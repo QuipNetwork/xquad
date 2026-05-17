@@ -40,14 +40,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 YAML_PATH = REPO_ROOT / "conformance" / "opcodes.yaml"
 
 
-# The YAML operand schema (types: register / label / immediate, plus a
-# `width` in bytes) is richer than xqvm_py's OperandType enum
-# (REGISTER / TARGET / IMMEDIATE), and xqvm_py itself is internally
-# inconsistent about labels (JUMP1 uses TARGET, JUMP2 uses two
-# IMMEDIATEs). Harmonising the Python operand vocabulary is a Phase 3
-# follow-up; this script therefore compares only the fields that are
-# unambiguous across both schemas: code, mnemonic, stack effect, and
-# total operand byte width.
+YAML_TYPE_TO_PYTHON = {"register": "REGISTER", "label": "TARGET", "immediate": "IMMEDIATE"}
 
 
 @dataclass(frozen=True)
@@ -59,12 +52,14 @@ class Row:
     stack_pop: int
     stack_push: int
     operand_byte_width: int
+    operand_types: tuple[str, ...]
 
     def format_line(self) -> str:
+        types = ",".join(self.operand_types) if self.operand_types else "-"
         return (
             f"{self.code:#04x} {self.mnemonic:<8} "
             f"pop={self.stack_pop} push={self.stack_push} "
-            f"operand_bytes={self.operand_byte_width}"
+            f"operand_bytes={self.operand_byte_width} types={types}"
         )
 
 
@@ -75,12 +70,17 @@ def load_yaml_rows(path: Path) -> dict[int, Row]:
     for entry in data["opcodes"]:
         code = int(entry["code"])
         operand_byte_width = sum(int(op.get("width", 1)) for op in entry["operands"])
+        operand_types: tuple[str, ...] = ()
+        for op in entry["operands"]:
+            py_type = YAML_TYPE_TO_PYTHON[op["type"]]
+            operand_types += (py_type,) * int(op.get("width", 1))
         rows[code] = Row(
             code=code,
             mnemonic=entry["mnemonic"],
             stack_pop=int(entry["stack_pop"]),
             stack_push=int(entry["stack_push"]),
             operand_byte_width=operand_byte_width,
+            operand_types=operand_types,
         )
     return rows
 
@@ -106,6 +106,7 @@ def load_python_rows() -> dict[int, Row]:
             stack_pop=meta.stack_pop,
             stack_push=meta.stack_push,
             operand_byte_width=meta.operand_count,
+            operand_types=tuple(t.name for t in meta.operand_types),
         )
     return rows
 
@@ -140,8 +141,7 @@ def main() -> int:
         for line in errors:
             print(line, file=sys.stderr)
         print(
-            f"\nCompared {len(yaml_rows)} yaml entries "
-            f"vs {len(py_rows)} xqvm_py entries.",
+            f"\nCompared {len(yaml_rows)} yaml entries vs {len(py_rows)} xqvm_py entries.",
             file=sys.stderr,
         )
         return 1

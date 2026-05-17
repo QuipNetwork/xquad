@@ -21,17 +21,16 @@ Complements ``scripts/check-opcode-parity.py`` (which runs in CI and
 compares Python opcodes against ``conformance/opcodes.yaml``) with a
 pytest-integrated variant so local ``pytest xqvm_py/tests`` catches
 drift the same way. The check is kept intentionally narrow — it
-compares only the fields both schemas describe unambiguously:
+compares the fields both schemas describe:
 
 - ``code``            — u8 wire encoding
 - ``mnemonic``        — uppercase assembly name
 - ``stack_pop`` / ``stack_push`` — stack effect
 - operand byte width — sum of ``operands[].width`` in the YAML,
   compared against the Python ``OpcodeMeta.operand_count``
-
-Operand *types* (register / label / immediate) are deliberately not
-compared yet because the Python ``OperandType`` enum is internally
-inconsistent about label representation (tracked in QUI-452).
+- operand types      — YAML types (register/label/immediate) mapped to
+  Python OperandType names (REGISTER/TARGET/IMMEDIATE), with each YAML
+  operand expanded by its width to match the per-byte Python tuple.
 """
 
 from __future__ import annotations
@@ -46,6 +45,8 @@ from xqvm_py.opcodes import Opcode
 REPO_ROOT = Path(__file__).resolve().parents[2]
 YAML_PATH = REPO_ROOT / "conformance" / "opcodes.yaml"
 
+_YAML_TYPE_TO_PYTHON = {"register": "REGISTER", "label": "TARGET", "immediate": "IMMEDIATE"}
+
 
 def _load_yaml_rows() -> dict[int, dict]:
     with YAML_PATH.open(encoding="utf-8") as f:
@@ -53,12 +54,17 @@ def _load_yaml_rows() -> dict[int, dict]:
     rows: dict[int, dict] = {}
     for entry in data["opcodes"]:
         code = int(entry["code"])
+        operand_types: tuple[str, ...] = ()
+        for op in entry["operands"]:
+            py_type = _YAML_TYPE_TO_PYTHON[op["type"]]
+            operand_types += (py_type,) * int(op.get("width", 1))
         rows[code] = {
             "code": code,
             "mnemonic": entry["mnemonic"],
             "stack_pop": int(entry["stack_pop"]),
             "stack_push": int(entry["stack_push"]),
             "operand_byte_width": sum(int(op.get("width", 1)) for op in entry["operands"]),
+            "operand_types": operand_types,
         }
     return rows
 
@@ -79,6 +85,7 @@ def py_rows() -> dict[int, dict]:
             "stack_pop": meta.stack_pop,
             "stack_push": meta.stack_push,
             "operand_byte_width": meta.operand_count,
+            "operand_types": tuple(t.name for t in meta.operand_types),
         }
     return rows
 
