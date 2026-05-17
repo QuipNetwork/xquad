@@ -173,7 +173,7 @@ conformance-rust:
 # spec-conformance-python shells out to `uv run python -m xqvm_py run`
 # from within the Rust test; the xqffi extension (maturin-built)
 # and xqvm_py (editable) must both be installed in .venv/ first.
-conformance-python:
+conformance-python: deps-python
 	cargo test -p xquad-conformance --no-default-features --features python
 
 # -- Dev ergonomics ---------------------------------------------------------
