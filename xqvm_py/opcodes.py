@@ -80,7 +80,7 @@ class Opcode(Enum):
         0,
         0,
         2,
-        (OperandType.IMMEDIATE, OperandType.IMMEDIATE),
+        (OperandType.TARGET, OperandType.TARGET),
         "Unconditional jump to target (u16)",
     )
     JUMPI2 = OpcodeMeta(
@@ -88,7 +88,7 @@ class Opcode(Enum):
         1,
         0,
         2,
-        (OperandType.IMMEDIATE, OperandType.IMMEDIATE),
+        (OperandType.TARGET, OperandType.TARGET),
         "Jump to target if top of stack is non-zero (u16)",
     )
     LIDX = OpcodeMeta(

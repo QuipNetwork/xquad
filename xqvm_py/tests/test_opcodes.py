@@ -309,10 +309,10 @@ class TestSpecificOpcodeMetadata:
         assert meta.operand_types == (OperandType.TARGET,)
 
     def test_jump2_metadata(self):
-        """JUMP2 takes two immediate operands (u16)."""
+        """JUMP2 takes two target operands (u16)."""
         meta = Opcode.JUMP2.meta
         assert meta.operand_count == 2
-        assert meta.operand_types == (OperandType.IMMEDIATE, OperandType.IMMEDIATE)
+        assert meta.operand_types == (OperandType.TARGET, OperandType.TARGET)
 
     def test_target_metadata(self):
         """TARGET has no operands."""
