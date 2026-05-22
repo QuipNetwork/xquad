@@ -89,6 +89,9 @@ pub mod disasm;
 // Pre-execution bytecode verifier.
 pub mod verifier;
 
+// Worklist data-flow analysis framework.
+pub mod dataflow;
+
 // ---------------------------------------------------------------------------
 // Public API re-exports — bytecode types hoisted to crate root
 // ---------------------------------------------------------------------------

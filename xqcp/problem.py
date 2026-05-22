@@ -86,6 +86,7 @@ class CompiledPrograms:
 # Post-compilation verification
 # ---------------------------------------------------------------------------
 
+# xqcp output programs (not the bytecode verifier added in QUI-513)
 _PROGRAM_LABELS = ("encoder", "verifier", "decoder")
 
 
