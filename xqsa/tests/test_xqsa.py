@@ -19,11 +19,15 @@
 Tests for the XQSA solver package.
 """
 
+import sys
+import types
+from unittest.mock import MagicMock
+
 import pytest
 
 dimod = pytest.importorskip("dimod", reason="dwave-samplers / dimod not installed")
 
-from xqsa import Solver, SolverDWaveCPU, SolverResult
+from xqsa import Solver, SolverDWaveCPU, SolverDWaveQPU, SolverResult
 from xqvm_py.xqmx import XQMX, XQMXMode, compute_energy
 
 # ---------------------------------------------------------------------------
@@ -300,3 +304,140 @@ class TestSolverDWaveCPU:
         assert sample.get_linear(0) == 1
         assert sample.get_linear(1) == 0
         assert sample.get_linear(2) == 1
+
+
+# ---------------------------------------------------------------------------
+# SolverDWaveQPU
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_dwave_system(monkeypatch):
+    """Inject a fake dwave.system module to avoid hardware dependency in tests."""
+    mock_first = MagicMock()
+    mock_first.sample = {0: 0, 1: 0}
+    mock_first.energy = 0.0
+    mock_first.num_occurrences = 1
+
+    mock_sampleset = MagicMock()
+    mock_sampleset.first = mock_first
+    mock_sampleset.info = {"timing": {"qpu_sampling_time": 1000}}
+
+    mock_composite = MagicMock()
+    mock_composite.sample.return_value = mock_sampleset
+
+    mock_raw = MagicMock()
+    mock_raw.solver.id = "Advantage_system5.4"
+
+    fake_dwave_system = types.ModuleType("dwave.system")
+    fake_dwave_system.DWaveSampler = MagicMock(return_value=mock_raw)
+    fake_dwave_system.EmbeddingComposite = MagicMock(return_value=mock_composite)
+
+    fake_dwave = types.ModuleType("dwave")
+    fake_dwave.system = fake_dwave_system
+
+    monkeypatch.setitem(sys.modules, "dwave", fake_dwave)
+    monkeypatch.setitem(sys.modules, "dwave.system", fake_dwave_system)
+
+    return {
+        "dwave_system": fake_dwave_system,
+        "composite": mock_composite,
+        "raw": mock_raw,
+        "sampleset": mock_sampleset,
+        "first": mock_first,
+    }
+
+
+class TestSolverDWaveQPU:
+    """Tests for the D-Wave QPU solver (hardware mocked)."""
+
+    def test_default_params(self, mock_dwave_system, monkeypatch) -> None:
+        """SolverDWaveQPU stores default parameters."""
+        monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
+        solver = SolverDWaveQPU()
+        assert solver.num_reads == 100
+        assert solver.annealing_time == 20
+
+    def test_custom_params(self, mock_dwave_system, monkeypatch) -> None:
+        """SolverDWaveQPU accepts custom parameters."""
+        monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
+        solver = SolverDWaveQPU(num_reads=50, annealing_time=100)
+        assert solver.num_reads == 50
+        assert solver.annealing_time == 100
+
+    def test_solve_binary(self, mock_dwave_system, monkeypatch) -> None:
+        """Solve a trivial 2-variable QUBO with mocked sampler."""
+        monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        model.set_linear(1, 1.0)
+
+        solver = SolverDWaveQPU()
+        result = solver.solve(model)
+
+        assert isinstance(result, SolverResult)
+        assert isinstance(result.sample, XQMX)
+        assert result.sample.mode == XQMXMode.SAMPLE
+        assert result.energy == 0  # x0=0, x1=0 -> energy 0
+        assert isinstance(result.energy, int)
+        assert result.timing >= 0.0
+        assert result.metadata["solver"] == "Advantage_system5.4"
+        assert result.metadata["qpu_timing"] == {"qpu_sampling_time": 1000}
+
+    def test_solve_spin(self, mock_dwave_system, monkeypatch) -> None:
+        """Solve a 2-variable Ising model with mocked sampler."""
+        mock_dwave_system["first"].sample = {0: -1, 1: -1}
+        mock_dwave_system["first"].energy = -2.0
+        monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
+        model = XQMX.spin_model(2)
+        model.set_linear(0, -1.0)
+        model.set_linear(1, -1.0)
+
+        solver = SolverDWaveQPU()
+        result = solver.solve(model)
+
+        assert result.sample.mode == XQMXMode.SAMPLE
+        # _recompute_energy: -1*(-1) + -1*(-1) = -2
+        expected = compute_energy(model, result.sample)
+        assert result.energy == expected
+        assert isinstance(result.energy, int)
+
+    def test_solve_kwargs_override(self, mock_dwave_system, monkeypatch) -> None:
+        """Per-call kwargs override constructor defaults."""
+        monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
+        model = XQMX.binary_model(2)
+
+        solver = SolverDWaveQPU(num_reads=100, annealing_time=20)
+        result = solver.solve(model, num_reads=50, annealing_time=40)
+
+        assert result.metadata["reads"] == 50
+        assert result.metadata["params"]["annealing_time"] == 40
+
+    def test_solve_rejects_sample_mode(self, mock_dwave_system, monkeypatch) -> None:
+        """SolverDWaveQPU raises ValueError for SAMPLE mode input."""
+        monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
+        sample = XQMX.binary_sample(2)
+        solver = SolverDWaveQPU()
+        with pytest.raises(ValueError, match="MODEL"):
+            solver.solve(sample)
+
+    def test_missing_token_raises(self, mock_dwave_system, monkeypatch) -> None:
+        """ValueError raised when token absent from constructor and env."""
+        monkeypatch.delenv("DWAVE_API_TOKEN", raising=False)
+        with pytest.raises(ValueError, match="DWAVE_API_TOKEN"):
+            SolverDWaveQPU()
+
+    def test_token_from_env(self, mock_dwave_system, monkeypatch) -> None:
+        """Token resolved from DWAVE_API_TOKEN env var."""
+        monkeypatch.setenv("DWAVE_API_TOKEN", "env-token")
+        SolverDWaveQPU()
+        call_kwargs = mock_dwave_system["dwave_system"].DWaveSampler.call_args.kwargs
+        assert call_kwargs["token"] == "env-token"
+
+    def test_missing_dwave_system_raises(self, monkeypatch) -> None:
+        """ImportError with install hint when dwave-system is not installed."""
+        monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
+        monkeypatch.setitem(sys.modules, "dwave", None)
+        monkeypatch.setitem(sys.modules, "dwave.system", None)
+        with pytest.raises(ImportError, match="pip install xqsa"):
+            SolverDWaveQPU()
