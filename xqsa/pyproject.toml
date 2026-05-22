@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dwave = [ "dwave-system>=1.0" ]
+gpu   = [ "dwave-samplers>=1.0", "numba>=0.57" ]
 
 [tool.uv.sources]
 xqvm_py.workspace = true

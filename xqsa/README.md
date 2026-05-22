@@ -67,6 +67,25 @@ Credential resolution order: `token=` constructor argument ->
 For a specific solver: `SolverDWaveQPU(solver="Advantage_system5.4")`.
 For custom annealing: `solver.solve(model, annealing_time=100, chain_strength=2.0)`.
 
+## Quick start -- GPU simulated annealing
+
+Requires an NVIDIA CUDA GPU and `pip install xqsa[gpu]`.
+
+```python
+from xqsa import SolverGPUSA
+from xqvm_py.xqmx import XQMX
+
+model = XQMX.binary_model(size=64)
+# ... set coefficients ...
+
+solver = SolverGPUSA(num_reads=1000)
+result = solver.solve(model)
+print(result.metadata["use_gpu"])  # True
+```
+
+Raises `RuntimeError` at construction time if no CUDA-capable GPU is detected.
+The NVIDIA CUDA toolkit must be installed on the host system separately.
+
 ## Solver protocol
 
 Any class conforming to `xqsa.Solver` can drop in:
