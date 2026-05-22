@@ -24,6 +24,11 @@ structural, jump-target, or loop-nesting violation. `Program::new` calls it to
 populate the jump table (ignoring any error); `Verifier::default` calls it once
 per invocation rather than three separate stream passes.
 
+Phases 2--4 each build a control-flow graph (CFG) of basic blocks and run a
+forward worklist analysis to track per-block state. The CFG correctly handles
+unreachable code, conditional branches, and loop back-edges, allowing errors
+that a linear scan would miss to be detected.
+
 ### Default pipeline (`Verifier::default`)
 
 | Order | Phase | Struct | What it checks |
@@ -31,13 +36,12 @@ per invocation rather than three separate stream passes.
 | 1a | Structural | `StructuralPhase` | Truncated bytes, unknown opcodes |
 | 1b | Jump target | `JumpTargetPhase` | Jump label >= target count |
 | 1c | Loop nesting | `LoopNestingPhase` | Loop open/close balance, loop-context reads |
-| 2 | Register type-state | `RegisterTypePhase` | Read-before-write, register type mismatches |
-| 3 | Stack depth | `StackEffectPhase` | Stack underflow/overflow risk, loop body net-effect |
+| 2 | Register type-state | `RegisterTypePhase` | CFG-based read-before-write, register type mismatches |
+| 3 | Must-init | `UninitRegisterPhase` | CFG AND-meet: registers uninit on at least one path |
+| 4 | Stack depth | `StackDepthPhase` | CFG-based stack underflow/overflow, loop balance, join-point depth mismatch |
 
-Phases 1a--1c share the `scan` kernel and run as one combined pass. Phases 2
-and 3 are separate linear passes that follow.
-
-Custom pipelines are supported via `Verifier::new().with_phase(p)`.
+Phases 1a--1c share the `scan` kernel and run as one combined pass. Custom
+pipelines are supported via `Verifier::new().with_phase(p)`.
 
 ---
 
@@ -74,57 +78,100 @@ Errors: `NoActiveLoop`, `UnmatchedLoop`.
 
 ---
 
-## Phase 2 -- Register Type-State
+## Phase 2 -- Register Type-State (`RegisterTypePhase`)
 
-A forward linear pass over `[RegType; 256]` (one slot per register). Each
-register starts as `Unset`. Instructions that write a register advance its slot
-to `Int`, `Vec`, `VecInt`, `VecXqmx`, `Model`, or `Sample`. Instructions that
-read a register are checked against a `RegTypeReq` requirement.
+A CFG-based forward analysis over `[RegType; 256]` (one slot per register).
+Each register starts as `Unset`. Instructions that write a register advance its
+slot to a concrete type (`Int`, `VecInt`, `VecXqmx`, `Model`, `Sample`) or
+`Any`. Instructions that read a register are checked against a `RegTypeReq`
+requirement.
+
+At join points the per-register meet is permissive: `meet(T, U) = Any` when
+types disagree (including `meet(Unset, Int) = Any`). This avoids false
+positives for registers written on only one branch of a conditional; the
+must-init pass (Phase 3) covers that gap.
 
 Preconditions enforced:
 
 - Reading an `Unset` register is rejected.
-- Type mismatches (e.g., reading a `Vec` register as `Int`) are rejected.
-- The `DROP` instruction resets a register to `Unset` in the type-state model -- a
-  subsequent read is rejected as `ReadUnsetRegister`. Note: at VM runtime `DROP`
-  writes `Int(0)` (a readable value), but the verifier applies the more conservative
-  semantics to prevent accidental reads of dropped registers.
+- Type mismatches (e.g., reading a `Model` register where `Int` is required)
+  are rejected.
+- The `DROP` instruction resets a register to `Unset` in the type-state model --
+  a subsequent read is rejected as `ReadUnsetRegister`. Note: at VM runtime
+  `DROP` writes `Int(0)` (a readable value), but the verifier applies the more
+  conservative semantics to prevent accidental reads of dropped registers.
+
+Unreachable blocks (entry state equals `[Any; 256]`) are skipped, so dead code
+after unconditional jumps does not produce false positives.
 
 Errors: `ReadUnsetRegister`, `RegisterTypeMismatch`.
 
 ---
 
-## Phase 3 -- Stack Depth and Loop Body Net-Effect
+## Phase 3 -- Must-Init Analysis (`UninitRegisterPhase`)
 
-A forward linear pass maintains a running `depth: usize` (starting at 0) and a
-loop stack of `(opener_offset, entry_depth)` pairs.
+A CFG-based forward AND-meet analysis over a 256-bit bitmap (four `u64` words).
+Bit `r` is set if register `r` is definitely initialized on **every** path to
+the current program point.
 
-For each instruction, the delta from `Instruction::stack_effect()` is applied:
+At program entry all bits are clear (all registers unwritten). The boundary
+value is `[0; 4]`; the lattice top is `[u64::MAX; 4]` (identity for AND-meet).
 
-- `StackEffect::Delta(d)`: if `depth + d` would underflow, emit
-  `StackUnderflow`. If the new depth exceeds 8192, emit `StackOverflowRisk`.
-- `StackEffect::Reset` (`SCLR`): unconditionally sets `depth = 0`. **Note:**
-  `SCLR` inside a loop body resets depth to 0 regardless of entry depth. If
-  entry depth was N > 0, exit depth is 0 != N, which is reported as
-  `LoopStackImbalance`. The message says "loop has non-zero stack effect" -- the
-  root cause is a global stack reset mid-iteration, not a conventional push/pop
-  imbalance.
+At join points: `meet(a, b) = a & b`. A register written on only one branch
+has its bit cleared at the join, so subsequent reads are flagged.
 
-Loop tracking (`RANGE`/`ITER`/`NEXT`) is handled after applying the depth
-delta: on `RANGE`/`ITER`, record `(offset, depth)` on the loop stack; on
-`NEXT`, pop the entry and compare with the current depth.
+This phase complements Phase 2: Phase 2 uses a permissive `Any`-meet that
+prevents false positives for partial writes across branches; Phase 3 uses
+AND-meet specifically to catch reads after join points where at least one
+incoming path did not write the register.
 
-Errors: `StackUnderflow`, `StackOverflowRisk`, `LoopStackImbalance`.
+Unreachable blocks (entry state equals `top`) are skipped.
 
-### Limitation -- linear scan, no CFG
+Error: `ReadUnsetRegister`.
 
-The scan is linear; conditional branches (`JUMPI1`/`JUMPI2`) are not followed.
-This means:
+---
 
-- Underflow on a branch not taken may be missed (false negative).
-- No false positives are produced on valid programs.
+## Phase 4 -- Stack Depth (`StackDepthPhase`)
 
-CFG-based data-flow analysis is tracked in QUI-513.
+A CFG-based forward analysis over abstract stack depth. Each basic block is
+characterised by a `BlockEffect` (minimum entry depth required and the output
+depth or depth delta at exit). The worklist uses min-meet to propagate the
+most conservative depth to successors.
+
+### Check order
+
+1. **`LoopStackImbalance`** -- detected via a separate one-pass BFS over each
+   loop body (ignoring back-edges). If the exit depth of the `NEXT` block
+   differs from the depth at the matching `RANGE`/`ITER` opener, the loop body
+   has a non-zero net stack effect.
+
+2. **`StackDepthMismatch`** -- after the worklist converges, every join block
+   (2+ predecessors) is examined. The exit depths of all reachable predecessors
+   are collected and compared. If any two differ, the stack is in an undefined
+   state at the join point. Blocks are checked in program order (ascending byte
+   offset) for deterministic error reporting.
+
+3. **`StackUnderflow`** / **`StackOverflowRisk`** -- blocks whose `before` or
+   `after` depth falls below 0 or exceeds 8192 are flagged.
+
+### Loop handling
+
+`RANGE`/`ITER` emit two CFG edges: a fall-through to the loop body and a
+skip-edge to the block after `NEXT` (empty-loop path). `NEXT` emits a
+back-edge to the loop body start and a fall-through to the post-loop block.
+
+`LoopStackImbalance` is reported before `StackDepthMismatch`, so if a loop is
+imbalanced the depth-mismatch check at the loop header is never reached.
+
+### `SCLR` semantics
+
+`SCLR` resets the abstract depth unconditionally to 0 (`StackEffect::Reset`).
+If the entry depth was N > 0 and the exit depth is 0, this is reported as
+`LoopStackImbalance` if inside a loop, or detected by `StackDepthMismatch` at a
+downstream join if the reset creates a discrepancy.
+
+Errors: `LoopStackImbalance`, `StackDepthMismatch`, `StackUnderflow`,
+`StackOverflowRisk`.
 
 ---
 
@@ -137,11 +184,12 @@ CFG-based data-flow analysis is tracked in QUI-513.
 | `UndefinedJumpTarget` | 1b | Jump references label id >= target count |
 | `NoActiveLoop` | 1c | `NEXT`, `LVAL`, or `LIDX` with no open loop frame |
 | `UnmatchedLoop` | 1c | Loop frame still open at end of program |
-| `ReadUnsetRegister` | 2 | Register read before any write |
+| `ReadUnsetRegister` | 2 or 3 | Register read before any write (or before write on all paths) |
 | `RegisterTypeMismatch` | 2 | Register holds wrong type for the instruction |
-| `StackUnderflow` | 3 | `depth + delta` would go negative |
-| `StackOverflowRisk` | 3 | `depth` would exceed 8192 |
-| `LoopStackImbalance` | 3 | Loop body entry depth != exit depth |
+| `LoopStackImbalance` | 4 | Loop body entry depth != exit depth |
+| `StackDepthMismatch` | 4 | Two paths arrive at a join with different stack depths |
+| `StackUnderflow` | 4 | Stack depth would go negative at a reachable instruction |
+| `StackOverflowRisk` | 4 | Stack depth would exceed 8192 |
 
 ---
 
