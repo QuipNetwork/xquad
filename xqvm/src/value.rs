@@ -19,8 +19,95 @@
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
+use core::fmt;
 
 pub(crate) use crate::model::{XqmxModel, XqmxSample};
+
+/// Discriminant tag for a [`RegVal`] variant.
+///
+/// Used in [`IncompatibleTypeError`] to report what kind of value was found in
+/// a register and what kind(s) were required, without carrying the value itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegValKind {
+    /// Register is unset (`DROP`ped or never written).
+    Unset,
+    /// Integer (`i64`).
+    Int,
+    /// Integer vector (`Vec<i64>`).
+    VecInt,
+    /// XQMX model vector (`Vec<XqmxModel>`).
+    VecXqmx,
+    /// XQMX model (QUBO/Ising/discrete).
+    Model,
+    /// XQMX sample.
+    Sample,
+}
+
+impl RegValKind {
+    /// Returns the canonical short name used in error messages.
+    ///
+    /// These strings match those previously produced by `RegVal::type_name()`
+    /// and are kept identical so that user-visible error text is unchanged.
+    pub fn kind_name(self) -> &'static str {
+        match self {
+            Self::Unset => "unset",
+            Self::Int => "int",
+            Self::VecInt => "vec<int>",
+            Self::VecXqmx => "vec<xqmx>",
+            Self::Model => "model",
+            Self::Sample => "sample",
+        }
+    }
+}
+
+/// Error returned by [`RegVal`] typed accessors when the register holds an
+/// incompatible kind.
+///
+/// `expected` lists every kind that would have been accepted; `actual` is
+/// what the register actually held. The slice form of `expected` allows
+/// accessors that accept multiple kinds (e.g., the grid accessors accept
+/// both `Model` and `Sample`) to declare their full acceptance set.
+///
+/// # Examples
+///
+/// ```rust
+/// use xqvm::{RegValKind, IncompatibleTypeError};
+///
+/// let err = IncompatibleTypeError {
+///     expected: &[RegValKind::Model],
+///     actual: RegValKind::Int,
+/// };
+/// assert_eq!(err.actual, RegValKind::Int);
+/// assert_eq!(err.expected, &[RegValKind::Model]);
+/// assert_eq!(err.to_string(), "incompatible types: expected model, got int");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncompatibleTypeError {
+    /// The kinds the accessor would have accepted.
+    pub expected: &'static [RegValKind],
+    /// The kind the register actually held.
+    pub actual: RegValKind,
+}
+
+impl fmt::Display for IncompatibleTypeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "incompatible types: expected ")?;
+        let mut first = true;
+        for kind in self.expected {
+            if !first {
+                write!(f, "|")?;
+            }
+            write!(f, "{}", kind.kind_name())?;
+            first = false;
+        }
+        write!(f, ", got {}", self.actual.kind_name())
+    }
+}
+
+// Manual impl (not `thiserror::Error`) so this type compiles under `no_std`
+// without linking against std. `thiserror` generates an `std::error::Error`
+// bound internally, which pulls in std even when the feature is not enabled.
+impl core::error::Error for IncompatibleTypeError {}
 
 /// A value that can be stored in an XQVM register.
 ///
@@ -56,75 +143,73 @@ impl Default for RegVal {
 }
 
 impl RegVal {
-    /// Return the integer value, or an error string if the wrong type.
-    pub(crate) fn as_int(&self) -> Result<i64, &'static str> {
+    /// Returns the kind tag for this register value.
+    ///
+    /// Replaces the old `type_name()` helper: callers that need a display
+    /// string should call `.kind().kind_name()`.
+    pub fn kind(&self) -> RegValKind {
+        match self {
+            Self::Unset => RegValKind::Unset,
+            Self::Int(_) => RegValKind::Int,
+            Self::VecInt(_) => RegValKind::VecInt,
+            Self::VecXqmx(_) => RegValKind::VecXqmx,
+            Self::Model(_) => RegValKind::Model,
+            Self::Sample(_) => RegValKind::Sample,
+        }
+    }
+
+    /// Return the integer value, or an [`IncompatibleTypeError`].
+    pub(crate) fn as_int(&self) -> Result<i64, IncompatibleTypeError> {
         match self {
             Self::Int(n) => Ok(*n),
-            Self::Unset => Err("unset"),
-            Self::VecInt(_) => Err("vec<int>"),
-            Self::VecXqmx(_) => Err("vec<xqmx>"),
-            Self::Model(_) => Err("model"),
-            Self::Sample(_) => Err("sample"),
+            other => Err(IncompatibleTypeError {
+                expected: &[RegValKind::Int],
+                actual: other.kind(),
+            }),
         }
     }
 
-    /// Return a mutable reference to the model, or an error string.
-    pub(crate) fn as_model_mut(&mut self) -> Result<&mut XqmxModel, &'static str> {
+    /// Return a mutable reference to the model, or an [`IncompatibleTypeError`].
+    pub(crate) fn as_model_mut(&mut self) -> Result<&mut XqmxModel, IncompatibleTypeError> {
         match self {
             Self::Model(m) => Ok(m),
-            Self::Unset => Err("unset"),
-            Self::Int(_) => Err("int"),
-            Self::VecInt(_) => Err("vec<int>"),
-            Self::VecXqmx(_) => Err("vec<xqmx>"),
-            Self::Sample(_) => Err("sample"),
+            other => Err(IncompatibleTypeError {
+                expected: &[RegValKind::Model],
+                actual: other.kind(),
+            }),
         }
     }
 
-    /// Return a shared reference to the model, or an error string.
-    pub(crate) fn as_model(&self) -> Result<&XqmxModel, &'static str> {
+    /// Return a shared reference to the model, or an [`IncompatibleTypeError`].
+    pub(crate) fn as_model(&self) -> Result<&XqmxModel, IncompatibleTypeError> {
         match self {
             Self::Model(m) => Ok(m),
-            Self::Unset => Err("unset"),
-            Self::Int(_) => Err("int"),
-            Self::VecInt(_) => Err("vec<int>"),
-            Self::VecXqmx(_) => Err("vec<xqmx>"),
-            Self::Sample(_) => Err("sample"),
+            other => Err(IncompatibleTypeError {
+                expected: &[RegValKind::Model],
+                actual: other.kind(),
+            }),
         }
     }
 
-    /// Return a mutable reference to the int vec, or an error string.
-    pub(crate) fn as_vec_int_mut(&mut self) -> Result<&mut Vec<i64>, &'static str> {
+    /// Return a mutable reference to the int vec, or an [`IncompatibleTypeError`].
+    pub(crate) fn as_vec_int_mut(&mut self) -> Result<&mut Vec<i64>, IncompatibleTypeError> {
         match self {
             Self::VecInt(v) => Ok(v),
-            Self::Unset => Err("unset"),
-            Self::Int(_) => Err("int"),
-            Self::VecXqmx(_) => Err("vec<xqmx>"),
-            Self::Model(_) => Err("model"),
-            Self::Sample(_) => Err("sample"),
+            other => Err(IncompatibleTypeError {
+                expected: &[RegValKind::VecInt],
+                actual: other.kind(),
+            }),
         }
     }
 
-    /// Return a shared reference to the int vec, or an error string.
-    pub(crate) fn as_vec_int(&self) -> Result<&Vec<i64>, &'static str> {
+    /// Return a shared reference to the int vec, or an [`IncompatibleTypeError`].
+    pub(crate) fn as_vec_int(&self) -> Result<&Vec<i64>, IncompatibleTypeError> {
         match self {
             Self::VecInt(v) => Ok(v),
-            Self::Unset => Err("unset"),
-            Self::Int(_) => Err("int"),
-            Self::VecXqmx(_) => Err("vec<xqmx>"),
-            Self::Model(_) => Err("model"),
-            Self::Sample(_) => Err("sample"),
-        }
-    }
-
-    /// Type name for error messages.
-    pub(crate) fn type_name(&self) -> &'static str {
-        match self {
-            Self::Unset => "unset",
-            Self::Int(_) => "int",
-            Self::VecInt(_) => "vec<int>",
-            Self::VecXqmx(_) => "vec<xqmx>",
-            Self::Model(_) => "model",
-            Self::Sample(_) => "sample",
+            other => Err(IncompatibleTypeError {
+                expected: &[RegValKind::VecInt],
+                actual: other.kind(),
+            }),
         }
     }
 
@@ -132,27 +217,27 @@ impl RegVal {
     /// model or a sample. Used by grid opcodes (`ROWSUM`, `COLSUM`,
     /// `ROWFIND`, `COLFIND`) per `spec/xqvm/SPEC.md` §303, which accept
     /// either XQMX mode.
-    pub(crate) fn as_xqmx_grid(&self) -> Result<XqmxGridRef<'_>, &'static str> {
+    pub(crate) fn as_xqmx_grid(&self) -> Result<XqmxGridRef<'_>, IncompatibleTypeError> {
         match self {
             Self::Model(m) => Ok(XqmxGridRef::Model(m)),
             Self::Sample(s) => Ok(XqmxGridRef::Sample(s)),
-            Self::Unset => Err("unset"),
-            Self::Int(_) => Err("int"),
-            Self::VecInt(_) => Err("vec<int>"),
-            Self::VecXqmx(_) => Err("vec<xqmx>"),
+            other => Err(IncompatibleTypeError {
+                expected: &[RegValKind::Model, RegValKind::Sample],
+                actual: other.kind(),
+            }),
         }
     }
 
     /// Return a mutable XQMX grid view for `RESIZE` — the only
     /// grid opcode that mutates the register.
-    pub(crate) fn as_xqmx_grid_mut(&mut self) -> Result<XqmxGridRefMut<'_>, &'static str> {
+    pub(crate) fn as_xqmx_grid_mut(&mut self) -> Result<XqmxGridRefMut<'_>, IncompatibleTypeError> {
         match self {
             Self::Model(m) => Ok(XqmxGridRefMut::Model(m)),
             Self::Sample(s) => Ok(XqmxGridRefMut::Sample(s)),
-            Self::Unset => Err("unset"),
-            Self::Int(_) => Err("int"),
-            Self::VecInt(_) => Err("vec<int>"),
-            Self::VecXqmx(_) => Err("vec<xqmx>"),
+            other => Err(IncompatibleTypeError {
+                expected: &[RegValKind::Model, RegValKind::Sample],
+                actual: other.kind(),
+            }),
         }
     }
 }
