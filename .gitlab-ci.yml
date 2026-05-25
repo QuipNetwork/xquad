@@ -1,3 +1,15 @@
+# Suppress duplicate pipelines: when a branch has an open MR, only the MR
+# pipeline runs (so the MR badge reflects the full quality gate). Branch
+# pipelines still fire for pre-MR development; tag pipelines fire for
+# releases.
+workflow:
+    rules:
+        - if: $CI_COMMIT_TAG
+        - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+        - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+          when: never
+        - if: $CI_COMMIT_BRANCH
+
 # Root pipeline — composition only.
 #
 # Jobs are authored in per-stage files under .gitlab/ci/ and pulled in
