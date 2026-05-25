@@ -84,40 +84,30 @@ git tag -s vX.Y.Z -m "xquad vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-The tag push triggers an automatic + manual two-phase pipeline in
-stage `release`:
+The tag push triggers a fully-automatic pipeline in stage `release`:
 
-**Auto (fires on tag push):**
-
-1. **`release:validate`** — packaging dry-run for all three crates and
+1. **`release:validate`** -- packaging dry-run for all three crates and
    all five Python distributions against the tagged commit. Nothing
    is uploaded; this is the gate that catches manifest / license /
    metadata regressions before any registry sees them.
-2. **`release:changelog` → `release:notes`** — git-cliff renders the
-   GitLab Release page from the conventional-commit history. Runs
-   off `release:validate` (decoupled from the publishes), so the
-   announcement page goes live immediately on a clean validate.
-
-**Manual (sit waiting for click):**
-
-3. **`release:publish-crates`** — `cargo publish` for `xqvm` →
-   `xqasm` → `xqcli`. Click "play" in the pipeline UI to fire.
-4. **`release:publish-pypi`** — `maturin publish` for `xqffi` then
+2. **`release:publish-crates`** -- `cargo publish` for `xqvm` →
+   `xqasm` → `xqcli`, in topological order. Fires automatically once
+   `release:validate` passes.
+3. **`release:publish-pypi`** -- `maturin publish` for `xqffi` then
    `uv build` + `twine upload` for `xqvm_py` / `xqcp` / `xqsa` /
-   `xquad`. Click "play" to fire; `needs: [release:publish-crates]`
-   enforces ordering (PyPI can't fire before crates).
+   `xquad`. Fires automatically once `release:publish-crates` passes
+   (`needs:` enforces ordering so PyPI cannot run before crates.io).
+4. **`release:changelog` → `release:notes`** -- git-cliff renders the
+   GitLab Release page from the conventional-commit history. Runs
+   after `release:publish-pypi` so the announcement page goes live
+   only once all artefacts are on the registries.
 
-The two manual jobs are **independent** — each is its own button.
-A Rust-only release (no PyPI yet) is just clicking publish-crates
-and skipping publish-pypi. The tag is effectively a "draft release"
-until the click happens.
-
-Watch the pipeline. If a publish job fails after the click, rerun
-**only the failed job** — both pass `--skip-existing` / `--locked`
-so re-runs are idempotent. Do not retag unless the failure was a
-version mistake. If `release:validate` fails, no registry has been
-touched; fix the underlying issue, force-push to the tag's commit
-(or move the tag), and rerun the pipeline.
+Watch the pipeline. If a publish job fails, rerun **only the failed
+job** -- both pass `--skip-existing` / `--locked` so re-runs are
+idempotent. Do not retag unless the failure was a version mistake.
+If `release:validate` fails, no registry has been touched; fix the
+underlying issue, force-push to the tag's commit (or move the tag),
+and rerun the pipeline.
 
 ## Post-flight
 

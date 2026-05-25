@@ -111,7 +111,7 @@ release:publish-crates:
     stage: release
     needs:
         - release:validate
-    <<: *on-release-tag-manual
+    <<: *on-release-tag
     script:
         - cargo --version
         - cargo publish --locked -p xqvm --token "${CARGO_REGISTRY_TOKEN}"
@@ -137,7 +137,7 @@ release:publish-pypi:
     needs:
         - release:validate
         - release:publish-crates
-    <<: *on-release-tag-manual
+    <<: *on-release-tag
     before_script:
         - *setup-python-publish
     script:
@@ -162,13 +162,10 @@ release:publish-pypi:
 # notes. The same override is set on `lint:changelog`.
 release:changelog:
     stage: release
-    # Decoupled from publish-pypi (QUI-495) so the GitLab Release page
-    # goes up automatically on tag push, regardless of whether the
-    # manual publish jobs are eventually clicked. The page describes
-    # the release; whether artefacts are on crates.io / PyPI yet is
-    # orthogonal.
+    # Runs after publish-pypi so the GitLab Release page goes up only
+    # once artefacts are live on crates.io and PyPI (QUI-496).
     needs:
-        - release:validate
+        - release:publish-pypi
     <<: *on-release-tag
     variables:
         GIT_DEPTH: 0
