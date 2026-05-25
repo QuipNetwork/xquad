@@ -73,6 +73,12 @@ pub enum Error {
         got: &'static str,
     },
 
+    /// Type mismatch without register context. Produced via
+    /// `From<IncompatibleTypeError>` when the caller does not track which
+    /// register triggered the fault.
+    #[error("{0}")]
+    IncompatibleType(crate::value::IncompatibleTypeError),
+
     /// A `LOAD` was attempted on a register that is unset (`DROP`ped or
     /// never written). Matches xq-py's `RegisterNotFound` exception.
     #[error("register r{reg} is unset at byte {pos:#06x}")]
@@ -223,12 +229,19 @@ impl Error {
             | Self::UnsetRegister { pos, .. }
             | Self::IndexOutOfBounds { pos, .. } => Some(*pos),
             Self::RegisterType { .. }
+            | Self::IncompatibleType(_)
             | Self::CallDataIndex { .. }
             | Self::OutputIndex { .. }
             | Self::SizeMismatch { .. }
             | Self::VecLengthMismatch { .. }
             | Self::StepLimitExceeded { .. } => None,
         }
+    }
+}
+
+impl From<crate::value::IncompatibleTypeError> for Error {
+    fn from(e: crate::value::IncompatibleTypeError) -> Self {
+        Self::IncompatibleType(e)
     }
 }
 
@@ -307,4 +320,27 @@ fn find_line_span(text: &str, byte_pos: usize) -> Option<SourceSpan> {
         .map_or(text.len(), |n| match_start + n);
 
     Some(SourceSpan::from(line_start..line_end))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::value::{IncompatibleTypeError, RegValKind};
+
+    #[test]
+    fn incompatible_type_from_impl_round_trips() {
+        let inner = IncompatibleTypeError {
+            expected: &[RegValKind::Model],
+            actual: RegValKind::Int,
+        };
+        let err = Error::from(inner.clone());
+        assert!(
+            matches!(err, Error::IncompatibleType(ref e) if e == &inner),
+            "From<IncompatibleTypeError> should produce Error::IncompatibleType"
+        );
+        assert_eq!(
+            err.to_string(),
+            "incompatible types: expected model, got int"
+        );
+    }
 }

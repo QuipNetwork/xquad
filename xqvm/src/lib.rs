@@ -114,6 +114,6 @@ pub use model::{Domain, XqmxModel, XqmxSample};
 #[cfg(feature = "std")]
 pub use tracer::{JsonTracer, TextTracer};
 pub use tracer::{NoopTracer, StepState, Tracer};
-pub use value::RegVal;
+pub use value::{IncompatibleTypeError, RegVal, RegValKind};
 pub use verifier::{RegType, VerifierError};
 pub use vm::Vm;

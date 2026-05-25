@@ -760,7 +760,7 @@ impl Vm {
             other => Err(Error::RegisterType {
                 reg: reg.slot(),
                 expected: "vec",
-                got: other.type_name(),
+                got: other.kind().kind_name(),
             }),
         }
     }
@@ -843,10 +843,10 @@ impl Vm {
                 reg: reg.slot(),
             });
         }
-        let v = self.reg(reg).as_int().map_err(|got| Error::RegisterType {
+        let v = self.reg(reg).as_int().map_err(|e| Error::RegisterType {
             reg: reg.slot(),
             expected: "int",
-            got,
+            got: e.actual.kind_name(),
         })?;
         self.push_stack(v, pos)?;
         Ok(StepResult::Continue)
@@ -1234,10 +1234,10 @@ impl Vm {
         let vec = self
             .reg_mut(reg)
             .as_vec_int_mut()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: reg.slot(),
                 expected: "vec<int>",
-                got,
+                got: e.actual.kind_name(),
             })?;
         vec.push(v);
         Ok(StepResult::Continue)
@@ -1248,10 +1248,10 @@ impl Vm {
         let vec = self
             .reg(reg)
             .as_vec_int()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: reg.slot(),
                 expected: "vec<int>",
-                got,
+                got: e.actual.kind_name(),
             })?;
         let usize_idx = usize::try_from(idx).ok().filter(|&i| i < vec.len()).ok_or(
             Error::IndexOutOfBounds {
@@ -1274,10 +1274,10 @@ impl Vm {
         let vec = self
             .reg_mut(reg)
             .as_vec_int_mut()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: reg.slot(),
                 expected: "vec<int>",
-                got,
+                got: e.actual.kind_name(),
             })?;
         let usize_idx = usize::try_from(idx).ok().filter(|&i| i < vec.len()).ok_or(
             Error::IndexOutOfBounds {
@@ -1299,7 +1299,7 @@ impl Vm {
                 return Err(Error::RegisterType {
                     reg: reg.slot(),
                     expected: "vec",
-                    got: other.type_name(),
+                    got: other.kind().kind_name(),
                 });
             }
         };
@@ -1322,14 +1322,14 @@ impl Vm {
         }
         // Append index entries to the indices register.
         {
-            let vec =
-                self.reg_mut(indices)
-                    .as_vec_int_mut()
-                    .map_err(|got| Error::RegisterType {
-                        reg: indices.slot(),
-                        expected: "vec<int>",
-                        got,
-                    })?;
+            let vec = self
+                .reg_mut(indices)
+                .as_vec_int_mut()
+                .map_err(|e| Error::RegisterType {
+                    reg: indices.slot(),
+                    expected: "vec<int>",
+                    got: e.actual.kind_name(),
+                })?;
             let mut power = 1i64;
             let mut i = 0i64;
             // `power > 0` guards against wrapping_mul overflow: once `power`
@@ -1346,10 +1346,10 @@ impl Vm {
             let vec = self
                 .reg_mut(coeffs)
                 .as_vec_int_mut()
-                .map_err(|got| Error::RegisterType {
+                .map_err(|e| Error::RegisterType {
                     reg: coeffs.slot(),
                     expected: "vec<int>",
-                    got,
+                    got: e.actual.kind_name(),
                 })?;
             let mut power = 1i64;
             while power > 0 && power <= capacity {
@@ -1387,10 +1387,10 @@ impl Vm {
         let grid = self
             .reg(reg)
             .as_xqmx_grid()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: reg.slot(),
                 expected: "model|sample",
-                got,
+                got: e.actual.kind_name(),
             })?;
         let size = grid.size();
         let usize_i = usize::try_from(i).map_err(|_| Error::IndexOutOfBounds {
@@ -1415,10 +1415,10 @@ impl Vm {
         let mut grid = self
             .reg_mut(reg)
             .as_xqmx_grid_mut()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: reg.slot(),
                 expected: "model|sample",
-                got,
+                got: e.actual.kind_name(),
             })?;
         let size = grid.size();
         let usize_i = usize::try_from(i).map_err(|_| Error::IndexOutOfBounds {
@@ -1443,10 +1443,10 @@ impl Vm {
         let mut grid = self
             .reg_mut(reg)
             .as_xqmx_grid_mut()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: reg.slot(),
                 expected: "model|sample",
-                got,
+                got: e.actual.kind_name(),
             })?;
         let size = grid.size();
         let usize_i = usize::try_from(i).map_err(|_| Error::IndexOutOfBounds {
@@ -1468,14 +1468,11 @@ impl Vm {
     fn exec_get_quad(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let j = self.pop(pos)?;
         let i = self.pop(pos)?;
-        let m = self
-            .reg(reg)
-            .as_model()
-            .map_err(|got| Error::RegisterType {
-                reg: reg.slot(),
-                expected: "model",
-                got,
-            })?;
+        let m = self.reg(reg).as_model().map_err(|e| Error::RegisterType {
+            reg: reg.slot(),
+            expected: "model",
+            got: e.actual.kind_name(),
+        })?;
         let usize_i = usize::try_from(i).map_err(|_| Error::IndexOutOfBounds {
             pos,
             index: i,
@@ -1497,10 +1494,10 @@ impl Vm {
         let m = self
             .reg_mut(reg)
             .as_model_mut()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: reg.slot(),
                 expected: "model",
-                got,
+                got: e.actual.kind_name(),
             })?;
         let usize_i = usize::try_from(i).map_err(|_| Error::IndexOutOfBounds {
             pos,
@@ -1523,10 +1520,10 @@ impl Vm {
         let m = self
             .reg_mut(reg)
             .as_model_mut()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: reg.slot(),
                 expected: "model",
-                got,
+                got: e.actual.kind_name(),
             })?;
         let usize_i = usize::try_from(i).map_err(|_| Error::IndexOutOfBounds {
             pos,
@@ -1557,10 +1554,10 @@ impl Vm {
         let mut grid = self
             .reg_mut(reg)
             .as_xqmx_grid_mut()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: reg.slot(),
                 expected: "model|sample",
-                got,
+                got: e.actual.kind_name(),
             })?;
         grid.set_grid(usize_rows, usize_cols);
         Ok(StepResult::Continue)
@@ -1572,10 +1569,10 @@ impl Vm {
         let grid = self
             .reg(reg)
             .as_xqmx_grid()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: reg.slot(),
                 expected: "model|sample",
-                got,
+                got: e.actual.kind_name(),
             })?;
         let usize_row = usize::try_from(row).map_err(|_| Error::IndexOutOfBounds {
             pos,
@@ -1598,10 +1595,10 @@ impl Vm {
         let grid = self
             .reg(reg)
             .as_xqmx_grid()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: reg.slot(),
                 expected: "model|sample",
-                got,
+                got: e.actual.kind_name(),
             })?;
         let usize_col = usize::try_from(col).map_err(|_| Error::IndexOutOfBounds {
             pos,
@@ -1623,10 +1620,10 @@ impl Vm {
         let grid = self
             .reg(reg)
             .as_xqmx_grid()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: reg.slot(),
                 expected: "model|sample",
-                got,
+                got: e.actual.kind_name(),
             })?;
         let usize_row = usize::try_from(row).map_err(|_| Error::IndexOutOfBounds {
             pos,
@@ -1645,10 +1642,10 @@ impl Vm {
         let grid = self
             .reg(reg)
             .as_xqmx_grid()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: reg.slot(),
                 expected: "model|sample",
-                got,
+                got: e.actual.kind_name(),
             })?;
         let usize_col = usize::try_from(col).map_err(|_| Error::IndexOutOfBounds {
             pos,
@@ -1670,10 +1667,10 @@ impl Vm {
         let m = self
             .reg_mut(reg)
             .as_model_mut()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: reg.slot(),
                 expected: "model",
-                got,
+                got: e.actual.kind_name(),
             })?;
         let usize_row = usize::try_from(row).map_err(|_| Error::IndexOutOfBounds {
             pos,
@@ -1701,10 +1698,10 @@ impl Vm {
         let m = self
             .reg_mut(reg)
             .as_model_mut()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: reg.slot(),
                 expected: "model",
-                got,
+                got: e.actual.kind_name(),
             })?;
         let col_idx = usize::try_from(col).map_err(|_| Error::IndexOutOfBounds {
             pos,
@@ -1732,10 +1729,10 @@ impl Vm {
         let m = self
             .reg_mut(reg)
             .as_model_mut()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: reg.slot(),
                 expected: "model",
-                got,
+                got: e.actual.kind_name(),
             })?;
         // Penalise x_i * x_j = 1 (mutual exclusion).
         let i_idx = usize::try_from(i).map_err(|_| Error::IndexOutOfBounds {
@@ -1759,10 +1756,10 @@ impl Vm {
         let m = self
             .reg_mut(reg)
             .as_model_mut()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: reg.slot(),
                 expected: "model",
-                got,
+                got: e.actual.kind_name(),
             })?;
         // Penalise x_i=1, x_j=0: penalty * x_i * (1 - x_j) = penalty*x_i - penalty*x_i*x_j.
         let i_idx = usize::try_from(i).map_err(|_| Error::IndexOutOfBounds {
@@ -1792,19 +1789,19 @@ impl Vm {
         let idx_vec: Vec<i64> = self
             .reg(indices)
             .as_vec_int()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: indices.slot(),
                 expected: "vec<int>",
-                got,
+                got: e.actual.kind_name(),
             })?
             .clone();
         let coeff_vec: Vec<i64> = self
             .reg(coeffs)
             .as_vec_int()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: coeffs.slot(),
                 expected: "vec<int>",
-                got,
+                got: e.actual.kind_name(),
             })?
             .clone();
         if idx_vec.len() != coeff_vec.len() {
@@ -1818,10 +1815,10 @@ impl Vm {
         let m = self
             .reg_mut(model)
             .as_model_mut()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: model.slot(),
                 expected: "model",
-                got,
+                got: e.actual.kind_name(),
             })?;
         if let Some(&max_idx) = idx_vec.iter().max()
             && let Ok(needed) = usize::try_from(max_idx + 1)
@@ -1845,10 +1842,10 @@ impl Vm {
         let idx_vec: Vec<i64> = self
             .reg(indices)
             .as_vec_int()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: indices.slot(),
                 expected: "vec<int>",
-                got,
+                got: e.actual.kind_name(),
             })?
             .clone();
         let n = idx_vec.len();
@@ -1865,10 +1862,10 @@ impl Vm {
         let m = self
             .reg_mut(model)
             .as_model_mut()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: model.slot(),
                 expected: "model",
-                got,
+                got: e.actual.kind_name(),
             })?;
         let max_excess = n_i64 - k;
         if max_excess <= 0 {
@@ -1907,19 +1904,19 @@ impl Vm {
         let idx_vec: Vec<i64> = self
             .reg(indices)
             .as_vec_int()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: indices.slot(),
                 expected: "vec<int>",
-                got,
+                got: e.actual.kind_name(),
             })?
             .clone();
         let coeff_vec: Vec<i64> = self
             .reg(coeffs)
             .as_vec_int()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: coeffs.slot(),
                 expected: "vec<int>",
-                got,
+                got: e.actual.kind_name(),
             })?
             .clone();
         let n = idx_vec.len();
@@ -1941,10 +1938,10 @@ impl Vm {
         let m = self
             .reg_mut(model)
             .as_model_mut()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: model.slot(),
                 expected: "model",
-                got,
+                got: e.actual.kind_name(),
             })?;
         let weight_sum: i64 = coeff_vec.iter().sum();
         let max_excess = weight_sum - k;
@@ -1978,10 +1975,10 @@ impl Vm {
         let m = self
             .reg_mut(model)
             .as_model_mut()
-            .map_err(|got| Error::RegisterType {
+            .map_err(|e| Error::RegisterType {
                 reg: model.slot(),
                 expected: "model",
-                got,
+                got: e.actual.kind_name(),
             })?;
         let ua =
             usize::try_from(var_a)
@@ -2028,7 +2025,7 @@ impl Vm {
                 return Err(Error::RegisterType {
                     reg: sample.slot(),
                     expected: "sample",
-                    got: other.type_name(),
+                    got: other.kind().kind_name(),
                 });
             }
         };
@@ -2038,7 +2035,7 @@ impl Vm {
                 return Err(Error::RegisterType {
                     reg: model.slot(),
                     expected: "model",
-                    got: other.type_name(),
+                    got: other.kind().kind_name(),
                 });
             }
         };
