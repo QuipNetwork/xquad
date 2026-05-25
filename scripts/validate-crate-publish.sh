@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Wrap `cargo publish --dry-run` for a workspace member, tolerating the
-# specific "workspace dep not yet on crates.io" failure that occurs at
-# first-publish of a multi-crate workspace.
+# "workspace dep not yet on crates.io" failure that occurs at every
+# version bump of a multi-crate workspace.
 #
 # Why this wrapper exists
 # -----------------------
@@ -16,25 +16,27 @@
 #   2. Verify -- extract the tarball and compile from the packaged
 #      source. Skipped via `--no-verify`.
 #
-# Phase 1 still resolves deps even with `--no-verify`. For a workspace
-# member like xqasm that depends on `xqvm = "0.1.0"`, that resolution
-# fails at the first publish because xqvm hasn't been pushed to
-# crates.io yet -- and won't be until `release:publish-crates` actually
+# Phase 1 still resolves deps against crates.io even with `--no-verify`.
+# For a workspace member like xqasm that depends on `xqvm = "0.2.0"`,
+# that resolution fails at validate-time because xqvm 0.2.0 hasn't been
+# pushed yet -- it won't land until `release:publish-crates` actually
 # runs (which publishes xqvm first, then xqasm, then xqcli).
+#
+# Cargo emits one of two error messages depending on whether any version
+# of the dep exists on the registry:
+#   - First-ever publish: "no matching package named `<crate>`"
+#   - Subsequent version bumps: "failed to select a version for the
+#     requirement `<crate> = "^X.Y.Z"`"
 #
 # This wrapper:
 #   - Runs cargo publish --dry-run for the named crate.
 #   - On exit 0: passes through.
-#   - On exit non-zero with the specific "no matching package named
-#     `<workspace-crate>`" error: logs the expected first-publish miss
-#     and exits 0. The actual sequential publish handles ordering.
+#   - On exit non-zero with either workspace-dep-not-on-crates.io
+#     pattern: logs the expected miss and exits 0. The actual sequential
+#     publish handles ordering.
 #   - On exit non-zero with any other error (metadata bugs, license
 #     missing, etc.): exits with the original code, blocking the
 #     pipeline.
-#
-# From v0.1.1 onwards (xqvm on crates.io), the dry-run resolves cleanly
-# and the wrapper is just a pass-through. Same behaviour for the rest
-# of the workspace's lifetime -- no follow-up needed.
 #
 # Usage:
 #   scripts/validate-crate-publish.sh <crate-name> [extra cargo flags]
@@ -63,16 +65,17 @@ if [[ "${exit_code}" -eq 0 ]]; then
     exit 0
 fi
 
-# Match cargo's exact phrasing: `no matching package named \`<crate>\``
-# Search for any workspace member name in that pattern.
+# Match either cargo error for a workspace dep not yet on crates.io:
+#   "no matching package named `<crate>`"        (dep never published)
+#   "failed to select a version for ... `<crate> = ..."  (newer version not yet published)
 for ws in "${WORKSPACE_CRATES[@]}"; do
-    if echo "${out}" | grep -qE "no matching package named \`${ws}\`"; then
+    if echo "${out}" | grep -qE "no matching package named \`${ws}\`|failed to select a version for the requirement \`${ws} ="; then
         echo
         echo "[validate-crate-publish] ${crate} dry-run failed because workspace dep '${ws}'"
-        echo "                         is not yet on crates.io. This is expected at the first"
-        echo "                         publish of a multi-crate workspace -- '${ws}' will be"
-        echo "                         published before '${crate}' by release:publish-crates,"
-        echo "                         which runs sequentially. Treating as success."
+        echo "                         is not yet on crates.io at the required version. This is"
+        echo "                         expected -- '${ws}' will be published before '${crate}'"
+        echo "                         by release:publish-crates, which runs sequentially."
+        echo "                         Treating as success."
         exit 0
     fi
 done
