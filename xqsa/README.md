@@ -38,6 +38,10 @@ class Backend(ABC):
 
 `SolverResult` is a frozen dataclass of `(sample: XQMX, energy: float, timing: float, metadata: dict)`. Backends return the best solution found for the model.
 
+## Specification
+
+Authoritative specification: [`../spec/xqsa/SPEC.md`](../spec/xqsa/SPEC.md). The spec is the source of truth; any divergence in this reference implementation is a bug.
+
 ## Also see
 
 - [`xqvm_py`](../xqvm_py/) — pure-Python reference VM.

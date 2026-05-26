@@ -1,28 +1,22 @@
-# XQSA Specification (draft)
+# XQSA Specification
 
-**Status:** draft. Authoritative specification is pending formalisation of
-the solver-adapter contract from the `xqsa/` reference implementation.
+Authoritative specification for X-Quadratic Solver Adapters. The spec is split across focused documents; each is the single source of truth for its topic.
 
-XQSA (X-Quadratic Solver Adapters) defines the interface between the
-XQVM toolchain and external quadratic optimization solvers (simulated
-annealing, quantum annealers, etc.). The goal is a single-sample-in /
-energy-out contract so that any solver can be plugged into the XQVM
-execution pipeline without touching the VM.
+## Documents
 
-## Scope (forthcoming)
-
-The specification will cover:
-
-- Solver interface: `solve(model: XQMX, **kwargs) -> Sample`.
-- Sample encoding: variable assignments compatible with
-  [`../xqvm/SPEC.md`](../xqvm/SPEC.md) `Sample` register values.
-- Energy contract: `energy(model, sample)` must agree to full precision
-  with the `ENERGY` opcode on both Rust and Python implementations for
-  every sample the solver returns.
-- Capability negotiation: binary / spin / discrete domains, problem-size
-  limits, determinism guarantees.
+| File | Content |
+|------|---------|
+| [SPEC.md](SPEC.md) | Architecture overview, pipeline position, plugin model |
+| [INTERFACE.md](INTERFACE.md) | `Backend` abstract class, `solve()` contract, `SolverResult` type, parameter conventions |
+| [ENERGY.md](ENERGY.md) | Energy computation formula, precision contract, sparse representation |
+| [DOMAINS.md](DOMAINS.md) | Domain support matrix, sample encoding, grid metadata, capability negotiation |
+| [SOLVERS.md](SOLVERS.md) | Solver registry, naming convention, algorithm families, dependency model |
 
 ## Reference implementation
 
-[`../../xqsa/`](../../xqsa/) — currently wraps `dwave-neal` simulated
-annealing.
+[`../../xqsa/`](../../xqsa/) -- Python package. v0.2.0 implements `NealBackend` wrapping `dwave-neal` simulated annealing.
+
+## Related specifications
+
+- [XQVM](../xqvm/README.md) -- the virtual machine that executes encoder, verifier, and decoder programs around the solver
+- [XQCP](../xqcp/README.md) -- the constraint-programming DSL that compiles problems into XQVM programs and XQMX models
