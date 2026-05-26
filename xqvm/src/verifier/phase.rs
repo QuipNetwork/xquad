@@ -19,7 +19,7 @@
 use alloc::{boxed::Box, vec::Vec};
 
 use crate::Program;
-use crate::dataflow::bytecode::{CfgContext, build_cfg, check_stack_depth_with_context};
+use crate::dataflow::bytecode::{build_cfg, check_stack_depth_with_context};
 use crate::dataflow::register::check_register_types_with_cfg;
 use crate::dataflow::uninit::check_uninit_registers_with_cfg;
 
@@ -165,17 +165,8 @@ impl Phase for AllCfgPhases {
         let Some(ctx) = build_cfg(code, program.jump_table()) else {
             return Ok(());
         };
-        let CfgContext {
-            cfg,
-            effects,
-            loop_regions,
-        } = ctx;
-        check_register_types_with_cfg(program, &cfg)?;
-        check_uninit_registers_with_cfg(program, &cfg)?;
-        check_stack_depth_with_context(CfgContext {
-            cfg,
-            effects,
-            loop_regions,
-        })
+        check_register_types_with_cfg(program, &ctx.cfg)?;
+        check_uninit_registers_with_cfg(program, &ctx.cfg)?;
+        check_stack_depth_with_context(&ctx.cfg, &ctx.effects, &ctx.loop_regions)
     }
 }

@@ -11,10 +11,10 @@ checked against these documents via the `conformance/` harness.
   instruction semantics, stack and register model, binary encoding.
   See [`xqvm/README.md`](xqvm/README.md) for the document index.
 - **[xqcp/](xqcp/)** — X-Quadratic Constraint Programming DSL. Symbolic
-  problem description and compilation to XQVM assembly. Draft — see
+  problem description and compilation to XQVM assembly. See
   [`xqcp/README.md`](xqcp/README.md).
 - **[xqsa/](xqsa/)** — X-Quadratic Solver Adapters. Solver-backend
-  interface and sample/energy contracts. Draft — see
+  interface and sample/energy contracts. See
   [`xqsa/README.md`](xqsa/README.md).
 
 ## Drift policy

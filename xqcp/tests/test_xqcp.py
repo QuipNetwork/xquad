@@ -166,6 +166,29 @@ class TestExpressions:
 
 
 # ---------------------------------------------------------------------------
+# Lifecycle guard tests
+# ---------------------------------------------------------------------------
+
+
+class TestLifecycleGuards:
+    """Tests for Problem lifecycle ordering enforcement."""
+
+    def test_input_after_define_model_raises(self) -> None:
+        import pytest
+
+        problem = Problem("guard")
+        problem.define_model(size=4, domain=XQMXDomain.BINARY)
+        with pytest.raises(RuntimeError, match="input.*before.*define_model"):
+            problem.input("late", type=Types.Int)
+
+    def test_input_before_define_model_ok(self) -> None:
+        problem = Problem("guard")
+        ref = problem.input("early", type=Types.Int)
+        problem.define_model(size=4, domain=XQMXDomain.BINARY)
+        assert ref is not None
+
+
+# ---------------------------------------------------------------------------
 # Compilation tests
 # ---------------------------------------------------------------------------
 

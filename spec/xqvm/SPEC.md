@@ -119,3 +119,8 @@ File format definitions, assembly syntax, and binary encoding rules: **[ENCODING
 ## Bytecode Verification
 
 Bytecode verification phases, error semantics, composable architecture, and per-opcode stack effects: **[VERIFIER.md](VERIFIER.md)**
+
+## Related Specifications
+
+- **[../xqsa/SPEC.md](../xqsa/SPEC.md)** -- solver adapter interface. Defines how external solvers plug into the pipeline between encoder and verifier execution.
+- **[../xqcp/SPEC.md](../xqcp/SPEC.md)** -- constraint-programming DSL. Compiles high-level problem descriptions into the three XQVM programs (encoder, verifier, decoder).

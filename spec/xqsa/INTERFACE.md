@@ -1,0 +1,145 @@
+# Solver Interface
+
+## Backend Abstract Class
+
+```python
+class Backend(ABC):
+    @abstractmethod
+    def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
+        """Solve a quadratic model, returning the best solution found."""
+        ...
+
+    def _validate_model(self, model: XQMX) -> None:
+        """Validate that the model is solvable."""
+        ...
+```
+
+All solver implementations inherit from `Backend` and override `solve()`.
+
+## `solve()` Contract
+
+**Input:**
+- `model` -- an XQMX in MODEL mode with a supported domain (see [DOMAINS.md](DOMAINS.md))
+- `**kwargs` -- solver-specific parameters that override constructor defaults
+
+**Output:**
+- A `SolverResult` containing the best solution found
+
+**Requirements:**
+1. Must call `_validate_model(model)` (or equivalent validation) before solving
+2. Must measure wall-clock timing via `time.perf_counter()`
+3. Must return the best sample (lowest energy) if multiple reads are performed
+4. Must populate `SolverResult.energy` with the authoritative integer energy computed via `compute_energy(model, sample)` (see [ENERGY.md](ENERGY.md))
+5. Must populate all mandated metadata keys (see [Metadata Schema](#metadata-schema))
+
+**Failure semantics:**
+- `solve()` raises on failure; it only returns `SolverResult` on success
+- Hardware or connectivity failures raise implementation-specific exceptions
+- "No sample produced" scenarios (e.g. QPU embedding failure) also raise
+- The verifier's `valid` flag handles the separate concern of "sample returned but does not satisfy constraints"
+
+## `_validate_model()` Contract
+
+Validates that a model is acceptable for solving:
+
+| Condition | Result |
+|-----------|--------|
+| `model.mode != XQMXMode.MODEL` | `ValueError("Expected MODEL mode, got {mode}")` |
+| `model.domain == XQMXDomain.DISCRETE` | `ValueError("Unsupported domain for solving: {domain}")` |
+| `model.domain` is `BINARY` or `SPIN` | Accepted |
+
+Subclasses may extend validation (e.g. checking problem-size limits) but must preserve these base checks.
+
+## `SolverResult` Type
+
+```python
+@dataclass(frozen=True)
+class SolverResult:
+    sample: XQMX               # Solution as XQMX in SAMPLE mode
+    energy: int                 # Authoritative Hamiltonian energy
+    timing: float               # Wall-clock seconds spent solving
+    metadata: dict[str, Any]    # Mandated + solver-specific keys
+```
+
+> **v0.2.0 divergence:** the reference implementation declares `energy: float` and uses flat metadata keys. QUI-573 brings the implementation into conformance with `energy: int`, base-class recomputation, and the mandated metadata schema.
+
+**Invariants:**
+- `sample.mode == XQMXMode.SAMPLE`
+- `sample.size == model.size` (same number of variables)
+- `sample.rows == model.rows` and `sample.cols == model.cols` (grid dimensions preserved)
+- `sample.domain == model.domain`
+- `energy == compute_energy(model, sample)` (see [ENERGY.md](ENERGY.md))
+- `timing >= 0.0`
+- Frozen (immutable after construction)
+
+## Metadata Schema
+
+`SolverResult.metadata` contains three mandated top-level keys plus a solver-specific namespace:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `seed` | `int \| None` | The random seed actually used. `None` if non-deterministic. |
+| `reads` | `int` | Number of samples/reads taken by the solver. |
+| `params` | `dict[str, Any]` | Solver-specific parameters and diagnostics. |
+
+All solver-specific keys must go under `params`. No other top-level keys are permitted beyond `seed`, `reads`, and `params`.
+
+**Example (NealBackend):**
+
+```python
+metadata = {
+    "seed": 42,
+    "reads": 100,
+    "params": {
+        "num_sweeps": 1000,
+        "beta_range": None,
+        "num_occurrences": 5,
+        "raw_energy": -42.0,
+    },
+}
+```
+
+The `raw_energy` key under `params` holds the solver's native float energy before integer recomputation. This is informational only.
+
+## Parameter Convention
+
+Solver parameters follow a two-level pattern:
+
+1. **Constructor defaults** -- set once when creating the solver instance
+2. **Per-call overrides** -- `**kwargs` on `solve()` override constructor defaults for that call only
+
+```python
+backend = NealBackend(num_reads=100, seed=42)
+result = backend.solve(model)                    # uses constructor defaults
+result = backend.solve(model, num_reads=500)     # overrides num_reads for this call
+```
+
+The spec does not mandate any specific parameter names beyond the metadata keys above. Each solver defines its own parameter surface.
+
+## Capability Reporting
+
+v0.2.0 uses validate-or-reject: `_validate_model()` is the sole gate. There is no capabilities introspection method. Callers that need to check domain support should catch `ValueError` from `_validate_model()`.
+
+Future versions may add richer negotiation (supported domains, problem-size limits, hardware constraints) but this is not currently specified.
+
+## NealBackend Reference (v0.2.0)
+
+`NealBackend` is the reference implementation, wrapping `dwave-neal` simulated annealing.
+
+**Constructor parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `num_reads` | `int` | `100` | Number of annealing runs |
+| `num_sweeps` | `int` | `1000` | Sweeps per run |
+| `beta_range` | `tuple[float, float] \| None` | `None` | Temperature range (None = auto) |
+| `seed` | `int \| None` | `None` | Random seed (None = non-deterministic) |
+
+All four parameters are overridable via `solve(**kwargs)`.
+
+**Conversion pipeline (informative, not normative):**
+1. XQMX model -> `dimod.BinaryQuadraticModel` via `_model_to_bqm()`
+2. `neal.SimulatedAnnealingSampler().sample()` with timing measurement
+3. Best result -> XQMX sample via `_sample_to_xqmx()`
+4. Energy recomputed via `compute_energy(model, sample)`
+5. Grid dimensions (rows/cols) preserved from original model

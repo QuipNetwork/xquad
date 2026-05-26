@@ -1,26 +1,21 @@
-# XQCP Specification (draft)
+# XQCP Specification
 
-**Status:** draft. Authoritative specification is pending formalisation of
-the DSL semantics from the `xqcp/` reference implementation.
+Authoritative specification for X-Quadratic Constraint Programming. The spec is split across focused documents; each is the single source of truth for its topic.
 
-XQCP (X-Quadratic Constraint Programming) is a Python-embedded DSL for
-describing quadratic optimization problems symbolically and compiling them
-to the three-program XQVM architecture (encoder, verifier, decoder).
+## Documents
 
-## Scope (forthcoming)
-
-The specification will cover:
-
-- Symbolic value types (`Int`, `Vec`, `XQMX`) and their operator algebra.
-- Problem lifecycle: `input` → `define_model` → `define_objective` →
-  `define_constraints` → `define_outputs` → `compile`.
-- Constraint taxonomy: one-hot, exclusion, implication, equality, linear.
-- Compilation contract: for every well-formed XQCP program, the three
-  emitted `.xqasm` programs must execute without error on any XQVM
-  implementation conforming to [`../xqvm/SPEC.md`](../xqvm/SPEC.md).
+| File | Content |
+|------|---------|
+| [SPEC.md](SPEC.md) | DSL overview, three-program architecture, problem lifecycle, compilation contract |
+| [TYPES.md](TYPES.md) | Symbolic value types, expression tree, operator algebra, free functions |
+| [CONSTRAINTS.md](CONSTRAINTS.md) | Constraint taxonomy, method signatures, HLF expansion cross-references |
+| [COMPILER.md](COMPILER.md) | Compilation pipeline: encoder/verifier/decoder generation, register allocation, action recording |
 
 ## Reference implementation
 
-[`../../xqcp/`](../../xqcp/) is the current reference. Any formal
-specification here must be validated against it; if the two diverge,
-the spec is authoritative and the reference is a bug.
+[`../../xqcp/`](../../xqcp/) -- Python package. The spec is reverse-engineered from this reference; once landed, the spec is authoritative and any divergence in the reference is a bug.
+
+## Related specifications
+
+- [XQVM](../xqvm/README.md) -- the virtual machine that executes the compiled programs
+- [XQSA](../xqsa/README.md) -- solver adapters that sit between the encoder and verifier in the pipeline

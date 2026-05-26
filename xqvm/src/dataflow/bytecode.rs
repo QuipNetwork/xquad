@@ -132,11 +132,11 @@ impl Lattice for DepthValue {
 // ---------------------------------------------------------------------------
 
 /// Forward stack-depth analysis over XQVM basic blocks.
-pub struct StackDepthAnalysis {
-    effects: HashMap<BlockId, BlockEffect>,
+pub struct StackDepthAnalysis<'a> {
+    effects: &'a HashMap<BlockId, BlockEffect>,
 }
 
-impl Analysis for StackDepthAnalysis {
+impl Analysis for StackDepthAnalysis<'_> {
     type Value = DepthValue;
     type Node = BlockId;
     type Dir = Forward;
@@ -546,21 +546,20 @@ pub(crate) fn build_cfg(code: &[u8], jump_table: &JumpTable) -> Option<CfgContex
 /// # Errors
 ///
 /// Returns the first [`VerifierError`] found, in the order described above.
-pub(crate) fn check_stack_depth_with_context(ctx: CfgContext) -> Result<(), VerifierError> {
-    let CfgContext {
-        cfg,
-        effects,
-        loop_regions,
-    } = ctx;
+pub(crate) fn check_stack_depth_with_context(
+    cfg: &Cfg<BlockId>,
+    effects: &HashMap<BlockId, BlockEffect>,
+    loop_regions: &[LoopRegion],
+) -> Result<(), VerifierError> {
     let analysis = StackDepthAnalysis { effects };
-    let result = solve(&analysis, &cfg);
+    let result = solve(&analysis, cfg);
 
     // --- LoopStackImbalance check (before underflow scan) ---
     //
     // The worklist analysis uses min-meet on back-edges, which causes
     // loop-body imbalances to converge rather than diverge.  A separate
     // one-pass BFS (simulate_body) detects them correctly.
-    for region in &loop_regions {
+    for region in loop_regions {
         let entry = result
             .after(&region.opener_block)
             .cloned()
@@ -569,8 +568,8 @@ pub(crate) fn check_stack_depth_with_context(ctx: CfgContext) -> Result<(), Veri
             region.body_start,
             entry.clone(),
             region.after_next,
-            &analysis.effects,
-            &cfg,
+            analysis.effects,
+            cfg,
         );
         if let (DepthValue::Known(e), DepthValue::Known(x)) = (&entry, &exit)
             && e != x
@@ -686,7 +685,7 @@ pub fn check_stack_depth(program: &Program) -> Result<(), VerifierError> {
     let Some(ctx) = build_cfg(code, program.jump_table()) else {
         return Ok(());
     };
-    check_stack_depth_with_context(ctx)
+    check_stack_depth_with_context(&ctx.cfg, &ctx.effects, &ctx.loop_regions)
 }
 
 // ---------------------------------------------------------------------------

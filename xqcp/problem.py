@@ -86,7 +86,7 @@ class CompiledPrograms:
 # Post-compilation verification
 # ---------------------------------------------------------------------------
 
-# xqcp output programs (not the bytecode verifier added in QUI-513)
+# xqcp output programs (not the bytecode verifier)
 _PROGRAM_LABELS = ("encoder", "verifier", "decoder")
 
 
@@ -146,6 +146,8 @@ class Problem:
 
     def input(self, name: str, type: Types) -> InputRef:
         """Declare a runtime input. Returns a symbolic InputRef."""
+        if self._model is not None:
+            raise RuntimeError("input() must be called before define_model()")
         reg = self._alloc.alloc()
         ref = InputRef(reg, name, type)
         self._actions.append(Action("input", {"ref": ref}))

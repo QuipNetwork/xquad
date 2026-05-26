@@ -24,7 +24,7 @@
 //!
 //! The low-level `scan` function is the shared kernel: it makes one linear
 //! pass over the instruction bytes, builds the [`crate::JumpTable`], and returns the
-//! first Phase 1 violation. [`Program::new`] calls it to obtain the jump
+//! first structural violation. [`Program::new`] calls it to obtain the jump
 //! table (ignoring any error); [`Verifier::default`] calls it once per
 //! invocation rather than running three separate stream passes.
 //!
@@ -39,9 +39,9 @@
 //! | [`UninitRegisterPhase`] | CFG AND-meet: registers uninit on at least one path | [`VerifierError::ReadUnsetRegister`] |
 //! | [`StackDepthPhase`] | CFG-based stack depth: underflow/overflow, loop balance, join-point mismatch | [`VerifierError::StackUnderflow`], [`VerifierError::StackOverflowRisk`], [`VerifierError::LoopStackImbalance`], [`VerifierError::StackDepthMismatch`] |
 //!
-//! Phase 1 (structural, jump, loop) runs as a single combined pass via
-//! `scan`. Phases 2–4 each build a control-flow graph and run a forward
-//! worklist analysis:
+//! The structural, jump, and loop phases run as a single combined pass via
+//! `scan`. The remaining phases each build a control-flow graph and run a
+//! forward worklist analysis:
 //!
 //! * [`RegisterTypePhase`] -- permissive Any-meet at join points; catches
 //!   read-before-write and type mismatches on all CFG paths.

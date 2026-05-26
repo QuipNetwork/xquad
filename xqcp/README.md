@@ -278,6 +278,10 @@ The verifier automatically selects the right validity check:
 - **ROWSUM/COLSUM** loops when onehot constraints are present
 - **Binary domain** check (GETLINE + 0-or-1 test) when no onehot constraints exist
 
+## Specification
+
+Authoritative specification: [`../spec/xqcp/SPEC.md`](../spec/xqcp/SPEC.md). The spec is the source of truth; any divergence in this reference implementation is a bug.
+
 ## Examples
 
 See the working XQCP programs in top-level runnable examples:
