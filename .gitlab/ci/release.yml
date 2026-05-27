@@ -104,6 +104,9 @@ release:auto-tag:
     stage: release
     image: registry.gitlab.com/gitlab-org/cli:latest
     cache: []
+    # No artifacts from previous stages needed; prevents GitLab from
+    # downloading e.g. the docs build into this lightweight Alpine job.
+    dependencies: []
     before_script:
         - apk add --no-cache jq
     rules:
@@ -115,9 +118,8 @@ release:auto-tag:
         GITLAB_TOKEN: "${GITLAB_API_TOKEN}"
     script:
         - |
-            SOURCE_BRANCH=$(curl -sf \
-              --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
-              "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests?state=merged&target_branch=main&order_by=updated_at&sort=desc&per_page=100" \
+            SOURCE_BRANCH=$(glab api \
+              "projects/${CI_PROJECT_ID}/merge_requests?state=merged&target_branch=main&order_by=updated_at&sort=desc&per_page=100" \
               | jq -r ".[] | select(.merge_commit_sha == \"${CI_COMMIT_SHA}\" or .squash_commit_sha == \"${CI_COMMIT_SHA}\") | .source_branch")
 
             if [ -z "$SOURCE_BRANCH" ]; then
@@ -135,12 +137,18 @@ release:auto-tag:
             fi
 
             echo "Detected release merge: v${VERSION}"
-            glab api "projects/${CI_PROJECT_ID}/repository/tags" \
+            if ! TAG_OUT=$(glab api "projects/${CI_PROJECT_ID}/repository/tags" \
               --method POST \
               -f "tag_name=v${VERSION}" \
               -f "ref=${CI_COMMIT_SHA}" \
-              -f "message=xquad v${VERSION}" \
-              || echo "Tag v${VERSION} already exists — skipping."
+              -f "message=xquad v${VERSION}" 2>&1); then
+                if echo "$TAG_OUT" | grep -qi "already exists"; then
+                    echo "Tag v${VERSION} already exists -- skipping."
+                else
+                    echo "Failed to create tag v${VERSION}: ${TAG_OUT}" >&2
+                    exit 1
+                fi
+            fi
 
 # ---------------------------------------------------------------------------
 # Release jobs (tag-triggered)
