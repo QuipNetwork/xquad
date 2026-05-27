@@ -55,18 +55,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dwave-neal"
-version = "0.6.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "dwave-samplers" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/84/7c/e368bbddb111958f64d4fdd58d4a0e01f8dc16d56fe89c7abdb028fbb029/dwave-neal-0.6.0.tar.gz", hash = "sha256:8ce51fee3339195df1ab69920fdb5afc496b5fd945e487fad3547c983d90c564", size = 6418, upload-time = "2022-11-25T23:44:37.85Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/64/f2/32c45bcc42196f69f101549abf35fc6019ef3488c8d4082fbcab22d77274/dwave_neal-0.6.0-py3-none-any.whl", hash = "sha256:8b7d89f0c52de6ac80e0f580ec272f6409b1cf9edb12250d22429425a13bd935", size = 8730, upload-time = "2022-11-25T23:44:35.533Z" },
-]
-
-[[package]]
 name = "dwave-samplers"
 version = "1.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -307,13 +295,13 @@ name = "xqsa"
 version = "0.2.0"
 source = { editable = "xqsa" }
 dependencies = [
-    { name = "dwave-neal" },
+    { name = "dwave-samplers" },
     { name = "xqvm-py" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "dwave-neal", specifier = ">=0.6" },
+    { name = "dwave-samplers", specifier = ">=1.0" },
     { name = "xqvm-py", editable = "xqvm_py" },
 ]
 

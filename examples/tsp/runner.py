@@ -20,9 +20,9 @@ TSP end-to-end XQuad pipeline example.
 
 Build a random Travelling-Salesman-Problem instance, compile it to
 XQVM assembly via xqcp, run the encoder on the chosen VM (Python
-reference or Rust), sample the resulting QUBO with xqsa's neal
-backend, run the verifier and decoder on the sampled solution, and
-print the decoded tour.
+reference or Rust), sample the resulting QUBO with xqsa's
+SolverDWaveCPU, run the verifier and decoder on the sampled
+solution, and print the decoded tour.
 
 The runner is the showcase: a single file exercises every layer of
 the toolchain. No pre-authored .xqasm files, no JSON inputs — just
@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from xquad.cp import Problem, Types, xq_triu
-from xquad.sa import NealBackend
+from xquad.sa import SolverDWaveCPU
 from xquad.types import XQMX, Vec, XQMXDomain, triu
 from xquad.vm import VM, VMBackend
 
@@ -142,8 +142,8 @@ def run(programs: Any, n: int, distances: list[int], seed: int, backend: VMBacke
     model = vm.outputs()[0]
     assert isinstance(model, XQMX)
 
-    sa_backend = NealBackend(seed=seed)
-    sample = sa_backend.solve(model).sample
+    solver = SolverDWaveCPU(seed=seed)
+    sample = solver.solve(model).sample
 
     vm = VM(backend=backend)
     vm.set_calldata([model, sample, n])

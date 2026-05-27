@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xqsa"
-description = "Solver adapters for XQMX models (dwave-neal today; pluggable backend interface)."
+description = "Solver adapters for XQMX models (dwave-samplers; pluggable solver interface)."
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "AGPL-3.0-or-later" }
 version = "0.2.0"
 dependencies = [
     "xqvm_py",
-    "dwave-neal>=0.6",
+    "dwave-samplers>=1.0",
 ]
 
 [tool.uv.sources]

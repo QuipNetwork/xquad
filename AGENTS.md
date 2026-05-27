@@ -264,7 +264,7 @@ Control flow, stack/register I/O, arithmetic (including `SQR`, `ABS`, `INC`, `DE
 | --- | --- | --- |
 | `xqvm_py` | `xqvm_py/` | Python reference VM implementation (conformance oracle) |
 | `xqcp` | `xqcp/` | High-level constraint programming DSL compiling to XQVM assembly |
-| `xqsa` | `xqsa/` | Solver adapters for XQMX models (dwave-neal; pluggable backend interface) |
+| `xqsa` | `xqsa/` | Solver adapters for XQMX models (dwave-samplers; pluggable solver interface) |
 | `xqffi` | `xqffi/` | PyO3 FFI bindings (maturin-built); also a Rust crate |
 | `xquad` | `xquad/` | Umbrella meta-package re-exporting xqffi, xqcp, xqsa under unified namespace |
 

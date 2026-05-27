@@ -42,19 +42,19 @@ The solver receives an XQMX in MODEL mode and returns an XQMX in SAMPLE mode. Th
 
 XQSA uses a class-based plugin model:
 
-- An abstract `Backend` class defines the contract (see [INTERFACE.md](INTERFACE.md))
+- An abstract `Solver` class defines the contract (see [INTERFACE.md](INTERFACE.md))
 - Concrete implementations wrap specific solvers
-- Any class implementing `Backend.solve()` can drop in as a replacement
+- Any class implementing `Solver.solve()` can drop in as a replacement
 - The contract is minimal: validate the model, solve it, return the result
 
-v0.2.0 ships one concrete implementation: `NealBackend`, wrapping `dwave-neal` simulated annealing. Additional backends are in progress; see [SOLVERS.md](SOLVERS.md) for the planned registry.
+v0.3.0 ships one concrete implementation: `SolverDWaveCPU`, wrapping `dwave-samplers` simulated annealing. Additional solvers are in progress; see [SOLVERS.md](SOLVERS.md) for the planned registry.
 
-## Package Structure (v0.2.0)
+## Package Structure (v0.3.0)
 
 | Module | Purpose |
 |--------|---------|
-| `backend.py` | Abstract `Backend` class, `SolverResult` dataclass, model validation |
-| `neal.py` | `NealBackend` wrapping `dwave-neal` |
+| `solver.py` | Abstract `Solver` class, `SolverResult` dataclass, model validation, BQM conversion helpers |
+| `dwave_cpu.py` | `SolverDWaveCPU` wrapping `dwave-samplers` |
 
 ## Thread Safety
 

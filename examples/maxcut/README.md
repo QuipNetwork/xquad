@@ -3,7 +3,7 @@
 End-to-end XQuad pipeline demo: build a random weighted complete
 graph, compile a Max-Cut QUBO via `xqcp`, run the encoder on the
 chosen XQVM interpreter (Python reference or Rust), sample the
-resulting model with `xqsa`'s neal simulated annealer, and verify +
+resulting model with `xqsa`'s `SolverDWaveCPU` simulated annealer, and verify +
 decode the 2-colour partition.
 
 ## Run it

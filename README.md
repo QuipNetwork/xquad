@@ -61,7 +61,7 @@ Five Python distributions on **PyPI**:
 | [`xqffi`](xqffi/) | PyO3 FFI bindings for `xqvm` + `xqasm` (`xqffi.vm`, `xqffi.asm`) |
 | [`xqvm_py`](xqvm_py/) | Pure-Python reference VM (conformance oracle) |
 | [`xqcp`](xqcp/) | Constraint-programming DSL that compiles to `.xqasm` |
-| [`xqsa`](xqsa/) | Solver adapters (dwave-neal today; pluggable backend protocol) |
+| [`xqsa`](xqsa/) | Solver adapters (dwave-samplers; pluggable solver interface) |
 | [`xquad`](xquad/) | Umbrella meta-package with interactive `Program` / `Session` / `RunResult` API |
 
 The one Rust package without a crates.io artefact is the `xqffi` pyo3

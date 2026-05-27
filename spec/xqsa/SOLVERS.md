@@ -4,7 +4,7 @@
 
 Concrete solver classes follow the pattern `Solver{Vendor/Technology}{ComputeTarget}`. Vendor-first grouping keeps related solvers together in sorted order.
 
-v0.2.0 uses the legacy names `Backend` (abstract) and `NealBackend` (concrete). The rename to `Solver` / `SolverDWaveCPU` lands in v0.3.0.
+v0.3.0 uses `Solver` (abstract) and `SolverDWaveCPU` (concrete).
 
 ## Algorithm Families
 
@@ -12,7 +12,7 @@ v0.2.0 uses the legacy names `Backend` (abstract) and `NealBackend` (concrete). 
 
 Solvers that use the `dimod` BQM format and D-Wave SDK packages. The SDK handles model conversion and sampling; solvers differ in where the BQM is solved (CPU, GPU, QPU).
 
-Shared base helpers: `_model_to_bqm()`, `_sample_to_xqmx()` (lifted to the base class in v0.3.0).
+Shared base helpers: `_model_to_bqm()`, `_sample_to_xqmx()` (concrete methods on the `Solver` base class).
 
 ### Custom Kernel Family
 
@@ -35,7 +35,7 @@ Each solver beyond the base `SolverDWaveCPU` lives behind an optional extra. Imp
 
 | Solver | File | Extra | Hardware | Added in |
 |--------|------|-------|----------|----------|
-| `SolverDWaveCPU` | `dwave_cpu.py` | (base) | CPU | v0.2.0 (as `NealBackend`) |
+| `SolverDWaveCPU` | `dwave_cpu.py` | (base) | CPU | v0.2.0 |
 | `SolverDWaveQPU` | `dwave_qpu.py` | `[dwave]` | D-Wave QPU (cloud) | v0.3.0 |
 | `SolverDWaveGPU` | `dwave_gpu.py` | `[gpu]` | NVIDIA CUDA GPU | v0.3.0 |
 | `SolverCudaGPU` | `cuda_gpu.py` | `[cuda]` | NVIDIA CUDA GPU | v0.3.0 |

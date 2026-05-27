@@ -16,14 +16,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Tests for the XQSA solver backend package.
+Tests for the XQSA solver package.
 """
 
 import pytest
 
-dimod = pytest.importorskip("dimod", reason="dwave-neal / dimod not installed")
+dimod = pytest.importorskip("dimod", reason="dwave-samplers / dimod not installed")
 
-from xqsa import Backend, NealBackend, SolverResult
+from xqsa import Solver, SolverDWaveCPU, SolverResult
 from xqvm_py.xqmx import XQMX, XQMXMode, compute_energy
 
 # ---------------------------------------------------------------------------
@@ -37,108 +37,108 @@ class TestSolverResult:
     def test_construction(self) -> None:
         """SolverResult stores sample, energy, timing, metadata."""
         sample = XQMX.binary_sample(2)
-        result = SolverResult(sample=sample, energy=-5.0, timing=0.1, metadata={"k": "v"})
+        result = SolverResult(sample=sample, energy=-5, timing=0.1, metadata={"k": "v"})
         assert result.sample is sample
-        assert result.energy == -5.0
+        assert result.energy == -5
         assert result.timing == 0.1
         assert result.metadata == {"k": "v"}
 
     def test_frozen(self) -> None:
         """SolverResult is immutable."""
         sample = XQMX.binary_sample(2)
-        result = SolverResult(sample=sample, energy=0.0, timing=0.0)
+        result = SolverResult(sample=sample, energy=0, timing=0.0)
         with pytest.raises(AttributeError):
-            result.energy = 1.0
+            result.energy = 1
 
     def test_default_metadata(self) -> None:
         """Metadata defaults to empty dict."""
         sample = XQMX.binary_sample(2)
-        result = SolverResult(sample=sample, energy=0.0, timing=0.0)
+        result = SolverResult(sample=sample, energy=0, timing=0.0)
         assert result.metadata == {}
 
 
 # ---------------------------------------------------------------------------
-# Backend ABC
+# Solver ABC
 # ---------------------------------------------------------------------------
 
 
-class TestBackend:
-    """Tests for the abstract Backend base class."""
+class TestSolver:
+    """Tests for the abstract Solver base class."""
 
     def test_cannot_instantiate(self) -> None:
-        """Backend is abstract and cannot be instantiated directly."""
+        """Solver is abstract and cannot be instantiated directly."""
         with pytest.raises(TypeError):
-            Backend()
+            Solver()
 
     def test_validate_rejects_sample_mode(self) -> None:
         """_validate_model rejects SAMPLE mode."""
 
-        class DummyBackend(Backend):
+        class DummySolver(Solver):
             def solve(self, model, **kwargs):
                 pass
 
-        backend = DummyBackend()
+        solver = DummySolver()
         sample = XQMX.binary_sample(2)
         with pytest.raises(ValueError, match="MODEL"):
-            backend._validate_model(sample)
+            solver._validate_model(sample)
 
     def test_validate_rejects_discrete_domain(self) -> None:
         """_validate_model rejects DISCRETE domain."""
 
-        class DummyBackend(Backend):
+        class DummySolver(Solver):
             def solve(self, model, **kwargs):
                 pass
 
-        backend = DummyBackend()
+        solver = DummySolver()
         model = XQMX.discrete_model(2, k=3)
         with pytest.raises(ValueError, match="DISCRETE"):
-            backend._validate_model(model)
+            solver._validate_model(model)
 
     def test_validate_accepts_binary_model(self) -> None:
         """_validate_model accepts BINARY MODEL."""
 
-        class DummyBackend(Backend):
+        class DummySolver(Solver):
             def solve(self, model, **kwargs):
                 pass
 
-        backend = DummyBackend()
+        solver = DummySolver()
         model = XQMX.binary_model(2)
-        backend._validate_model(model)  # should not raise
+        solver._validate_model(model)  # should not raise
 
     def test_validate_accepts_spin_model(self) -> None:
         """_validate_model accepts SPIN MODEL."""
 
-        class DummyBackend(Backend):
+        class DummySolver(Solver):
             def solve(self, model, **kwargs):
                 pass
 
-        backend = DummyBackend()
+        solver = DummySolver()
         model = XQMX.spin_model(2)
-        backend._validate_model(model)  # should not raise
+        solver._validate_model(model)  # should not raise
 
 
 # ---------------------------------------------------------------------------
-# NealBackend
+# SolverDWaveCPU
 # ---------------------------------------------------------------------------
 
 
-class TestNealBackend:
-    """Tests for the DWave neal simulated annealing backend."""
+class TestSolverDWaveCPU:
+    """Tests for the DWave CPU simulated annealing solver."""
 
     def test_default_params(self) -> None:
-        """NealBackend stores default parameters."""
-        backend = NealBackend()
-        assert backend.num_reads == 100
-        assert backend.num_sweeps == 1000
-        assert backend.beta_range is None
-        assert backend.seed is None
+        """SolverDWaveCPU stores default parameters."""
+        solver = SolverDWaveCPU()
+        assert solver.num_reads == 100
+        assert solver.num_sweeps == 1000
+        assert solver.beta_range is None
+        assert solver.seed is None
 
     def test_custom_params(self) -> None:
-        """NealBackend accepts custom parameters."""
-        backend = NealBackend(num_reads=50, num_sweeps=500, seed=42)
-        assert backend.num_reads == 50
-        assert backend.num_sweeps == 500
-        assert backend.seed == 42
+        """SolverDWaveCPU accepts custom parameters."""
+        solver = SolverDWaveCPU(num_reads=50, num_sweeps=500, seed=42)
+        assert solver.num_reads == 50
+        assert solver.num_sweeps == 500
+        assert solver.seed == 42
 
     def test_solve_trivial_binary(self) -> None:
         """Solve a trivial 2-variable QUBO: minimize x0 + x1."""
@@ -146,36 +146,39 @@ class TestNealBackend:
         model.set_linear(0, 1.0)
         model.set_linear(1, 1.0)
 
-        backend = NealBackend(num_reads=10, num_sweeps=100, seed=42)
-        result = backend.solve(model)
+        solver = SolverDWaveCPU(num_reads=10, num_sweeps=100, seed=42)
+        result = solver.solve(model)
 
         assert isinstance(result, SolverResult)
         assert isinstance(result.sample, XQMX)
         assert result.sample.mode == XQMXMode.SAMPLE
         assert result.sample.size == 2
-        assert result.energy == 0.0
+        assert result.energy == 0
+        assert isinstance(result.energy, int)
         assert result.timing > 0.0
-        assert "num_reads" in result.metadata
+        assert result.metadata["reads"] == 10
+        assert result.metadata["seed"] == 42
+        assert "num_sweeps" in result.metadata["params"]
 
     def test_solve_antiferromagnetic(self) -> None:
         """Solve x0*x1 with positive coupling: optimal is x0 != x1."""
         model = XQMX.binary_model(2)
         model.set_quadratic(0, 1, 1.0)
 
-        backend = NealBackend(num_reads=10, num_sweeps=100, seed=42)
-        result = backend.solve(model)
+        solver = SolverDWaveCPU(num_reads=10, num_sweeps=100, seed=42)
+        result = solver.solve(model)
 
         x0 = result.sample.get_linear(0)
         x1 = result.sample.get_linear(1)
-        assert x0 * x1 == 0.0  # at least one must be 0
+        assert x0 * x1 == 0  # at least one must be 0
 
     def test_solve_preserves_grid(self) -> None:
         """Solver preserves rows/cols from the model."""
         model = XQMX.binary_model(4, rows=2, cols=2)
         model.set_linear(0, 1.0)
 
-        backend = NealBackend(num_reads=10, num_sweeps=100, seed=42)
-        result = backend.solve(model)
+        solver = SolverDWaveCPU(num_reads=10, num_sweeps=100, seed=42)
+        result = solver.solve(model)
 
         assert result.sample.rows == 2
         assert result.sample.cols == 2
@@ -183,20 +186,21 @@ class TestNealBackend:
     def test_solve_rejects_sample_mode(self) -> None:
         """Solve rejects SAMPLE mode input."""
         sample = XQMX.binary_sample(2)
-        backend = NealBackend()
+        solver = SolverDWaveCPU()
         with pytest.raises(ValueError, match="MODEL"):
-            backend.solve(sample)
+            solver.solve(sample)
 
     def test_kwargs_override(self) -> None:
         """Per-call kwargs override constructor defaults."""
         model = XQMX.binary_model(2)
         model.set_linear(0, 1.0)
 
-        backend = NealBackend(num_reads=100, seed=1)
-        result = backend.solve(model, num_reads=5, seed=99)
+        solver = SolverDWaveCPU(num_reads=100, seed=1)
+        result = solver.solve(model, num_reads=5, seed=99)
 
-        assert result.metadata["num_reads"] == 5
+        assert result.metadata["reads"] == 5
         assert result.metadata["seed"] == 99
+        assert result.metadata["params"]["num_sweeps"] == 1000
 
     def test_energy_matches_compute_energy(self) -> None:
         """Solver-reported energy matches compute_energy."""
@@ -205,8 +209,94 @@ class TestNealBackend:
         model.set_linear(1, -3.0)
         model.set_quadratic(0, 1, 5.0)
 
-        backend = NealBackend(num_reads=50, num_sweeps=500, seed=42)
-        result = backend.solve(model)
+        solver = SolverDWaveCPU(num_reads=50, num_sweeps=500, seed=42)
+        result = solver.solve(model)
 
         expected_energy = compute_energy(model, result.sample)
-        assert abs(result.energy - expected_energy) < 1e-9
+        assert result.energy == expected_energy
+        assert isinstance(result.energy, int)
+
+    def test_solve_ising_basic(self) -> None:
+        """Solve a trivial Ising model: minimize -s0 - s1 (ground state: +1, +1)."""
+        model = XQMX.spin_model(2)
+        model.set_linear(0, -1.0)
+        model.set_linear(1, -1.0)
+
+        solver = SolverDWaveCPU(num_reads=10, num_sweeps=100, seed=42)
+        result = solver.solve(model)
+
+        assert isinstance(result, SolverResult)
+        assert isinstance(result.energy, int)
+        assert result.sample.size == 2
+        for i in range(2):
+            assert result.sample.get_linear(i) in (-1, 1)
+
+    def test_beta_range_passthrough(self) -> None:
+        """beta_range is recorded in result metadata."""
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+
+        solver = SolverDWaveCPU(num_reads=10, num_sweeps=100, seed=42)
+        result = solver.solve(model, beta_range=(0.1, 5.0))
+
+        assert result.metadata["params"]["beta_range"] == (0.1, 5.0)
+
+    def test_num_reads_validation(self) -> None:
+        """num_reads < 1 raises ValueError."""
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        solver = SolverDWaveCPU()
+        with pytest.raises(ValueError, match="num_reads"):
+            solver.solve(model, num_reads=0)
+
+    def test_num_sweeps_validation(self) -> None:
+        """num_sweeps < 1 raises ValueError."""
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        solver = SolverDWaveCPU()
+        with pytest.raises(ValueError, match="num_sweeps"):
+            solver.solve(model, num_sweeps=0)
+
+    def test_model_to_bqm_qubo(self) -> None:
+        """_model_to_bqm produces correct BQM for a QUBO model."""
+        model = XQMX.binary_model(3)
+        model.set_linear(0, -2.0)
+        model.set_linear(1, 3.0)
+        model.set_quadratic(0, 2, 1.5)
+
+        solver = SolverDWaveCPU()
+        bqm = solver._model_to_bqm(model)
+
+        assert bqm.vartype is dimod.BINARY
+        assert len(bqm.variables) == 3
+        assert bqm.get_linear(0) == pytest.approx(-2.0)
+        assert bqm.get_linear(1) == pytest.approx(3.0)
+        assert bqm.get_quadratic(0, 2) == pytest.approx(1.5)
+
+    def test_model_to_bqm_ising(self) -> None:
+        """_model_to_bqm produces correct BQM for an Ising model."""
+        model = XQMX.spin_model(2)
+        model.set_linear(0, -1.0)
+        model.set_quadratic(0, 1, 2.0)
+
+        solver = SolverDWaveCPU()
+        bqm = solver._model_to_bqm(model)
+
+        assert bqm.vartype is dimod.SPIN
+        assert bqm.get_linear(0) == pytest.approx(-1.0)
+        assert bqm.get_quadratic(0, 1) == pytest.approx(2.0)
+
+    def test_sample_to_xqmx(self) -> None:
+        """_sample_to_xqmx converts a raw sample dict to an XQMX sample."""
+        model = XQMX.binary_model(3, rows=1, cols=3)
+
+        solver = SolverDWaveCPU()
+        sample = solver._sample_to_xqmx(model, {0: 1, 1: 0, 2: 1})
+
+        assert sample.mode == XQMXMode.SAMPLE
+        assert sample.size == 3
+        assert sample.rows == 1
+        assert sample.cols == 3
+        assert sample.get_linear(0) == 1
+        assert sample.get_linear(1) == 0
+        assert sample.get_linear(2) == 1

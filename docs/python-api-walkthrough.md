@@ -12,7 +12,7 @@ The XQuad toolchain ships as five peer PyPI distributions:
 |---------|---------|
 | [`xqffi`](../xqffi/) | pyo3 FFI bindings for the Rust VM + assembler (not user-facing) |
 | [`xqcp`](../xqcp/) | Constraint-programming DSL |
-| [`xqsa`](../xqsa/) | Solver adapters (dwave-neal today) |
+| [`xqsa`](../xqsa/) | Solver adapters (dwave-samplers) |
 | [`xqvm_py`](../xqvm_py/) | Python reference VM (conformance oracle) |
 | [`xquad`](../xquad/) | Umbrella meta-package — user-facing API surface |
 
@@ -176,7 +176,7 @@ v.set_calldata([...])
 v.run(encoder_bytecode)
 
 # sample — xqsa drives a solver
-samples = sa.NealBackend().sample(model_from_outputs)
+result = sa.SolverDWaveCPU().solve(model_from_outputs)
 
 # verify / decode — problem-specific; typically more xqasm runs
 ```

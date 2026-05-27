@@ -53,7 +53,7 @@ assert dict(result.outputs) == {0: 42}
 
 - [`xqvm_py`](../xqvm_py/) — pure-Python reference VM (conformance oracle).
 - [`xqcp`](../xqcp/) — constraint programming DSL that compiles to `.xqasm`.
-- [`xqsa`](../xqsa/) — solver adapters (dwave-neal).
+- [`xqsa`](../xqsa/) -- solver adapters (dwave-samplers).
 - [`xquad`](../xquad/) — umbrella meta-package with the interactive API.
 - [`docs/python-api-walkthrough.md`](../docs/python-api-walkthrough.md) — full tour.
 

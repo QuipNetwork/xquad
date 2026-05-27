@@ -15,8 +15,8 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""`xquad.sa` — re-export of `xqsa` (solver adapters: dwave-neal + pluggable backends)."""
+"""`xquad.sa` -- re-export of `xqsa` (solver adapters: dwave-samplers + pluggable solvers)."""
 
-from xqsa import Backend, NealBackend, SolverResult
+from xqsa import Solver, SolverDWaveCPU, SolverResult
 
-__all__ = ["Backend", "NealBackend", "SolverResult"]
+__all__ = ["Solver", "SolverDWaveCPU", "SolverResult"]
