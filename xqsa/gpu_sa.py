@@ -80,9 +80,7 @@ class SolverGPUSA(Solver):
             ) from exc
 
         if not _cuda.is_available():
-            raise RuntimeError(
-                "No CUDA-capable GPU detected. SolverGPUSA requires an NVIDIA GPU with CUDA support."
-            )
+            raise RuntimeError("No CUDA-capable GPU detected. SolverGPUSA requires an NVIDIA GPU with CUDA support.")
 
         self.num_reads = num_reads
         self.num_sweeps = num_sweeps

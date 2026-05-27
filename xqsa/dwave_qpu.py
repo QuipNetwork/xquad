@@ -81,9 +81,7 @@ class SolverDWaveQPU(Solver):
         try:
             import dwave.system as _dwave_system
         except ImportError as exc:
-            raise ImportError(
-                "dwave-system is not installed. Install xqsa with: pip install xqsa[dwave]"
-            ) from exc
+            raise ImportError("dwave-system is not installed. Install xqsa with: pip install xqsa[dwave]") from exc
 
         resolved_token = token or os.environ.get("DWAVE_API_TOKEN")
         if resolved_token is None:
