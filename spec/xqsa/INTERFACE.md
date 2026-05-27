@@ -1,9 +1,9 @@
 # Solver Interface
 
-## Backend Abstract Class
+## Solver Abstract Class
 
 ```python
-class Backend(ABC):
+class Solver(ABC):
     @abstractmethod
     def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
         """Solve a quadratic model, returning the best solution found."""
@@ -12,9 +12,21 @@ class Backend(ABC):
     def _validate_model(self, model: XQMX) -> None:
         """Validate that the model is solvable."""
         ...
+
+    def _model_to_bqm(self, model: XQMX) -> dimod.BinaryQuadraticModel:
+        """Convert an XQMX model to a dimod BQM."""
+        ...
+
+    def _sample_to_xqmx(self, model: XQMX, raw_sample: dict[int, int]) -> XQMX:
+        """Convert a dimod sample dict to an XQMX sample."""
+        ...
+
+    def _recompute_energy(self, model: XQMX, sample: XQMX) -> int:
+        """Compute authoritative integer energy for a model-sample pair."""
+        ...
 ```
 
-All solver implementations inherit from `Backend` and override `solve()`.
+All solver implementations inherit from `Solver` and override `solve()`.
 
 ## `solve()` Contract
 
@@ -29,7 +41,7 @@ All solver implementations inherit from `Backend` and override `solve()`.
 1. Must call `_validate_model(model)` (or equivalent validation) before solving
 2. Must measure wall-clock timing via `time.perf_counter()`
 3. Must return the best sample (lowest energy) if multiple reads are performed
-4. Must populate `SolverResult.energy` with the authoritative integer energy computed via `compute_energy(model, sample)` (see [ENERGY.md](ENERGY.md))
+4. Must populate `SolverResult.energy` with the authoritative integer energy computed via `_recompute_energy(model, sample)` (see [ENERGY.md](ENERGY.md))
 5. Must populate all mandated metadata keys (see [Metadata Schema](#metadata-schema))
 
 **Failure semantics:**
@@ -61,8 +73,6 @@ class SolverResult:
     metadata: dict[str, Any]    # Mandated + solver-specific keys
 ```
 
-> **v0.2.0 divergence:** the reference implementation declares `energy: float` and uses flat metadata keys. QUI-573 brings the implementation into conformance with `energy: int`, base-class recomputation, and the mandated metadata schema.
-
 **Invariants:**
 - `sample.mode == XQMXMode.SAMPLE`
 - `sample.size == model.size` (same number of variables)
@@ -84,7 +94,7 @@ class SolverResult:
 
 All solver-specific keys must go under `params`. No other top-level keys are permitted beyond `seed`, `reads`, and `params`.
 
-**Example (NealBackend):**
+**Example (SolverDWaveCPU):**
 
 ```python
 metadata = {
@@ -109,22 +119,22 @@ Solver parameters follow a two-level pattern:
 2. **Per-call overrides** -- `**kwargs` on `solve()` override constructor defaults for that call only
 
 ```python
-backend = NealBackend(num_reads=100, seed=42)
-result = backend.solve(model)                    # uses constructor defaults
-result = backend.solve(model, num_reads=500)     # overrides num_reads for this call
+solver = SolverDWaveCPU(num_reads=100, seed=42)
+result = solver.solve(model)                    # uses constructor defaults
+result = solver.solve(model, num_reads=500)     # overrides num_reads for this call
 ```
 
 The spec does not mandate any specific parameter names beyond the metadata keys above. Each solver defines its own parameter surface.
 
 ## Capability Reporting
 
-v0.2.0 uses validate-or-reject: `_validate_model()` is the sole gate. There is no capabilities introspection method. Callers that need to check domain support should catch `ValueError` from `_validate_model()`.
+`_validate_model()` is the sole gate. There is no capabilities introspection method. Callers that need to check domain support should catch `ValueError` from `_validate_model()`.
 
 Future versions may add richer negotiation (supported domains, problem-size limits, hardware constraints) but this is not currently specified.
 
-## NealBackend Reference (v0.2.0)
+## SolverDWaveCPU Reference
 
-`NealBackend` is the reference implementation, wrapping `dwave-neal` simulated annealing.
+`SolverDWaveCPU` is the reference implementation, wrapping `dwave-samplers` simulated annealing on CPU.
 
 **Constructor parameters:**
 
@@ -139,7 +149,7 @@ All four parameters are overridable via `solve(**kwargs)`.
 
 **Conversion pipeline (informative, not normative):**
 1. XQMX model -> `dimod.BinaryQuadraticModel` via `_model_to_bqm()`
-2. `neal.SimulatedAnnealingSampler().sample()` with timing measurement
+2. `dwave.samplers.SimulatedAnnealingSampler().sample()` with timing measurement
 3. Best result -> XQMX sample via `_sample_to_xqmx()`
-4. Energy recomputed via `compute_energy(model, sample)`
+4. Energy recomputed via `_recompute_energy(model, sample)`
 5. Grid dimensions (rows/cols) preserved from original model

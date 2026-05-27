@@ -16,17 +16,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-XQSA — Solver backends for XQMX quadratic models.
+XQSA -- Solvers for XQMX quadratic models.
 
-Provides pluggable solver backends that take XQMX models and return
-optimized samples. The first backend wraps DWave's neal simulated annealer.
+Provides pluggable solvers that take XQMX models and return
+optimized samples. The first solver wraps DWave's CPU simulated annealer.
 """
 
-from .backend import Backend, SolverResult
-from .neal import NealBackend
+from .dwave_cpu import SolverDWaveCPU
+from .solver import Solver, SolverResult
 
 __all__ = [
-    "Backend",
+    "Solver",
     "SolverResult",
-    "NealBackend",
+    "SolverDWaveCPU",
 ]

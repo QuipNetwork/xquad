@@ -71,7 +71,7 @@ test:xquad:
             import xqvm_py.xqmx as _xqmx
             import xqvm_py.vector as _vec
             assert cp.Problem is _cp.Problem
-            assert sa.NealBackend is _sa.NealBackend
+            assert sa.SolverDWaveCPU is _sa.SolverDWaveCPU
             assert types.XQMX is _xqmx.XQMX
             assert types.Vec is _vec.Vec
             assert types.triu is _xqmx.triu

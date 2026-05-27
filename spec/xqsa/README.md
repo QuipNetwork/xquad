@@ -7,14 +7,14 @@ Authoritative specification for X-Quadratic Solver Adapters. The spec is split a
 | File | Content |
 |------|---------|
 | [SPEC.md](SPEC.md) | Architecture overview, pipeline position, plugin model |
-| [INTERFACE.md](INTERFACE.md) | `Backend` abstract class, `solve()` contract, `SolverResult` type, parameter conventions |
+| [INTERFACE.md](INTERFACE.md) | `Solver` abstract class, `solve()` contract, `SolverResult` type, parameter conventions |
 | [ENERGY.md](ENERGY.md) | Energy computation formula, precision contract, sparse representation |
 | [DOMAINS.md](DOMAINS.md) | Domain support matrix, sample encoding, grid metadata, capability negotiation |
 | [SOLVERS.md](SOLVERS.md) | Solver registry, naming convention, algorithm families, dependency model |
 
 ## Reference implementation
 
-[`../../xqsa/`](../../xqsa/) -- Python package. v0.2.0 implements `NealBackend` wrapping `dwave-neal` simulated annealing.
+[`../../xqsa/`](../../xqsa/) -- Python package. v0.3.0 implements `SolverDWaveCPU` wrapping `dwave-samplers` simulated annealing.
 
 ## Related specifications
 

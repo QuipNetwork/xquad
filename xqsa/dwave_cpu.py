@@ -16,9 +16,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-DWave neal simulated annealing backend.
+DWave CPU simulated annealing solver.
 
-Wraps dwave-neal's SimulatedAnnealingSampler to solve XQMX
+Wraps dwave-samplers' SimulatedAnnealingSampler to solve XQMX
 quadratic models via simulated annealing on CPU.
 """
 
@@ -27,16 +27,15 @@ from __future__ import annotations
 import time
 from typing import Any
 
-import dimod
-import neal
+from dwave.samplers import SimulatedAnnealingSampler
 
-from xqvm_py.xqmx import XQMX, XQMXDomain
+from xqvm_py.xqmx import XQMX
 
-from .backend import Backend, SolverResult
+from .solver import Solver, SolverResult
 
 
-class NealBackend(Backend):
-    """Simulated annealing backend using dwave-neal."""
+class SolverDWaveCPU(Solver):
+    """Simulated annealing solver using dwave-samplers (CPU)."""
 
     def __init__(
         self,
@@ -51,7 +50,7 @@ class NealBackend(Backend):
         self.seed = seed
 
     def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
-        """Solve using simulated annealing via dwave-neal."""
+        """Solve using simulated annealing via dwave-samplers."""
         self._validate_model(model)
 
         num_reads = kwargs.get("num_reads", self.num_reads)
@@ -59,8 +58,13 @@ class NealBackend(Backend):
         beta_range = kwargs.get("beta_range", self.beta_range)
         seed = kwargs.get("seed", self.seed)
 
+        if num_reads < 1:
+            raise ValueError("num_reads must be >= 1")
+        if num_sweeps < 1:
+            raise ValueError("num_sweeps must be >= 1")
+
         bqm = self._model_to_bqm(model)
-        sampler = neal.SimulatedAnnealingSampler()
+        sampler = SimulatedAnnealingSampler()
 
         sample_kwargs: dict[str, Any] = {
             "num_reads": num_reads,
@@ -77,41 +81,20 @@ class NealBackend(Backend):
 
         best = result.first
         raw_sample = dict(best.sample)
-        energy = float(best.energy)
-
         sample = self._sample_to_xqmx(model, raw_sample)
 
         return SolverResult(
             sample=sample,
-            energy=energy,
+            energy=self._recompute_energy(model, sample),
             timing=elapsed,
             metadata={
-                "num_reads": num_reads,
-                "num_sweeps": num_sweeps,
-                "beta_range": beta_range,
                 "seed": seed,
-                "num_occurrences": int(best.num_occurrences),
+                "reads": num_reads,
+                "params": {
+                    "num_sweeps": num_sweeps,
+                    "beta_range": beta_range,
+                    "num_occurrences": int(best.num_occurrences),
+                    "raw_energy": float(best.energy),
+                },
             },
         )
-
-    def _model_to_bqm(self, model: XQMX) -> dimod.BinaryQuadraticModel:
-        """Convert an XQMX model to a dimod BQM."""
-        vartype = dimod.BINARY if model.domain == XQMXDomain.BINARY else dimod.SPIN
-        return dimod.BinaryQuadraticModel(
-            model.linear,
-            model.quadratic,
-            0.0,
-            vartype,
-        )
-
-    def _sample_to_xqmx(self, model: XQMX, raw_sample: dict[int, int]) -> XQMX:
-        """Convert a dimod sample dict to an XQMX sample."""
-        if model.domain == XQMXDomain.BINARY:
-            sample = XQMX.binary_sample(model.size, model.rows, model.cols)
-        else:
-            sample = XQMX.spin_sample(model.size, model.rows, model.cols)
-
-        for var_idx, value in raw_sample.items():
-            sample.set_linear(var_idx, int(value))
-
-        return sample

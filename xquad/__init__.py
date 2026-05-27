@@ -29,7 +29,7 @@ pipeline::
     bytecode = asm.assemble_source(...)
     v = vm.Vm()
     v.run(bytecode)
-    samples = sa.NealBackend().sample(problem.model())
+    samples = sa.SolverDWaveCPU().solve(problem.model())
 
 Each subnamespace is a direct re-export of the corresponding peer
 package, so `xquad.cp.Problem is xqcp.Problem` (identity, not copy).

@@ -19,9 +19,7 @@ This is identical to the XQVM `ENERGY` opcode (see [../xqvm/HLF.md](../xqvm/HLF.
 
 `SolverResult.energy` must equal `compute_energy(model, sample)` exactly. This is an integer-to-integer comparison with no tolerance.
 
-The `Backend` base class enforces this by recomputing energy via `compute_energy(model, sample)` after the concrete solver returns, rather than trusting the solver's internally reported energy. External solver libraries (dimod, dwave-neal) typically return energy as `float`. The base class replaces this with the authoritative integer value. The solver's raw float energy is preserved under `metadata["params"]["raw_energy"]` for diagnostics.
-
-> **v0.2.0 divergence:** the reference implementation stores `energy` as `float` and does not perform base-class recomputation. QUI-573 adds the recomputation step and changes the type to `int`.
+The `Solver` base class provides `_recompute_energy(model, sample)` which calls `compute_energy(model, sample)` and casts the result to `int`. Concrete solvers must use this instead of trusting the solver's internally reported energy. External solver libraries (dimod, dwave-samplers) typically return energy as `float`. The base class replaces this with the authoritative integer value. The solver's raw float energy is preserved under `metadata["params"]["raw_energy"]` for diagnostics.
 
 **Why integer:** all XQMX coefficients (`linear`, `quadratic`) and all variable assignments are integers. The energy formula is a sum of integer products, so the result is always an exact integer. The XQVM `ENERGY` opcode returns an integer pushed onto the stack. Using integer energy throughout eliminates float64 mantissa overflow concerns and allows direct `==` comparison between solver-reported energy and verifier-computed energy.
 

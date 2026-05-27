@@ -16,9 +16,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Abstract solver backend and result types for XQMX quadratic models.
+Abstract solver base class and result types for XQMX quadratic models.
 
-Backends implement the solve() method to find low-energy solutions
+Solvers implement the solve() method to find low-energy solutions
 for XQMX models using different optimization strategies.
 """
 
@@ -28,21 +28,23 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
-from xqvm_py.xqmx import XQMX, XQMXDomain, XQMXMode
+import dimod
+
+from xqvm_py.xqmx import XQMX, XQMXDomain, XQMXMode, compute_energy
 
 
 @dataclass(frozen=True)
 class SolverResult:
-    """Result from a solver backend."""
+    """Result from a solver."""
 
     sample: XQMX
-    energy: float
+    energy: int
     timing: float
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-class Backend(ABC):
-    """Abstract solver backend for XQMX quadratic models."""
+class Solver(ABC):
+    """Abstract solver base class for XQMX quadratic models."""
 
     @abstractmethod
     def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
@@ -55,3 +57,29 @@ class Backend(ABC):
             raise ValueError(f"Expected MODEL mode, got {model.mode.name}")
         if model.domain not in (XQMXDomain.BINARY, XQMXDomain.SPIN):
             raise ValueError(f"Unsupported domain for solving: {model.domain.name}")
+
+    def _model_to_bqm(self, model: XQMX) -> dimod.BinaryQuadraticModel:
+        """Convert an XQMX model to a dimod BQM."""
+        vartype = dimod.BINARY if model.domain == XQMXDomain.BINARY else dimod.SPIN
+        return dimod.BinaryQuadraticModel(
+            model.linear,
+            model.quadratic,
+            0.0,
+            vartype,
+        )
+
+    def _sample_to_xqmx(self, model: XQMX, raw_sample: dict[int, int]) -> XQMX:
+        """Convert a dimod sample dict to an XQMX sample."""
+        if model.domain == XQMXDomain.BINARY:
+            sample = XQMX.binary_sample(model.size, model.rows, model.cols)
+        else:
+            sample = XQMX.spin_sample(model.size, model.rows, model.cols)
+
+        for var_idx, value in raw_sample.items():
+            sample.set_linear(var_idx, int(value))
+
+        return sample
+
+    def _recompute_energy(self, model: XQMX, sample: XQMX) -> int:
+        """Compute authoritative integer energy for a model-sample pair."""
+        return int(compute_energy(model, sample))

@@ -58,7 +58,7 @@ vm.set_output_slots(1)
 vm.run(programs.encoder)
 model = vm.outputs()[0]
 
-sample = sa.NealBackend().solve(model).sample
+sample = sa.SolverDWaveCPU().solve(model).sample
 ```
 
 Re-exports of peer packages are identity, not copies:
@@ -79,7 +79,7 @@ So `isinstance` works whether the caller imported directly from the peer or via 
 | `xquad.types` | first-party | Canonical Python type aliases used across the API |
 | `xquad.asm` | re-exports `xqffi.asm` | `parse_xqasm`, `assemble_source`, `disassemble` |
 | `xquad.cp` | re-exports `xqcp` | DSL — `Problem`, `Types`, expression builders |
-| `xquad.sa` | re-exports `xqsa` | Solver backends — `NealBackend`, `Backend` |
+| `xquad.sa` | re-exports `xqsa` | Solvers -- `SolverDWaveCPU`, `Solver` |
 
 Lower-level escape hatches remain available directly via the peer packages (`xqffi.vm.Vm` for the raw FFI one-shot surface; `xqvm_py.Executor` for the pure-Python reference VM).
 

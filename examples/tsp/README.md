@@ -3,7 +3,7 @@
 End-to-end XQuad pipeline demo: build a random symmetric distance
 matrix, compile a TSP QUBO via `xqcp`, run the encoder on the chosen
 XQVM interpreter (Python reference or Rust), sample the resulting
-model with `xqsa`'s neal simulated annealer, and verify + decode the
+model with `xqsa`'s `SolverDWaveCPU` simulated annealer, and verify + decode the
 tour.
 
 ## Run it
@@ -42,7 +42,7 @@ Flags:
    `.xqasm` text into bytecode or a `Program` dataclass.
 3. **Encode** — run the encoder program on the chosen VM to produce
    the fully-populated `XqmxModel`.
-4. **Sample** — `xqsa.NealBackend(seed=seed)` runs dwave-neal
+4. **Sample** -- `xqsa.SolverDWaveCPU(seed=seed)` runs dwave-samplers
    simulated annealing over the model, returning a candidate `Sample`.
 5. **Verify** — run the verifier program (same VM) to check one-hot
    row/col constraints and compute the Hamiltonian energy.

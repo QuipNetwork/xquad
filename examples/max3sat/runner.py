@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from xquad.cp import Problem, Types
-from xquad.sa import NealBackend
+from xquad.sa import SolverDWaveCPU
 from xquad.types import XQMX, Vec, XQMXDomain
 from xquad.vm import VM, VMBackend
 
@@ -120,8 +120,8 @@ def run(
     model = vm.outputs()[0]
     assert isinstance(model, XQMX)
 
-    sa_backend = NealBackend(seed=seed)
-    sample = sa_backend.solve(model).sample
+    solver = SolverDWaveCPU(seed=seed)
+    sample = solver.solve(model).sample
 
     vm = VM(backend=backend)
     vm.set_calldata([model, sample, n])
