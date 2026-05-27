@@ -14,6 +14,22 @@
 #                         per-project tokens require the project to
 #                         already exist on PyPI.
 #
+# Release MR flow (QUI-580):
+#
+#   1. Open a branch named `release/vX.Y.Z` with the version bump.
+#   2. Create an MR using the "release" template; both @kleczkowski
+#      and @meganathanmanish must approve (2 approvals required).
+#   3. Merge → `release:auto-tag` fires on main, looks up the merged
+#      MR via the GitLab API, and pushes tag `vX.Y.Z` via glab.
+#   4. The tag push triggers the rest of this pipeline as normal.
+#      `release:notes` creates the GitLab Release page with git-cliff
+#      notes via glab once artefacts are published.
+#
+#   Prerequisite: GITLAB_API_TOKEN (project access token, api scope)
+#   must be set in Settings → CI/CD → Variables (masked).
+#   Protected tag pattern `v*` must exist in
+#   Settings → Repository → Protected tags.
+#
 # See RELEASING.md for the full tag-cut checklist.
 
 # ---------------------------------------------------------------------------
@@ -66,6 +82,65 @@
     - export PATH="${HOME}/.local/share/uv/tools/maturin/bin:${HOME}/.local/share/uv/tools/twine/bin:${PATH}"
     - maturin --version
     - twine --version
+
+# ---------------------------------------------------------------------------
+# Auto-tag job (main-push-triggered, release MR flow)
+# ---------------------------------------------------------------------------
+
+# Fires on every push to main. Queries the GitLab MR API for the
+# merged MR whose merge_commit_sha or squash_commit_sha matches
+# CI_COMMIT_SHA, then reads source_branch directly — no commit
+# message parsing. Both fields are checked because squash merges set
+# merge_commit_sha to null and record the pushed SHA in
+# squash_commit_sha instead. If the branch matches release/vX.Y.Z
+# the version is extracted and only the git tag is pushed via glab
+# api. The release page is created separately by release:notes once
+# git-cliff notes are ready. Any other push exits cleanly.
+#
+# Required CI variable (Settings → CI/CD → Variables, masked):
+#   GITLAB_API_TOKEN  — project access token with api scope (write_repository
+#                       minimum). CI_JOB_TOKEN cannot query MR metadata.
+release:auto-tag:
+    stage: release
+    image: registry.gitlab.com/gitlab-org/cli:latest
+    cache: []
+    before_script:
+        - apk add --no-cache jq
+    rules:
+        # Only on direct pushes to main — not on tag pipelines or MR
+        # pipelines (MR pipelines run before the merge; we want after).
+        - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
+          when: on_success
+    variables:
+        GITLAB_TOKEN: "${GITLAB_API_TOKEN}"
+    script:
+        - |
+            SOURCE_BRANCH=$(curl -sf \
+              --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
+              "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests?state=merged&target_branch=main&order_by=updated_at&sort=desc&per_page=100" \
+              | jq -r ".[] | select(.merge_commit_sha == \"${CI_COMMIT_SHA}\" or .squash_commit_sha == \"${CI_COMMIT_SHA}\") | .source_branch")
+
+            if [ -z "$SOURCE_BRANCH" ]; then
+              echo "No merged MR found for this commit — nothing to tag."
+              exit 0
+            fi
+
+            echo "Merged from branch: ${SOURCE_BRANCH}"
+
+            VERSION=$(printf '%s' "$SOURCE_BRANCH" | sed -n 's|^release/v||p')
+
+            if [ -z "$VERSION" ]; then
+              echo "Source branch is not a release branch — nothing to tag."
+              exit 0
+            fi
+
+            echo "Detected release merge: v${VERSION}"
+            glab api "projects/${CI_PROJECT_ID}/repository/tags" \
+              --method POST \
+              -f "tag_name=v${VERSION}" \
+              -f "ref=${CI_COMMIT_SHA}" \
+              -f "message=xquad v${VERSION}" \
+              || echo "Tag v${VERSION} already exists — skipping."
 
 # ---------------------------------------------------------------------------
 # Release jobs (tag-triggered)
@@ -184,23 +259,21 @@ release:changelog:
         expire_in: 30 days
 
 # Create the GitLab Release page for the tag with the git-cliff-
-# generated notes as the description. Uses GitLab's `release:`
-# keyword (declarative) which talks to the project API via the
-# CI_JOB_TOKEN -- no extra secrets needed.
+# generated notes as the description. Uses the declarative `release:`
+# keyword so CI_JOB_TOKEN is sufficient — no extra PAT needed, and the
+# job is idempotent (re-running does not error if the release exists).
 release:notes:
     stage: release
     image: registry.gitlab.com/gitlab-org/release-cli:latest
-    # Alpine-based release-cli image -- the rust default cache paths
-    # are irrelevant here.
     cache: []
     needs:
         - job: release:changelog
           artifacts: true
     <<: *on-release-tag
     script:
-        - echo "Publishing GitLab Release for ${CI_COMMIT_TAG}"
+        - echo "Creating release for ${CI_COMMIT_TAG}"
     release:
-        tag_name: "${CI_COMMIT_TAG}"
+        tag_name: $CI_COMMIT_TAG
         name: "xquad ${CI_COMMIT_TAG}"
         description: ./release-notes.md
 
