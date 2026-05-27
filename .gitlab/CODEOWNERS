@@ -1,0 +1,10 @@
+# Code owners — every MR into main requires approval from both owners.
+#
+# Approval count is enforced via:
+#   Settings → Merge requests → Approval rules → Approvals required: 2
+#
+# The "Require code owner approval" toggle on the protected main branch
+# additionally ensures approvals must come from the listed owners, not
+# arbitrary project members.
+
+* @kleczkowski @meganathanmanish

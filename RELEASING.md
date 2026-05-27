@@ -66,23 +66,58 @@ Before cutting a tag:
 
 ## Cutting a release
 
-From a clean checkout of the commit you intend to release (typically
-`main` at the tip, or a release branch like `release/0.1`):
+### One-time setup (per GitLab project)
+
+1. **Settings → Repository → Protected tags** — add pattern `v*`,
+   allowed to create: Maintainers. This restricts who can push tags
+   manually and ensures the CI-created tag is protected.
+2. **Settings → CI/CD → Variables** — add `GITLAB_API_TOKEN` (project
+   access token, `api` scope, masked). `write_repository` is the minimum
+   needed to push tags; full `api` is simpler to configure. Used only by
+   `release:auto-tag` to look up the merged MR and push the tag.
+3. **Settings → Merge requests → Approvals** — enable "Require code
+   owner approval" for the `main` branch and set approvals required
+   to 2. This enforces that all MRs go through both
+   `@kleczkowski` and `@meganathanmanish`.
+
+### Release MR flow (standard)
 
 ```sh
-# 1. Bump versions in every manifest.
-#    (Until we scripted this, edit by hand. Touchpoints:
-#     Cargo.toml workspace.package.version, each crate's Cargo.toml,
-#     each pyproject.toml [project] version.)
+# 1. Create a release branch. The branch name must match release/vX.Y.Z
+#    exactly — the CI auto-tag job matches the merge SHA against the MR
+#    API to find this branch name.
+git checkout -b release/vX.Y.Z main
+
+# 2. Bump versions in every manifest.
+#    Touchpoints: Cargo.toml workspace.package.version, each crate's
+#    Cargo.toml, each pyproject.toml [project] version.
 git commit -s -am "chore: bump workspace to X.Y.Z"
 
-# 2. Push the version bump and wait for CI to go green.
-git push
+# 3. Push and open an MR using the "release" template.
+git push -u origin release/vX.Y.Z
+```
 
-# 3. Tag.
+Open the MR targeting `main`. Both @kleczkowski and @meganathanmanish
+must approve. After approval, merge using any strategy — squash and
+merge commit are both supported. `release:auto-tag` detects the merged
+MR by matching `CI_COMMIT_SHA` against both `squash_commit_sha` and
+`merge_commit_sha` in the GitLab MR API.
+
+The merge triggers `release:auto-tag` on `main`, which pushes tag
+`vX.Y.Z`. The tag then fires the rest of the release pipeline.
+
+### Legacy manual flow (fallback)
+
+If you need to tag without a release MR (e.g., hotfix or RC):
+
+```sh
 git tag -s vX.Y.Z -m "xquad vX.Y.Z"
 git push origin vX.Y.Z
 ```
+
+The tag push triggers the release pipeline identically.
+
+---
 
 The tag push triggers a fully-automatic pipeline in stage `release`:
 
