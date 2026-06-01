@@ -18,7 +18,11 @@ std = [
 ]
 
 [dependencies]
-crc32fast           = { version = "1.5", default-features = false }
+crc32fast = { version = "1.5", default-features = false }
+# hashbrown provides no_std-compatible HashMap/HashSet used by the dataflow/
+# verifier modules. Declared explicitly because Rust does not allow using
+# transitive dependencies directly.
+hashbrown           = { version = "0.15", default-features = false, features = [ "default-hasher" ] }
 pastey.workspace    = true
 thiserror.workspace = true
 

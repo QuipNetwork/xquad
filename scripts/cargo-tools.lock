@@ -25,3 +25,4 @@ cargo-nextest=0.9.130
 mdbook=0.5.2
 mdbook-mermaid=0.17.0
 git-cliff=2.13.1
+wasm-pack=0.15.0

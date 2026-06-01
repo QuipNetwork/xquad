@@ -69,9 +69,24 @@ fi
 
 # --- Escape hatch: commit-message exemption --------------------------------
 
-if git log --format=%B "${BASE_REF}..${HEAD_REF}" \
-    | grep -Eq '^[[:space:]]*Atomic-Spec-Exempt:[[:space:]]*[^[:space:]]'; then
+_has_exempt() {
+    git log --format=%B "${1}..${2}" \
+        | grep -Eq '^[[:space:]]*Atomic-Spec-Exempt:[[:space:]]*[^[:space:]]'
+}
+
+if _has_exempt "${BASE_REF}" "${HEAD_REF}"; then
     echo "guard: Atomic-Spec-Exempt trailer present in a commit message — bypassed"
+    exit 0
+fi
+
+# In squash-merge train pipelines the HEAD is a squash commit that discards
+# individual commit messages. Re-scan the un-squashed branch tip when
+# CI_MERGE_REQUEST_SOURCE_BRANCH_SHA is available (set by GitLab in all MR
+# and merge-train pipeline contexts).
+if [[ -n "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-}" ]] \
+    && git rev-parse --verify "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA}" >/dev/null 2>&1 \
+    && _has_exempt "${BASE_REF}" "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA}"; then
+    echo "guard: Atomic-Spec-Exempt trailer present in branch commit (squash train) — bypassed"
     exit 0
 fi
 

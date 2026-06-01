@@ -6,7 +6,11 @@ members = [
     "xqcli",
     "conformance",
     "xqffi",
+    "fixtures/xqvm-wasm",
 ]
+# fixtures/pallet-xqvm is a standalone workspace (heavy polkadot-sdk git dep);
+# excluded so it does not inflate main workspace build times.
+exclude = [ "fixtures/pallet-xqvm" ]
 
 [workspace.package]
 repository = "https://gitlab.com/quip.network/xquad"
