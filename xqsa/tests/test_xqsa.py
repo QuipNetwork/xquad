@@ -27,7 +27,7 @@ import pytest
 
 dimod = pytest.importorskip("dimod", reason="dwave-samplers / dimod not installed")
 
-from xqsa import Solver, SolverDWaveCPU, SolverDWaveQPU, SolverGPUSA, SolverResult
+from xqsa import Solver, SolverDWaveCPU, SolverDWaveGPU, SolverDWaveQPU, SolverResult
 from xqvm_py.xqmx import XQMX, XQMXMode, compute_energy
 
 # ---------------------------------------------------------------------------
@@ -444,7 +444,7 @@ class TestSolverDWaveQPU:
 
 
 # ---------------------------------------------------------------------------
-# SolverGPUSA
+# SolverDWaveGPU
 # ---------------------------------------------------------------------------
 
 
@@ -488,19 +488,19 @@ def mock_gpu_env(monkeypatch):
     }
 
 
-class TestSolverGPUSA:
+class TestSolverDWaveGPU:
     """Tests for the GPU-accelerated simulated annealing solver (GPU mocked)."""
 
     def test_default_params(self, mock_gpu_env) -> None:
-        """SolverGPUSA stores default parameters."""
-        solver = SolverGPUSA()
+        """SolverDWaveGPU stores default parameters."""
+        solver = SolverDWaveGPU()
         assert solver.num_reads == 100
         assert solver.num_sweeps == 1000
         assert solver.seed is None
 
     def test_custom_params(self, mock_gpu_env) -> None:
-        """SolverGPUSA accepts custom parameters."""
-        solver = SolverGPUSA(num_reads=500, num_sweeps=2000, seed=7)
+        """SolverDWaveGPU accepts custom parameters."""
+        solver = SolverDWaveGPU(num_reads=500, num_sweeps=2000, seed=7)
         assert solver.num_reads == 500
         assert solver.num_sweeps == 2000
         assert solver.seed == 7
@@ -511,7 +511,7 @@ class TestSolverGPUSA:
         model.set_linear(0, 1)
         model.set_linear(1, 1)
 
-        solver = SolverGPUSA()
+        solver = SolverDWaveGPU()
         result = solver.solve(model)
 
         assert isinstance(result, SolverResult)
@@ -530,7 +530,7 @@ class TestSolverGPUSA:
         model.set_linear(0, -1)
         model.set_linear(1, -1)
 
-        solver = SolverGPUSA()
+        solver = SolverDWaveGPU()
         result = solver.solve(model)
 
         assert result.sample.mode == XQMXMode.SAMPLE
@@ -542,30 +542,30 @@ class TestSolverGPUSA:
         """Per-call kwargs override constructor defaults."""
         model = XQMX.binary_model(2)
 
-        solver = SolverGPUSA(num_reads=100, num_sweeps=1000)
+        solver = SolverDWaveGPU(num_reads=100, num_sweeps=1000)
         result = solver.solve(model, num_reads=50, num_sweeps=500)
 
         assert result.metadata["reads"] == 50
         assert result.metadata["params"]["num_sweeps"] == 500
 
     def test_solve_rejects_sample_mode(self, mock_gpu_env) -> None:
-        """SolverGPUSA raises ValueError for SAMPLE mode input."""
+        """SolverDWaveGPU raises ValueError for SAMPLE mode input."""
         sample = XQMX.binary_sample(2)
-        solver = SolverGPUSA()
+        solver = SolverDWaveGPU()
         with pytest.raises(ValueError, match="MODEL"):
             solver.solve(sample)
 
     def test_num_reads_validation(self, mock_gpu_env) -> None:
         """num_reads < 1 raises ValueError."""
         model = XQMX.binary_model(2)
-        solver = SolverGPUSA()
+        solver = SolverDWaveGPU()
         with pytest.raises(ValueError, match="num_reads"):
             solver.solve(model, num_reads=0)
 
     def test_num_sweeps_validation(self, mock_gpu_env) -> None:
         """num_sweeps < 1 raises ValueError."""
         model = XQMX.binary_model(2)
-        solver = SolverGPUSA()
+        solver = SolverDWaveGPU()
         with pytest.raises(ValueError, match="num_sweeps"):
             solver.solve(model, num_sweeps=0)
 
@@ -573,11 +573,11 @@ class TestSolverGPUSA:
         """RuntimeError raised when no CUDA GPU is detected."""
         mock_gpu_env["cuda"].is_available.return_value = False
         with pytest.raises(RuntimeError, match="CUDA"):
-            SolverGPUSA()
+            SolverDWaveGPU()
 
     def test_missing_gpu_extra_raises(self, monkeypatch) -> None:
         """ImportError with install hint when dwave-samplers[gpu] is absent."""
         monkeypatch.setitem(sys.modules, "dwave.samplers", None)
         monkeypatch.setitem(sys.modules, "numba", None)
         with pytest.raises(ImportError, match="pip install xqsa"):
-            SolverGPUSA()
+            SolverDWaveGPU()

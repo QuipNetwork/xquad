@@ -6,7 +6,7 @@ Pluggable solvers for quadratic optimisation models produced by the XQuad toolch
 |---|---|---|---|
 | DWave CPU simulated annealing | `SolverDWaveCPU` | local | `pip install xqsa` |
 | D-Wave Advantage QPU | `SolverDWaveQPU` | D-Wave Leap cloud | `pip install xqsa[dwave]` |
-| GPU simulated annealing | `SolverGPUSA` | local CUDA | `pip install xqsa[gpu]` |
+| GPU simulated annealing | `SolverDWaveGPU` | local CUDA | `pip install xqsa[gpu]` |
 
 ## Install
 
@@ -72,13 +72,13 @@ For custom annealing: `solver.solve(model, annealing_time=100, chain_strength=2.
 Requires an NVIDIA CUDA GPU and `pip install xqsa[gpu]`.
 
 ```python
-from xqsa import SolverGPUSA
+from xqsa import SolverDWaveGPU
 from xqvm_py.xqmx import XQMX
 
 model = XQMX.binary_model(size=64)
 # ... set coefficients ...
 
-solver = SolverGPUSA(num_reads=1000)
+solver = SolverDWaveGPU(num_reads=1000)
 result = solver.solve(model)
 print(result.metadata["use_gpu"])  # True
 ```

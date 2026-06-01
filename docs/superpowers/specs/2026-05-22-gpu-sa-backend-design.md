@@ -1,4 +1,4 @@
-# GPU Simulated Annealing Backend for XQSA
+# GPU Simulated Annealing Solver for XQSA
 
 **Date:** 2026-05-22
 **Status:** approved
@@ -6,14 +6,14 @@
 
 ## Summary
 
-Add `GPUSABackend` to `xqsa` -- a GPU-accelerated simulated annealing solver
+Add `SolverDWaveGPU` to `xqsa` -- a GPU-accelerated simulated annealing solver
 using `dwave.samplers.SimulatedAnnealingSampler` with `use_gpu=True`. This is
-the CUDA-accelerated counterpart to `NealBackend`, running thousands of
+the CUDA-accelerated counterpart to `SolverDWaveCPU`, running thousands of
 parallel SA replicas on an NVIDIA GPU instead of a single CPU thread.
 
 ## Motivation
 
-`NealBackend` is limited to CPU execution. For large QUBO/Ising problems,
+`SolverDWaveCPU` is limited to CPU execution. For large QUBO/Ising problems,
 GPU-parallelised SA explores far more states per wall-clock second.
 `dwave.samplers` (the upstream library `neal` already delegates to) ships
 native CUDA support via its `[gpu]` extra, keeping the implementation within
@@ -21,20 +21,20 @@ the existing `dimod` ecosystem with minimal new code.
 
 ## Scope
 
-- New file: `xqsa/gpu_sa.py` -- `GPUSABackend` class
-- Modified: `xqsa/__init__.py` -- export `GPUSABackend`
+- New file: `xqsa/dwave_gpu.py` -- `SolverDWaveGPU` class
+- Modified: `xqsa/__init__.py` -- export `SolverDWaveGPU`
 - Modified: `xqsa/pyproject.toml` -- add `dwave-samplers[gpu]>=1.0` optional
   dependency under `[gpu]` extra
-- Modified: `xqsa/tests/test_xqsa.py` -- add `TestGPUSABackend` with mocked
+- Modified: `xqsa/tests/test_xqsa.py` -- add `TestSolverDWaveGPU` with mocked
   GPU tests
-- Modified: `xqsa/README.md` -- document the new backend
+- Modified: `xqsa/README.md` -- document the new solver
 
 ## Architecture
 
 ### Constructor
 
 ```python
-GPUSABackend(
+SolverDWaveGPU(
     num_reads: int = 100,
     num_sweeps: int = 1000,
     seed: int | None = None,
@@ -60,8 +60,8 @@ Install xqsa with: pip install xqsa[gpu]
 
 ### solve() flow
 
-1. `_validate_model(model)` -- inherited from `Backend`
-2. `_model_to_bqm(model)` -- inherited from `Backend`
+1. `_validate_model(model)` -- inherited from `Solver`
+2. `_model_to_bqm(model)` -- inherited from `Solver`
 3. `sampler.sample(bqm, num_reads=..., num_sweeps=..., seed=..., use_gpu=True, **kwargs)`
 4. Pick `result.first` (lowest energy)
 5. Return `SolverResult(sample, energy, timing, metadata)`
@@ -93,7 +93,7 @@ installed on the host system separately (not pip-installable).
 
 ## Testing
 
-Tests live in `xqsa/tests/test_xqsa.py` under `TestGPUSABackend`. All tests
+Tests live in `xqsa/tests/test_xqsa.py` under `TestSolverDWaveGPU`. All tests
 mock `dwave.samplers` and `numba.cuda` to avoid requiring physical GPU
 hardware in CI.
 

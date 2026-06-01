@@ -39,7 +39,7 @@ from xqvm_py.xqmx import XQMX
 from .solver import Solver, SolverResult
 
 
-class SolverGPUSA(Solver):
+class SolverDWaveGPU(Solver):
     """GPU-accelerated simulated annealing via dwave.samplers on CUDA.
 
     Runs thousands of independent SA replicas in parallel on an NVIDIA GPU,
@@ -49,13 +49,13 @@ class SolverGPUSA(Solver):
     Examples:
 
     ```python
-    from xqsa import SolverGPUSA
+    from xqsa import SolverDWaveGPU
     from xqvm_py.xqmx import XQMX
 
     model = XQMX.binary_model(64)
     # ... set coefficients ...
 
-    solver = SolverGPUSA(num_reads=1000)
+    solver = SolverDWaveGPU(num_reads=1000)
     result = solver.solve(model)
     print(result.energy, result.metadata["use_gpu"])
     ```
@@ -80,7 +80,7 @@ class SolverGPUSA(Solver):
             ) from exc
 
         if not _cuda.is_available():
-            raise RuntimeError("No CUDA-capable GPU detected. SolverGPUSA requires an NVIDIA GPU with CUDA support.")
+            raise RuntimeError("No CUDA-capable GPU detected. SolverDWaveGPU requires an NVIDIA GPU with CUDA support.")
 
         self.num_reads = num_reads
         self.num_sweeps = num_sweeps

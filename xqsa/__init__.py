@@ -23,8 +23,8 @@ optimized samples. The first solver wraps DWave's CPU simulated annealer.
 """
 
 from .dwave_cpu import SolverDWaveCPU
+from .dwave_gpu import SolverDWaveGPU
 from .dwave_qpu import SolverDWaveQPU
-from .gpu_sa import SolverGPUSA
 from .solver import Solver, SolverResult
 
 __all__ = [
@@ -32,5 +32,5 @@ __all__ = [
     "SolverResult",
     "SolverDWaveCPU",
     "SolverDWaveQPU",
-    "SolverGPUSA",
+    "SolverDWaveGPU",
 ]

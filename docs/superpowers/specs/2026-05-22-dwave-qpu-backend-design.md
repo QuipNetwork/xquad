@@ -1,4 +1,4 @@
-# D-Wave QPU Backend for XQSA
+# D-Wave QPU Solver for XQSA
 
 **Date:** 2026-05-22
 **Status:** approved
@@ -6,25 +6,25 @@
 
 ## Summary
 
-Add `DWaveBackend` to `xqsa` -- a solver adapter that submits XQMX quadratic
+Add `SolverDWaveQPU` to `xqsa` -- a solver adapter that submits XQMX quadratic
 models to a real D-Wave Advantage QPU via the D-Wave Leap cloud API. This is
-the first hardware backend in xqsa; the existing `NealBackend` is a CPU
+the first hardware solver in xqsa; the existing `SolverDWaveCPU` is a CPU
 simulated annealer.
 
 ## Motivation
 
-`NealBackend` provides classical simulated annealing for local testing.
+`SolverDWaveCPU` provides classical simulated annealing for local testing.
 Production workloads benefit from real quantum annealing hardware (D-Wave
 Advantage) for larger QUBO/Ising problems where the physical annealing process
 can find better solutions faster than CPU simulation.
 
 ## Scope
 
-- New file: `xqsa/dwave.py` -- `DWaveBackend` class
-- Modified: `xqsa/__init__.py` -- export `DWaveBackend`
+- New file: `xqsa/dwave_qpu.py` -- `SolverDWaveQPU` class
+- Modified: `xqsa/__init__.py` -- export `SolverDWaveQPU`
 - Modified: `xqsa/pyproject.toml` -- add `dwave-system>=1.0` optional dependency
   under `[dwave]` extra
-- Modified: `xqsa/tests/test_xqsa.py` -- add `TestDWaveBackend` with mocked
+- Modified: `xqsa/tests/test_xqsa.py` -- add `TestSolverDWaveQPU` with mocked
   hardware tests
 - Modified: `xqsa/README.md` -- document the new backend
 
@@ -35,7 +35,7 @@ can find better solutions faster than CPU simulation.
 Constructor signature:
 
 ```python
-DWaveBackend(
+SolverDWaveQPU(
     token: str | None = None,       # fallback: DWAVE_API_TOKEN env var
     endpoint: str | None = None,    # fallback: DWAVE_API_ENDPOINT env var
     solver: str | None = None,      # None = auto-select Advantage (Pegasus topology)
@@ -61,8 +61,8 @@ A named solver string (e.g. `"Advantage_system5.4"`) is passed directly.
 
 ### solve() flow
 
-1. `_validate_model(model)` -- inherited from `Backend`, checks BINARY/SPIN
-2. `_model_to_bqm(model)` -- same dimod BQM conversion as `NealBackend`
+1. `_validate_model(model)` -- inherited from `Solver`, checks BINARY/SPIN
+2. `_model_to_bqm(model)` -- same dimod BQM conversion as `SolverDWaveCPU`
 3. `sampler.sample(bqm, num_reads=..., annealing_time=..., **kwargs)` --
    `**kwargs` passes through for escape-hatch parameters (e.g.
    `annealing_schedule`, `chain_strength`)
@@ -81,11 +81,11 @@ A named solver string (e.g. `"Advantage_system5.4"`) is passed directly.
 ```
 
 `SolverResult.timing` is wall-clock time (`perf_counter`), consistent with
-`NealBackend`.
+`SolverDWaveCPU`.
 
 ### Import guard
 
-`dwave.system` is imported inside `DWaveBackend.__init__` (not at module level)
+`dwave.system` is imported inside `SolverDWaveQPU.__init__` (not at module level)
 so that importing `xqsa` without the `[dwave]` extra installed does not raise
 `ImportError`. The error is raised lazily with a clear message:
 
@@ -104,7 +104,7 @@ dwave = ["dwave-system>=1.0"]
 
 ## Testing
 
-Tests live in `xqsa/tests/test_xqsa.py` under `TestDWaveBackend`. All tests
+Tests live in `xqsa/tests/test_xqsa.py` under `TestSolverDWaveQPU`. All tests
 mock `dwave.system.DWaveSampler` and `dwave.system.EmbeddingComposite` since
 CI has no hardware credentials.
 
@@ -125,5 +125,5 @@ Test cases:
 
 - Fixed embedding (`FixedEmbeddingComposite`) -- can be added later if users
   need repeated-solve optimization with pre-computed embedding
-- GPU-based simulated annealing -- separate backend, tracked separately
+- GPU-based simulated annealing -- separate solver, tracked separately
 - D-Wave Leap hybrid solvers -- separate backend
