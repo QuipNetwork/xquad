@@ -17,6 +17,6 @@
 
 """`xquad.sa` -- re-export of `xqsa` (solver adapters: dwave-samplers + pluggable solvers)."""
 
-from xqsa import Solver, SolverDWaveCPU, SolverResult
+from xqsa import Solver, SolverCudaGPU, SolverDWaveCPU, SolverResult
 
-__all__ = ["Solver", "SolverDWaveCPU", "SolverResult"]
+__all__ = ["Solver", "SolverCudaGPU", "SolverDWaveCPU", "SolverResult"]
