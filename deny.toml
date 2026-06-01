@@ -16,6 +16,8 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "Unicode-3.0",
     "ISC",
+    # foldhash (default hasher for hashbrown 0.15) uses Zlib.
+    "Zlib",
 ]
 
 [bans]
@@ -26,6 +28,12 @@ skip = [
     # assert_cmd / predicates (dev-only) pull older transitive versions.
     { name = "unicode-width", version = "=0.1.14" },
     { name = "windows-sys", version = "=0.60.2" },
+    # serde_yaml_ng's indexmap pulls hashbrown 0.17 while xqvm directly
+    # depends on hashbrown 0.15 for no_std dataflow maps.
+    { name = "hashbrown", version = "=0.17.0" },
+    # tempfile's getrandom dependency currently pulls both wasip2 and wasip3,
+    # which depend on different wit-bindgen versions.
+    { name = "wit-bindgen", version = "=0.51.0" },
 ]
 
 [sources]

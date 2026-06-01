@@ -1,0 +1,25 @@
+# Copyright (C) 2026 Postquant Labs Incorporated
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[package]
+name        = "xqvm-wasm"
+version     = "0.0.0"
+edition     = "2024"
+publish     = false
+description = "Freestanding wasm32-unknown-unknown tests for xqvm no_std correctness."
+license     = "AGPL-3.0-or-later"
+
+# cdylib: required by wasm-bindgen-test.
+# rlib: required for `cargo check` in the main workspace.
+[lib]
+crate-type = [ "cdylib", "rlib" ]
+
+[lints]
+workspace = true
+
+[dependencies]
+# xqvm compiled without std -- this is the dep under test.
+xqvm = { path = "../../xqvm", default-features = false }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

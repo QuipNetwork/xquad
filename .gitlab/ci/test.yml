@@ -26,3 +26,40 @@ test:doc:
         - *install-deps
     script:
         - make test-doc
+
+# Run xqvm-wasm no_std correctness tests. Two gates:
+#   1. cargo build -p xqvm --target wasm32v1-none --no-default-features --
+#      xqvm compiles for the bare-metal Substrate runtime target (no std,
+#      no JS ABI, no panic runtime).
+#   2. wasm-pack test --node (wasm32-unknown-unknown) -- wasm-bindgen-test
+#      suite executes in a real WASM environment via Node.js.
+# Installs Node.js from the Debian apt repo (rust:latest image omits it) and
+# logs the resolved version so runner image changes are visible in job output.
+# wasm-pack and both WASM targets are installed via make deps-wasm.
+test:wasm:
+    stage: test
+    before_script:
+        - apt-get update -q && apt-get install -yq nodejs
+        - node --version
+        - *install-deps
+        - make deps-wasm
+    script:
+        - make test-wasm
+
+# Run the Substrate FRAME pallet fixture tests. The fixture lives in a
+# standalone workspace (fixtures/pallet-xqvm) that pins the
+# QuipNetwork/polkadot-sdk git dep; this job owns its own cargo cache
+# key so the large polkadot-sdk build does not pollute the main
+# workspace cache.
+test:substrate-fixture:
+    stage: test
+    cache:
+        - key:
+              files:
+                  - fixtures/pallet-xqvm/Cargo.lock
+          paths:
+              - fixtures/pallet-xqvm/target/
+    before_script:
+        - export PATH="${CARGO_HOME}/bin:${PATH}"
+    script:
+        - make test-substrate-fixture

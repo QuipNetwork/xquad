@@ -1,9 +1,9 @@
 .PHONY: all xquad repl \
-        deps deps-docs deps-miri deps-python \
+        deps deps-docs deps-miri deps-python deps-wasm \
         install-hooks \
         lint lint-clippy lint-doc lint-deny lint-python \
         fmt fmt-rust fmt-taplo fmt-check fmt-check-rust fmt-check-taplo fmt-python fmt-check-python \
-        test test-unit test-integration test-doc test-miri test-python \
+        test test-unit test-integration test-doc test-miri test-python test-wasm test-substrate-fixture \
         opcode-parity opcode-parity-rust opcode-parity-python \
         conformance conformance-rust conformance-python \
         example-smoke \
@@ -49,6 +49,17 @@ deps-docs:
 deps-miri:
 	rustup toolchain install nightly --component miri
 	cargo +nightly miri setup
+
+# Install wasm-pack and the WASM targets required for no_std correctness
+# tests (fixtures/xqvm-wasm). wasm32-unknown-unknown is used by
+# wasm-bindgen-test (Node.js runner); wasm32v1-none is the bare-metal
+# target Substrate runtimes compile to -- we verify xqvm builds for it
+# as a separate cargo-build check in test-wasm.
+# Re-run if wasm-pack is not on PATH or a target is missing.
+deps-wasm:
+	bash scripts/install-cargo-tools.sh --only wasm-pack
+	rustup target add wasm32-unknown-unknown
+	rustup target add wasm32v1-none
 
 # Sync the Python workspace (xqffi, xqvm_py, xqcp, xqsa) into .venv/
 # via uv. Assumes `uv` is already on $PATH; CI installs it in its
@@ -151,6 +162,24 @@ test-miri:
 # CI already has this via the job's before_script.
 test-python: deps-python
 	uv run --no-sync pytest xqvm_py/tests xqcp/tests xqsa/tests xquad/tests
+
+# Run the WASM no_std correctness tests (fixtures/xqvm-wasm).
+# Two gates in sequence:
+#   1. cargo build -p xqvm --target wasm32v1-none --no-default-features --
+#      verifies xqvm compiles for the bare-metal Substrate runtime target
+#      (no std, no JS ABI, no panic runtime).
+#   2. wasm-pack test --node -- executes the wasm-bindgen-test suite
+#      inside a real wasm32-unknown-unknown + Node.js environment.
+# Requires: deps-wasm (wasm-pack + both wasm targets installed).
+test-wasm:
+	cargo build -p xqvm --target wasm32v1-none --no-default-features
+	wasm-pack test --node fixtures/xqvm-wasm
+
+# Run native pallet tests for the Substrate FRAME fixture
+# (fixtures/pallet-xqvm). The fixture lives in a standalone workspace to
+# isolate the QuipNetwork/polkadot-sdk git dep from the main build.
+test-substrate-fixture:
+	cargo test --manifest-path fixtures/pallet-xqvm/Cargo.toml
 
 # -- Conformance ------------------------------------------------------------
 
