@@ -47,7 +47,7 @@ XQSA uses a class-based plugin model:
 - Any class implementing `Solver.solve()` can drop in as a replacement
 - The contract is minimal: validate the model, solve it, return the result
 
-v0.3.0 ships `SolverDWaveCPU` in the base package and optional D-Wave QPU/GPU solvers behind extras. Additional solvers are in progress; see [SOLVERS.md](SOLVERS.md) for the planned registry.
+v0.3.0 ships `SolverDWaveCPU` in the base package and an optional D-Wave QPU solver behind an extra. Additional solvers are in progress; see [SOLVERS.md](SOLVERS.md) for the planned registry.
 
 ## Package Structure (v0.3.0)
 
@@ -56,7 +56,6 @@ v0.3.0 ships `SolverDWaveCPU` in the base package and optional D-Wave QPU/GPU so
 | `solver.py` | Abstract `Solver` class, `SolverResult` dataclass, model validation, BQM conversion helpers |
 | `dwave_cpu.py` | `SolverDWaveCPU` wrapping `dwave-samplers` |
 | `dwave_qpu.py` | `SolverDWaveQPU` wrapping D-Wave Leap QPU access through `dwave-system` |
-| `dwave_gpu.py` | `SolverDWaveGPU` wrapping GPU-accelerated `dwave-samplers` |
 
 ## Thread Safety
 

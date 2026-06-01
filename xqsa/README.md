@@ -6,7 +6,6 @@ Pluggable solvers for quadratic optimisation models produced by the XQuad toolch
 |---|---|---|---|
 | DWave CPU simulated annealing | `SolverDWaveCPU` | local | `pip install xqsa` |
 | D-Wave Advantage QPU | `SolverDWaveQPU` | D-Wave Leap cloud | `pip install xqsa[dwave]` |
-| GPU simulated annealing | `SolverDWaveGPU` | local CUDA | `pip install xqsa[gpu]` |
 
 ## Install
 
@@ -16,9 +15,6 @@ pip install xqsa
 
 # Add D-Wave QPU support
 pip install xqsa[dwave]
-
-# Add GPU-accelerated SA support
-pip install xqsa[gpu]
 ```
 
 ## Quick start -- CPU simulated annealing
@@ -67,24 +63,8 @@ Credential resolution order: `token=` constructor argument ->
 For a specific solver: `SolverDWaveQPU(solver="Advantage_system5.4")`.
 For custom annealing: `solver.solve(model, annealing_time=100, chain_strength=2.0)`.
 
-## Quick start -- GPU simulated annealing
-
-Requires an NVIDIA CUDA GPU and `pip install xqsa[gpu]`.
-
-```python
-from xqsa import SolverDWaveGPU
-from xqvm_py.xqmx import XQMX
-
-model = XQMX.binary_model(size=64)
-# ... set coefficients ...
-
-solver = SolverDWaveGPU(num_reads=1000)
-result = solver.solve(model)
-print(result.metadata["use_gpu"])  # True
-```
-
-Raises `RuntimeError` at construction time if no CUDA-capable GPU is detected.
-The NVIDIA CUDA toolkit must be installed on the host system separately.
+GPU-accelerated solving is delivered by `SolverCudaGPU` (custom CUDA kernels via
+CuPy), tracked in QUI-574 -- not by the D-Wave SDK, which has no GPU sampler.
 
 ## Solver protocol
 

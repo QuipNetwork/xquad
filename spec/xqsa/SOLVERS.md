@@ -10,7 +10,7 @@ v0.3.0 uses `Solver` (abstract) with CPU, QPU, and GPU concrete solvers.
 
 ### D-Wave SDK Family
 
-Solvers that use the `dimod` BQM format and D-Wave SDK packages. The SDK handles model conversion and sampling; solvers differ in where the BQM is solved (CPU, GPU, QPU).
+Solvers that use the `dimod` BQM format and D-Wave SDK packages. The SDK handles model conversion and sampling; solvers differ in where the BQM is solved (CPU, QPU). The D-Wave SDK ships no GPU sampler; GPU solving lives in the Custom Kernel Family below.
 
 Shared base helpers: `_model_to_bqm()`, `_sample_to_xqmx()` (concrete methods on the `Solver` base class).
 
@@ -37,7 +37,6 @@ Each solver beyond the base `SolverDWaveCPU` lives behind an optional extra. Imp
 |--------|------|-------|----------|----------|
 | `SolverDWaveCPU` | `dwave_cpu.py` | (base) | CPU | v0.2.0 |
 | `SolverDWaveQPU` | `dwave_qpu.py` | `[dwave]` | D-Wave QPU (cloud) | v0.3.0 |
-| `SolverDWaveGPU` | `dwave_gpu.py` | `[gpu]` | NVIDIA CUDA GPU | v0.3.0 |
 | `SolverCudaGPU` | `cuda_gpu.py` | `[cuda]` | NVIDIA CUDA GPU | v0.3.0 |
 | `SolverMetalGPU` | `metal_gpu.py` | `[metal]` | Apple Metal GPU | v0.3.0 |
 | `SolverIBMQAOA` | -- | `[ibm]` | IBM QPU / AerSimulator | v0.3.0 |
@@ -57,4 +56,3 @@ Mapping between `quip-protocol` miner config keys and xqsa solver classes:
 | IBM QAOA (feature branch) | `SolverIBMQAOA` |
 | IonQ QAOA (feature branch) | `SolverIonQQAOA` |
 | `modal` | No xqsa equivalent (orchestration layer, not a solver algorithm) |
-| GPU SA (dwave-samplers + CUDA) | `SolverDWaveGPU` (no protocol miner equivalent) |
