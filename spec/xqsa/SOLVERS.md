@@ -4,7 +4,7 @@
 
 Concrete solver classes follow the pattern `Solver{Vendor/Technology}{ComputeTarget}`. Vendor-first grouping keeps related solvers together in sorted order.
 
-v0.3.0 uses `Solver` (abstract) and `SolverDWaveCPU` (concrete).
+v0.3.0 uses `Solver` (abstract) with CPU, QPU, and GPU concrete solvers.
 
 ## Algorithm Families
 

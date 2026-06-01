@@ -26,7 +26,7 @@ can find better solutions faster than CPU simulation.
   under `[dwave]` extra
 - Modified: `xqsa/tests/test_xqsa.py` -- add `TestSolverDWaveQPU` with mocked
   hardware tests
-- Modified: `xqsa/README.md` -- document the new backend
+- Modified: `xqsa/README.md` -- document the new solver
 
 ## Architecture
 
@@ -126,4 +126,4 @@ Test cases:
 - Fixed embedding (`FixedEmbeddingComposite`) -- can be added later if users
   need repeated-solve optimization with pre-computed embedding
 - GPU-based simulated annealing -- separate solver, tracked separately
-- D-Wave Leap hybrid solvers -- separate backend
+- D-Wave Leap hybrid solvers -- separate solver
