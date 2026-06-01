@@ -14,6 +14,9 @@ dependencies = [
     "dwave-samplers>=1.0",
 ]
 
+[project.optional-dependencies]
+cuda = [ "cupy-cuda12x>=13.0" ]
+
 [tool.uv.sources]
 xqvm_py.workspace = true
 
