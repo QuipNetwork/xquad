@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from xqvm_py.xqmx import XQMX
+from xqvm_py.xqmx import XQMX, XQMXDomain
 
 from .solver import Solver, SolverResult
 
@@ -41,6 +41,124 @@ if TYPE_CHECKING:
     import cupy as cp
 
 _SUPPORTED_STRATEGIES = frozenset({"sa"})
+
+# ---------------------------------------------------------------------------
+# CUDA kernel sources
+# ---------------------------------------------------------------------------
+
+_SA_BINARY_KERNEL = r"""
+extern "C" __global__
+void sa_binary(
+    const double* __restrict__ h,
+    const double* __restrict__ J,
+    int*          __restrict__ samples,
+    double*       __restrict__ energies,
+    const double* __restrict__ randoms,
+    int    n,
+    int    num_sweeps,
+    double beta_start,
+    double beta_end
+) {
+    int rid = blockIdx.x;
+    int* x = samples + rid * n;
+    double* rand_ptr = (double*)randoms + (long long)rid * num_sweeps * n;
+
+    /* compute initial energy */
+    double energy = 0.0;
+    for (int i = 0; i < n; i++) {
+        if (x[i] == 0) continue;
+        energy += h[i];
+        for (int j = i + 1; j < n; j++) {
+            if (x[j] == 0) continue;
+            energy += J[i * n + j];
+        }
+    }
+
+    for (int sweep = 0; sweep < num_sweeps; sweep++) {
+        double beta;
+        if (num_sweeps <= 1) {
+            beta = beta_start;
+        } else {
+            beta = beta_start
+                + (beta_end - beta_start)
+                    * ((double)sweep / (double)(num_sweeps - 1));
+        }
+
+        for (int i = 0; i < n; i++) {
+            /* delta_E for flipping x_i */
+            double local = h[i];
+            for (int j = 0; j < n; j++) {
+                if (j == i) continue;
+                local += J[i * n + j] * (double)x[j];
+            }
+            double delta_E = local * (double)(1 - 2 * x[i]);
+
+            double r = rand_ptr[(long long)sweep * n + i];
+            if (delta_E <= 0.0 || r < exp(-delta_E * beta)) {
+                x[i] = 1 - x[i];
+                energy += delta_E;
+            }
+        }
+    }
+    energies[rid] = energy;
+}
+"""
+
+_SA_SPIN_KERNEL = r"""
+extern "C" __global__
+void sa_spin(
+    const double* __restrict__ h,
+    const double* __restrict__ J,
+    int*          __restrict__ samples,
+    double*       __restrict__ energies,
+    const double* __restrict__ randoms,
+    int    n,
+    int    num_sweeps,
+    double beta_start,
+    double beta_end
+) {
+    int rid = blockIdx.x;
+    int* s = samples + rid * n;
+    double* rand_ptr = (double*)randoms + (long long)rid * num_sweeps * n;
+
+    /* compute initial energy */
+    double energy = 0.0;
+    for (int i = 0; i < n; i++) {
+        energy += h[i] * (double)s[i];
+        for (int j = i + 1; j < n; j++) {
+            energy += J[i * n + j] * (double)s[i] * (double)s[j];
+        }
+    }
+
+    for (int sweep = 0; sweep < num_sweeps; sweep++) {
+        double beta;
+        if (num_sweeps <= 1) {
+            beta = beta_start;
+        } else {
+            beta = beta_start
+                + (beta_end - beta_start)
+                    * ((double)sweep / (double)(num_sweeps - 1));
+        }
+
+        for (int i = 0; i < n; i++) {
+            /* delta_E for flipping s_i */
+            double local = h[i];
+            for (int j = 0; j < n; j++) {
+                if (j == i) continue;
+                local += J[i * n + j] * (double)s[j];
+            }
+            double delta_E = -2.0 * (double)s[i] * local;
+
+            double r = rand_ptr[(long long)sweep * n + i];
+            if (delta_E <= 0.0 || r < exp(-delta_E * beta)) {
+                s[i] = -s[i];
+                energy += delta_E;
+            }
+        }
+    }
+    energies[rid] = energy;
+}
+"""
 
 
 class SolverCudaGPU(Solver):
@@ -91,6 +209,8 @@ class SolverCudaGPU(Solver):
             raise ValueError(f"Unsupported strategy {strategy!r}. Supported: {sorted(_SUPPORTED_STRATEGIES)}")
 
         self._cp = _cupy
+        self._binary_kernel = _cupy.RawKernel(_SA_BINARY_KERNEL, "sa_binary")
+        self._spin_kernel = _cupy.RawKernel(_SA_SPIN_KERNEL, "sa_spin")
         self.strategy = strategy
         self.num_reads = num_reads
         self.num_sweeps = num_sweeps
@@ -171,6 +291,20 @@ class SolverCudaGPU(Solver):
 
         return self._cp.asarray(h_np), self._cp.asarray(j_np)
 
+    def _auto_beta_range(self, h: cp.ndarray, j_matrix: cp.ndarray) -> tuple[float, float]:
+        """Compute a reasonable beta range from model coefficients.
+
+        Uses the maximum absolute coefficient magnitude to set the
+        temperature window. beta_start (high temperature) allows free
+        exploration; beta_end (low temperature) freezes into a basin.
+        """
+        max_h = float(self._cp.max(self._cp.abs(h)))
+        max_j = float(self._cp.max(self._cp.abs(j_matrix)))
+        max_coeff = max(max_h, max_j, 1e-8)
+        beta_start = 1.0 / (max_coeff * 10.0)
+        beta_end = 10.0 / max_coeff
+        return (beta_start, beta_end)
+
     def _run_sa(
         self,
         model: XQMX,
@@ -187,4 +321,53 @@ class SolverCudaGPU(Solver):
             (best_sample_dict, raw_energy) -- the best sample found
             across all replicas, and its float energy.
         """
-        raise NotImplementedError("CUDA SA kernel not yet implemented")
+        cupy = self._cp
+        n = model.size
+
+        if beta_range is None:
+            beta_range = self._auto_beta_range(h, j_matrix)
+
+        beta_start, beta_end = beta_range
+
+        rng = cupy.random.default_rng(seed)
+
+        # Initialise replica samples
+        is_binary = model.domain == XQMXDomain.BINARY
+        if is_binary:
+            samples = rng.integers(0, 2, size=(num_reads, n), dtype=cupy.int32)
+        else:
+            raw = rng.integers(0, 2, size=(num_reads, n), dtype=cupy.int32)
+            samples = raw * 2 - 1  # map {0,1} -> {-1,+1}
+            samples = samples.astype(cupy.int32)
+
+        # Pre-generate all random acceptance thresholds
+        randoms = rng.random(size=(num_reads, num_sweeps, n), dtype=cupy.float64)
+
+        energies = cupy.zeros(num_reads, dtype=cupy.float64)
+
+        kernel = self._binary_kernel if is_binary else self._spin_kernel
+        kernel(
+            (num_reads,),  # grid: one block per replica
+            (1,),  # block: single thread per replica
+            (
+                h,
+                j_matrix,
+                samples,
+                energies,
+                randoms,
+                np.int32(n),
+                np.int32(num_sweeps),
+                np.float64(beta_start),
+                np.float64(beta_end),
+            ),
+        )
+        cupy.cuda.Device().synchronize()
+
+        # Find best replica
+        energies_np = cupy.asnumpy(energies)
+        best_idx = int(np.argmin(energies_np))
+        raw_energy = float(energies_np[best_idx])
+        best_row = cupy.asnumpy(samples[best_idx])
+
+        best_sample_dict: dict[int, int] = {i: int(best_row[i]) for i in range(n)}
+        return best_sample_dict, raw_energy
