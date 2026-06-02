@@ -21,8 +21,8 @@ license    = "AGPL-3.0-or-later"
 # Version strings are required for `cargo publish`; `path` keeps the
 # workspace build pointed at the live sources, and cargo rewrites
 # dependency specs to drop the path on publish.
-xqvm  = { path = "./xqvm", version = "0.2.0" }
-xqasm = { path = "./xqasm", version = "0.2.0" }
+xqvm  = { path = "./xqvm", version = "0.2.1" }
+xqasm = { path = "./xqasm", version = "0.2.1" }
 
 ### Common dependencies ###
 clap      = { version = "4", features = [ "derive" ] }
