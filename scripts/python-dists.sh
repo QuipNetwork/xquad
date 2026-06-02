@@ -14,9 +14,10 @@
 #               twine check. No network upload, no token needed. Used
 #               by release:dry-run:pypi (MR/push) and release:validate
 #               (tag).
-#   publish  -- maturin publish (xqffi) + uv build + twine upload
-#               (peers). Requires PYPI_TOKEN in env. Used by
-#               release:publish-pypi (tag only).
+#   publish  -- maturin build (xqffi) + uv build (peers) + twine
+#               upload via PyPI Trusted Publishing (OIDC). twine
+#               auto-detects PYPI_ID_TOKEN in env; no long-lived
+#               token. Used by release:publish-pypi (tag only).
 #
 # Run from the workspace root.
 
@@ -37,29 +38,35 @@ case "${mode}" in
 esac
 
 if [[ "${mode}" == "publish" ]]; then
-    : "${PYPI_TOKEN:?PYPI_TOKEN is required for publish mode}"
+    : "${PYPI_ID_TOKEN:?PYPI_ID_TOKEN is required for publish mode (OIDC trusted publishing — set by GitLab id_tokens block)}"
 fi
 
 # --- xqffi (pyo3 cdylib) ---------------------------------------------------
+# `maturin publish` has no OIDC support (no --trusted-publishing flag);
+# it only accepts --username/--password. Split build from upload so the
+# wheel goes through twine, which auto-detects PYPI_ID_TOKEN and does
+# the OIDC token exchange just like the pure-Python peers below.
+maturin build --release --manifest-path xqffi/Cargo.toml --out xqffi/dist
 if [[ "${mode}" == "check" ]]; then
-    maturin build --release --manifest-path xqffi/Cargo.toml --out xqffi/dist
     twine check xqffi/dist/*
 else
-    maturin publish --manifest-path xqffi/Cargo.toml \
-        --username __token__ --password "${PYPI_TOKEN}" --skip-existing
+    twine upload --non-interactive --skip-existing xqffi/dist/*
 fi
 
 # --- pure-Python peers + umbrella -----------------------------------------
 # `uv build` inside a workspace member defaults to the workspace-root
 # `dist/`; `--out-dir dist` keeps each package's artefacts under its own
 # subdir so subsequent twine ops resolve files locally to that package.
+#
+# twine ≥6.1 with no --username/--password and PYPI_ID_TOKEN in env
+# uses OIDC trusted publishing automatically (PyPI mints a per-project
+# API token for each upload).
 for pkg in "${PEERS[@]}"; do
     (
         cd "${pkg}"
         uv build --out-dir dist
         if [[ "${mode}" == "publish" ]]; then
-            twine upload --non-interactive --skip-existing \
-                --username __token__ --password "${PYPI_TOKEN}" dist/*
+            twine upload --non-interactive --skip-existing dist/*
         else
             twine check dist/*
         fi
