@@ -236,12 +236,29 @@ release:publish-pypi:
     # PyPI Trusted Publisher; PyPI rejects the OIDC exchange if the
     # job's environment doesn't match what's configured project-side.
     environment: release
-    # GitLab mints a short-lived JWT into `PYPI_ID_TOKEN`; twine ≥6.1
-    # auto-detects it (via `id.detect_credential("pypi")`) and
-    # exchanges it for a per-project PyPI API token at upload time.
+    # GitLab mints one short-lived JWT per id_tokens entry; PyPI's
+    # `/_/oidc/mint-token` endpoint is single-use per JWT (anti-replay
+    # on the `jti` claim), so a monorepo publishing N packages in one
+    # job needs N distinct JWTs. We mint one per PyPI project; the
+    # script in `scripts/python-dists.sh` exchanges each for that
+    # project's API token at upload time.
+    #
+    # twine ≥6.1's auto-detection (`id.detect_credential("pypi")`)
+    # only handles a single ambient JWT, which is why upload uses
+    # explicit TWINE_USERNAME/TWINE_PASSWORD per package rather than
+    # relying on auto-detect.
+    #
     # Audience MUST be the literal `pypi` (not `pypi.org`).
     id_tokens:
-        PYPI_ID_TOKEN:
+        PYPI_ID_TOKEN_XQFFI:
+            aud: pypi
+        PYPI_ID_TOKEN_XQVM_PY:
+            aud: pypi
+        PYPI_ID_TOKEN_XQCP:
+            aud: pypi
+        PYPI_ID_TOKEN_XQSA:
+            aud: pypi
+        PYPI_ID_TOKEN_XQUAD:
             aud: pypi
     before_script:
         - *setup-python-publish
