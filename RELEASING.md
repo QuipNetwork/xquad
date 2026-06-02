@@ -27,20 +27,25 @@ view.
 
 ## Prerequisites (one-time)
 
-Protected CI variables must be present in the GitLab project
-(**Settings → CI/CD → Variables**, both masked + protected):
+**Protected CI variable** (set once in **Settings → CI/CD →
+Variables**; masked + protected):
 
 - `CARGO_REGISTRY_TOKEN` — crates.io API token from
   `ops@postquant.xyz`. Scope to `xqvm`, `xqasm`, `xqcli` publish-new
   + publish-update.
-- `PYPI_TOKEN` — PyPI API token from `ops@postquant.xyz`. The first
-  release needs an **account-wide** token because per-project tokens
-  require the project to exist. After v0.1.0 lands, rotate to
-  per-project tokens scoped to the five PyPI names.
 
-Both accounts are owned by `ops@postquant.xyz` (QUI-436 placeholder
-reservations done by Keith; real release happens when this pipeline
-runs).
+**PyPI Trusted Publishing (OIDC)** -- no long-lived token in CI. Each
+of the 5 PyPI projects (`xqffi`, `xqvm_py`, `xqcp`, `xqsa`, `xquad`)
+must have a GitLab Trusted Publisher configured at
+`pypi.org/manage/project/<name>/settings/publishing/` pointing at:
+
+    namespace = quip.network
+    project   = xquad
+    pipeline  = .gitlab-ci.yml
+    env       = release
+
+The matching `release` environment must exist in **Settings → CI/CD →
+Environments**, restricted to protected tags `v*`.
 
 ## Pre-flight
 
@@ -128,9 +133,10 @@ The tag push triggers a fully-automatic pipeline in stage `release`:
 2. **`release:publish-crates`** -- `cargo publish` for `xqvm` →
    `xqasm` → `xqcli`, in topological order. Fires automatically once
    `release:validate` passes.
-3. **`release:publish-pypi`** -- `maturin publish` for `xqffi` then
-   `uv build` + `twine upload` for `xqvm_py` / `xqcp` / `xqsa` /
-   `xquad`. Fires automatically once `release:publish-crates` passes
+3. **`release:publish-pypi`** -- `maturin build` + `twine upload`
+   (OIDC) for `xqffi`, then `uv build` + `twine upload` for
+   `xqvm_py` / `xqcp` / `xqsa` / `xquad`. Fires automatically
+   once `release:publish-crates` passes
    (`needs:` enforces ordering so PyPI cannot run before crates.io).
 4. **`release:changelog` → `release:notes`** -- git-cliff renders the
    GitLab Release page from the conventional-commit history. Runs

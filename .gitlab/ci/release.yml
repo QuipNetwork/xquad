@@ -2,17 +2,24 @@
 # PyPI on every tag of the form `v<digit>...`.
 #
 # Required protected CI variables (set once in project settings →
-# CI/CD → Variables; both are masked + protected):
+# CI/CD → Variables; masked + protected):
 #
 #   CARGO_REGISTRY_TOKEN  crates.io API token for ops@postquant.xyz
 #                         scoped to xqvm + xqasm + xqcli (publish-new
 #                         + publish-update).
 #
-#   PYPI_TOKEN            PyPI API token for ops@postquant.xyz scoped to
-#                         xqffi + xqcp + xqsa + xqvm_py + xquad. First
-#                         release needs an account-wide token because
-#                         per-project tokens require the project to
-#                         already exist on PyPI.
+# PyPI publishing uses Trusted Publishing (OIDC) — no long-lived
+# token in CI. Each of the 5 PyPI projects (xqffi, xqvm_py, xqcp,
+# xqsa, xquad) must have a GitLab Trusted Publisher configured at
+# pypi.org/manage/project/<name>/settings/publishing/ pointing at:
+#
+#   namespace = quip.network
+#   project   = xquad
+#   pipeline  = .gitlab-ci.yml
+#   env       = release
+#
+# The matching `release` environment must exist in
+# Settings → CI/CD → Environments, restricted to protected tags `v*`.
 #
 # Release MR flow (QUI-580):
 #
@@ -78,7 +85,10 @@
     - export PATH="${HOME}/.local/bin:${PATH}"
     - uv --version
     - uv tool install maturin --with-requirements /dev/null
-    - uv tool install twine
+    # twine ≥6.1 added preliminary OIDC trusted-publishing support;
+    # earlier versions fall back to interactive prompt when no token
+    # env is present, which hangs the CI.
+    - uv tool install 'twine>=6.1'
     - export PATH="${HOME}/.local/share/uv/tools/maturin/bin:${HOME}/.local/share/uv/tools/twine/bin:${PATH}"
     - maturin --version
     - twine --version
@@ -211,16 +221,28 @@ release:publish-crates:
 #   4. xqsa             (solver adapters)
 #   5. xquad            (umbrella — depends on 1-4)
 #
-# maturin publish uploads wheels for the current runner's platform
-# tag. The full matrix (linux-x86_64 + linux-aarch64 + macos-arm64 +
-# windows-x86_64) requires a multi-runner fan-out; for v0.1.0 we ship
-# linux-x86_64 only and track the matrix as a RELEASING.md follow-up.
+# maturin build + twine upload (OIDC) produces wheels for the current
+# runner's platform tag. The full matrix (linux-x86_64 + linux-aarch64
+# + macos-arm64 + windows-x86_64) requires a multi-runner fan-out; for
+# v0.1.0 we ship linux-x86_64 only and track the matrix as a
+# RELEASING.md follow-up.
 release:publish-pypi:
     stage: release
     needs:
         - release:validate
         - release:publish-crates
     <<: *on-release-tag
+    # `environment: release` matches the env name registered on each
+    # PyPI Trusted Publisher; PyPI rejects the OIDC exchange if the
+    # job's environment doesn't match what's configured project-side.
+    environment: release
+    # GitLab mints a short-lived JWT into `PYPI_ID_TOKEN`; twine ≥6.1
+    # auto-detects it (via `id.detect_credential("pypi")`) and
+    # exchanges it for a per-project PyPI API token at upload time.
+    # Audience MUST be the literal `pypi` (not `pypi.org`).
+    id_tokens:
+        PYPI_ID_TOKEN:
+            aud: pypi
     before_script:
         - *setup-python-publish
     script:
