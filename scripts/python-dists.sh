@@ -64,7 +64,8 @@ fi
 publish_pkg() {
     local pkg="$1"
     local dist_glob="$2"
-    local jwt_var="PYPI_ID_TOKEN_$(printf '%s' "${pkg}" | tr '[:lower:]' '[:upper:]')"
+    local jwt_var
+    jwt_var="PYPI_ID_TOKEN_$(printf '%s' "${pkg}" | tr '[:lower:]' '[:upper:]')"
     local jwt="${!jwt_var}"
 
     # Build the request body via python3 rather than string interpolation
@@ -78,19 +79,29 @@ publish_pkg() {
     # `{"message":"publisher config mismatch"}`), surface the whole
     # response in the failure log instead of a generic message.
     local response
-    response=$(curl -fsS -X POST https://pypi.org/_/oidc/mint-token \
+    if ! response=$(curl -sS --fail-with-body -X POST \
+        https://pypi.org/_/oidc/mint-token \
         -H "Content-Type: application/json" \
-        -d "${body}")
+        -d "${body}"); then
+        echo "Failed to mint PyPI API token for ${pkg}: ${response}" >&2
+        return 1
+    fi
 
     local api_token
     api_token=$(printf '%s' "${response}" \
         | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token") or "")')
 
     if [[ -z "${api_token}" ]]; then
-        echo "Failed to mint PyPI API token for ${pkg}: ${response}" >&2
+        # Redact any minted token before logging to avoid leaking
+        # credentials in CI output.
+        local safe_response
+        safe_response=$(printf '%s' "${response}" \
+            | sed 's/"token":"[^"]*"/"token":"[REDACTED]"/g')
+        echo "Failed to mint PyPI API token for ${pkg}: ${safe_response}" >&2
         return 1
     fi
 
+    # shellcheck disable=SC2086  # Intentional: dist_glob must expand
     TWINE_USERNAME=__token__ TWINE_PASSWORD="${api_token}" \
         twine upload --non-interactive --skip-existing ${dist_glob}
 }
