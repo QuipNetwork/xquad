@@ -67,14 +67,27 @@ publish_pkg() {
     local jwt_var="PYPI_ID_TOKEN_$(printf '%s' "${pkg}" | tr '[:lower:]' '[:upper:]')"
     local jwt="${!jwt_var}"
 
-    local api_token
-    api_token=$(curl -fsS -X POST https://pypi.org/_/oidc/mint-token \
+    # Build the request body via python3 rather than string interpolation
+    # so weird characters in the JWT (none expected — base64url-safe — but
+    # belt-and-suspenders) can't break the JSON.
+    local body
+    body=$(python3 -c 'import json,sys; print(json.dumps({"token": sys.argv[1]}))' "${jwt}")
+
+    # Capture the raw response, then extract the token. If the token is
+    # missing (e.g. PyPI returned 200 with an error payload like
+    # `{"message":"publisher config mismatch"}`), surface the whole
+    # response in the failure log instead of a generic message.
+    local response
+    response=$(curl -fsS -X POST https://pypi.org/_/oidc/mint-token \
         -H "Content-Type: application/json" \
-        -d "{\"token\":\"${jwt}\"}" \
+        -d "${body}")
+
+    local api_token
+    api_token=$(printf '%s' "${response}" \
         | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token") or "")')
 
     if [[ -z "${api_token}" ]]; then
-        echo "Failed to mint PyPI API token for ${pkg} (OIDC exchange returned no token)" >&2
+        echo "Failed to mint PyPI API token for ${pkg}: ${response}" >&2
         return 1
     fi
 
