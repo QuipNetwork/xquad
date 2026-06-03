@@ -28,6 +28,7 @@ Requires the optional ``cuda`` extra::
 
 from __future__ import annotations
 
+import functools
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -61,7 +62,7 @@ void sa_binary(
 ) {
     int rid = blockIdx.x;
     int* x = samples + rid * n;
-    double* rand_ptr = (double*)randoms + (long long)rid * num_sweeps * n;
+    const double* rand_ptr = randoms + (long long)rid * num_sweeps * n;
 
     /* compute initial energy */
     double energy = 0.0;
@@ -119,7 +120,7 @@ void sa_spin(
 ) {
     int rid = blockIdx.x;
     int* s = samples + rid * n;
-    double* rand_ptr = (double*)randoms + (long long)rid * num_sweeps * n;
+    const double* rand_ptr = randoms + (long long)rid * num_sweeps * n;
 
     /* compute initial energy */
     double energy = 0.0;
@@ -209,13 +210,21 @@ class SolverCudaGPU(Solver):
             raise ValueError(f"Unsupported strategy {strategy!r}. Supported: {sorted(_SUPPORTED_STRATEGIES)}")
 
         self._cp = _cupy
-        self._binary_kernel = _cupy.RawKernel(_SA_BINARY_KERNEL, "sa_binary")
-        self._spin_kernel = _cupy.RawKernel(_SA_SPIN_KERNEL, "sa_spin")
         self.strategy = strategy
         self.num_reads = num_reads
         self.num_sweeps = num_sweeps
         self.beta_range = beta_range
         self.seed = seed
+
+    @functools.cached_property
+    def _binary_kernel(self):
+        """Compile the binary-domain SA kernel on first use."""
+        return self._cp.RawKernel(_SA_BINARY_KERNEL, "sa_binary")
+
+    @functools.cached_property
+    def _spin_kernel(self):
+        """Compile the spin-domain SA kernel on first use."""
+        return self._cp.RawKernel(_SA_SPIN_KERNEL, "sa_spin")
 
     def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
         """Solve using parallel-replica simulated annealing on GPU.
@@ -340,7 +349,16 @@ class SolverCudaGPU(Solver):
             samples = raw * 2 - 1  # map {0,1} -> {-1,+1}
             samples = samples.astype(cupy.int32)
 
-        # Pre-generate all random acceptance thresholds
+        # Pre-generate all random acceptance thresholds.
+        # Memory: num_reads * num_sweeps * n * 8 bytes (float64).
+        random_bytes = num_reads * num_sweeps * n * 8
+        gpu_free = cupy.cuda.Device().mem_info[0]
+        if random_bytes > gpu_free * 0.8:
+            raise ValueError(
+                f"Random buffer requires {random_bytes / 1e9:.1f} GB "
+                f"GPU memory ({gpu_free / 1e9:.1f} GB free). "
+                f"Reduce num_reads or num_sweeps."
+            )
         randoms = rng.random(size=(num_reads, num_sweeps, n), dtype=cupy.float64)
 
         energies = cupy.zeros(num_reads, dtype=cupy.float64)

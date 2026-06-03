@@ -328,6 +328,11 @@ def mock_cupy_env(monkeypatch):
     fake_runtime.getDeviceCount = lambda: 1
 
     class _FakeDevice:
+        @property
+        def mem_info(self):
+            # (free, total) -- 8 GB fake GPU for test purposes.
+            return (8 * 1024**3, 8 * 1024**3)
+
         def synchronize(self):
             pass
 
@@ -502,6 +507,28 @@ class TestSolverCudaGPUMocked:
             from xqsa.cuda_gpu import SolverCudaGPU as _Solver
 
             _Solver()
+
+    def test_oom_guard(self, mock_cupy_env) -> None:
+        """ValueError when random buffer exceeds GPU memory."""
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        # Override mem_info to report only 1 KB free.
+        class _TinyDevice:
+            @property
+            def mem_info(self):
+                return (1024, 1024)
+
+            def synchronize(self):
+                pass
+
+        mock_cupy_env.cuda.Device = _TinyDevice
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+
+        solver = _Solver(num_reads=10, num_sweeps=100, seed=42)
+        with pytest.raises(ValueError, match="GPU memory"):
+            solver.solve(model)
 
 
 # ---------------------------------------------------------------------------
