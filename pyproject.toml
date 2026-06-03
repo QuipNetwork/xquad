@@ -50,3 +50,4 @@ known-first-party = [ "xqvm_py", "xqcp", "xqsa", "xqffi", "xquad" ]
 
 [tool.pytest.ini_options]
 testpaths = [ "xqvm_py/tests", "xqcp/tests", "xqsa/tests", "xquad/tests" ]
+markers   = [ "qpu: live D-Wave QPU tests (require DWAVE_API_TOKEN)" ]

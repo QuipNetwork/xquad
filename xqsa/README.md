@@ -1,14 +1,23 @@
 # xqsa -- Solver adapters for XQMX models
 
-Pluggable solvers for quadratic optimisation models produced by the XQuad toolchain. Today's implementation wraps DWave's simulated annealer via [`dwave-samplers`](https://docs.ocean.dwavesys.com/projects/dwave-samplers/); future solvers (D-Wave QPU, GPU kernels, QAOA) plug into the same `Solver` protocol.
+Pluggable solvers for quadratic optimisation models produced by the XQuad toolchain.
+
+| Solver | Class | Transport | Install |
+|---|---|---|---|
+| DWave CPU simulated annealing | `SolverDWaveCPU` | local | `pip install xqsa` |
+| D-Wave Advantage QPU | `SolverDWaveQPU` | D-Wave Leap cloud | `pip install xqsa[dwave]` |
 
 ## Install
 
 ```sh
+# CPU simulated annealing only
 pip install xqsa
+
+# Add D-Wave QPU support
+pip install xqsa[dwave]
 ```
 
-## Quick start
+## Quick start -- CPU simulated annealing
 
 ```python
 from xqsa import SolverDWaveCPU
@@ -25,6 +34,34 @@ result = solver.solve(model)
 # result.timing: float   -- wall-clock seconds spent solving
 # result.metadata: dict  -- seed, reads, solver-specific params
 ```
+
+## Quick start -- D-Wave Advantage QPU
+
+Requires a [D-Wave Leap](https://cloud.dwavesys.com/leap/) account and
+`pip install xqsa[dwave]`.
+
+```python
+import os
+os.environ["DWAVE_API_TOKEN"] = "your-leap-token"  # or pass token= directly
+
+from xqsa import SolverDWaveQPU
+from xqvm_py.xqmx import XQMX
+
+model = XQMX.binary_model(size=4)
+model.set_linear(0, -1)
+model.set_quadratic(0, 1, 2)
+
+solver = SolverDWaveQPU()              # auto-selects best Advantage system
+result = solver.solve(model)
+print(result.metadata["solver"])       # e.g. "Advantage_system5.4"
+print(result.metadata["qpu_timing"])   # QPU timing breakdown from Leap
+```
+
+Credential resolution order: `token=` constructor argument ->
+`DWAVE_API_TOKEN` env var -> `ValueError`.
+
+For a specific solver: `SolverDWaveQPU(solver="Advantage_system5.4")`.
+For custom annealing: `solver.solve(model, annealing_time=100, chain_strength=2.0)`.
 
 ## Solver protocol
 

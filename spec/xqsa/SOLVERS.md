@@ -4,7 +4,7 @@
 
 Concrete solver classes follow the pattern `Solver{Vendor/Technology}{ComputeTarget}`. Vendor-first grouping keeps related solvers together in sorted order.
 
-v0.3.0 uses `Solver` (abstract) and `SolverDWaveCPU` (concrete).
+v0.3.0 uses `Solver` (abstract) with CPU and QPU concrete solvers.
 
 ## Algorithm Families
 
@@ -37,7 +37,6 @@ Each solver beyond the base `SolverDWaveCPU` lives behind an optional extra. Imp
 |--------|------|-------|----------|----------|
 | `SolverDWaveCPU` | `dwave_cpu.py` | (base) | CPU | v0.2.0 |
 | `SolverDWaveQPU` | `dwave_qpu.py` | `[dwave]` | D-Wave QPU (cloud) | v0.3.0 |
-| `SolverDWaveGPU` | `dwave_gpu.py` | `[gpu]` | NVIDIA CUDA GPU | v0.3.0 |
 | `SolverCudaGPU` | `cuda_gpu.py` | `[cuda]` | NVIDIA CUDA GPU | v0.3.0 |
 | `SolverMetalGPU` | `metal_gpu.py` | `[metal]` | Apple Metal GPU | v0.3.0 |
 | `SolverIBMQAOA` | -- | `[ibm]` | IBM QPU / AerSimulator | v0.3.0 |
@@ -57,4 +56,3 @@ Mapping between `quip-protocol` miner config keys and xqsa solver classes:
 | IBM QAOA (feature branch) | `SolverIBMQAOA` |
 | IonQ QAOA (feature branch) | `SolverIonQQAOA` |
 | `modal` | No xqsa equivalent (orchestration layer, not a solver algorithm) |
-| GPU SA (dwave-samplers + CUDA) | `SolverDWaveGPU` (no protocol miner equivalent) |
