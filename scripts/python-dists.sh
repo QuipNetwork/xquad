@@ -88,8 +88,10 @@ publish_pkg() {
     fi
 
     local api_token
-    api_token=$(printf '%s' "${response}" \
-        | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token") or "")')
+    if ! api_token=$(printf '%s' "${response}" \
+        | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token") or "")' 2>/dev/null); then
+        api_token=""
+    fi
 
     if [[ -z "${api_token}" ]]; then
         # Redact any minted token before logging to avoid leaking
