@@ -15,9 +15,13 @@
 #               by release:dry-run:pypi (MR/push) and release:validate
 #               (tag).
 #   publish  -- maturin build (xqffi) + uv build (peers) + twine
-#               upload via PyPI Trusted Publishing (OIDC). twine
-#               auto-detects PYPI_ID_TOKEN in env; no long-lived
-#               token. Used by release:publish-pypi (tag only).
+#               upload via PyPI Trusted Publishing (OIDC). One PyPI
+#               API token is minted per package (PyPI's mint-token
+#               endpoint is single-use per GitLab JWT, so a monorepo
+#               needs one JWT per package — see release.yml's
+#               id_tokens block). Requires PYPI_ID_TOKEN_<PKG> in
+#               env for each PKG. Used by release:publish-pypi (tag
+#               only).
 #
 # Run from the workspace root.
 
@@ -38,35 +42,94 @@ case "${mode}" in
 esac
 
 if [[ "${mode}" == "publish" ]]; then
-    : "${PYPI_ID_TOKEN:?PYPI_ID_TOKEN is required for publish mode (OIDC trusted publishing — set by GitLab id_tokens block)}"
+    for pkg in xqffi "${PEERS[@]}"; do
+        var="PYPI_ID_TOKEN_$(printf '%s' "${pkg}" | tr '[:lower:]' '[:upper:]')"
+        if [[ -z "${!var:-}" ]]; then
+            echo "${var} is required for publish mode (OIDC trusted publishing — set by GitLab id_tokens block in .gitlab/ci/release.yml)" >&2
+            exit 1
+        fi
+    done
 fi
+
+# Exchange a GitLab OIDC JWT for a per-project PyPI API token, then
+# upload via twine using that token. PyPI's mint-token endpoint
+# refuses to exchange the same JWT twice (anti-replay), so each
+# package gets its own JWT (see release.yml's id_tokens block) and
+# its own minted API token.
+#
+# We set TWINE_USERNAME/TWINE_PASSWORD explicitly rather than let
+# twine auto-detect, because twine's `id.detect_credential` only
+# reads the single `PYPI_ID_TOKEN` env var — it can't pick the right
+# per-package JWT from `PYPI_ID_TOKEN_<PKG>`.
+publish_pkg() {
+    local pkg="$1"
+    local dist_glob="$2"
+    local jwt_var
+    jwt_var="PYPI_ID_TOKEN_$(printf '%s' "${pkg}" | tr '[:lower:]' '[:upper:]')"
+    local jwt="${!jwt_var}"
+
+    # Build the request body via python3 rather than string interpolation
+    # so weird characters in the JWT (none expected — base64url-safe — but
+    # belt-and-suspenders) can't break the JSON.
+    local body
+    body=$(python3 -c 'import json,sys; print(json.dumps({"token": sys.argv[1]}))' "${jwt}")
+
+    # Capture the raw response, then extract the token. If the token is
+    # missing (e.g. PyPI returned 200 with an error payload like
+    # `{"message":"publisher config mismatch"}`), surface the whole
+    # response in the failure log instead of a generic message.
+    local response
+    if ! response=$(curl -sS --fail-with-body -X POST \
+        https://pypi.org/_/oidc/mint-token \
+        -H "Content-Type: application/json" \
+        -d "${body}"); then
+        echo "Failed to mint PyPI API token for ${pkg}: ${response}" >&2
+        return 1
+    fi
+
+    local api_token
+    if ! api_token=$(printf '%s' "${response}" \
+        | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token") or "")' 2>/dev/null); then
+        api_token=""
+    fi
+
+    if [[ -z "${api_token}" ]]; then
+        # Redact any minted token before logging to avoid leaking
+        # credentials in CI output.
+        local safe_response
+        safe_response=$(printf '%s' "${response}" \
+            | sed 's/"token":"[^"]*"/"token":"[REDACTED]"/g')
+        echo "Failed to mint PyPI API token for ${pkg}: ${safe_response}" >&2
+        return 1
+    fi
+
+    # shellcheck disable=SC2086  # Intentional: dist_glob must expand
+    TWINE_USERNAME=__token__ TWINE_PASSWORD="${api_token}" \
+        twine upload --non-interactive --skip-existing ${dist_glob}
+}
 
 # --- xqffi (pyo3 cdylib) ---------------------------------------------------
 # `maturin publish` has no OIDC support (no --trusted-publishing flag);
 # it only accepts --username/--password. Split build from upload so the
-# wheel goes through twine, which auto-detects PYPI_ID_TOKEN and does
-# the OIDC token exchange just like the pure-Python peers below.
+# wheel goes through twine, which lets the cdylib follow the same
+# OIDC-mint-and-upload path as the pure-Python peers below.
 maturin build --release --manifest-path xqffi/Cargo.toml --out xqffi/dist
 if [[ "${mode}" == "check" ]]; then
     twine check xqffi/dist/*
 else
-    twine upload --non-interactive --skip-existing xqffi/dist/*
+    publish_pkg xqffi "xqffi/dist/*"
 fi
 
 # --- pure-Python peers + umbrella -----------------------------------------
 # `uv build` inside a workspace member defaults to the workspace-root
 # `dist/`; `--out-dir dist` keeps each package's artefacts under its own
 # subdir so subsequent twine ops resolve files locally to that package.
-#
-# twine ≥6.1 with no --username/--password and PYPI_ID_TOKEN in env
-# uses OIDC trusted publishing automatically (PyPI mints a per-project
-# API token for each upload).
 for pkg in "${PEERS[@]}"; do
     (
         cd "${pkg}"
         uv build --out-dir dist
         if [[ "${mode}" == "publish" ]]; then
-            twine upload --non-interactive --skip-existing dist/*
+            publish_pkg "${pkg}" "dist/*"
         else
             twine check dist/*
         fi
