@@ -22,6 +22,7 @@ Provides pluggable solvers that take XQMX models and return
 optimized samples. The first solver wraps DWave's CPU simulated annealer.
 """
 
+from .cuda_gpu import SolverCudaGPU
 from .dwave_cpu import SolverDWaveCPU
 from .dwave_qpu import SolverDWaveQPU
 from .solver import Solver, SolverResult
@@ -29,6 +30,7 @@ from .solver import Solver, SolverResult
 __all__ = [
     "Solver",
     "SolverResult",
+    "SolverCudaGPU",
     "SolverDWaveCPU",
     "SolverDWaveQPU",
 ]
