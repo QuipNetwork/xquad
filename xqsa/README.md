@@ -6,6 +6,7 @@ Pluggable solvers for quadratic optimisation models produced by the XQuad toolch
 |---|---|---|---|
 | DWave CPU simulated annealing | `SolverDWaveCPU` | local | `pip install xqsa` |
 | D-Wave Advantage QPU | `SolverDWaveQPU` | D-Wave Leap cloud | `pip install xqsa[dwave]` |
+| CUDA GPU simulated annealing | `SolverCudaGPU` | local (NVIDIA GPU) | `pip install xqsa[cuda]` |
 
 ## Install
 
@@ -15,6 +16,9 @@ pip install xqsa
 
 # Add D-Wave QPU support
 pip install xqsa[dwave]
+
+# Add CUDA GPU support (requires NVIDIA GPU + CUDA driver)
+pip install xqsa[cuda]
 ```
 
 ## Quick start -- CPU simulated annealing
@@ -62,6 +66,30 @@ Credential resolution order: `token=` constructor argument ->
 
 For a specific solver: `SolverDWaveQPU(solver="Advantage_system5.4")`.
 For custom annealing: `solver.solve(model, annealing_time=100, chain_strength=2.0)`.
+
+## Quick start -- CUDA GPU simulated annealing
+
+Requires an NVIDIA GPU with CUDA support and `pip install xqsa[cuda]`.
+
+```python
+from xqsa import SolverCudaGPU
+from xqvm_py.xqmx import XQMX
+
+model = XQMX.binary_model(size=4)
+model.set_linear(0, -1)
+model.set_quadratic(0, 1, 2)
+
+solver = SolverCudaGPU()                # uses all defaults
+result = solver.solve(model)
+print(result.energy, result.timing)
+
+# Custom parameters
+solver = SolverCudaGPU(num_reads=200, num_sweeps=2000, seed=42)
+result = solver.solve(model, beta_range=(0.1, 5.0))
+```
+
+Algorithm selection via the `strategy` parameter (currently only `"sa"`
+is supported; `"gibbs"` and `"metropolis"` are planned).
 
 ## Solver protocol
 

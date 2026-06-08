@@ -4,13 +4,13 @@
 
 Concrete solver classes follow the pattern `Solver{Vendor/Technology}{ComputeTarget}`. Vendor-first grouping keeps related solvers together in sorted order.
 
-v0.3.0 uses `Solver` (abstract) with CPU and QPU concrete solvers.
+v0.3.0 uses `Solver` (abstract) with `SolverDWaveCPU`, `SolverDWaveQPU`, and `SolverCudaGPU` (concrete).
 
 ## Algorithm Families
 
 ### D-Wave SDK Family
 
-Solvers that use the `dimod` BQM format and D-Wave SDK packages. The SDK handles model conversion and sampling; solvers differ in where the BQM is solved (CPU, GPU, QPU).
+Solvers that use the `dimod` BQM format and D-Wave SDK packages. The SDK handles model conversion and sampling; solvers differ in where the BQM is solved (CPU, QPU).
 
 Shared base helpers: `_model_to_bqm()`, `_sample_to_xqmx()` (concrete methods on the `Solver` base class).
 
@@ -19,6 +19,8 @@ Shared base helpers: `_model_to_bqm()`, `_sample_to_xqmx()` (concrete methods on
 Custom GPU kernels (CUDA `.cu` / Metal `.metal`) bypassing the D-Wave SDK for the compute step. Higher performance ceiling, more code to maintain.
 
 Algorithm selection is a configuration option on the solver class via a `strategy` parameter (e.g. `"sa"`, `"gibbs"`, `"metropolis"`), not separate solver classes. This matches the convention from the quip-protocol codebase.
+
+`SolverCudaGPU` is the first solver in this family, using CuPy RawKernel for custom CUDA C++ kernels. It converts XQMX models directly to dense GPU arrays (skipping the BQM intermediate) and runs parallel-replica simulated annealing with Metropolis acceptance.
 
 ### Gate-Based QAOA Family
 
@@ -33,14 +35,14 @@ Each solver beyond the base `SolverDWaveCPU` lives behind an optional extra. Imp
 
 ## Solver Registry
 
-| Solver | File | Extra | Hardware | Added in |
-|--------|------|-------|----------|----------|
-| `SolverDWaveCPU` | `dwave_cpu.py` | (base) | CPU | v0.2.0 |
-| `SolverDWaveQPU` | `dwave_qpu.py` | `[dwave]` | D-Wave QPU (cloud) | v0.3.0 |
-| `SolverCudaGPU` | `cuda_gpu.py` | `[cuda]` | NVIDIA CUDA GPU | v0.3.0 |
-| `SolverMetalGPU` | `metal_gpu.py` | `[metal]` | Apple Metal GPU | v0.3.0 |
-| `SolverIBMQAOA` | -- | `[ibm]` | IBM QPU / AerSimulator | v0.3.0 |
-| `SolverIonQQAOA` | -- | `[ionq]` | IonQ trapped-ion QPU | v0.3.0 |
+| Solver | File | Extra | Hardware | Status |
+|--------|------|-------|----------|--------|
+| `SolverDWaveCPU` | `dwave_cpu.py` | (base) | CPU | implemented |
+| `SolverDWaveQPU` | `dwave_qpu.py` | `[dwave]` | D-Wave QPU (cloud) | implemented |
+| `SolverCudaGPU` | `cuda_gpu.py` | `[cuda]` | NVIDIA CUDA GPU | implemented |
+| `SolverMetalGPU` | `metal_gpu.py` | `[metal]` | Apple Metal GPU | planned |
+| `SolverIBMQAOA` | -- | `[ibm]` | IBM QPU / AerSimulator | planned |
+| `SolverIonQQAOA` | -- | `[ionq]` | IonQ trapped-ion QPU | planned |
 
 ## Protocol Miner Equivalence
 
