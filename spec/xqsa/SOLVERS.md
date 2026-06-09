@@ -4,7 +4,7 @@
 
 Concrete solver classes follow the pattern `Solver{Vendor/Technology}{ComputeTarget}`. Vendor-first grouping keeps related solvers together in sorted order.
 
-v0.3.0 uses `Solver` (abstract) with `SolverDWaveCPU`, `SolverDWaveQPU`, and `SolverCudaGPU` (concrete).
+v0.3.0 uses `Solver` (abstract) with `SolverDWaveCPU`, `SolverDWaveQPU`, `SolverCudaGPU`, and `SolverMetalGPU` (concrete).
 
 ## Algorithm Families
 
@@ -21,6 +21,8 @@ Custom GPU kernels (CUDA `.cu` / Metal `.metal`) bypassing the D-Wave SDK for th
 Algorithm selection is a configuration option on the solver class via a `strategy` parameter (e.g. `"sa"`, `"gibbs"`, `"metropolis"`), not separate solver classes. This matches the convention from the quip-protocol codebase.
 
 `SolverCudaGPU` is the first solver in this family, using CuPy RawKernel for custom CUDA C++ kernels. It converts XQMX models directly to dense GPU arrays (skipping the BQM intermediate) and runs parallel-replica simulated annealing with Metropolis acceptance.
+
+`SolverMetalGPU` is the Apple Silicon counterpart, using inline Metal Shading Language kernels dispatched via `pyobjc-framework-Metal`. It supports `strategy="sa"` (simulated annealing) and `strategy="gibbs"` (block Gibbs sampling over a greedy graph colouring). Like the CUDA solver it works on dense float32 arrays; unlike it, acceptance randomness is generated on-device (xorshift32 per replica) so no random buffer is allocated.
 
 ### Gate-Based QAOA Family
 
@@ -40,7 +42,7 @@ Each solver beyond the base `SolverDWaveCPU` lives behind an optional extra. Imp
 | `SolverDWaveCPU` | `dwave_cpu.py` | (base) | CPU | implemented |
 | `SolverDWaveQPU` | `dwave_qpu.py` | `[dwave]` | D-Wave QPU (cloud) | implemented |
 | `SolverCudaGPU` | `cuda_gpu.py` | `[cuda]` | NVIDIA CUDA GPU | implemented |
-| `SolverMetalGPU` | `metal_gpu.py` | `[metal]` | Apple Metal GPU | planned |
+| `SolverMetalGPU` | `metal_gpu.py` | `[metal]` | Apple Metal GPU | implemented |
 | `SolverIBMQAOA` | -- | `[ibm]` | IBM QPU / AerSimulator | planned |
 | `SolverIonQQAOA` | -- | `[ionq]` | IonQ trapped-ion QPU | planned |
 
@@ -55,6 +57,7 @@ Mapping between `quip-protocol` miner config keys and xqsa solver classes:
 | `cuda` | `SolverCudaGPU(strategy="sa")` |
 | `cuda-gibbs` | `SolverCudaGPU(strategy="gibbs")` |
 | `metal` | `SolverMetalGPU(strategy="sa")` |
+| `metal-gibbs` | `SolverMetalGPU(strategy="gibbs")` |
 | IBM QAOA (feature branch) | `SolverIBMQAOA` |
 | IonQ QAOA (feature branch) | `SolverIonQQAOA` |
 | `modal` | No xqsa equivalent (orchestration layer, not a solver algorithm) |

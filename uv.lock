@@ -835,6 +835,55 @@ wheels = [
 ]
 
 [[package]]
+name = "pyobjc-core"
+version = "12.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2a/e8/a6cc12669211e7c9b29e8f26bf2159e67c7a73555dc229018abf46d8167a/pyobjc_core-12.2.tar.gz", hash = "sha256:51d7de4cfa32f508c6a7aac31f131b12d5e196a8dcf588e6e8d7e6337224f66d", size = 1062064, upload-time = "2026-05-30T12:29:55.417Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d6/ed/6e62d038992bc7ef9091d95ec97c3c221686fe52a993a6501e961c757613/pyobjc_core-12.2-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:9287c7c46d6ae8676b4c6c0389a8f4b5381f42ae53a47151900c08b157e5a992", size = 6428611, upload-time = "2026-05-30T10:21:33.83Z" },
+    { url = "https://files.pythonhosted.org/packages/bf/0b/d492110202f4d1050a5e590620ebd1e730cf89f9880a26cf18205e0f5800/pyobjc_core-12.2-cp313-cp313t-macosx_10_13_universal2.whl", hash = "sha256:515ecf2afe168301feb66a7230d700584ce2e4b8a0ac178e19450b8898384139", size = 6677992, upload-time = "2026-05-30T10:44:13.039Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/b2/ecfbd0c80e7688ed6f3db23414758443c69c3a9d318f2036e26530ede955/pyobjc_core-12.2-cp314-cp314-macosx_10_15_universal2.whl", hash = "sha256:a51352e478785cd7fce1604b9902125a286139caea0759cb340e59d75b594992", size = 6421372, upload-time = "2026-05-30T10:47:27.907Z" },
+    { url = "https://files.pythonhosted.org/packages/2b/89/ecd5cb62573fba9a95f8bdb838a9860a360907104a0724af6611d3b20512/pyobjc_core-12.2-cp314-cp314t-macosx_10_15_universal2.whl", hash = "sha256:3137b2d14f9f2154fb5b1c092c38d15e164f68ab190c18335d76e4e7e1583f79", size = 6676789, upload-time = "2026-05-30T10:59:33.811Z" },
+    { url = "https://files.pythonhosted.org/packages/74/24/5091d156b19df0f657127f42b08eada11c9b9cc5df49fedb91bb354d9821/pyobjc_core-12.2-cp315-cp315-macosx_10_15_universal2.whl", hash = "sha256:1e4216f2ec962dc13cf7f31b9bc3a7190337a0f401e7dc9de6b2d8c08b9dbb7a", size = 6476112, upload-time = "2026-05-30T11:21:46.914Z" },
+    { url = "https://files.pythonhosted.org/packages/77/e2/ee91ea8a0ad28e759f351ed8654027c34fc62ad5e207672522025a6a3fc2/pyobjc_core-12.2-cp315-cp315t-macosx_10_15_universal2.whl", hash = "sha256:ac952bac8057dd0b97ee7b311c39f97cad7430b7cfbd67ca0a30135a7d17d2ab", size = 6718365, upload-time = "2026-05-30T11:51:47.35Z" },
+]
+
+[[package]]
+name = "pyobjc-framework-cocoa"
+version = "12.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyobjc-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6d/cc/927169225e72bab9c9b44285656768fb75052a0bc85fdbca62740e1ca43c/pyobjc_framework_cocoa-12.2.tar.gz", hash = "sha256:20b392e2b7241caad0538dfde12143343e5dfe48f72e7df660a7548e635903dc", size = 3125555, upload-time = "2026-05-30T12:35:09.273Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3f/3b/1af2be2bf5204bbcfc94de215d5f87d35348c9982d9b05f54ceefbc53b8f/pyobjc_framework_cocoa-12.2-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:f0bbe0abedfb24b11ff6c71e26cdefb0df001c6482f95591fad40c2688c16498", size = 388154, upload-time = "2026-05-30T11:58:38.547Z" },
+    { url = "https://files.pythonhosted.org/packages/41/cb/c0435d64f1199210af36141b90aea2ae3344719f7313d4160b8b0dd527db/pyobjc_framework_cocoa-12.2-cp313-cp313t-macosx_10_13_universal2.whl", hash = "sha256:46b6681e2b21b099ed095339c140f2c8137d6ac5658653166ee90722f9e3c621", size = 392245, upload-time = "2026-05-30T11:59:02.436Z" },
+    { url = "https://files.pythonhosted.org/packages/56/4b/df8e359e5e422e8f1430bde038aa64364e8c1d4542d7f6fcc4f8a97ec0b7/pyobjc_framework_cocoa-12.2-cp314-cp314-macosx_10_15_universal2.whl", hash = "sha256:aecfd44908fa12a9291fb6ca2458ebbc611102de6784f2202a35fd5ed9f56c60", size = 388334, upload-time = "2026-05-30T11:59:25.861Z" },
+    { url = "https://files.pythonhosted.org/packages/43/a2/68c0702cc9d6dbc7077edbd13ccc9aa30ac589d514f51ad6f5c3840e3bf1/pyobjc_framework_cocoa-12.2-cp314-cp314t-macosx_10_15_universal2.whl", hash = "sha256:ef679740f541c52118149b558b757d1f11d9dcf30c2a23344b13a6af6a99a1ab", size = 392376, upload-time = "2026-05-30T11:59:50.031Z" },
+    { url = "https://files.pythonhosted.org/packages/83/c3/e170672302e75cc1aa833546fb0d5a3bd4a126ede4124566d5a2e4a50cd6/pyobjc_framework_cocoa-12.2-cp315-cp315-macosx_10_15_universal2.whl", hash = "sha256:290e544a8c2d0786a34a359d825eaad44ebaaa3b30cdd765b2755422ca39a0d2", size = 388566, upload-time = "2026-05-30T12:00:13.606Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/6b/78e98e4de11646e56cf98066f9f84b43c86adc8b273a660d85a6ceba7a31/pyobjc_framework_cocoa-12.2-cp315-cp315t-macosx_10_15_universal2.whl", hash = "sha256:5a0bed77b0b56074cc2b4564aae3e6e9d5da5fdf93252f50b6dbced0f7fece3a", size = 392674, upload-time = "2026-05-30T12:00:37.572Z" },
+]
+
+[[package]]
+name = "pyobjc-framework-metal"
+version = "12.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyobjc-core" },
+    { name = "pyobjc-framework-cocoa" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/71/a9/ff281c31ce7d0cb819af1989b77258b2d8cffc0b9fad47fcdd39043f4d81/pyobjc_framework_metal-12.2.tar.gz", hash = "sha256:4fb2cfd42cc8e808f08f1f2fe57de713734dd2f495c666296b2c8a5fba9be6dc", size = 238106, upload-time = "2026-05-30T12:39:54.526Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dd/90/f3832396e967ae149b480ebf31da0ab7b033c145b15274b2bd5357d8faf5/pyobjc_framework_metal-12.2-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:538826eb6020e2d49e481f7ad390319dfa1016aeeac623f8b76bfe8aaec8a66f", size = 75935, upload-time = "2026-05-30T12:14:28.505Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/95/f36313fab765e90c8400c9423cc0f6af6fec96a919ad894b09681d0b4a88/pyobjc_framework_metal-12.2-cp313-cp313t-macosx_10_13_universal2.whl", hash = "sha256:b9a9ba61ab834ada0e23fe7d560cf01e6948a88a4aef3342c032683b795bc908", size = 76491, upload-time = "2026-05-30T12:14:33.968Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/92/3c9a3f13a968f8935d3ea46e0ca5d3662b5d5fcaa4faa7b19e68e33956f5/pyobjc_framework_metal-12.2-cp314-cp314-macosx_10_15_universal2.whl", hash = "sha256:06775870d7f40496d647f9ac37793e4a037ffaad43612aea7313460a52ee9e7f", size = 75937, upload-time = "2026-05-30T12:14:39.603Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/34/9244ee1aef137fb8603daa7fcbe3919d4a27c894b120aaa22ba9c1481d5d/pyobjc_framework_metal-12.2-cp314-cp314t-macosx_10_15_universal2.whl", hash = "sha256:86296b6bf1b19f0e0c0d4bc1e99954eb666c48a386e61ed805cbaa961cc0cd6e", size = 76541, upload-time = "2026-05-30T12:14:45.26Z" },
+    { url = "https://files.pythonhosted.org/packages/65/c6/a5f5169c2799e67fbc7a159154ff9369dae2c1b0a76a87c1ab3206be9470/pyobjc_framework_metal-12.2-cp315-cp315-macosx_10_15_universal2.whl", hash = "sha256:67619f9778593deb2596f7c7c20c230b93a1ebfd500b5cfd29c2e4d3db1e4a64", size = 76051, upload-time = "2026-05-30T12:14:50.76Z" },
+    { url = "https://files.pythonhosted.org/packages/39/f6/01b2bf593c60b325d4ad9568bb8b7861ddc15196d69bdf0e82871e417d8e/pyobjc_framework_metal-12.2-cp315-cp315t-macosx_10_15_universal2.whl", hash = "sha256:3d044801562c2a411ac65ff8f2f5d4004b3d1bd41082e8bb52b1f7a87ac53813", size = 76675, upload-time = "2026-05-30T12:14:56.186Z" },
+]
+
+[[package]]
 name = "pysocks"
 version = "1.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1087,6 +1136,9 @@ cuda = [
 dwave = [
     { name = "dwave-system" },
 ]
+metal = [
+    { name = "pyobjc-framework-metal", marker = "sys_platform == 'darwin'" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -1095,9 +1147,10 @@ requires-dist = [
     { name = "dwave-system", marker = "extra == 'dwave'", specifier = ">=1.0" },
     { name = "nvidia-cuda-nvrtc-cu12", marker = "extra == 'cuda'" },
     { name = "nvidia-cuda-runtime-cu12", marker = "extra == 'cuda'" },
+    { name = "pyobjc-framework-metal", marker = "sys_platform == 'darwin' and extra == 'metal'", specifier = ">=11.0" },
     { name = "xqvm-py", editable = "xqvm_py" },
 ]
-provides-extras = ["cuda", "dwave"]
+provides-extras = ["cuda", "dwave", "metal"]
 
 [[package]]
 name = "xquad"
