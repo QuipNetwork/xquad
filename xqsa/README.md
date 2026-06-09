@@ -7,6 +7,7 @@ Pluggable solvers for quadratic optimisation models produced by the XQuad toolch
 | DWave CPU simulated annealing | `SolverDWaveCPU` | local | `pip install xqsa` |
 | D-Wave Advantage QPU | `SolverDWaveQPU` | D-Wave Leap cloud | `pip install xqsa[dwave]` |
 | CUDA GPU simulated annealing | `SolverCudaGPU` | local (NVIDIA GPU) | `pip install xqsa[cuda]` |
+| Metal GPU SA / Gibbs | `SolverMetalGPU` | local (Apple GPU, macOS) | `pip install xqsa[metal]` |
 
 ## Install
 
@@ -19,6 +20,9 @@ pip install xqsa[dwave]
 
 # Add CUDA GPU support (requires NVIDIA GPU + CUDA driver)
 pip install xqsa[cuda]
+
+# Add Metal GPU support (requires macOS + Apple Silicon GPU)
+pip install xqsa[metal]
 ```
 
 ## Quick start -- CPU simulated annealing
@@ -90,6 +94,30 @@ result = solver.solve(model, beta_range=(0.1, 5.0))
 
 Algorithm selection via the `strategy` parameter (currently only `"sa"`
 is supported; `"gibbs"` and `"metropolis"` are planned).
+
+## Quick start -- Metal GPU (Apple Silicon)
+
+Requires macOS with an Apple Metal GPU and `pip install xqsa[metal]`.
+
+```python
+from xqsa import SolverMetalGPU
+from xqvm_py.xqmx import XQMX
+
+model = XQMX.binary_model(size=4)
+model.set_linear(0, -1)
+model.set_quadratic(0, 1, 2)
+
+# Simulated annealing (default), or strategy="gibbs" for block Gibbs sampling.
+solver = SolverMetalGPU(strategy="sa", num_reads=200, num_sweeps=2000, seed=42)
+result = solver.solve(model)
+print(result.energy, result.timing)
+```
+
+The `strategy` parameter selects `"sa"` (simulated annealing) or `"gibbs"`
+(block Gibbs sampling over a greedy graph colouring). `beta_schedule_type`
+selects `"geometric"` (default) or `"linear"`. Coefficients are computed in
+float32 on the GPU; `result.energy` is recomputed authoritatively in
+integer arithmetic.
 
 ## Solver protocol
 

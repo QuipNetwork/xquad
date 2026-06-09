@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 cuda  = [ "cupy-cuda12x>=13.0", "nvidia-cuda-nvrtc-cu12", "nvidia-cuda-runtime-cu12" ]
 dwave = [ "dwave-system>=1.0" ]
+metal = [ "pyobjc-framework-Metal>=11.0; sys_platform == 'darwin'" ]
 
 [tool.uv.sources]
 xqvm_py.workspace = true

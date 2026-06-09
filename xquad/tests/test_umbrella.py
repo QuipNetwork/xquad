@@ -46,6 +46,7 @@ def test_identity_reexports():
     assert cp.Types is _xqcp.Types
     assert sa.SolverDWaveCPU is _xqsa.SolverDWaveCPU
     assert sa.SolverCudaGPU is _xqsa.SolverCudaGPU
+    assert sa.SolverMetalGPU is _xqsa.SolverMetalGPU
     assert sa.Solver is _xqsa.Solver
     assert sa.SolverResult is _xqsa.SolverResult
     assert types.XQMX is _xqvm_py_xqmx.XQMX
