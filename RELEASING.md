@@ -1,6 +1,6 @@
 # Releasing the xquad toolchain
 
-Cutting a release publishes nine artefacts in one shot from a single
+Cutting a release publishes eleven artefacts in one shot from a single
 `v<X.Y.Z>` git tag:
 
 | # | Artefact | Registry | Ordering |
@@ -8,7 +8,7 @@ Cutting a release publishes nine artefacts in one shot from a single
 | 1 | [`xqvm`](xqvm/) | crates.io | before xqasm, xqcli |
 | 2 | [`xqasm`](xqasm/) | crates.io | before xqcli |
 | 3 | [`xqcli`](xqcli/) | crates.io | last Rust crate |
-| 4 | [`xqffi`](xqffi/) wheel | PyPI | before peers (pyo3 cdylib) |
+| 4 | [`xqffi`](xqffi/) abi3 wheels + sdist | PyPI | before peers (2 abi3 wheels + sdist) |
 | 5 | [`xqvm_py`](xqvm_py/) sdist | PyPI | before xquad |
 | 6 | [`xqcp`](xqcp/) sdist | PyPI | before xquad |
 | 7 | [`xqsa`](xqsa/) sdist | PyPI | before xquad |
@@ -189,15 +189,13 @@ and rerun the pipeline.
 
 ## What this pipeline does *not* do yet
 
-- **Multi-platform wheels (user-facing limitation).**
-  `pip install xquad` currently only works on `linux-x86_64`. macOS
-  (Intel and ARM), linux-aarch64, and Windows users cannot install
-  from PyPI — they must build from source with a local Rust toolchain
-  (`maturin develop` + `uv sync`). There is no sdist fallback: the
-  `xqffi` pyo3 cdylib that `xquad` depends on is wheel-only, so
-  install does not degrade gracefully, it fails outright. The
-  multi-arch wheel matrix requires runner fan-out to platform-specific
-  runners — tracked as a QUI-442 follow-up.
+- **macOS and Windows prebuilt wheels.** `pip install xquad` ships
+  prebuilt abi3 wheels for linux-x86_64 and linux-aarch64 (CPython
+  >= 3.13). macOS and Windows users can still install from PyPI --
+  pip falls back to the published sdist and builds `xqffi` from
+  source, which requires a Rust toolchain (rustc >= 1.85). Native
+  macOS/Windows wheels would eliminate that requirement but need
+  platform-specific CI runners.
 - **Automated version bumps.** No `cargo-release` / `hatch version`
   integration yet; versions are edited by hand per the step above.
 - **Signed tags + signed artefacts.** Tags are expected to be git-

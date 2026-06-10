@@ -44,6 +44,8 @@ pip install xquad             # umbrella — full pipeline
 pip install xqffi xqcp xqsa   # FFI bindings + DSL + solvers
 ```
 
+Prebuilt wheels are available for Linux x86_64 and aarch64 (CPython >= 3.13). On macOS and Windows, pip builds the `xqffi` Rust extension from source -- this requires a [Rust toolchain](https://rustup.rs/) (>= 1.85).
+
 ## Package map
 
 Three Rust crates on **crates.io**:
