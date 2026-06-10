@@ -1,0 +1,95 @@
+# Hardware-backed XQSA solver verification.
+#
+# These jobs run the real-hardware solver tests (CUDA, D-Wave QPU, Metal)
+# against actual devices on the shared GitLab group runners, exercising the
+# encode -> solve -> verify -> decode pipeline rather than the mocked unit
+# tests in `test:python`.
+#
+# They run only on PROTECTED REFS (main, protected v* tags, protected
+# release/* branches) -- see `.hardware-rules`. Two reasons converge on this:
+#   * test:qpu needs DWAVE_API_TOKEN, a *protected* variable that only exists
+#     on protected refs; running it elsewhere would hard-fail on a missing
+#     token, and the token must never reach unreviewed feature-branch CI.
+#   * Keeping all three together (vs. running cuda/metal everywhere) avoids a
+#     split policy and keeps feature MRs fast and runner-independent.
+# On protected refs the jobs are obligatory: they auto-run and block, so a
+# regressed backend or misconfigured runner fails the pipeline -- no skip.
+#
+# To gate a release MR (source release/vX.Y.Z) pre-merge, protect the
+# `release/*` branch pattern; otherwise these verify on main + the v* tag.
+#
+# Runner routing (group runners under quip.network). Several Linux x86_64
+# runners share identical [linux, x86_64, amd64] tags, so a GPU job needs a
+# more specific selector or it can land on a runner with no GPU:
+#   [linux, x86_64, cuda] -> a GPU runner (lovelace/finney, tagged `cuda`) -> test:cuda
+#   [linux, x86_64]       -> any Linux runner (cloud QPU, no GPU)          -> test:qpu
+#   [macos, arm64]        -> tesla-arm (Apple Silicon)                     -> test:metal
+#                            (Metal is not reachable from Docker)
+#
+# Prerequisites before these pass (tracked in QUI-654):
+#   * The `cuda`-tagged runners pass the GPU through to the Docker container:
+#     NVIDIA Container Toolkit installed + `gpus = "all"` in the runner's
+#     config.toml, which mounts libcuda.so into the image. Without it, the
+#     cuda tests fail in cupy (no CUDA-capable device).
+#   * DWAVE_API_TOKEN added as a masked, protected CI/CD variable for test:qpu.
+
+# Run on protected refs only (main, protected tags, protected release
+# branches). Obligatory there -- auto-run, block on failure.
+.hardware-rules: &hardware-rules
+    rules:
+        - if: $CI_COMMIT_REF_PROTECTED == "true"
+
+# uv bootstrap shared by all hardware jobs. Mirrors `.install-uv` in
+# python.yml (anchors don't cross `include:` files). `--extra <group>` pulls
+# the solver-specific optional deps declared in xqsa/pyproject.toml.
+.install-uv: &install-uv
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+    - export PATH="${HOME}/.local/bin:${PATH}"
+    - export UV_CACHE_DIR="${CI_PROJECT_DIR}/.uv-cache"
+
+test:cuda:
+    stage: test
+    # `cuda` pins this to a GPU runner (lovelace/finney). The platform tags
+    # alone match every Linux x86_64 runner in the group (lovelace, finney,
+    # watch), so a CUDA job could land on a box with no GPU; the `cuda` tag is
+    # the GPU-specific selector the group otherwise lacks.
+    tags: [linux, x86_64, cuda]
+    <<: *hardware-rules
+    before_script:
+        - *install-uv
+        - uv sync --extra cuda
+        # Non-fatal diagnostics (|| true): print what the *container* sees so
+        # a driver/runtime mismatch is visible in the log without gating the
+        # job. nvidia-smi shows the host driver's max CUDA (needs the
+        # `utility` capability); the cupy line is the authoritative compute
+        # view -- driverGetVersion = driver ceiling, runtimeGetVersion = the
+        # CUDA the bundled runtime wants.
+        - nvidia-smi || true
+        - uv run python -c "import cupy.cuda.runtime as r; print('driver CUDA:', r.driverGetVersion(), 'runtime CUDA:', r.runtimeGetVersion())" || true
+    script:
+        # The cuda tests import cupy and dlopen libcuda.so, so they are the
+        # real GPU gate: they pass when the runner exposes a GPU whose driver
+        # is recent enough for the bundled CUDA runtime, and fail in cupy
+        # otherwise.
+        - uv run pytest xqsa/tests/ -m cuda -v
+
+test:qpu:
+    stage: test
+    tags: [linux, x86_64]
+    <<: *hardware-rules
+    before_script:
+        - *install-uv
+        - uv sync --extra dwave
+    script:
+        # DWAVE_API_TOKEN comes from a masked, protected CI/CD variable.
+        - uv run pytest xqsa/tests/ -m qpu -v
+
+test:metal:
+    stage: test
+    tags: [macos, arm64]
+    <<: *hardware-rules
+    before_script:
+        - *install-uv
+        - uv sync --extra metal
+    script:
+        - uv run pytest xqsa/tests/ -m metal -v

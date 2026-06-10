@@ -19,12 +19,18 @@
 Tests for the XQSA solver package.
 """
 
+import os
 import sys
 import types
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+
+# True in CI (GitLab/GitHub set CI). Hardware tests must run and hard-fail on a
+# misconfigured CI environment rather than skip silently; locally they skip when
+# the device/dependency is absent (no developer has every backend).
+_IN_CI = os.environ.get("CI") is not None
 
 dimod = pytest.importorskip("dimod", reason="dwave-samplers / dimod not installed")
 
@@ -681,11 +687,15 @@ try:
 except ImportError:
     _has_cupy = False
 
-if _has_cupy:
+if _has_cupy or _IN_CI:
     from xqsa.cuda_gpu import SolverCudaGPU
 
 
-@pytest.mark.skipif(not _has_cupy, reason="cupy not installed")
+@pytest.mark.cuda
+@pytest.mark.skipif(
+    not _IN_CI and not _has_cupy,
+    reason="cupy not installed (skipped locally; runs and hard-fails in CI)",
+)
 class TestSolverCudaGPU:
     """Tests for the CUDA GPU simulated annealing solver (real hardware)."""
 
@@ -1403,11 +1413,15 @@ try:
 except ImportError:
     _has_metal = False
 
-if _has_metal:
+if _has_metal or _IN_CI:
     from xqsa.metal_gpu import SolverMetalGPU
 
 
-@pytest.mark.skipif(not _has_metal, reason="Metal GPU not available")
+@pytest.mark.metal
+@pytest.mark.skipif(
+    not _IN_CI and not _has_metal,
+    reason="Metal GPU not available (skipped locally; runs and hard-fails in CI)",
+)
 class TestSolverMetalGPU:
     """Tests for the Metal GPU solver (real Apple hardware)."""
 

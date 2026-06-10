@@ -119,6 +119,27 @@ selects `"geometric"` (default) or `"linear"`. Coefficients are computed in
 float32 on the GPU; `result.energy` is recomputed authoritatively in
 integer arithmetic.
 
+## Selecting a solver by name
+
+`build_solver` constructs any backend from a short, CLI-friendly name, so
+tools and scripts can stay backend-agnostic:
+
+```python
+from xqsa import SOLVERS, build_solver
+
+print(sorted(SOLVERS))          # ['cuda', 'dwave-cpu', 'dwave-qpu', 'metal']
+solver = build_solver("dwave-cpu", seed=42)
+result = solver.solve(model)
+```
+
+`seed` is forwarded to the classical SA backends (`dwave-cpu`, `cuda`,
+`metal`) and ignored for `dwave-qpu`, which is physical hardware. Every
+example runner exposes this as a `--solver` flag:
+
+```sh
+uv run python examples/maxcut/runner.py --solver cuda
+```
+
 ## Solver protocol
 
 Any class conforming to `xqsa.Solver` can drop in:

@@ -46,6 +46,22 @@ Each solver beyond the base `SolverDWaveCPU` lives behind an optional extra. Imp
 | `SolverIBMQAOA` | -- | `[ibm]` | IBM QPU / AerSimulator | planned |
 | `SolverIonQQAOA` | -- | `[ionq]` | IonQ trapped-ion QPU | planned |
 
+## Selecting by Name
+
+`xqsa.build_solver(name, *, seed=None)` constructs a solver from a short,
+CLI-friendly name, decoupling callers (example runners, the smoke harness,
+`--solver` flags) from concrete class names. `xqsa.SOLVERS` is the
+authoritative name->class map and `xqsa.DEFAULT_SOLVER` is the baseline.
+`seed` is forwarded only to the classical SA backends; the QPU is physical
+hardware and takes no seed.
+
+| CLI name | Class |
+|----------|-------|
+| `dwave-cpu` (default) | `SolverDWaveCPU` |
+| `dwave-qpu` | `SolverDWaveQPU` |
+| `cuda` | `SolverCudaGPU` |
+| `metal` | `SolverMetalGPU` |
+
 ## Protocol Miner Equivalence
 
 Mapping between `quip-protocol` miner config keys and xqsa solver classes:

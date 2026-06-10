@@ -29,25 +29,91 @@ valid) optima.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
+from xqsa import DEFAULT_SOLVER
+
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
 SEED = 42
 
+# Representative subset exercised against hardware backends: a binary
+# (maxcut), a permutation (tsp), and a constrained problem (knapsack).
+# Kept small to bound GPU time and the monthly D-Wave QPU quota; the full
+# suite still runs on the CPU annealer on both interpreters.
+HARDWARE_EXAMPLES = ("maxcut", "tsp", "knapsack")
 
-def run_example(runner: Path, interpreter: str) -> dict:
+
+def run_example(runner: Path, interpreter: str, solver: str = DEFAULT_SOLVER) -> dict:
     result = subprocess.run(
-        ["python", str(runner), "--seed", str(SEED), "--interpreter", interpreter],
+        ["python", str(runner), "--seed", str(SEED), "--interpreter", interpreter, "--solver", solver],
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
-        print(f"  FAIL ({interpreter}): runner exited {result.returncode}", file=sys.stderr)
+        print(f"  FAIL ({interpreter}/{solver}): runner exited {result.returncode}", file=sys.stderr)
         print(result.stderr[-500:], file=sys.stderr)
         sys.exit(1)
     return json.loads(result.stdout)
+
+
+def _cuda_available() -> bool:
+    """True when cupy is installed and a CUDA device is present."""
+    try:
+        import cupy
+
+        return bool(cupy.cuda.runtime.getDeviceCount() > 0)
+    except Exception:
+        return False
+
+
+def _metal_available() -> bool:
+    """True when running on macOS with a usable Metal device."""
+    try:
+        import Metal
+
+        return Metal.MTLCreateSystemDefaultDevice() is not None
+    except Exception:
+        return False
+
+
+def _qpu_available() -> bool:
+    """True when dwave-system is installed and a Leap token is configured.
+
+    Both are required: the token alone (without the ``[dwave]`` extra) would
+    let the run start and then crash in the solver, so it must be a skip.
+    """
+    if os.environ.get("DWAVE_API_TOKEN") is None:
+        return False
+    try:
+        import dwave.system  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+def available_hardware_solvers() -> list[str]:
+    """Resolve which hardware solver backends can run here.
+
+    Logs each backend that is skipped and why, so an absent GPU/QPU reads
+    as a deliberate skip rather than silent non-coverage.
+    """
+    probes = (("cuda", _cuda_available), ("dwave-qpu", _qpu_available), ("metal", _metal_available))
+    reasons = {
+        "cuda": "no cupy / CUDA device",
+        "dwave-qpu": "no dwave-system extra / DWAVE_API_TOKEN not set",
+        "metal": "no Metal device",
+    }
+    available: list[str] = []
+    for solver, probe in probes:
+        if probe():
+            available.append(solver)
+        else:
+            print(f"  skip {solver}: {reasons[solver]}")
+    return available
 
 
 def main() -> int:
@@ -72,11 +138,26 @@ def main() -> int:
             else:
                 print(f"  ok   ({interp}): energy={energy}")
 
+    # Hardware-backed solver runs over the subset, gated by availability.
+    print("\n==> hardware solvers")
+    hw_solvers = available_hardware_solvers()
+    for solver in hw_solvers:
+        for name in HARDWARE_EXAMPLES:
+            runner = EXAMPLES_DIR / name / "runner.py"
+            out = run_example(runner, "rust", solver=solver)
+            valid, energy = out.get("valid"), out.get("energy")
+            if valid != 1:
+                print(f"  FAIL ({solver}/{name}): valid={valid}, energy={energy}")
+                failures += 1
+            else:
+                print(f"  ok   ({solver}/{name}): energy={energy}")
+
     if failures:
         print(f"\n{failures} failure(s)")
         return 1
 
-    print(f"\nAll {len(runners)} examples passed on both interpreters.")
+    hw_note = f", {len(hw_solvers)} hardware solver(s)" if hw_solvers else ""
+    print(f"\nAll {len(runners)} examples passed on both interpreters{hw_note}.")
     return 0
 
 

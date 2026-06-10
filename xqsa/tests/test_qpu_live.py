@@ -35,10 +35,17 @@ import pytest
 pytestmark = pytest.mark.qpu
 
 _HAS_TOKEN = os.environ.get("DWAVE_API_TOKEN") is not None
+# True in CI. In CI these tests must run and hard-fail when the token is missing
+# (a silent skip would be a green-but-unverified release gate); locally they
+# skip without a token.
+_IN_CI = os.environ.get("CI") is not None
 
-skip_no_token = pytest.mark.skipif(not _HAS_TOKEN, reason="DWAVE_API_TOKEN not set")
+skip_no_token = pytest.mark.skipif(
+    not _IN_CI and not _HAS_TOKEN,
+    reason="DWAVE_API_TOKEN not set (skipped locally; runs and hard-fails in CI)",
+)
 
-if _HAS_TOKEN:
+if _HAS_TOKEN or _IN_CI:
     from xqsa import SolverDWaveQPU, SolverResult
     from xquad.cp import Problem, Types, xq_triu
     from xquad.types import XQMXDomain

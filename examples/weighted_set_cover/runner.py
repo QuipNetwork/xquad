@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from xquad.cp import Problem, Types
-from xquad.sa import SolverDWaveCPU
+from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
 from xquad.types import XQMX, Vec, XQMXDomain
 from xquad.vm import VM, VMBackend
 
@@ -131,6 +131,7 @@ def run(
     costs: list[int],
     seed: int,
     backend: VMBackend,
+    solver_name: str,
 ) -> tuple[int, int, list[int]]:
     """Full pipeline on the selected VM backend."""
     flat_covers = [covers[e][s] for e in range(num_elements) for s in range(num_sets)]
@@ -142,7 +143,7 @@ def run(
     model = vm.outputs()[0]
     assert isinstance(model, XQMX)
 
-    solver = SolverDWaveCPU(seed=seed)
+    solver = build_solver(solver_name, seed=seed)
     sample = solver.solve(model).sample
 
     vm = VM(backend=backend)
@@ -177,6 +178,12 @@ def main() -> int:
         help="XQVM interpreter to run the compiled programs on",
     )
     parser.add_argument(
+        "--solver",
+        choices=sorted(SOLVERS),
+        default=DEFAULT_SOLVER,
+        help="XQSA solver backend to sample the model with",
+    )
+    parser.add_argument(
         "-o",
         "--output",
         type=Path,
@@ -205,7 +212,7 @@ def main() -> int:
 
     backend = VMBackend.PYTHON if args.interpreter == "python" else VMBackend.RUST
     energy, valid, selected = run(
-        programs, args.num_elements, args.num_sets, covers, caps, demands, costs, args.seed, backend
+        programs, args.num_elements, args.num_sets, covers, caps, demands, costs, args.seed, backend, args.solver
     )
 
     result = {

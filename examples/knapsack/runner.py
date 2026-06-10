@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from xquad.cp import Problem, Types
-from xquad.sa import SolverDWaveCPU
+from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
 from xquad.types import XQMX, Vec, XQMXDomain
 from xquad.vm import VM, VMBackend
 
@@ -101,6 +101,7 @@ def run(
     capacity: int,
     seed: int,
     backend: VMBackend,
+    solver_name: str,
 ) -> tuple[int, int, list[int]]:
     """Full pipeline on the selected VM backend."""
     vm = VM(backend=backend)
@@ -110,7 +111,7 @@ def run(
     model = vm.outputs()[0]
     assert isinstance(model, XQMX)
 
-    solver = SolverDWaveCPU(seed=seed)
+    solver = build_solver(solver_name, seed=seed)
     sample = solver.solve(model).sample
 
     vm = VM(backend=backend)
@@ -144,6 +145,12 @@ def main() -> int:
         help="XQVM interpreter to run the compiled programs on",
     )
     parser.add_argument(
+        "--solver",
+        choices=sorted(SOLVERS),
+        default=DEFAULT_SOLVER,
+        help="XQSA solver backend to sample the model with",
+    )
+    parser.add_argument(
         "-o",
         "--output",
         type=Path,
@@ -161,7 +168,7 @@ def main() -> int:
     programs = problem.compile()
 
     backend = VMBackend.PYTHON if args.interpreter == "python" else VMBackend.RUST
-    energy, valid, selection = run(programs, args.n, weights, values, capacity, args.seed, backend)
+    energy, valid, selection = run(programs, args.n, weights, values, capacity, args.seed, backend, args.solver)
 
     result = {
         "_seed": args.seed,
