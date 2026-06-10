@@ -48,22 +48,6 @@
     rules:
         - if: $CI_COMMIT_TAG =~ /^v\d/
 
-# Same trigger as `.on-release-tag`, but the job sits as a manual
-# "play" button until a maintainer clicks it (QUI-495). Used by the
-# publish jobs so a tag push fires validate + GitLab Release notes
-# automatically while the irreversible registry uploads (cargo
-# publish, twine upload) wait for explicit confirmation. The tag is
-# effectively a "draft release" until the click happens.
-#
-# `allow_failure: true` keeps the pipeline reported as green while
-# the manual job sits unclicked -- otherwise an unclicked draft tag
-# would show as a failed pipeline forever.
-.on-release-tag-manual: &on-release-tag-manual
-    rules:
-        - if: $CI_COMMIT_TAG =~ /^v\d/
-          when: manual
-          allow_failure: true
-
 # Run on every MR and push; never on the release tag (that's what the
 # actual release jobs are for). These dry-runs prove the release path
 # works without publishing.

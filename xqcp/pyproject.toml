@@ -8,7 +8,7 @@ description = "High-level constraint programming DSL compiling to XQVM assembly.
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "AGPL-3.0-or-later" }
-version = "0.2.1"
+version = "0.3.0rc1"
 dependencies = [
     "xqvm_py",
 ]
