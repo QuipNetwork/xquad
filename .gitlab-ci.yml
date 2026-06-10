@@ -83,6 +83,7 @@ include:
     - local: .gitlab/ci/lint.yml
     - local: .gitlab/ci/test.yml
     - local: .gitlab/ci/python.yml
+    - local: .gitlab/ci/hardware.yml
     - local: .gitlab/ci/conformance.yml
     - local: .gitlab/ci/docs.yml
     - local: .gitlab/ci/release.yml

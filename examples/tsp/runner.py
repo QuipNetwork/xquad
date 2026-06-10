@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from xquad.cp import Problem, Types, xq_triu
-from xquad.sa import SolverDWaveCPU
+from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
 from xquad.types import XQMX, Vec, XQMXDomain, triu
 from xquad.vm import VM, VMBackend
 
@@ -133,7 +133,9 @@ def canonicalize_tour(tour: list[int]) -> list[int]:
     return min(rotated, reversed_direction)
 
 
-def run(programs: Any, n: int, distances: list[int], seed: int, backend: VMBackend) -> tuple[int, int, list[int]]:
+def run(
+    programs: Any, n: int, distances: list[int], seed: int, backend: VMBackend, solver_name: str
+) -> tuple[int, int, list[int]]:
     """Full pipeline on the selected VM backend."""
     vm = VM(backend=backend)
     vm.set_calldata([n, distances])
@@ -142,7 +144,7 @@ def run(programs: Any, n: int, distances: list[int], seed: int, backend: VMBacke
     model = vm.outputs()[0]
     assert isinstance(model, XQMX)
 
-    solver = SolverDWaveCPU(seed=seed)
+    solver = build_solver(solver_name, seed=seed)
     sample = solver.solve(model).sample
 
     vm = VM(backend=backend)
@@ -176,6 +178,12 @@ def main() -> int:
         help="XQVM interpreter to run the compiled programs on",
     )
     parser.add_argument(
+        "--solver",
+        choices=sorted(SOLVERS),
+        default=DEFAULT_SOLVER,
+        help="XQSA solver backend to sample the model with",
+    )
+    parser.add_argument(
         "-o",
         "--output",
         type=Path,
@@ -188,7 +196,7 @@ def main() -> int:
     programs = problem.compile()
 
     backend = VMBackend.PYTHON if args.interpreter == "python" else VMBackend.RUST
-    energy, valid, tour = run(programs, args.n, distances, args.seed, backend)
+    energy, valid, tour = run(programs, args.n, distances, args.seed, backend, args.solver)
     tour = canonicalize_tour(tour)
 
     result = {

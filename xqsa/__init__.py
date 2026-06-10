@@ -26,6 +26,7 @@ from .cuda_gpu import SolverCudaGPU
 from .dwave_cpu import SolverDWaveCPU
 from .dwave_qpu import SolverDWaveQPU
 from .metal_gpu import SolverMetalGPU
+from .registry import DEFAULT_SOLVER, SOLVERS, build_solver
 from .solver import Solver, SolverResult
 
 __all__ = [
@@ -35,4 +36,7 @@ __all__ = [
     "SolverDWaveCPU",
     "SolverDWaveQPU",
     "SolverMetalGPU",
+    "SOLVERS",
+    "DEFAULT_SOLVER",
+    "build_solver",
 ]

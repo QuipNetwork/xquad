@@ -160,8 +160,12 @@ test-miri:
 # when Rust sources have changed (uv's editable-wheel cache masks the
 # edit). Depend on deps-python so a fresh maturin develop runs first;
 # CI already has this via the job's before_script.
+# Excludes the hardware-backed solver tests (cuda/qpu/metal); those run in
+# their own GPU/QPU runner jobs (.gitlab/ci/hardware.yml) where they hard-fail
+# on a missing device/token rather than skip. This job runs everywhere, so it
+# must deselect them or they would run unconfigured in CI.
 test-python: deps-python
-	uv run --no-sync pytest xqvm_py/tests xqcp/tests xqsa/tests xquad/tests
+	uv run --no-sync pytest xqvm_py/tests xqcp/tests xqsa/tests xquad/tests -m "not cuda and not qpu and not metal"
 
 # Run the WASM no_std correctness tests (fixtures/xqvm-wasm).
 # Two gates in sequence:
