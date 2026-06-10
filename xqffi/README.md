@@ -1,6 +1,6 @@
 # xqffi — PyO3 FFI bindings for the XQuad Rust runtime
 
-The Python extension that exposes the Rust [`xqvm`](../xqvm/) interpreter and [`xqasm`](../xqasm/) assembler. Ships as a manylinux wheel built by maturin.
+The Python extension that exposes the Rust [`xqvm`](../xqvm/) interpreter and [`xqasm`](../xqasm/) assembler. Ships as abi3 manylinux wheels (x86_64 + aarch64, CPython >= 3.13) plus a universal sdist for other platforms, all built by maturin.
 
 `xqffi` is a **pure FFI shim** — it only re-exposes the Rust types and entry points. User-facing conveniences (`Program` / `Session` / `RunResult`, keyword calldata, trace inspection) live in the [`xquad`](../xquad/) umbrella package.
 

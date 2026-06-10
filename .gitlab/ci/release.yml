@@ -68,7 +68,12 @@
     - curl -LsSf https://astral.sh/uv/install.sh | sh
     - export PATH="${HOME}/.local/bin:${PATH}"
     - uv --version
-    - uv tool install maturin --with-requirements /dev/null
+    # ziglang rides along in maturin's uv-tool venv (--with) so the
+    # `python3` first on PATH (the venv's) can `python3 -m ziglang` --
+    # that is how cargo-zigbuild locates zig for the aarch64 build.
+    # A plain `pip3 install ziglang` lands in the system python, which
+    # is NOT the python3 on PATH here, so cargo-zigbuild can't find it.
+    - uv tool install maturin --with-requirements /dev/null --with ziglang
     # twine ≥6.1 added preliminary OIDC trusted-publishing support;
     # earlier versions fall back to interactive prompt when no token
     # env is present, which hangs the CI.
@@ -76,6 +81,13 @@
     - export PATH="${HOME}/.local/share/uv/tools/maturin/bin:${HOME}/.local/share/uv/tools/twine/bin:${PATH}"
     - maturin --version
     - twine --version
+    # cargo-zigbuild drives the aarch64 cross-build (zig as the linker;
+    # zig itself comes from the ziglang package installed above). Pinned
+    # in scripts/cargo-tools.lock and installed via binstall (prebuilt,
+    # cached) like the other cargo tools, instead of a bare `cargo
+    # install` that recompiles from source every run.
+    - bash scripts/install-cargo-tools.sh --only cargo-zigbuild
+    - rustup target add aarch64-unknown-linux-gnu
 
 # ---------------------------------------------------------------------------
 # Auto-tag job (main-push-triggered, release MR flow)
@@ -199,17 +211,17 @@ release:publish-crates:
 # the umbrella meta-package and depends on the peers, so it must land
 # *after* them or `pip install xquad` cannot resolve its deps.
 #
-#   1. xqffi            (pyo3 cdylib — maturin builds manylinux wheels)
+#   1. xqffi            (pyo3 cdylib — maturin builds:
+#                         - abi3 wheel for linux-x86_64 (native)
+#                         - abi3 wheel for linux-aarch64 (cargo-zigbuild)
+#                         - sdist (universal source fallback))
 #   2. xqvm_py          (pure-Python reference VM)
 #   3. xqcp             (DSL)
 #   4. xqsa             (solver adapters)
 #   5. xquad            (umbrella — depends on 1-4)
 #
-# maturin build + twine upload (OIDC) produces wheels for the current
-# runner's platform tag. The full matrix (linux-x86_64 + linux-aarch64
-# + macos-arm64 + windows-x86_64) requires a multi-runner fan-out; for
-# v0.1.0 we ship linux-x86_64 only and track the matrix as a
-# RELEASING.md follow-up.
+# macOS and Windows wheels are out of scope; those platforms fall back
+# to building from the sdist with a local Rust toolchain.
 release:publish-pypi:
     stage: release
     needs:

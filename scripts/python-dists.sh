@@ -10,12 +10,13 @@
 # edit here.
 #
 # Modes:
-#   check    -- maturin build (xqffi cdylib) + uv build (peers) +
-#               twine check. No network upload, no token needed. Used
-#               by release:dry-run:pypi (MR/push) and release:validate
-#               (tag).
-#   publish  -- maturin build (xqffi) + uv build (peers) + twine
-#               upload via PyPI Trusted Publishing (OIDC). One PyPI
+#   check    -- maturin build (xqffi abi3 wheels + sdist) + uv build
+#               (peers) + twine check. No network upload, no token
+#               needed. Used by release:dry-run:pypi (MR/push) and
+#               release:validate (tag).
+#   publish  -- maturin build (xqffi abi3 wheels + sdist) + uv build
+#               (peers) + twine upload via PyPI Trusted Publishing
+#               (OIDC). One PyPI
 #               API token is minted per package (PyPI's mint-token
 #               endpoint is single-use per GitLab JWT, so a monorepo
 #               needs one JWT per package — see release.yml's
@@ -29,7 +30,7 @@ set -euo pipefail
 
 # Pure-Python peers + umbrella, in any order: each is its own sdist.
 # The pyo3 cdylib (xqffi) is handled separately because it ships as
-# a maturin-built wheel rather than an sdist.
+# maturin-built abi3 wheels (x86_64 + aarch64) plus a source dist.
 PEERS=(xqvm_py xqcp xqsa xquad)
 
 mode="${1:-}"
@@ -109,11 +110,29 @@ publish_pkg() {
 }
 
 # --- xqffi (pyo3 cdylib) ---------------------------------------------------
+# Three artefacts:
+#   1. abi3 wheel for linux-x86_64 (native build on CI runner)
+#   2. abi3 wheel for linux-aarch64 (cross-compiled via cargo-zigbuild)
+#   3. sdist (universal source fallback for macOS/Windows/other)
+#
 # `maturin publish` has no OIDC support (no --trusted-publishing flag);
 # it only accepts --username/--password. Split build from upload so the
-# wheel goes through twine, which lets the cdylib follow the same
+# artefacts go through twine, which lets the cdylib follow the same
 # OIDC-mint-and-upload path as the pure-Python peers below.
+
+rm -rf xqffi/dist
+mkdir -p xqffi/dist
+
+# 1. Native abi3 wheel (abi3 tag comes from pyo3's abi3-py313 feature)
 maturin build --release --manifest-path xqffi/Cargo.toml --out xqffi/dist
+
+# 2. Cross-compiled aarch64 abi3 wheel via zig linker
+maturin build --release --manifest-path xqffi/Cargo.toml --out xqffi/dist \
+    --target aarch64-unknown-linux-gnu --zig
+
+# 3. sdist (universal source fallback)
+maturin sdist --manifest-path xqffi/Cargo.toml --out xqffi/dist
+
 if [[ "${mode}" == "check" ]]; then
     twine check xqffi/dist/*
 else

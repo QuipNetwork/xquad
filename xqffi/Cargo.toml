@@ -3,6 +3,7 @@ name                 = "xqffi"
 description          = "PyO3 FFI bindings exposing xqvm + xqasm to Python; produces the `xqffi` Python extension"
 version              = "0.3.0-rc1"
 edition              = "2024"
+rust-version         = "1.85"
 license.workspace    = true
 repository.workspace = true
 publish              = false
@@ -17,4 +18,4 @@ crate-type = [ "cdylib", "rlib" ]
 [dependencies]
 xqvm.workspace  = true
 xqasm.workspace = true
-pyo3            = { version = "0.28", features = [ "extension-module" ] }
+pyo3            = { version = "0.28", features = [ "extension-module", "abi3-py313" ] }
