@@ -15,11 +15,13 @@
 
 ## What merging this MR will do
 
-Merging triggers a CI job (`release:auto-tag`) on `main` that pushes
-the tag `vX.Y.Z` and creates the GitLab Release page. The
-`release:validate`, `release:changelog`, and `release:notes` jobs then
-fire automatically; `release:publish-crates` and `release:publish-pypi`
-sit as manual gates.
+Merging triggers `release:auto-tag` on `main`, which pushes the tag
+`vX.Y.Z`. The tag fires the full release pipeline automatically:
+`release:validate` → `release:publish-crates` (crates.io) →
+`release:publish-pypi` (PyPI) → `release:changelog` → `release:notes`
+(GitLab Release page). The registry uploads are **not** gated behind a
+manual click — once this MR merges, publishing is automatic and
+irreversible.
 
 ## Notes
 
