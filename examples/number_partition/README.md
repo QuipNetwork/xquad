@@ -5,11 +5,9 @@ equal sum (or as close as possible if an exact split does not exist).
 
 ## QUBO formulation
 
-Decision variables x_i in {0,1} (x_i = 1 puts number a_i in subset A).
-
-Objective: minimise P * (sum(a_i * x_i) - S/2)^2
-
-where S = sum(a_i) is the total sum.
+- **Input**: N positive integers `a_i`
+- **Model**: N binary variables. `x_i = 1` puts number `a_i` in subset A.
+- **Objective**: minimise `P * (sum(a_i * x_i) - S/2)^2` where `S = sum(a_i)`
 
 An exact partition exists when S is even and the penalty evaluates to zero.
 The QUBO minimiser finds the balanced partition when one exists, or the
@@ -20,6 +18,15 @@ most balanced split when the total is odd.
 - `problem.vec()` -- allocate untyped vector registers for indices and coefficients
 - `model.apply_equality(indices, coeffs, target, penalty)` -- EQUALITY constraint
 
+## Pipeline overview
+
+1. **CP** (`xqcp`) -- generate random positive integers, declare binary variables (one per number), and encode the half-sum equality constraint via EQUALITY.
+2. **Assemble** -- `.xqasm` text to bytecode via `xquad.asm`
+3. **Encode** -- run encoder on chosen XQVM to produce the XQMX model
+4. **Sample** -- solver runs SA/QPU/GPU over the model
+5. **Verify** -- verifier checks the partition constraint and computes energy
+6. **Decode** -- decoder extracts the subset assignment
+
 ## Usage
 
 ```sh
@@ -27,11 +34,32 @@ uv run python examples/number_partition/runner.py --seed 42
 uv run python examples/number_partition/runner.py --n 8 --interpreter rust
 ```
 
-## Options
-
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--n` | 6 | Number of integers |
-| `--seed` | 42 | Random seed for number generation |
-| `--interpreter` | python | XQVM backend: `python` or `rust` |
-| `-o PATH` | stdout | Write JSON result to file |
+| `--n` | `6` | Number of integers |
+| `--solver` | `dwave-cpu` | Solver backend (see Choosing a solver) |
+| `--interpreter` | `python` | XQVM backend: `python` or `rust` |
+| `--seed` | `42` | Random seed |
+| `-o` | stdout | Write JSON result to file |
+
+## Choosing a solver
+
+| Name | Hardware | Install |
+|------|----------|---------|
+| `dwave-cpu` | CPU (default) | `pip install xquad` |
+| `dwave-qpu` | D-Wave Leap account | `pip install xquad[dwave]` |
+| `cuda-gpu` | NVIDIA CUDA GPU | `pip install xquad[cuda]` |
+| `metal-gpu` | Apple Silicon (macOS) | `pip install xquad[metal]` |
+
+See [GPU/QPU installation](../../README.md#gpuqpu-support) for driver
+prerequisites and [xqsa solver quick-starts](../../xqsa/README.md) for
+per-solver parameter tuning.
+
+Non-default solvers will not reproduce the canonical output (different
+RNG/hardware). `example-smoke` always runs `dwave-cpu`.
+
+## Canonical output
+
+`example-smoke` validates both interpreters produce `valid == 1` with
+`--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
+it checks validity, not exact output.

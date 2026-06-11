@@ -40,8 +40,8 @@ from xqsa.solver import Solver
 SOLVERS: dict[str, type[Solver]] = {
     "dwave-cpu": SolverDWaveCPU,
     "dwave-qpu": SolverDWaveQPU,
-    "cuda": SolverCudaGPU,
-    "metal": SolverMetalGPU,
+    "cuda-gpu": SolverCudaGPU,
+    "metal-gpu": SolverMetalGPU,
 }
 
 DEFAULT_SOLVER = "dwave-cpu"
@@ -49,14 +49,14 @@ DEFAULT_SOLVER = "dwave-cpu"
 # Solvers whose constructor accepts a `seed`. The classical SA family is
 # seedable for reproducibility; the D-Wave QPU is physical hardware with no
 # seed, so it is deliberately excluded.
-_SEEDED: frozenset[str] = frozenset({"dwave-cpu", "cuda", "metal"})
+_SEEDED: frozenset[str] = frozenset({"dwave-cpu", "cuda-gpu", "metal-gpu"})
 
 
 def build_solver(name: str, *, seed: int | None = None) -> Solver:
     """Construct a solver by registry name.
 
     Args:
-        name: A key in :data:`SOLVERS` (e.g. ``"dwave-cpu"``, ``"cuda"``).
+        name: A key in :data:`SOLVERS` (e.g. ``"dwave-cpu"``, ``"cuda-gpu"``).
         seed: Seed for reproducibility, forwarded only to solvers whose
             constructor accepts it. The D-Wave QPU is physical hardware and
             takes no seed, so it is ignored there.
@@ -70,6 +70,8 @@ def build_solver(name: str, *, seed: int | None = None) -> Solver:
     if name not in SOLVERS:
         raise ValueError(f"Unknown solver {name!r}. Choose one of: {', '.join(sorted(SOLVERS))}.")
     cls = SOLVERS[name]
+    if name in ("cuda-gpu", "metal-gpu"):
+        return cls(num_reads=200, num_sweeps=2000, seed=seed)
     if name in _SEEDED:
         return cls(seed=seed)
     return cls()

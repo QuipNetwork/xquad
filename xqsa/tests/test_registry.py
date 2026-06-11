@@ -32,7 +32,7 @@ class TestRegistry:
 
     def test_expected_solver_names(self) -> None:
         """SOLVERS exposes exactly the four backend names."""
-        assert set(xqsa.SOLVERS) == {"dwave-cpu", "dwave-qpu", "cuda", "metal"}
+        assert set(xqsa.SOLVERS) == {"dwave-cpu", "dwave-qpu", "cuda-gpu", "metal-gpu"}
 
     def test_default_solver_is_registered(self) -> None:
         """DEFAULT_SOLVER is a real registry key, so it always resolves."""

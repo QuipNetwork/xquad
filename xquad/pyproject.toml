@@ -16,6 +16,11 @@ dependencies = [
     "xqvm_py",
 ]
 
+[project.optional-dependencies]
+cuda  = [ "xqsa[cuda]" ]
+dwave = [ "xqsa[dwave]" ]
+metal = [ "xqsa[metal]" ]
+
 [tool.uv.sources]
 xqffi.workspace   = true
 xqcp.workspace    = true

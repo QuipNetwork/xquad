@@ -119,8 +119,12 @@ def run(
     model = vm.outputs()[0]
     assert isinstance(model, XQMX)
 
-    solver = build_solver(solver_name, seed=seed)
-    sample = solver.solve(model).sample
+    try:
+        solver = build_solver(solver_name, seed=seed)
+        sample = solver.solve(model).sample
+    except (ImportError, RuntimeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     vm = VM(backend=backend)
     vm.set_calldata([model, sample, n])

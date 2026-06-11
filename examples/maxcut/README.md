@@ -1,51 +1,67 @@
 # Max-Cut
 
-End-to-end XQuad pipeline demo: build a random weighted complete
-graph, compile a Max-Cut QUBO via `xqcp`, run the encoder on the
-chosen XQVM interpreter (Python reference or Rust), sample the
-resulting model with `xqsa`'s `SolverDWaveCPU` simulated annealer, and verify +
-decode the 2-colour partition.
+Find a 2-colour partition of a weighted graph that maximises the total weight
+of edges crossing the partition.
 
-## Run it
+## QUBO formulation
 
-From the repo root:
+- **Input**: `num_nodes` (int), `edges` (Vec of flat `(i, j, w)` triples, `3*|E|` entries)
+- **Model**: `n` binary variables, one per node. `x[v] in {0, 1}` selects the side of the cut.
+- **Objective**: for each edge `(i, j, w)`, add `-w*(x_i + x_j)` and `+2w*x_i*x_j`. Minimising this minimises `-sum w*[x_i != x_j]`, i.e. maximises the cut.
+
+## DSL methods used
+
+- `problem.input()` -- declare typed calldata inputs
+- `problem.define_model()` -- allocate binary XQMX model
+- `problem.stow()` -- bind intermediate computations to named registers
+- `problem.range()` -- emit RANGE loops
+- `model.linear[i].add()` -- accumulate linear bias on variable i
+- `model.quadratic[i, j].add()` -- accumulate quadratic coupling between variables i and j
+- `problem.output()` -- declare typed output slots
+- `problem.sample.getline()` -- read a row from the sample bitstring
+
+## Pipeline overview
+
+1. **CP** (`xqcp`) -- build a random weighted complete graph, declare binary variables (one per node), and add linear/quadratic QUBO terms per edge.
+2. **Assemble** -- `.xqasm` text to bytecode via `xquad.asm`
+3. **Encode** -- run encoder on chosen XQVM to produce the XQMX model
+4. **Sample** -- solver runs SA/QPU/GPU over the model
+5. **Verify** -- verifier checks constraints and computes energy
+6. **Decode** -- decoder extracts the 2-colour partition
+
+## Usage
 
 ```sh
 uv run python examples/maxcut/runner.py --seed 42
-uv run python examples/maxcut/runner.py --seed 42 --interpreter rust
 uv run python examples/maxcut/runner.py --n 6 --seed 7 -o /tmp/mc.json
 ```
 
-Flags:
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--n` | `5` | Number of nodes in the complete graph |
+| `--solver` | `dwave-cpu` | Solver backend (see Choosing a solver) |
+| `--interpreter` | `python` | XQVM backend: `python` or `rust` |
+| `--seed` | `42` | Random seed |
+| `-o` | stdout | Write JSON result to file |
 
-- `--n N` — number of nodes in the (complete) graph (default: 5).
-- `--seed S` — RNG seed for edge weights and the SA sampler (default:
-  42). Both draw from the same seed so the output is reproducible.
-- `--interpreter {python,rust}` — which XQVM executes the compiled
-  programs (default: `python`). Both paths must produce identical
-  decoded output for the same seed.
-- `-o PATH` — write the result as JSON to `PATH`; stdout otherwise.
+## Choosing a solver
 
-## What the pipeline does
+| Name | Hardware | Install |
+|------|----------|---------|
+| `dwave-cpu` | CPU (default) | `pip install xquad` |
+| `dwave-qpu` | D-Wave Leap account | `pip install xquad[dwave]` |
+| `cuda-gpu` | NVIDIA CUDA GPU | `pip install xquad[cuda]` |
+| `metal-gpu` | Apple Silicon (macOS) | `pip install xquad[metal]` |
 
-1. **CP** (`xqcp`) — build the Max-Cut problem:
-   - Input: `num_nodes` (int), `edges` (Vec of flat `(i, j, w)`
-     triples, `3*|E|` entries).
-   - Model: `n` binary variables, one per node. `x[v] ∈ {0, 1}`
-     selects the side of the cut.
-   - Objective: for each edge `(i, j, w)`, add `-w*(x_i + x_j)` and
-     `+2w*x_i*x_j`. Minimising this minimises `-∑ w*[x_i ≠ x_j]`,
-     i.e. maximises the cut.
-2. **Assemble**, **Encode**, **Sample**, **Verify**, **Decode** — same
-   shape as `examples/tsp/` (see that README for details).
+See [GPU/QPU installation](../../README.md#gpuqpu-support) for driver
+prerequisites and [xqsa solver quick-starts](../../xqsa/README.md) for
+per-solver parameter tuning.
+
+Non-default solvers will not reproduce the canonical output (different
+RNG/hardware). `example-smoke` always runs `dwave-cpu`.
 
 ## Canonical output
 
-`golden.json` is the decoded partition for `--seed 42 --n 5`. Both
-interpreters produce the same file byte-for-byte (the runner flips
-the partition so node 0 sits on side 0, since Max-Cut is invariant
-under global bit-flip).
-
-The `example-smoke` CI target runs both interpreter paths against
-this golden; `make regen-example-goldens` rewrites it from the
-current runner output.
+`example-smoke` validates both interpreters produce `valid == 1` with
+`--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
+it checks validity, not exact output.

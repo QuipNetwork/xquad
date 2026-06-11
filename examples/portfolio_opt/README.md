@@ -5,26 +5,22 @@ return while penalising higher-order risk cross-interactions.
 
 ## QUBO formulation
 
-Decision variables x_i in {0,1} (x_i = 1 if asset i is selected).
+- **Input**: N asset returns, cubic risk interactions `(i, j, k, sigma)`, budget B
+- **Model**: N binary variables. `x_i = 1` if asset i is selected.
+- **Objective**: `-sum(r_i * x_i) + sum(sigma_ijk * x_i * x_j * x_k)` -- first term maximises return (minimising its negation), second penalises correlated three-asset risk interactions.
+- **Constraints**: budget `sum(x_i) = B` (EQUALITY with unit coefficients, penalty 200)
 
-Objective: -sum(r_i * x_i) + sum(sigma_ijk * x_i * x_j * x_k)
+### Encoding strategy
 
-The first term maximises return (minimising its negation).  The second term
-penalises correlated three-asset risk interactions encoded as cubic terms,
-reduced to quadratic via REDUCE.
-
-Budget constraint: sum(x_i) = B  (EQUALITY with unit coefficients)
-
-## Encoding strategy
-
-Return terms are linear: ADDLINE(i, -r_i) per asset.
+Return terms are linear: `ADDLINE(i, -r_i)` per asset.
 
 Cubic risk terms (i, j, k, sigma) are degree-reduced:
-1. REDUCE(i, j, P_AUX) -> w  (Rosenberg enforcement for w = x_i * x_j)
-2. ADDQUAD(w, k, sigma)      (sigma * w * x_k = sigma * x_i * x_j * x_k)
+
+1. `REDUCE(i, j, P_AUX) -> w` (Rosenberg enforcement for `w = x_i * x_j`)
+2. `ADDQUAD(w, k, sigma)` (`sigma * w * x_k = sigma * x_i * x_j * x_k`)
 
 Budget constraint builds uniform-coefficient index/coeff vecs then calls
-EQUALITY with target = B and penalty = 200.  EQUALITY is emitted after all
+EQUALITY with `target = B` and `penalty = 200`. EQUALITY is emitted after all
 objective (body) actions because it lands in the constraint section.
 
 ## DSL methods used
@@ -33,6 +29,15 @@ objective (body) actions because it lands in the constraint section.
 - `problem.vec()` -- allocate index/coefficient vecs for the budget constraint
 - `model.apply_equality(indices, coeffs, target, penalty)` -- budget EQUALITY
 
+## Pipeline overview
+
+1. **CP** (`xqcp`) -- generate random returns and cubic risk interactions, declare binary variables, degree-reduce risk terms via REDUCE, and add a budget EQUALITY constraint.
+2. **Assemble** -- `.xqasm` text to bytecode via `xquad.asm`
+3. **Encode** -- run encoder on chosen XQVM to produce the XQMX model
+4. **Sample** -- solver runs SA/QPU/GPU over the model
+5. **Verify** -- verifier checks budget constraint and computes energy
+6. **Decode** -- decoder extracts the selected assets
+
 ## Usage
 
 ```sh
@@ -40,12 +45,33 @@ uv run python examples/portfolio_opt/runner.py --seed 42
 uv run python examples/portfolio_opt/runner.py --n 6 --budget 3 --interpreter rust
 ```
 
-## Options
-
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--n` | 5 | Number of assets |
-| `--budget` | 2 | Number of assets to select |
-| `--seed` | 42 | Random seed for instance generation |
-| `--interpreter` | python | XQVM backend: `python` or `rust` |
-| `-o PATH` | stdout | Write JSON result to file |
+| `--n` | `5` | Number of assets |
+| `--budget` | `2` | Number of assets to select |
+| `--solver` | `dwave-cpu` | Solver backend (see Choosing a solver) |
+| `--interpreter` | `python` | XQVM backend: `python` or `rust` |
+| `--seed` | `42` | Random seed |
+| `-o` | stdout | Write JSON result to file |
+
+## Choosing a solver
+
+| Name | Hardware | Install |
+|------|----------|---------|
+| `dwave-cpu` | CPU (default) | `pip install xquad` |
+| `dwave-qpu` | D-Wave Leap account | `pip install xquad[dwave]` |
+| `cuda-gpu` | NVIDIA CUDA GPU | `pip install xquad[cuda]` |
+| `metal-gpu` | Apple Silicon (macOS) | `pip install xquad[metal]` |
+
+See [GPU/QPU installation](../../README.md#gpuqpu-support) for driver
+prerequisites and [xqsa solver quick-starts](../../xqsa/README.md) for
+per-solver parameter tuning.
+
+Non-default solvers will not reproduce the canonical output (different
+RNG/hardware). `example-smoke` always runs `dwave-cpu`.
+
+## Canonical output
+
+`example-smoke` validates both interpreters produce `valid == 1` with
+`--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
+it checks validity, not exact output.
