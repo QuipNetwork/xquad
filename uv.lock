@@ -1105,7 +1105,7 @@ wheels = [
 
 [[package]]
 name = "xqcp"
-version = "0.2.1"
+version = "0.3.0rc1"
 source = { editable = "xqcp" }
 dependencies = [
     { name = "xqvm-py" },
@@ -1120,7 +1120,7 @@ source = { editable = "xqffi" }
 
 [[package]]
 name = "xqsa"
-version = "0.3.0"
+version = "0.3.0rc1"
 source = { editable = "xqsa" }
 dependencies = [
     { name = "dwave-samplers" },
@@ -1154,7 +1154,7 @@ provides-extras = ["cuda", "dwave", "metal"]
 
 [[package]]
 name = "xquad"
-version = "0.2.1"
+version = "0.3.0rc1"
 source = { editable = "xquad" }
 dependencies = [
     { name = "xqcp" },
@@ -1163,13 +1163,28 @@ dependencies = [
     { name = "xqvm-py" },
 ]
 
+[package.optional-dependencies]
+cuda = [
+    { name = "xqsa", extra = ["cuda"] },
+]
+dwave = [
+    { name = "xqsa", extra = ["dwave"] },
+]
+metal = [
+    { name = "xqsa", extra = ["metal"] },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "xqcp", editable = "xqcp" },
     { name = "xqffi", editable = "xqffi" },
     { name = "xqsa", editable = "xqsa" },
+    { name = "xqsa", extras = ["cuda"], marker = "extra == 'cuda'", editable = "xqsa" },
+    { name = "xqsa", extras = ["dwave"], marker = "extra == 'dwave'", editable = "xqsa" },
+    { name = "xqsa", extras = ["metal"], marker = "extra == 'metal'", editable = "xqsa" },
     { name = "xqvm-py", editable = "xqvm_py" },
 ]
+provides-extras = ["cuda", "dwave", "metal"]
 
 [[package]]
 name = "xqvm-py"

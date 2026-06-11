@@ -52,8 +52,7 @@ make repl             # Python REPL with xqffi + workspace packages
 # Cross-language
 make opcode-parity    # opcode-parity-rust + opcode-parity-python
 make conformance      # conformance-rust + conformance-python
-make example-smoke    # run examples on both interpreters, diff against golden
-make regen-example-goldens
+make example-smoke    # run examples on both interpreters, check valid == 1
 
 # Documentation
 make docs             # mdbook build (runs docs-check first)
@@ -300,7 +299,7 @@ For deliberately one-sided changes (e.g. aligning one impl to existing behaviour
 
 ### Examples & Smoke Tests
 
-`examples/tsp/` (Travelling Salesman) and `examples/maxcut/` (Max-Cut) each consist of `.xqasm` programs driven by a Python runner (`runner.py`) that exercises both the Rust and Python interpreters via the `--interpreter` flag. These are the canonical references for how host code loads and runs `.xqasm` programs via the toolchain. `make example-smoke` diffs both interpreters against `golden.json`; `make regen-example-goldens` regenerates the goldens.
+`examples/tsp/` (Travelling Salesman) and `examples/maxcut/` (Max-Cut) each consist of `.xqasm` programs driven by a Python runner (`runner.py`) that exercises both the Rust and Python interpreters via the `--interpreter` flag. These are the canonical references for how host code loads and runs `.xqasm` programs via the toolchain. `make example-smoke` runs both interpreters and checks each produces a valid solution (`valid == 1`); the check is invariant-based, not golden-file diffing.
 
 ### CI Pipeline
 

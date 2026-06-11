@@ -25,6 +25,38 @@ pip install xqsa[cuda]
 pip install xqsa[metal]
 ```
 
+Already have xqsa installed? Add an extra on top:
+
+```sh
+pip install "xqsa[cuda]"          # adds CUDA support to an existing install
+```
+
+### Driver prerequisites
+
+| Extra | Hardware | Prerequisite | Verify |
+|-------|----------|-------------|--------|
+| `[cuda]` | NVIDIA GPU | CUDA 12.x driver | `nvidia-smi` |
+| `[metal]` | Apple Silicon | macOS 13+ (Ventura) | built-in on supported Macs |
+| `[dwave]` | -- | D-Wave Leap account + `DWAVE_API_TOKEN` env var | `dwave ping` |
+
+After installing an extra, verify the solver class imports:
+
+```sh
+python -c "from xqsa import SolverCudaGPU; print('ok')"
+python -c "from xqsa import SolverMetalGPU; print('ok')"
+python -c "from xqsa import SolverDWaveQPU; print('ok')"
+```
+
+### uv workspace caveat
+
+`uv sync` installs only base dependencies, not optional extras. To test GPU/QPU solvers locally, install the extra explicitly:
+
+```sh
+uv pip install "xqsa[cuda]"       # or [metal] / [dwave]
+```
+
+Note that a bare `uv run pytest` re-syncs the environment and drops both the extra and the maturin-built `xqffi` extension. Use `uv run --no-sync pytest` to preserve them, or re-run `maturin develop` + `uv pip install "xqsa[...]"` after each sync.
+
 ## Quick start -- CPU simulated annealing
 
 ```python
@@ -127,17 +159,17 @@ tools and scripts can stay backend-agnostic:
 ```python
 from xqsa import SOLVERS, build_solver
 
-print(sorted(SOLVERS))          # ['cuda', 'dwave-cpu', 'dwave-qpu', 'metal']
+print(sorted(SOLVERS))          # ['cuda-gpu', 'dwave-cpu', 'dwave-qpu', 'metal-gpu']
 solver = build_solver("dwave-cpu", seed=42)
 result = solver.solve(model)
 ```
 
-`seed` is forwarded to the classical SA backends (`dwave-cpu`, `cuda`,
-`metal`) and ignored for `dwave-qpu`, which is physical hardware. Every
+`seed` is forwarded to the classical SA backends (`dwave-cpu`, `cuda-gpu`,
+`metal-gpu`) and ignored for `dwave-qpu`, which is physical hardware. Every
 example runner exposes this as a `--solver` flag:
 
 ```sh
-uv run python examples/maxcut/runner.py --solver cuda
+uv run python examples/maxcut/runner.py --solver cuda-gpu
 ```
 
 ## Solver protocol

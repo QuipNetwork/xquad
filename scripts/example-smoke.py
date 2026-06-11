@@ -101,11 +101,11 @@ def available_hardware_solvers() -> list[str]:
     Logs each backend that is skipped and why, so an absent GPU/QPU reads
     as a deliberate skip rather than silent non-coverage.
     """
-    probes = (("cuda", _cuda_available), ("dwave-qpu", _qpu_available), ("metal", _metal_available))
+    probes = (("cuda-gpu", _cuda_available), ("dwave-qpu", _qpu_available), ("metal-gpu", _metal_available))
     reasons = {
-        "cuda": "no cupy / CUDA device",
+        "cuda-gpu": "no cupy / CUDA device",
         "dwave-qpu": "no dwave-system extra / DWAVE_API_TOKEN not set",
-        "metal": "no Metal device",
+        "metal-gpu": "no Metal device",
     }
     available: list[str] = []
     for solver, probe in probes:

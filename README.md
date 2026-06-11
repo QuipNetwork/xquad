@@ -46,6 +46,18 @@ pip install xqffi xqcp xqsa   # FFI bindings + DSL + solvers
 
 Prebuilt wheels are available for Linux x86_64 and aarch64 (CPython >= 3.13). On macOS and Windows, pip builds the `xqffi` Rust extension from source -- this requires a [Rust toolchain](https://rustup.rs/) (>= 1.85).
 
+### GPU/QPU support
+
+The base install includes CPU simulated annealing only. To use GPU or quantum hardware solvers, install the corresponding extra:
+
+| Solver | Install | Prerequisite |
+|--------|---------|-------------|
+| NVIDIA CUDA GPU (`cuda-gpu`) | `pip install xquad[cuda]` | CUDA 12.x driver + NVIDIA GPU |
+| Apple Metal GPU (`metal-gpu`) | `pip install xquad[metal]` | macOS 13+ with Apple Silicon |
+| D-Wave Advantage QPU (`dwave-qpu`) | `pip install xquad[dwave]` | D-Wave Leap account + API token |
+
+Extras are composable: `pip install xquad[cuda,dwave]`. See [`xqsa/README.md`](xqsa/README.md#install) for driver prerequisites and per-solver quick-starts.
+
 ## Package map
 
 Three Rust crates on **crates.io**:

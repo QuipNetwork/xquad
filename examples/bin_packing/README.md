@@ -5,14 +5,12 @@ with a fixed capacity C.
 
 ## QUBO formulation
 
-Decision variables x[i,b] in {0,1} (x[i,b] = 1 if item i is placed in bin b).
-The model is laid out as an N x B 2D grid of size N*B.
-
-Objective: minimise sum_{i,b} x[i,b]  (proxy for number of bins used)
-
-Assignment constraint per item i: sum_b x[i,b] = 1  (EQUALITY with unit coeffs)
-
-Capacity constraint per bin b: sum_i s_i * x[i,b] <= C  (SLACK + EQUALITY)
+- **Input**: N item sizes (Vec), number of bins B, bin capacity C
+- **Model**: N*B binary variables in an N x B grid. `x[i,b] = 1` if item i is placed in bin b.
+- **Objective**: minimise `sum_{i,b} x[i,b]` (proxy for number of bins used)
+- **Constraints**:
+  - Assignment per item i: `sum_b x[i,b] = 1` (EQUALITY with unit coefficients)
+  - Capacity per bin b: `sum_i s_i * x[i,b] <= C` (SLACK + EQUALITY)
 
 The capacity inequality is encoded by appending binary slack variable entries
 to the column index/coefficient vectors, converting it to a weighted equality.
@@ -23,6 +21,15 @@ to the column index/coefficient vectors, converting it to a weighted equality.
 - `problem.slack(indices, coeffs, start_index, capacity)` -- append slack entries
 - `model.apply_equality(indices, coeffs, target, penalty)` -- EQUALITY constraint
 
+## Pipeline overview
+
+1. **CP** (`xqcp`) -- generate random item sizes, declare an N x B binary grid, and add EQUALITY assignment constraints per item plus SLACK + EQUALITY capacity constraints per bin.
+2. **Assemble** -- `.xqasm` text to bytecode via `xquad.asm`
+3. **Encode** -- run encoder on chosen XQVM to produce the XQMX model
+4. **Sample** -- solver runs SA/QPU/GPU over the model
+5. **Verify** -- verifier checks assignment and capacity constraints and computes energy
+6. **Decode** -- decoder extracts the bin assignments
+
 ## Usage
 
 ```sh
@@ -30,12 +37,33 @@ uv run python examples/bin_packing/runner.py --seed 42
 uv run python examples/bin_packing/runner.py --n 5 --bins 4 --interpreter rust
 ```
 
-## Options
-
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--n` | 4 | Number of items |
-| `--bins` | 3 | Number of bins |
-| `--seed` | 42 | Random seed for item generation |
-| `--interpreter` | python | XQVM backend: `python` or `rust` |
-| `-o PATH` | stdout | Write JSON result to file |
+| `--n` | `4` | Number of items |
+| `--bins` | `3` | Number of bins |
+| `--solver` | `dwave-cpu` | Solver backend (see Choosing a solver) |
+| `--interpreter` | `python` | XQVM backend: `python` or `rust` |
+| `--seed` | `42` | Random seed |
+| `-o` | stdout | Write JSON result to file |
+
+## Choosing a solver
+
+| Name | Hardware | Install |
+|------|----------|---------|
+| `dwave-cpu` | CPU (default) | `pip install xquad` |
+| `dwave-qpu` | D-Wave Leap account | `pip install xquad[dwave]` |
+| `cuda-gpu` | NVIDIA CUDA GPU | `pip install xquad[cuda]` |
+| `metal-gpu` | Apple Silicon (macOS) | `pip install xquad[metal]` |
+
+See [GPU/QPU installation](../../README.md#gpuqpu-support) for driver
+prerequisites and [xqsa solver quick-starts](../../xqsa/README.md) for
+per-solver parameter tuning.
+
+Non-default solvers will not reproduce the canonical output (different
+RNG/hardware). `example-smoke` always runs `dwave-cpu`.
+
+## Canonical output
+
+`example-smoke` validates both interpreters produce `valid == 1` with
+`--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
+it checks validity, not exact output.

@@ -59,8 +59,8 @@ hardware and takes no seed.
 |----------|-------|
 | `dwave-cpu` (default) | `SolverDWaveCPU` |
 | `dwave-qpu` | `SolverDWaveQPU` |
-| `cuda` | `SolverCudaGPU` |
-| `metal` | `SolverMetalGPU` |
+| `cuda-gpu` | `SolverCudaGPU` |
+| `metal-gpu` | `SolverMetalGPU` |
 
 ## Protocol Miner Equivalence
 
