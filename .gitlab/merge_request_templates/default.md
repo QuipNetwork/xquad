@@ -8,22 +8,26 @@
 - [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
 - [ ] Documentation update
 
-## License Compliance Checklist
-- [ ] All new files include the required AGPL-3.0-or-later license header
-- [ ] Any new dependencies are AGPL-3.0-or-later compatible
-- [ ] NOTICE file updated if adding AGPL-3.0-or-later compatible dependencies.
-- [ ] `deny.toml` updated if the license is not listed and its compatible with AGPL-3.0-or-later
-- [ ] No proprietary or incompatible code was incorporated
-
 ## Checklist
 
+### Preflight Checks
+Run locally what CI enforces. Mark a language N/A if this MR does not touch it.
+- [ ] `make preflight-rs` passes -- fmt, taplo, clippy, rustdoc, deny, unit/integration/doc tests (or N/A)
+- [ ] `make preflight-py` passes -- taplo, ruff format + lint, pytest (or N/A)
+- [ ] `make preflight-parity` passes -- opcode parity, conformance, example smoke (if opcode or VM semantics changed)
+
+### Optional Checks
+- [ ] `make test-miri` passes -- run if the MR adds or changes `unsafe` code (not a CI gate)
+
+### Commits & Documentation
 - [ ] Commit subject lines are 72 characters or fewer and use the imperative mood
 - [ ] Commits are signed off (`git commit -s`)
-- [ ] `cargo fmt --all` run
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
-- [ ] `cargo doc --workspace --all-features --no-deps` builds without warnings
-- [ ] `cargo deny check` passes
-- [ ] `cargo test --workspace --all-features` passes
-- [ ] `cargo +nightly miri test --workspace --all-features` passes (or N/A)
 - [ ] All public items are documented
-- [ ] New source files include the AGPL license header
+
+### License Compliance Checklist
+- [ ] All new files include the required AGPL-3.0-or-later license header
+- [ ] Any new dependencies are AGPL-3.0-or-later compatible
+- [ ] Any new Python dependencies (`pyproject.toml` / `uv.lock`) are AGPL-3.0-or-later compatible
+- [ ] NOTICE file updated if adding AGPL-3.0-or-later compatible dependencies.
+- [ ] `deny.toml` updated if the license is not listed and it's compatible with AGPL-3.0-or-later
+- [ ] No proprietary or incompatible code was incorporated

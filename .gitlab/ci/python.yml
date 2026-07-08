@@ -40,8 +40,8 @@ lint:python:
     before_script:
         - *install-uv
     script:
-        - make lint-python
-        - make fmt-check-python
+        - make lint-py
+        - make fmt-check-py
 
 test:python:
     stage: test
@@ -49,7 +49,7 @@ test:python:
     before_script:
         - *install-uv
     script:
-        - make test-python
+        - make test-py
 
 # Smoke-test the xquad umbrella package: a single `import xquad` should
 # resolve every subnamespace and exercise the encode -> execute -> sample

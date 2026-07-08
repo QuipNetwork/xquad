@@ -13,11 +13,11 @@ lint:fmt:
     before_script:
         - *install-deps
     script:
-        # fmt-check-python is intentionally omitted here — it needs `uv`
+        # fmt-check-py is intentionally omitted here — it needs `uv`
         # which this job does not install. Python formatting is covered
         # by `lint:python` in .gitlab/ci/python.yml.
-        - make fmt-check-rust
-        - make fmt-check-taplo
+        - make fmt-check-rs
+        - make fmt-check-toml
 
 lint:clippy:
     stage: lint
@@ -38,7 +38,7 @@ lint:deny:
     before_script:
         - *install-deps
     script:
-        - make lint-deny
+        - make lint-deny-rs
 
 # cliff.toml smoke check — render the changelog from current history
 # without writing it. Catches broken templates or parser regexes

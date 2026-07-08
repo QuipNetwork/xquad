@@ -18,4 +18,4 @@ crate-type = [ "cdylib", "rlib" ]
 [dependencies]
 xqvm.workspace  = true
 xqasm.workspace = true
-pyo3            = { version = "0.28", features = [ "extension-module", "abi3-py313" ] }
+pyo3            = { version = "0.29", features = [ "extension-module", "abi3-py313" ] }
