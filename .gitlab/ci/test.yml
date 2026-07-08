@@ -11,14 +11,14 @@ test:unit:
     before_script:
         - *install-deps
     script:
-        - make test-unit
+        - make test-unit-rs
 
 test:integration:
     stage: test
     before_script:
         - *install-deps
     script:
-        - make test-integration
+        - make test-integ-rs
 
 test:doc:
     stage: test

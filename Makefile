@@ -1,16 +1,35 @@
 .PHONY: all xquad repl \
-        deps deps-docs deps-miri deps-python deps-wasm \
+        preflight preflight-rs preflight-py preflight-parity \
+        deps deps-docs deps-miri deps-py deps-wasm \
         install-hooks \
-        lint lint-clippy lint-doc lint-deny lint-python \
-        fmt fmt-rust fmt-taplo fmt-check fmt-check-rust fmt-check-taplo fmt-python fmt-check-python \
-        test test-unit test-integration test-doc test-miri test-python test-wasm test-substrate-fixture \
-        opcode-parity opcode-parity-rust opcode-parity-python \
-        conformance conformance-rust conformance-python \
+        lint lint-clippy lint-doc lint-deny-rs lint-py \
+        fmt fmt-rs fmt-toml fmt-check fmt-check-rs fmt-check-toml fmt-py fmt-check-py \
+        test test-unit-rs test-integ-rs test-doc test-miri test-py test-wasm test-substrate-fixture \
+        opcode-parity opcode-parity-rs opcode-parity-py \
+        conformance conformance-rs conformance-py \
         example-smoke \
         docs docs-regen docs-check docs-serve \
         changelog changelog-render changelog-release
 
 all: fmt lint test
+
+# -- Preflight --------------------------------------------------------------
+
+# Run locally exactly what CI enforces, grouped by language so a single-
+# language MR can pre-flight just its half. Composes the same leaf targets
+# CI invokes; when a CI job is added, add its leaf target here.
+#
+# preflight-rs is pure-Rust (no uv / maturin prereqs); preflight-py and
+# preflight-parity pull the deps-py maturin rebuild via their leaf prereqs.
+# test-miri is deliberately excluded -- not a CI gate, needs nightly; it
+# lives under Optional Checks in the MR template.
+preflight-rs: fmt-check-rs fmt-check-toml lint-clippy lint-doc lint-deny-rs test-unit-rs test-integ-rs test-doc
+
+preflight-py: fmt-check-toml fmt-check-py lint-py test-py
+
+preflight-parity: opcode-parity conformance example-smoke
+
+preflight: preflight-rs preflight-py preflight-parity
 
 # -- Local setup ------------------------------------------------------------
 
@@ -25,7 +44,7 @@ all: fmt lint test
 # Run once per environment; re-run after a pull that touches Rust
 # sources or workspace deps. Publishing / wheel distribution is out
 # of scope (see QUI-442).
-xquad: deps-python
+xquad: deps-py
 	cargo install --path xqcli --locked --force
 
 # -- Dependencies -----------------------------------------------------------
@@ -70,7 +89,7 @@ deps-wasm:
 # still valid, leaving .venv/.../xqffi.*.so stale. An explicit
 # `maturin develop` after sync guarantees the extension matches
 # current Rust sources — essential for local runs of
-# `make example-smoke`, `make test-python`, etc.
+# `make example-smoke`, `make test-py`, etc.
 #
 # The final step writes `xq-rs-workspace.pth` into the venv's
 # site-packages, adding the repo root to sys.path. This closes a
@@ -79,7 +98,7 @@ deps-wasm:
 # (/repo), so scripts run from sibling directories (examples/,
 # scripts/) can't `import xqcp` unless they first inject the repo
 # root themselves. With the .pth in place they just work.
-deps-python:
+deps-py:
 	uv sync
 	uv run --active maturin develop --manifest-path xqffi/Cargo.toml
 	@.venv/bin/python -c "from pathlib import Path; import site; Path(site.getsitepackages()[0], 'xq-rs-workspace.pth').write_text(str(Path('.').resolve()))"
@@ -95,31 +114,31 @@ install-hooks:
 
 # -- Formatting -------------------------------------------------------------
 
-fmt: fmt-rust fmt-taplo fmt-python
+fmt: fmt-rs fmt-toml fmt-py
 
-fmt-rust:
+fmt-rs:
 	cargo fmt --all
 
-fmt-taplo:
+fmt-toml:
 	taplo fmt
 
-fmt-python:
+fmt-py:
 	uv run ruff format xqvm_py xqcp xqsa xqffi xquad examples
 
-fmt-check: fmt-check-rust fmt-check-taplo fmt-check-python
+fmt-check: fmt-check-rs fmt-check-toml fmt-check-py
 
-fmt-check-rust:
+fmt-check-rs:
 	cargo fmt --all -- --check
 
-fmt-check-taplo:
+fmt-check-toml:
 	taplo fmt --check
 
-fmt-check-python:
+fmt-check-py:
 	uv run ruff format --check xqvm_py xqcp xqsa xqffi xquad examples
 
 # -- Lints ------------------------------------------------------------------
 
-lint: lint-clippy lint-doc lint-deny lint-python fmt-check
+lint: lint-clippy lint-doc lint-deny-rs lint-py fmt-check
 
 lint-clippy:
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -127,25 +146,25 @@ lint-clippy:
 lint-doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 
-lint-deny:
+lint-deny-rs:
 	cargo deny check
 
-lint-python:
+lint-py:
 	uv run ruff check xqvm_py xqcp xqsa xqffi xquad examples
 
 # -- Tests ------------------------------------------------------------------
 
-test: test-unit test-integration test-doc test-python
+test: test-unit-rs test-integ-rs test-doc test-py
 
-test-unit:
+test-unit-rs:
 	cargo nextest run --workspace --all-features --lib --cargo-profile ci-test
 
 # xquad-conformance is excluded here because its `python` feature gates
 # a test file that shells out to `uv run python -m xqvm_py`, and the
 # test:integration CI job does not install uv. The conformance suite
-# has its own dedicated jobs (spec-conformance-rust / -python) that
+# has its own dedicated jobs (conformance:rust / conformance:python) that
 # cover both runtimes with the proper before_script setup.
-test-integration:
+test-integ-rs:
 	cargo nextest run --workspace --exclude xquad-conformance --all-features --test '*' --cargo-profile ci-test
 
 # nextest cannot execute rustdoc doctests, so they are driven by the
@@ -153,18 +172,18 @@ test-integration:
 test-doc:
 	cargo test --doc --workspace --all-features --profile ci-test
 
-test-miri:
+test-miri: deps-miri
 	cargo +nightly miri test --workspace --all-features
 
 # `uv run pytest` alone skips rebuilding xqffi's maturin-built cdylib
 # when Rust sources have changed (uv's editable-wheel cache masks the
-# edit). Depend on deps-python so a fresh maturin develop runs first;
+# edit). Depend on deps-py so a fresh maturin develop runs first;
 # CI already has this via the job's before_script.
 # Excludes the hardware-backed solver tests (cuda/qpu/metal); those run in
 # their own GPU/QPU runner jobs (.gitlab/ci/hardware.yml) where they hard-fail
 # on a missing device/token rather than skip. This job runs everywhere, so it
 # must deselect them or they would run unconfigured in CI.
-test-python: deps-python
+test-py: deps-py
 	uv run --no-sync pytest xqvm_py/tests xqcp/tests xqsa/tests xquad/tests -m "not cuda and not qpu and not metal"
 
 # Run the WASM no_std correctness tests (fixtures/xqvm-wasm).
@@ -190,33 +209,33 @@ test-substrate-fixture:
 # Cross-implementation parity (opcode table, spec conformance vectors).
 # `cargo build -p xqvm` exercises the compile-time YAML ↔ opcodes! macro
 # check via xqvm/build.rs; the Python script covers the xqvm_py side.
-opcode-parity: opcode-parity-rust opcode-parity-python
+opcode-parity: opcode-parity-rs opcode-parity-py
 
-opcode-parity-rust:
+opcode-parity-rs:
 	cargo build -p xqvm
 
-opcode-parity-python:
+opcode-parity-py:
 	uv run python scripts/check-opcode-parity.py
 
-conformance: conformance-rust conformance-python
+conformance: conformance-rs conformance-py
 
-conformance-rust:
+conformance-rs:
 	cargo test -p xquad-conformance --no-default-features --features rust
 
-# spec-conformance-python shells out to `uv run python -m xqvm_py run`
+# conformance:python shells out to `uv run python -m xqvm_py run`
 # from within the Rust test; the xqffi extension (maturin-built)
 # and xqvm_py (editable) must both be installed in .venv/ first.
-conformance-python: deps-python
+conformance-py: deps-py
 	cargo test -p xquad-conformance --no-default-features --features python
 
 # -- Dev ergonomics ---------------------------------------------------------
 
 # Open a Python REPL with the xqffi extension fresh and the
 # workspace packages (xqvm_py, xqcp, xqsa) importable. Depends on
-# deps-python so the .so / .pth stay current; `uv run --no-sync`
+# deps-py so the .so / .pth stay current; `uv run --no-sync`
 # skips the implicit sync that would otherwise revert maturin's
 # fresh extension build to a cached wheel.
-repl: deps-python
+repl: deps-py
 	uv run --no-sync python
 
 # -- Examples ---------------------------------------------------------------
@@ -225,7 +244,7 @@ repl: deps-python
 # interpreters with the canonical seed and diff the decoded outputs
 # against the checked-in golden.json. Catches drift between the two
 # interpreters and regressions in either path.
-example-smoke: deps-python
+example-smoke: deps-py
 	uv run --no-sync python scripts/example-smoke.py
 
 # -- Documentation ----------------------------------------------------------

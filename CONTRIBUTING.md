@@ -40,23 +40,23 @@ Individual targets:
 ```sh
 # Formatting
 make fmt              # apply all formatting (Rust + TOML)
-make fmt-rust         # cargo fmt --all
-make fmt-taplo        # taplo fmt
+make fmt-rs           # cargo fmt --all
+make fmt-toml         # taplo fmt
 
 make fmt-check        # check formatting without modifying files
-make fmt-check-rust
-make fmt-check-taplo
+make fmt-check-rs
+make fmt-check-toml
 
 # Lints
 make lint             # all lints + format check
 make lint-clippy      # cargo clippy --workspace --all-targets --all-features -- -D warnings
 make lint-doc         # RUSTDOCFLAGS="-D warnings" cargo doc
-make lint-deny        # cargo deny check
+make lint-deny-rs     # cargo deny check
 
 # Tests
 make test             # unit + integration
-make test-unit        # cargo nextest --lib
-make test-integration # cargo nextest --test '*'
+make test-unit-rs     # cargo nextest --lib
+make test-integ-rs    # cargo nextest --test '*'
 make test-miri        # cargo +nightly miri test (requires make deps-miri)
 ```
 

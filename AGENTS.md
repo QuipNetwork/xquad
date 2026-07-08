@@ -23,15 +23,21 @@ make all              # fmt + lint + test (Rust + Python)
 make xquad            # bootstrap local dev: Python venv + install xquad CLI
 make install-hooks    # point git at .githooks/ pre-commit hook
 
+# Preflight (run locally exactly what CI enforces; N/A a language you didn't touch)
+make preflight        # preflight-rs + preflight-py + preflight-parity
+make preflight-rs     # fmt, taplo, clippy, rustdoc, deny, unit/integration/doc tests
+make preflight-py     # taplo, ruff format + lint, pytest
+make preflight-parity # opcode parity, conformance, example smoke
+
 # Rust
 make fmt              # cargo fmt + taplo fmt + ruff format
-make lint             # lint-clippy + lint-doc + lint-deny + lint-python + fmt-check
+make lint             # lint-clippy + lint-doc + lint-deny-rs + lint-py + fmt-check
 make lint-clippy      # cargo clippy --workspace --all-targets --all-features -- -D warnings
 make lint-doc         # RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
-make lint-deny        # cargo deny check
-make test             # test-unit + test-integration + test-doc + test-python
-make test-unit        # cargo nextest run --workspace --all-features --lib
-make test-integration # cargo nextest run --workspace --exclude xquad-conformance --all-features --test '*'
+make lint-deny-rs     # cargo deny check
+make test             # test-unit-rs + test-integ-rs + test-doc + test-py
+make test-unit-rs     # cargo nextest run --workspace --all-features --lib
+make test-integ-rs    # cargo nextest run --workspace --exclude xquad-conformance --all-features --test '*'
 make test-doc         # cargo test --doc --workspace --all-features
 make test-miri        # cargo +nightly miri test --workspace --all-features
 make deps             # install rustup components + pinned cargo tools
@@ -42,16 +48,16 @@ cargo nextest run --workspace -E 'test(my_test_name)'
 cargo test --workspace my_test_name
 
 # Python
-make deps-python      # uv sync + maturin develop + workspace .pth
-make fmt-python       # ruff format across all Python packages
-make fmt-check-python # ruff format --check
-make lint-python      # ruff check across all Python packages
-make test-python      # pytest xqvm_py/tests xqcp/tests xqsa/tests xquad/tests
+make deps-py          # uv sync + maturin develop + workspace .pth
+make fmt-py           # ruff format across all Python packages
+make fmt-check-py     # ruff format --check
+make lint-py          # ruff check across all Python packages
+make test-py          # pytest xqvm_py/tests xqcp/tests xqsa/tests xquad/tests
 make repl             # Python REPL with xqffi + workspace packages
 
 # Cross-language
-make opcode-parity    # opcode-parity-rust + opcode-parity-python
-make conformance      # conformance-rust + conformance-python
+make opcode-parity    # opcode-parity-rs + opcode-parity-py
+make conformance      # conformance-rs + conformance-py
 make example-smoke    # run examples on both interpreters, check valid == 1
 
 # Documentation
@@ -255,7 +261,7 @@ Control flow, stack/register I/O, arithmetic (including `SQR`, `ABS`, `INC`, `DE
 
 - **Dependencies:** manage via each package's `pyproject.toml`. The repo-root `pyproject.toml` hosts the `uv` workspace declaration and dev-tool pins (maturin, pytest, pyyaml, ruff); the xqvm_py / xqcp / xqsa / xqffi members carry their own. Never modify the dev-dep pins without explicit user approval.
 - **Virtual environment:** always use the workspace `.venv/` managed by `uv sync` / `uv run`. Never install packages globally or create ad-hoc venvs. Invoke scripts and tests via `uv run` so the maturin-built `xqffi` extension is picked up without a manual activation step.
-- **Setup:** `make deps-python` runs `uv sync` + `maturin develop` + installs workspace `.pth`. Re-run after pulls that touch Rust sources or workspace deps.
+- **Setup:** `make deps-py` runs `uv sync` + `maturin develop` + installs workspace `.pth`. Re-run after pulls that touch Rust sources or workspace deps.
 
 ### Package Map
 
@@ -269,7 +275,7 @@ Control flow, stack/register I/O, arithmetic (including `SQR`, `ABS`, `INC`, `DE
 
 ### Testing
 
-`make test-python` runs pytest across `xqvm_py/tests`, `xqcp/tests`, `xqsa/tests`, `xquad/tests`. Test paths are configured in the root `pyproject.toml` under `[tool.pytest.ini_options]`.
+`make test-py` runs pytest across `xqvm_py/tests`, `xqcp/tests`, `xqsa/tests`, `xquad/tests`. Test paths are configured in the root `pyproject.toml` under `[tool.pytest.ini_options]`.
 
 ## Cross-Language
 
@@ -295,7 +301,7 @@ For deliberately one-sided changes (e.g. aligning one impl to existing behaviour
 
 ### Rust-Python Bindings (xqffi)
 
-`xqvm_py` consumes `xqffi.asm` only -- its executor stays pure-Python so `xqvm_py` remains an independent conformance oracle. Build with `maturin develop --manifest-path xqffi/Cargo.toml` (handled by `make deps-python`).
+`xqvm_py` consumes `xqffi.asm` only -- its executor stays pure-Python so `xqvm_py` remains an independent conformance oracle. Build with `maturin develop --manifest-path xqffi/Cargo.toml` (handled by `make deps-py`).
 
 ### Examples & Smoke Tests
 
