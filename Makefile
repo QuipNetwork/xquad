@@ -5,6 +5,7 @@
         lint lint-clippy lint-doc lint-deny-rs lint-py \
         fmt fmt-rs fmt-toml fmt-check fmt-check-rs fmt-check-toml fmt-py fmt-check-py \
         test test-unit-rs test-integ-rs test-doc test-miri test-py test-wasm test-substrate-fixture \
+        test-quip test-quip-sign test-quip-e2e \
         opcode-parity opcode-parity-rs opcode-parity-py \
         conformance conformance-rs conformance-py \
         example-smoke \
@@ -181,10 +182,12 @@ test-miri: deps-miri
 # CI already has this via the job's before_script.
 # Excludes the hardware-backed solver tests (cuda/qpu/metal); those run in
 # their own GPU/QPU runner jobs (.gitlab/ci/hardware.yml) where they hard-fail
-# on a missing device/token rather than skip. This job runs everywhere, so it
-# must deselect them or they would run unconfigured in CI.
+# on a missing device/token rather than skip. Also excludes the Quip signing
+# tests (quip), which need the `[quip]` extra and run in the dedicated
+# `test:quip` job (.gitlab/ci/python.yml). This job runs everywhere, so it must
+# deselect them or they would run unconfigured in CI.
 test-py: deps-py
-	uv run --no-sync pytest xqvm_py/tests xqcp/tests xqsa/tests xquad/tests -m "not cuda and not qpu and not metal"
+	uv run --no-sync pytest xqvm_py/tests xqcp/tests xqsa/tests xquad/tests -m "not cuda and not qpu and not metal and not quip"
 
 # Run the WASM no_std correctness tests (fixtures/xqvm-wasm).
 # Two gates in sequence:
@@ -203,6 +206,49 @@ test-wasm:
 # isolate the QuipNetwork/polkadot-sdk git dep from the main build.
 test-substrate-fixture:
 	cargo test --manifest-path fixtures/pallet-xqvm/Cargo.toml
+
+# Full SolverQuip sweep -- the signing tests plus the live-devnet end-to-end
+# suite. Run this when an MR changes SolverQuip (xqsa/quip*.py); it is the
+# Optional Check the MR template names. Opt-in and NOT part of `make test` /
+# preflight: the e2e leaf needs a running Quip devnet and hard-errors without
+# QUIP_RPC_URL, so drive it with the devnet env vars set (see test-quip-e2e):
+#
+#   make test-quip \
+#       QUIP_RPC_URL=ws://127.0.0.1:9944 \
+#       QUIP_FAUCET_URL=http://127.0.0.1:8087
+test-quip: test-quip-sign test-quip-e2e
+
+# Run the quip-marked signing tests (xqsa/tests/test_quip_signing.py): the
+# pure-Python SCALE / keystore / extrinsic tests that need the `[quip]` extra
+# and so are deselected by `make test-py` (`-m "not ... quip"`). This is the
+# local leaf for the CI `test:quip` job (.gitlab/ci/python.yml); `--extra quip`
+# pulls the quip_signer wheel those tests importorskip on. No chain required --
+# the live-devnet suite is the separate `test-quip-e2e` target below.
+test-quip-sign:
+	uv run --extra quip pytest xqsa/tests/test_quip_signing.py -m quip
+
+# Live Quip Network devnet end-to-end tests for SolverQuip
+# (xqsa/tests/test_quip_live.py) -- the chain-backed sibling of
+# `test-quip-sign`. Opt-in and deliberately NOT part of `make test` /
+# preflight: like the cuda / qpu / metal hardware tiers they need a running
+# Quip devnet, so they are driven by hand or a dedicated runner. Point the two
+# env vars at the devnet's RPC + faucet:
+#
+#   make test-quip-e2e \
+#       QUIP_RPC_URL=ws://127.0.0.1:9944 \
+#       QUIP_FAUCET_URL=http://127.0.0.1:8087
+#
+# QUIP_RPC_URL gates the whole module (unset -> every test skips), so the
+# target hard-errors when it is missing rather than reporting a hollow, all-
+# skipped pass. QUIP_FAUCET_URL is optional but needed for the funded submit
+# and end-to-end tiers; without it only the read-only connectivity tests run.
+test-quip-e2e:
+	@if [ -z "$(QUIP_RPC_URL)" ]; then \
+		echo "error: QUIP_RPC_URL is required (e.g. make test-quip-e2e QUIP_RPC_URL=ws://127.0.0.1:9944 QUIP_FAUCET_URL=http://127.0.0.1:8087)" >&2; \
+		exit 2; \
+	fi
+	QUIP_RPC_URL="$(QUIP_RPC_URL)" QUIP_FAUCET_URL="$(QUIP_FAUCET_URL)" \
+		uv run --extra quip pytest xqsa/tests/test_quip_live.py -m quip -v
 
 # -- Conformance ------------------------------------------------------------
 

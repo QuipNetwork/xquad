@@ -51,6 +51,26 @@ test:python:
     script:
         - make test-py
 
+# Quip Network signing-layer tests. These are pure-Python SCALE / keystore /
+# submission-state-machine tests that need only the `quip_signer` wheel from the
+# `[quip]` extra, not a live chain. The base `test:python` job runs `uv sync`
+# without the extra, so `test_quip_signing.py`'s `importorskip("quip_signer")`
+# skips the whole module there and a malformed extrinsic or keystore regression
+# would not turn CI red. `make test-quip-sign` installs the extra
+# (`uv run --extra quip`) so those tests execute.
+#
+# NOTE: this runs only the `test-quip-sign` leaf, NOT the full `make test-quip`
+# aggregate. The aggregate also runs the live-devnet e2e suite (`test-quip-e2e`),
+# which needs a running Quip devnet that CI has no access to. That e2e sweep is
+# an MR-template Optional Check developers run by hand against a devnet.
+test:quip:
+    stage: test
+    <<: *python-cache
+    before_script:
+        - *install-uv
+    script:
+        - make test-quip-sign
+
 # Smoke-test the xquad umbrella package: a single `import xquad` should
 # resolve every subnamespace and exercise the encode -> execute -> sample
 # pipeline. Catches regressions where a peer package's public surface
