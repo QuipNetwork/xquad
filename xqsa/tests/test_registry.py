@@ -31,8 +31,28 @@ class TestRegistry:
     """The name->class registry and its default."""
 
     def test_expected_solver_names(self) -> None:
-        """SOLVERS exposes exactly the four backend names."""
-        assert set(xqsa.SOLVERS) == {"dwave-cpu", "dwave-qpu", "cuda-gpu", "metal-gpu"}
+        """SOLVERS exposes exactly the registered backend names."""
+        assert set(xqsa.SOLVERS) == {"dwave-cpu", "dwave-qpu", "cuda-gpu", "metal-gpu", "quip"}
+
+    def test_quip_registered_and_env_driven(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """'quip' maps to SolverQuip and builds with no seed (env-configured).
+
+        Uses a fake so the dispatch is exercised without the [quip] extra (the
+        substrate-interface client and quip_signer extension the real backend
+        requires).
+        """
+        assert xqsa.SOLVERS["quip"] is xqsa.SolverQuip
+        assert "quip" not in registry._SEEDED  # env-driven, not RNG-seeded
+
+        built: dict[str, Any] = {}
+
+        class FakeQuip:
+            def __init__(self) -> None:
+                built["args"] = {}
+
+        monkeypatch.setitem(registry.SOLVERS, "quip", FakeQuip)
+        registry.build_solver("quip", seed=123)  # seed is ignored
+        assert built["args"] == {}
 
     def test_default_solver_is_registered(self) -> None:
         """DEFAULT_SOLVER is a real registry key, so it always resolves."""

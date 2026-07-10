@@ -26,6 +26,14 @@ from .cuda_gpu import SolverCudaGPU
 from .dwave_cpu import SolverDWaveCPU
 from .dwave_qpu import SolverDWaveQPU
 from .metal_gpu import SolverMetalGPU
+from .quip import (
+    QuipConnectionError,
+    QuipJobFailedError,
+    QuipSubmissionError,
+    QuipTimeoutError,
+    SolverQuip,
+)
+from .quip_codec import EncodingError, PlacementError, QuipError, QuipSigningError
 from .registry import DEFAULT_SOLVER, SOLVERS, build_solver
 from .solver import Solver, SolverResult
 
@@ -36,6 +44,15 @@ __all__ = [
     "SolverDWaveCPU",
     "SolverDWaveQPU",
     "SolverMetalGPU",
+    "SolverQuip",
+    "QuipError",
+    "QuipConnectionError",
+    "QuipSubmissionError",
+    "QuipTimeoutError",
+    "QuipJobFailedError",
+    "QuipSigningError",
+    "PlacementError",
+    "EncodingError",
     "SOLVERS",
     "DEFAULT_SOLVER",
     "build_solver",

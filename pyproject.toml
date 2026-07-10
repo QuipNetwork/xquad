@@ -54,4 +54,5 @@ markers = [
     "qpu: live D-Wave QPU tests (require DWAVE_API_TOKEN)",
     "cuda: real NVIDIA CUDA GPU tests (require cupy + a CUDA device)",
     "metal: real Apple Metal GPU tests (require macOS + a Metal device)",
+    "quip: live Quip Network devnet tests (require QUIP_RPC_URL)",
 ]
