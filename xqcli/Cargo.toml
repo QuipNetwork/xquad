@@ -1,7 +1,7 @@
 [package]
 name                 = "xqcli"
 description          = "Unified CLI for the XQuad Toolchain"
-version              = "0.3.0-rc1"
+version              = "0.3.0"
 license.workspace    = true
 repository.workspace = true
 edition              = "2024"
