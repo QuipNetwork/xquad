@@ -80,6 +80,8 @@ coverage.xml
 
 ### Developer-local agent/tool artifacts ###
 CLAUDE.md
+CLAUDE.local.md
+AGENTS.local.md
 .claude/
 graphify-out/
 scratch/

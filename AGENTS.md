@@ -1,8 +1,15 @@
 # AGENTS.md
 
-This file is the single source of truth for AI coding assistants working in this
-repository. `CLAUDE.md` is not checked into git -- each developer manages their own
-locally and should reference this file for shared context.
+This file is the authoritative, tool-neutral source of truth for AI coding assistants
+and human contributors working in this repository. It holds repo-wide conventions for
+any collaborator.
+
+Tool-specific agent config files (`CLAUDE.md`, etc.) are not checked into git -- each
+developer manages their own locally. Claude Code does not read `AGENTS.md` natively, so
+Claude Code users should add a gitignored `CLAUDE.md` (or `CLAUDE.local.md`) whose first
+line is `@AGENTS.md` to auto-load this file. Personal, repository-specific overrides go
+in `AGENTS.local.md` (gitignored), imported at the end of this file and silently skipped
+for anyone who does not have one.
 
 The **XQuad Toolchain** is a hardware-agnostic quantum VM and SDK: a problem is
 expressed once in XQVM bytecode and executed on any supported quantum backend
@@ -120,7 +127,7 @@ All commit messages must follow the [Conventional Commits](https://www.conventio
 **Rules:**
 - Subject line: imperative mood, lowercase start, no trailing period, max 72 characters
 - Body: wrap at 72 characters, explain what and why
-- Footer: `Fixes QUI-NNN` or `Implements QUI-NNN` to link Linear tickets
+- Footer: reference the tracking issue (e.g. `Fixes #123`) to auto-link and close it on merge
 - Breaking changes: append `!` after type/scope (e.g. `feat(xqvm)!: remove deprecated API`) or add a `BREAKING CHANGE:` footer
 - NEVER add `Co-Authored-By` trailers for AI assistants
 
@@ -133,7 +140,7 @@ The two-pass label resolver was not accounting for label offsets
 inside nested RANGE blocks, causing incorrect jump targets when
 a forward reference crossed a loop boundary.
 
-Fixes QUI-456
+Fixes #456
 ```
 
 ### Post-Edit Linting
@@ -329,3 +336,10 @@ Caveats:
 - Pre-conventional-commits history (everything before QUI-480) is filtered out by `filter_unconventional = true`; only commits on or after the QUI-480 enforcement appear in the rendered output. The static footer is appended to whatever `make changelog` produces, so an empty render plus footer is the expected state until the first user-visible `feat`/`fix` lands.
 - `chore`, `style`, `test`, `ci`, `build` are **dropped silently** -- if a commit under one of those types ships a user-visible change (e.g. a security-relevant dep bump under `chore`), promote it to `feat`/`fix`/`security` before merging or it will be invisible in release notes.
 - Before tagging a release, run `make changelog-release VERSION=vX.Y.Z` locally to preview what the GitLab Release page will say. Bad commit subjects can be fixed on the source branch and re-merged before the tag is cut.
+
+## Local overrides
+
+Personal, repository-specific configuration goes in `AGENTS.local.md` (gitignored). It is
+imported below and silently skipped for collaborators who do not have one.
+
+@AGENTS.local.md
