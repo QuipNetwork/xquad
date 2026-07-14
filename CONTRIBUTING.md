@@ -81,7 +81,7 @@ All commit messages must follow the [Conventional Commits](https://www.conventio
 - Subject line: imperative mood, lowercase start, no trailing period, max 72 characters
 - Separate subject from body with a blank line
 - Body: wrap at 72 characters; explain *what* and *why*, not *how*
-- Footer: `Fixes QUI-NNN` or `Implements QUI-NNN` to link Linear tickets
+- Footer: reference the tracking issue (e.g. `Fixes #123`) to auto-link and close it on merge
 - Breaking changes: append `!` after type/scope (e.g. `feat(xqvm)!: remove deprecated API`) or add a `BREAKING CHANGE:` footer
 - Each commit is a logical cohesive change, which should pass tests and lints
 
@@ -100,7 +100,7 @@ The two-pass label resolver was not accounting for label offsets
 inside nested RANGE blocks, causing incorrect jump targets when
 a forward reference crossed a loop boundary.
 
-Fixes QUI-456
+Fixes #456
 ```
 
 ## Semver Compliance
@@ -176,15 +176,18 @@ Signed-off-by: Your Name <your.email@example.com>
 
 ## AI Assistants
 
-The repository ships configuration for AI coding assistants so they understand
-the project's conventions out of the box.
+`AGENTS.md` is the canonical, committed source of project conventions for AI
+coding assistants and human contributors. It is the only agent-config file
+tracked in git; keep it up to date when project conventions change.
 
-| File | Tool |
-|---|---|
-| `AGENTS.md` | Claude Code, OpenAI Codex, Cursor (primary source of truth) |
+Tools that read `AGENTS.md` natively (e.g. OpenAI Codex, Cursor) pick it up on
+clone. Tools that do not (e.g. Claude Code) opt in locally with a gitignored
+entry-point file whose first line imports it: for Claude Code, add a gitignored
+`CLAUDE.md` (or `CLAUDE.local.md`) whose first line is `@AGENTS.md`.
 
-`AGENTS.md` is the canonical source of project conventions for AI assistants.
-When updating project conventions, keep this file up to date.
+Personal, repository-specific configuration that is not a repo-wide convention
+goes in a gitignored `AGENTS.local.md`, imported at the end of `AGENTS.md` and
+silently skipped for contributors who do not have one.
 
 ## Merge Requests
 
