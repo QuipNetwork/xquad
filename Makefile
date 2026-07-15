@@ -124,7 +124,7 @@ fmt-toml:
 	taplo fmt
 
 fmt-py:
-	uv run ruff format xqvm_py xqcp xqsa xqffi xquad examples
+	uv run ruff format xqvm_py xqcp xqsa xqffi xquad examples scripts
 
 fmt-check: fmt-check-rs fmt-check-toml fmt-check-py
 
@@ -135,7 +135,7 @@ fmt-check-toml:
 	taplo fmt --check
 
 fmt-check-py:
-	uv run ruff format --check xqvm_py xqcp xqsa xqffi xquad examples
+	uv run ruff format --check xqvm_py xqcp xqsa xqffi xquad examples scripts
 
 # -- Lints ------------------------------------------------------------------
 
@@ -151,7 +151,7 @@ lint-deny-rs:
 	cargo deny check
 
 lint-py:
-	uv run ruff check xqvm_py xqcp xqsa xqffi xquad examples
+	uv run ruff check xqvm_py xqcp xqsa xqffi xquad examples scripts
 
 # -- Tests ------------------------------------------------------------------
 
@@ -187,7 +187,7 @@ test-miri: deps-miri
 # `test:quip` job (.gitlab/ci/python.yml). This job runs everywhere, so it must
 # deselect them or they would run unconfigured in CI.
 test-py: deps-py
-	uv run --no-sync pytest xqvm_py/tests xqcp/tests xqsa/tests xquad/tests -m "not cuda and not qpu and not metal and not quip"
+	uv run --no-sync pytest xqvm_py/tests xqcp/tests xqsa/tests xquad/tests scripts/tests -m "not cuda and not qpu and not metal and not quip"
 
 # Run the WASM no_std correctness tests (fixtures/xqvm-wasm).
 # Two gates in sequence:

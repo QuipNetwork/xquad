@@ -138,9 +138,7 @@ def render(data: dict) -> str:
             operands = format_operands(entry["operands"])
             stack = f"`{entry['stack_pop']} → {entry['stack_push']}`"
             doc = entry["doc"].replace("|", "\\|")
-            lines.append(
-                f"| `0x{code:02X}` | `{mnemonic}` | {operands} | {stack} | {doc} |"
-            )
+            lines.append(f"| `0x{code:02X}` | `{mnemonic}` | {operands} | {stack} | {doc} |")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
@@ -171,9 +169,7 @@ def main() -> int:
             fromfile=str(DOC_PATH.relative_to(REPO_ROOT)) + " (committed)",
             tofile=str(DOC_PATH.relative_to(REPO_ROOT)) + " (regenerated)",
         )
-        sys.stderr.write(
-            f"{DOC_PATH.relative_to(REPO_ROOT)} is stale — run `make docs-regen`.\n\n"
-        )
+        sys.stderr.write(f"{DOC_PATH.relative_to(REPO_ROOT)} is stale — run `make docs-regen`.\n\n")
         sys.stderr.writelines(diff_lines)
         return 1
 
