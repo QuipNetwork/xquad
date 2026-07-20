@@ -482,6 +482,37 @@ class TestSolverDWaveQPU:
 # SolverCudaGPU -- mocked tests (no GPU required, runs everywhere)
 # ---------------------------------------------------------------------------
 
+# Python mirrors of the CUDA device RNG in xqsa.cuda_gpu._RNG_PRELUDE
+# (QUI-705). Constants and update order must match the kernel bit-for-bit;
+# the fake kernel below consumes these so the mocked solve reproduces the
+# device sampling stream exactly.
+_MASK64 = (1 << 64) - 1
+
+
+def _splitmix64(x: int) -> int:
+    x = (x + 0x9E3779B97F4A7C15) & _MASK64
+    x = ((x ^ (x >> 30)) * 0xBF58476D1CE4E5B9) & _MASK64
+    x = ((x ^ (x >> 27)) * 0x94D049BB133111EB) & _MASK64
+    return x ^ (x >> 31)
+
+
+def _seed_for_replica(base_seed: int, rid: int) -> int:
+    s = _splitmix64(base_seed ^ ((0x9E3779B97F4A7C15 * (rid + 1)) & _MASK64))
+    return s if s != 0 else 1
+
+
+def _xorshift64(state: int) -> int:
+    x = state
+    x ^= (x << 13) & _MASK64
+    x ^= x >> 7
+    x ^= (x << 17) & _MASK64
+    return x
+
+
+def _rand_unit(state: int) -> tuple[float, int]:
+    state = _xorshift64(state)
+    return (state >> 11) / 9007199254740992.0, state
+
 
 @pytest.fixture
 def mock_cupy_env(monkeypatch):
@@ -522,7 +553,7 @@ def mock_cupy_env(monkeypatch):
         """Return a callable that simulates SA on CPU via numpy."""
 
         def _kernel(grid, block, args):
-            h, J, samples, energies, randoms, betas, n_val, ns_val = args
+            h, J, samples, energies, betas, n_val, ns_val, base_seed = args
             n = int(n_val)
             num_sweeps = int(ns_val)
             num_reads = samples.shape[0]
@@ -530,6 +561,7 @@ def mock_cupy_env(monkeypatch):
 
             for rid in range(num_reads):
                 x = samples[rid]
+                rng_state = _seed_for_replica(int(base_seed), rid)
                 energy = 0.0
                 if is_binary:
                     for i in range(n):
@@ -565,7 +597,7 @@ def mock_cupy_env(monkeypatch):
                                 local += J[i, j] * float(x[j])
                             delta_e = -2.0 * float(x[i]) * local
 
-                        r = randoms[rid, sweep, i]
+                        r, rng_state = _rand_unit(rng_state)
                         if delta_e <= 0.0 or r < np.exp(-delta_e * beta):
                             if is_binary:
                                 x[i] = 1 - x[i]
@@ -684,28 +716,6 @@ class TestSolverCudaGPUMocked:
             from xqsa.cuda_gpu import SolverCudaGPU as _Solver
 
             _Solver()
-
-    def test_oom_guard(self, mock_cupy_env) -> None:
-        """ValueError when random buffer exceeds GPU memory."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
-
-        # Override mem_info to report only 1 KB free.
-        class _TinyDevice:
-            @property
-            def mem_info(self):
-                return (1024, 1024)
-
-            def synchronize(self):
-                pass
-
-        mock_cupy_env.cuda.Device = _TinyDevice
-
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-
-        solver = _Solver(num_reads=10, num_sweeps=100, seed=42)
-        with pytest.raises(ValueError, match="GPU memory"):
-            solver.solve(model)
 
     def test_compute_beta_schedule_mocked(self, mock_cupy_env) -> None:
         """_compute_beta_schedule returns num_betas float64 points for both types."""
@@ -836,7 +846,7 @@ class TestSolverCudaGPUMocked:
         captured = self._capture_kernel_args(solver)
         solver.solve(model)
 
-        betas = np.asarray(captured["args"][5])
+        betas = np.asarray(captured["args"][4])
         assert betas.shape == (200,)
         levels = betas.reshape(20, 10)
         for level in levels:
@@ -855,7 +865,7 @@ class TestSolverCudaGPUMocked:
         captured = self._capture_kernel_args(solver)
         solver.solve(model)
 
-        betas = np.asarray(captured["args"][5])
+        betas = np.asarray(captured["args"][4])
         expected = 0.05 + (5.0 - 0.05) * (np.arange(200, dtype=np.float64) / np.float64(199))
         np.testing.assert_array_equal(betas, expected)
 
@@ -874,7 +884,7 @@ class TestSolverCudaGPUMocked:
         captured = self._capture_kernel_args(solver)
         result = solver.solve(model)
 
-        betas = np.asarray(captured["args"][5])
+        betas = np.asarray(captured["args"][4])
         assert betas.shape == (50,)
         assert np.all(betas == np.float64(5.0))
         assert result.metadata["params"]["num_betas"] == 1
@@ -911,7 +921,7 @@ class TestSolverCudaGPUMocked:
         captured = self._capture_kernel_args(solver)
         solver.solve(model)
 
-        betas = np.asarray(captured["args"][5])
+        betas = np.asarray(captured["args"][4])
         levels = betas.reshape(20, 10)[:, 0]
         ratios = np.diff(np.log(levels))
         assert np.allclose(ratios, ratios[0])
@@ -945,6 +955,37 @@ class TestSolverCudaGPUMocked:
         assert result.metadata["params"]["num_sweeps_per_beta"] == 5
         assert result.metadata["params"]["num_betas"] == 20
         assert result.metadata["params"]["beta_schedule_type"] == "geometric"
+
+    def test_same_seed_reproducible_mocked(self, mock_cupy_env) -> None:
+        """Identical seeds give identical best energy and sample (QUI-705)."""
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        model = XQMX.spin_model(6)
+        model.set_quadratic(0, 1, 1.0)
+        model.set_quadratic(1, 2, -1.0)
+        model.set_quadratic(2, 3, 1.0)
+        model.set_quadratic(3, 4, -1.0)
+        model.set_quadratic(4, 5, 1.0)
+        model.set_quadratic(0, 5, 1.0)
+
+        r1 = _Solver(num_reads=4, num_sweeps=30, seed=7).solve(model)
+        r2 = _Solver(num_reads=4, num_sweeps=30, seed=7).solve(model)
+
+        assert r1.energy == r2.energy
+        assert [r1.sample.get_linear(i) for i in range(6)] == [r2.sample.get_linear(i) for i in range(6)]
+
+    def test_seed_none_solves_mocked(self, mock_cupy_env) -> None:
+        """seed=None draws a random base seed and still solves (QUI-705)."""
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        model.set_linear(1, 1.0)
+
+        result = _Solver(num_reads=10, num_sweeps=100, seed=None).solve(model)
+
+        assert result.energy == 0
+        assert result.metadata["seed"] is None
 
 
 # ---------------------------------------------------------------------------
