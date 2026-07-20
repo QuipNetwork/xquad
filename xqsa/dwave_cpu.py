@@ -41,11 +41,13 @@ class SolverDWaveCPU(Solver):
         self,
         num_reads: int = 100,
         num_sweeps: int = 1000,
+        num_sweeps_per_beta: int = 1,
         beta_range: tuple[float, float] | None = None,
         seed: int | None = None,
     ) -> None:
         self.num_reads = num_reads
         self.num_sweeps = num_sweeps
+        self.num_sweeps_per_beta = num_sweeps_per_beta
         self.beta_range = beta_range
         self.seed = seed
 
@@ -55,20 +57,33 @@ class SolverDWaveCPU(Solver):
 
         num_reads = kwargs.get("num_reads", self.num_reads)
         num_sweeps = kwargs.get("num_sweeps", self.num_sweeps)
+        num_sweeps_per_beta = kwargs.get("num_sweeps_per_beta", self.num_sweeps_per_beta)
         beta_range = kwargs.get("beta_range", self.beta_range)
         seed = kwargs.get("seed", self.seed)
 
         if num_reads < 1:
-            raise ValueError("num_reads must be >= 1")
+            raise ValueError(f"num_reads must be >= 1, got {num_reads}")
         if num_sweeps < 1:
-            raise ValueError("num_sweeps must be >= 1")
+            raise ValueError(f"num_sweeps must be >= 1, got {num_sweeps}")
+        if not isinstance(num_sweeps_per_beta, int):
+            raise ValueError(f"num_sweeps_per_beta must be an int, got {type(num_sweeps_per_beta).__name__}")
+        if num_sweeps_per_beta < 1:
+            raise ValueError(f"num_sweeps_per_beta must be >= 1, got {num_sweeps_per_beta}")
+        num_betas, rem = divmod(num_sweeps, num_sweeps_per_beta)
+        if rem != 0:
+            raise ValueError(
+                f"num_sweeps ({num_sweeps}) must be divisible by num_sweeps_per_beta ({num_sweeps_per_beta})"
+            )
 
         bqm = self._model_to_bqm(model)
         sampler = SimulatedAnnealingSampler()
 
+        # Enforce locally for a consistent cross-backend error; dwave-samplers
+        # retains the same check as a backstop.
         sample_kwargs: dict[str, Any] = {
             "num_reads": num_reads,
             "num_sweeps": num_sweeps,
+            "num_sweeps_per_beta": num_sweeps_per_beta,
         }
         if beta_range is not None:
             sample_kwargs["beta_range"] = beta_range
@@ -92,6 +107,8 @@ class SolverDWaveCPU(Solver):
                 "reads": num_reads,
                 "params": {
                     "num_sweeps": num_sweeps,
+                    "num_sweeps_per_beta": num_sweeps_per_beta,
+                    "num_betas": num_betas,
                     "beta_range": beta_range,
                     "num_occurrences": int(best.num_occurrences),
                     "raw_energy": float(best.energy),

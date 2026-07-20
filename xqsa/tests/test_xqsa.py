@@ -141,14 +141,16 @@ class TestSolverDWaveCPU:
         solver = SolverDWaveCPU()
         assert solver.num_reads == 100
         assert solver.num_sweeps == 1000
+        assert solver.num_sweeps_per_beta == 1
         assert solver.beta_range is None
         assert solver.seed is None
 
     def test_custom_params(self) -> None:
         """SolverDWaveCPU accepts custom parameters."""
-        solver = SolverDWaveCPU(num_reads=50, num_sweeps=500, seed=42)
+        solver = SolverDWaveCPU(num_reads=50, num_sweeps=500, num_sweeps_per_beta=5, seed=42)
         assert solver.num_reads == 50
         assert solver.num_sweeps == 500
+        assert solver.num_sweeps_per_beta == 5
         assert solver.seed == 42
 
     def test_solve_trivial_binary(self) -> None:
@@ -267,6 +269,32 @@ class TestSolverDWaveCPU:
         solver = SolverDWaveCPU()
         with pytest.raises(ValueError, match="num_sweeps"):
             solver.solve(model, num_sweeps=0)
+
+    def test_num_sweeps_per_beta_validation(self) -> None:
+        """num_sweeps_per_beta < 1 raises, and indivisible counts raise."""
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        solver = SolverDWaveCPU()
+        with pytest.raises(ValueError, match="num_sweeps_per_beta"):
+            solver.solve(model, num_sweeps_per_beta=0)
+        # Local validation keeps this message independent of upstream wording.
+        with pytest.raises(ValueError, match="divisible"):
+            solver.solve(model, num_sweeps=100, num_sweeps_per_beta=7)
+        with pytest.raises(ValueError, match="must be an int, got float"):
+            solver.solve(model, num_sweeps_per_beta=2.5)
+
+    def test_num_sweeps_per_beta_run(self) -> None:
+        """num_sweeps_per_beta > 1 solves and is recorded in metadata."""
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        model.set_linear(1, 1.0)
+
+        solver = SolverDWaveCPU(num_reads=10, num_sweeps=100, num_sweeps_per_beta=10, seed=42)
+        result = solver.solve(model)
+
+        assert result.energy == 0
+        assert result.metadata["params"]["num_sweeps_per_beta"] == 10
+        assert result.metadata["params"]["num_betas"] == 10
 
     def test_model_to_bqm_qubo(self) -> None:
         """_model_to_bqm produces correct BQM for a QUBO model."""
@@ -624,6 +652,14 @@ class TestSolverCudaGPUMocked:
 
         assert result.metadata["reads"] == 5
         assert result.metadata["seed"] == 99
+
+    def test_num_sweeps_per_beta_guard_mocked(self, mock_cupy_env) -> None:
+        """Unsupported CUDA temperature-level repeats fail before dispatch."""
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        with pytest.raises(ValueError, match="does not yet support num_sweeps_per_beta"):
+            _Solver().solve(model, num_sweeps_per_beta=2)
 
     def test_metadata_schema_mocked(self, mock_cupy_env) -> None:
         """Metadata has exactly {seed, reads, params} keys (mocked)."""
@@ -1233,6 +1269,8 @@ class TestSolverMetalGPUMocked:
         assert set(result.metadata["params"].keys()) == {
             "strategy",
             "num_sweeps",
+            "num_sweeps_per_beta",
+            "num_betas",
             "beta_range",
             "beta_schedule_type",
             "raw_energy",
@@ -1307,6 +1345,107 @@ class TestSolverMetalGPUMocked:
         with pytest.raises(ValueError, match="num_sweeps"):
             _Solver().solve(model, num_sweeps=0)
 
+    def test_num_sweeps_per_beta_validation_mocked(self, mock_metal_env) -> None:
+        """num_sweeps_per_beta < 1 raises, and indivisible counts raise (mocked)."""
+        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        with pytest.raises(ValueError, match="num_sweeps_per_beta"):
+            _Solver().solve(model, num_sweeps_per_beta=0)
+        with pytest.raises(ValueError, match="divisible"):
+            _Solver().solve(model, num_sweeps=200, num_sweeps_per_beta=7)
+        with pytest.raises(ValueError, match="must be an int, got float"):
+            _Solver().solve(model, num_sweeps_per_beta=2.5)
+
+    def _capture_beta_buffer(self, solver, model):
+        """Run ``solve`` and return the beta buffer bound to the Metal encoder."""
+        captured: dict = {}
+        original_queue = solver._device.newCommandQueue
+
+        def capturing_queue():
+            queue = original_queue()
+            original_buffer = queue.commandBuffer
+
+            def capturing_buffer():
+                command_buffer = original_buffer()
+                original_encoder = command_buffer.computeCommandEncoder
+
+                def capturing_encoder():
+                    encoder = original_encoder()
+                    captured["encoder"] = encoder
+                    return encoder
+
+                command_buffer.computeCommandEncoder = capturing_encoder
+                return command_buffer
+
+            queue.commandBuffer = capturing_buffer
+            return queue
+
+        solver._device.newCommandQueue = capturing_queue
+        result = solver.solve(model)
+        beta = np.frombuffer(captured["encoder"].buffers[2]._raw, dtype=np.float32)
+        return result, beta
+
+    def test_num_sweeps_per_beta_run_mocked(self, mock_metal_env) -> None:
+        """num_sweeps_per_beta > 1 expands the schedule and records the split (mocked).
+
+        Verifies the divide semantics end-to-end: the beta buffer bound to the
+        kernel (ABI index 2) is the per-sweep schedule of length ``num_sweeps``,
+        holding each of the ``num_betas`` levels for ``num_sweeps_per_beta``
+        consecutive sweeps.
+        """
+        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        model.set_linear(1, 1.0)
+
+        solver = _Solver(strategy="sa", num_reads=10, num_sweeps=200, num_sweeps_per_beta=10, seed=42)
+        result, beta = self._capture_beta_buffer(solver, model)
+
+        assert result.energy == 0
+        assert result.metadata["params"]["num_sweeps"] == 200
+        assert result.metadata["params"]["num_sweeps_per_beta"] == 10
+        assert result.metadata["params"]["num_betas"] == 20
+
+        assert beta.shape == (200,)
+        # Each temperature level is held for num_sweeps_per_beta consecutive sweeps.
+        levels = beta.reshape(20, 10)
+        for level in levels:
+            assert np.all(level == level[0])
+        assert np.unique(levels[:, 0]).size == 20
+        assert np.all(np.diff(levels[:, 0]) > 0)
+
+    def test_default_beta_schedule_is_bit_identical_mocked(self, mock_metal_env) -> None:
+        """The default one-beta-per-sweep buffer matches the legacy schedule."""
+        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        model.set_linear(1, 1.0)
+        solver = _Solver(strategy="sa", num_reads=10, num_sweeps=200, seed=42)
+        result, beta = self._capture_beta_buffer(solver, model)
+
+        expected = solver._compute_beta_schedule(
+            200, result.metadata["params"]["beta_range"], result.metadata["params"]["beta_schedule_type"]
+        )
+        np.testing.assert_array_equal(beta, expected)
+
+    def test_single_temperature_level_uses_beta_end_mocked(self, mock_metal_env) -> None:
+        """A single temperature level binds beta_end for every sweep."""
+        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        model.set_linear(1, 1.0)
+        solver = _Solver(strategy="sa", num_reads=10, num_sweeps=50, num_sweeps_per_beta=50, seed=42)
+        result, beta = self._capture_beta_buffer(solver, model)
+
+        beta_end = result.metadata["params"]["beta_range"][-1]
+        assert result.metadata["params"]["num_betas"] == 1
+        np.testing.assert_array_equal(beta, np.full(50, beta_end, dtype=np.float32))
+
     def test_linear_schedule_mocked(self, mock_metal_env) -> None:
         """The linear beta schedule solves a trivial model (mocked)."""
         from xqsa.metal_gpu import SolverMetalGPU as _Solver
@@ -1334,13 +1473,8 @@ class TestSolverMetalGPUMocked:
 
         assert result.energy == compute_energy(model, result.sample)
 
-    def test_single_sweep_uses_beta_start(self, mock_metal_env) -> None:
-        """num_sweeps == 1 anneals at beta_start, matching SolverCudaGPU.
-
-        Locks finding #7: the single-sweep schedule must reuse the hot
-        end (beta_start) like the CUDA kernel and the sweep-0 value of the
-        multi-sweep schedule, not the cold end (beta_end).
-        """
+    def test_single_sweep_uses_beta_end(self, mock_metal_env) -> None:
+        """num_sweeps == 1 anneals at beta_end, matching dwave-samplers."""
         from xqsa.metal_gpu import SolverMetalGPU as _Solver
 
         solver = _Solver()
@@ -1348,7 +1482,16 @@ class TestSolverMetalGPUMocked:
         for schedule_type in ("geometric", "linear"):
             schedule = solver._compute_beta_schedule(1, (beta_start, beta_end), schedule_type)
             assert schedule.shape == (1,)
-            assert schedule[0] == pytest.approx(beta_start)
+            assert schedule[0] == pytest.approx(beta_end)
+
+    def test_compute_beta_schedule_length_mocked(self, mock_metal_env) -> None:
+        """_compute_beta_schedule returns one beta per temperature level."""
+        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+
+        solver = _Solver()
+        for schedule_type in ("geometric", "linear"):
+            schedule = solver._compute_beta_schedule(20, (0.05, 5.0), schedule_type)
+            assert schedule.shape == (20,)
 
     def test_command_buffer_error_raises_mocked(self, mock_metal_env) -> None:
         """A GPU command-buffer error surfaces as RuntimeError, not silently."""
@@ -1431,16 +1574,18 @@ class TestSolverMetalGPU:
         assert solver.strategy == "sa"
         assert solver.num_reads == 100
         assert solver.num_sweeps == 1000
+        assert solver.num_sweeps_per_beta == 1
         assert solver.beta_range is None
         assert solver.beta_schedule_type == "geometric"
         assert solver.seed is None
 
     def test_custom_params(self) -> None:
         """SolverMetalGPU accepts custom parameters."""
-        solver = SolverMetalGPU(strategy="gibbs", num_reads=50, num_sweeps=500, seed=42)
+        solver = SolverMetalGPU(strategy="gibbs", num_reads=50, num_sweeps=500, num_sweeps_per_beta=5, seed=42)
         assert solver.strategy == "gibbs"
         assert solver.num_reads == 50
         assert solver.num_sweeps == 500
+        assert solver.num_sweeps_per_beta == 5
         assert solver.seed == 42
 
     def test_solve_trivial_binary_sa(self) -> None:
@@ -1559,6 +1704,41 @@ class TestSolverMetalGPU:
         with pytest.raises(ValueError, match="Unsupported strategy"):
             SolverMetalGPU(strategy="metropolis")
 
+    def test_num_sweeps_per_beta_validation(self) -> None:
+        """num_sweeps_per_beta < 1 raises, and indivisible counts raise."""
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        solver = SolverMetalGPU()
+        with pytest.raises(ValueError, match="num_sweeps_per_beta"):
+            solver.solve(model, num_sweeps_per_beta=0)
+        with pytest.raises(ValueError, match="divisible"):
+            solver.solve(model, num_sweeps=200, num_sweeps_per_beta=7)
+        with pytest.raises(ValueError, match="must be an int, got float"):
+            solver.solve(model, num_sweeps_per_beta=2.5)
+
+    def test_single_temperature_level_uses_beta_end(self) -> None:
+        """A single Metal temperature level uses the coldest beta."""
+        solver = SolverMetalGPU()
+        beta_start, beta_end = 0.05, 5.0
+        for schedule_type in ("geometric", "linear"):
+            schedule = solver._compute_beta_schedule(1, (beta_start, beta_end), schedule_type)
+            assert schedule.shape == (1,)
+            assert schedule[0] == pytest.approx(beta_end)
+
+    def test_num_sweeps_per_beta_run(self) -> None:
+        """num_sweeps_per_beta > 1 solves and records the schedule split."""
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        model.set_linear(1, 1.0)
+
+        solver = SolverMetalGPU(strategy="sa", num_reads=20, num_sweeps=200, num_sweeps_per_beta=10, seed=42)
+        result = solver.solve(model)
+
+        assert result.energy == 0
+        assert result.metadata["params"]["num_sweeps"] == 200
+        assert result.metadata["params"]["num_sweeps_per_beta"] == 10
+        assert result.metadata["params"]["num_betas"] == 20
+
     def test_linear_schedule(self) -> None:
         """The linear beta schedule also solves a trivial model."""
         model = XQMX.binary_model(2)
@@ -1583,6 +1763,8 @@ class TestSolverMetalGPU:
         assert set(result.metadata["params"].keys()) == {
             "strategy",
             "num_sweeps",
+            "num_sweeps_per_beta",
+            "num_betas",
             "beta_range",
             "beta_schedule_type",
             "raw_energy",

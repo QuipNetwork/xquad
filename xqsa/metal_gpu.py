@@ -233,6 +233,15 @@ class SolverMetalGPU(Solver):
     * ``"sa"`` -- simulated annealing with Metropolis acceptance.
     * ``"gibbs"`` -- block Gibbs sampling over a greedy graph colouring.
 
+    ``num_sweeps_per_beta`` holds each inverse-temperature (beta) for that
+    many consecutive sweeps, decoupling the number of temperature levels from
+    the total sweep count: ``num_betas = num_sweeps // num_sweeps_per_beta``
+    (``num_sweeps`` must be divisible by it). The default of 1 keeps one beta
+    per sweep, bit-identical to the previous behaviour. A single temperature
+    level (``num_sweeps_per_beta == num_sweeps``) runs a cold greedy quench at
+    ``beta_range[-1]``, matching ``SolverDWaveCPU``; the GPU backends align on
+    this in QUI-854.
+
     Examples:
 
     ```python
@@ -259,6 +268,7 @@ class SolverMetalGPU(Solver):
         strategy: str = "sa",
         num_reads: int = 100,
         num_sweeps: int = 1000,
+        num_sweeps_per_beta: int = 1,
         beta_range: tuple[float, float] | None = None,
         beta_schedule_type: str = "geometric",
         seed: int | None = None,
@@ -284,6 +294,7 @@ class SolverMetalGPU(Solver):
         self.strategy = strategy
         self.num_reads = num_reads
         self.num_sweeps = num_sweeps
+        self.num_sweeps_per_beta = num_sweeps_per_beta
         self.beta_range = beta_range
         self.beta_schedule_type = beta_schedule_type
         self.seed = seed
@@ -327,6 +338,7 @@ class SolverMetalGPU(Solver):
         strategy = kwargs.get("strategy", self.strategy)
         num_reads = kwargs.get("num_reads", self.num_reads)
         num_sweeps = kwargs.get("num_sweeps", self.num_sweeps)
+        num_sweeps_per_beta = kwargs.get("num_sweeps_per_beta", self.num_sweeps_per_beta)
         beta_range = kwargs.get("beta_range", self.beta_range)
         beta_schedule_type = kwargs.get("beta_schedule_type", self.beta_schedule_type)
         seed = kwargs.get("seed", self.seed)
@@ -338,14 +350,24 @@ class SolverMetalGPU(Solver):
                 f"Unsupported beta_schedule_type {beta_schedule_type!r}. Supported: {sorted(_SUPPORTED_SCHEDULES)}"
             )
         if num_reads < 1:
-            raise ValueError("num_reads must be >= 1")
+            raise ValueError(f"num_reads must be >= 1, got {num_reads}")
         if num_sweeps < 1:
-            raise ValueError("num_sweeps must be >= 1")
+            raise ValueError(f"num_sweeps must be >= 1, got {num_sweeps}")
+        if not isinstance(num_sweeps_per_beta, int):
+            raise ValueError(f"num_sweeps_per_beta must be an int, got {type(num_sweeps_per_beta).__name__}")
+        if num_sweeps_per_beta < 1:
+            raise ValueError(f"num_sweeps_per_beta must be >= 1, got {num_sweeps_per_beta}")
+        num_betas, rem = divmod(num_sweeps, num_sweeps_per_beta)
+        if rem != 0:
+            raise ValueError(
+                f"num_sweeps ({num_sweeps}) must be divisible by num_sweeps_per_beta ({num_sweeps_per_beta})"
+            )
 
         h, j_matrix = self._to_dense_arrays(model)
         if beta_range is None:
             beta_range = self._auto_beta_range(h, j_matrix)
-        beta_schedule = self._compute_beta_schedule(num_sweeps, beta_range, beta_schedule_type)
+        betas = self._compute_beta_schedule(num_betas, beta_range, beta_schedule_type)
+        beta_schedule = np.repeat(betas, num_sweeps_per_beta)
 
         base_seed = self._resolve_base_seed(seed)
         is_spin = model.domain == XQMXDomain.SPIN
@@ -375,6 +397,8 @@ class SolverMetalGPU(Solver):
                 "params": {
                     "strategy": strategy,
                     "num_sweeps": num_sweeps,
+                    "num_sweeps_per_beta": num_sweeps_per_beta,
+                    "num_betas": num_betas,
                     "beta_range": beta_range,
                     "beta_schedule_type": beta_schedule_type,
                     "raw_energy": raw_energy,
@@ -420,23 +444,26 @@ class SolverMetalGPU(Solver):
         return (beta_start, beta_end)
 
     def _compute_beta_schedule(
-        self, num_sweeps: int, beta_range: tuple[float, float], schedule_type: str
+        self, num_betas: int, beta_range: tuple[float, float], schedule_type: str
     ) -> npt.NDArray[np.float32]:
-        """Build a per-sweep inverse-temperature schedule.
+        """Build the per-temperature-level inverse-temperature schedule.
 
-        ``"geometric"`` spends more sweeps at low temperature where the
-        landscape is frozen; ``"linear"`` ramps uniformly.
+        Returns ``num_betas`` inverse-temperature (beta) points; ``solve``
+        expands this to the per-sweep schedule via
+        ``np.repeat(..., num_sweeps_per_beta)``. ``"geometric"`` spends more
+        levels at low temperature where the landscape is frozen; ``"linear"``
+        ramps uniformly.
         """
         beta_start, beta_end = beta_range
-        if num_sweeps == 1:
-            # Single sweep anneals at beta_start (hottest), matching
-            # SolverCudaGPU and the sweep-0 value of the multi-sweep schedule.
-            return np.array([beta_start], dtype=np.float32)
+        if num_betas == 1:
+            # A single temperature level anneals at beta_end (coldest),
+            # matching dwave-samplers' greedy quench.
+            return np.array([beta_end], dtype=np.float32)
         if schedule_type == "geometric":
             start = max(beta_start, 1e-12)
-            schedule = np.geomspace(start, beta_end, num_sweeps)
+            schedule = np.geomspace(start, beta_end, num_betas)
         else:
-            schedule = np.linspace(beta_start, beta_end, num_sweeps)
+            schedule = np.linspace(beta_start, beta_end, num_betas)
         return schedule.astype(np.float32)
 
     def _compute_graph_coloring(

@@ -241,6 +241,8 @@ class SolverCudaGPU(Solver):
         beta_range = kwargs.get("beta_range", self.beta_range)
         seed = kwargs.get("seed", self.seed)
 
+        if kwargs.get("num_sweeps_per_beta", 1) != 1:
+            raise ValueError("SolverCudaGPU does not yet support num_sweeps_per_beta (QUI-854 follow-up)")
         if strategy not in _SUPPORTED_STRATEGIES:
             raise ValueError(f"Unsupported strategy {strategy!r}. Supported: {sorted(_SUPPORTED_STRATEGIES)}")
         if num_reads < 1:
