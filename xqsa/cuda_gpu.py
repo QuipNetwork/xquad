@@ -45,6 +45,11 @@ if TYPE_CHECKING:
 _SUPPORTED_STRATEGIES = frozenset({"sa"})
 _SUPPORTED_SCHEDULES = frozenset({"geometric", "linear"})
 
+# One CUDA block per replica; this many threads cooperate on the local-field
+# reduction (QUI-852). Must be a power of two (tree reduction) and match the
+# kernels' `__shared__ double sdata[256]`.
+_THREADS_PER_REPLICA = 256
+
 # ---------------------------------------------------------------------------
 # CUDA kernel sources
 # ---------------------------------------------------------------------------
@@ -61,41 +66,64 @@ void sa_binary(
     int    n,
     int    num_sweeps
 ) {
+    /* One block per replica; blockDim.x threads cooperate on the O(n)
+       local-field reduction. Spin updates stay strictly sequential on
+       thread 0: same proposal order, same acceptance rule, same RNG
+       consumption order as the single-thread kernel (QUI-852). Only the
+       floating-point summation order of the local field changes. */
+    __shared__ double sdata[256];
     int rid = blockIdx.x;
+    int tid = threadIdx.x;
+    int nthreads = blockDim.x;
     int* x = samples + rid * n;
     const double* rand_ptr = randoms + (long long)rid * num_sweeps * n;
 
-    /* compute initial energy */
+    /* initial energy: one-time O(n^2), thread 0 only */
     double energy = 0.0;
-    for (int i = 0; i < n; i++) {
-        if (x[i] == 0) continue;
-        energy += h[i];
-        for (int j = i + 1; j < n; j++) {
-            if (x[j] == 0) continue;
-            energy += J[i * n + j];
+    if (tid == 0) {
+        for (int i = 0; i < n; i++) {
+            if (x[i] == 0) continue;
+            energy += h[i];
+            for (int j = i + 1; j < n; j++) {
+                if (x[j] == 0) continue;
+                energy += J[i * n + j];
+            }
         }
     }
+    __syncthreads();
 
     for (int sweep = 0; sweep < num_sweeps; sweep++) {
         double beta = betas[sweep];
 
         for (int i = 0; i < n; i++) {
-            /* delta_E for flipping x_i */
-            double local = h[i];
-            for (int j = 0; j < n; j++) {
+            /* strided partial sums of the local field for spin i */
+            double partial = 0.0;
+            for (int j = tid; j < n; j += nthreads) {
                 if (j == i) continue;
-                local += J[i * n + j] * (double)x[j];
+                partial += J[i * n + j] * (double)x[j];
             }
-            double delta_E = local * (double)(1 - 2 * x[i]);
+            sdata[tid] = partial;
+            __syncthreads();
 
-            double r = rand_ptr[(long long)sweep * n + i];
-            if (delta_E <= 0.0 || r < exp(-delta_E * beta)) {
-                x[i] = 1 - x[i];
-                energy += delta_E;
+            /* power-of-two tree reduction into sdata[0] */
+            for (int s = nthreads / 2; s > 0; s >>= 1) {
+                if (tid < s) sdata[tid] += sdata[tid + s];
+                __syncthreads();
             }
+
+            if (tid == 0) {
+                double local = h[i] + sdata[0];
+                double delta_E = local * (double)(1 - 2 * x[i]);
+                double r = rand_ptr[(long long)sweep * n + i];
+                if (delta_E <= 0.0 || r < exp(-delta_E * beta)) {
+                    x[i] = 1 - x[i];
+                    energy += delta_E;
+                }
+            }
+            __syncthreads();
         }
     }
-    energies[rid] = energy;
+    if (tid == 0) energies[rid] = energy;
 }
 """
 
@@ -111,39 +139,55 @@ void sa_spin(
     int    n,
     int    num_sweeps
 ) {
+    /* See sa_binary: cooperative local-field reduction, sequential updates. */
+    __shared__ double sdata[256];
     int rid = blockIdx.x;
+    int tid = threadIdx.x;
+    int nthreads = blockDim.x;
     int* s = samples + rid * n;
     const double* rand_ptr = randoms + (long long)rid * num_sweeps * n;
 
-    /* compute initial energy */
     double energy = 0.0;
-    for (int i = 0; i < n; i++) {
-        energy += h[i] * (double)s[i];
-        for (int j = i + 1; j < n; j++) {
-            energy += J[i * n + j] * (double)s[i] * (double)s[j];
+    if (tid == 0) {
+        for (int i = 0; i < n; i++) {
+            energy += h[i] * (double)s[i];
+            for (int j = i + 1; j < n; j++) {
+                energy += J[i * n + j] * (double)s[i] * (double)s[j];
+            }
         }
     }
+    __syncthreads();
 
     for (int sweep = 0; sweep < num_sweeps; sweep++) {
         double beta = betas[sweep];
 
         for (int i = 0; i < n; i++) {
-            /* delta_E for flipping s_i */
-            double local = h[i];
-            for (int j = 0; j < n; j++) {
+            double partial = 0.0;
+            for (int j = tid; j < n; j += nthreads) {
                 if (j == i) continue;
-                local += J[i * n + j] * (double)s[j];
+                partial += J[i * n + j] * (double)s[j];
             }
-            double delta_E = -2.0 * (double)s[i] * local;
+            sdata[tid] = partial;
+            __syncthreads();
 
-            double r = rand_ptr[(long long)sweep * n + i];
-            if (delta_E <= 0.0 || r < exp(-delta_E * beta)) {
-                s[i] = -s[i];
-                energy += delta_E;
+            for (int st = nthreads / 2; st > 0; st >>= 1) {
+                if (tid < st) sdata[tid] += sdata[tid + st];
+                __syncthreads();
             }
+
+            if (tid == 0) {
+                double local = h[i] + sdata[0];
+                double delta_E = -2.0 * (double)s[i] * local;
+                double r = rand_ptr[(long long)sweep * n + i];
+                if (delta_E <= 0.0 || r < exp(-delta_E * beta)) {
+                    s[i] = -s[i];
+                    energy += delta_E;
+                }
+            }
+            __syncthreads();
         }
     }
-    energies[rid] = energy;
+    if (tid == 0) energies[rid] = energy;
 }
 """
 
@@ -153,7 +197,9 @@ class SolverCudaGPU(Solver):
 
     Runs parallel replica simulated annealing on an NVIDIA GPU. Each
     replica (controlled by ``num_reads``) executes independently in its
-    own CUDA thread block.
+    own CUDA thread block. Within a block, ``_THREADS_PER_REPLICA``
+    threads cooperate on the local-field reduction while spin updates
+    remain sequential (QUI-852).
 
     ``num_sweeps_per_beta`` holds each inverse-temperature (beta) for that
     many consecutive sweeps, decoupling the number of temperature levels
@@ -445,7 +491,7 @@ class SolverCudaGPU(Solver):
         kernel = self._binary_kernel if is_binary else self._spin_kernel
         kernel(
             (num_reads,),  # grid: one block per replica
-            (1,),  # block: single thread per replica
+            (_THREADS_PER_REPLICA,),  # block: cooperative local-field reduction
             (
                 h,
                 j_matrix,
