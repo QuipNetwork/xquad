@@ -60,6 +60,12 @@ if TYPE_CHECKING:
 _SUPPORTED_STRATEGIES = frozenset({"sa", "gibbs"})
 _SUPPORTED_SCHEDULES = frozenset({"geometric", "linear"})
 
+# Threadgroup width for the sa pipeline's cooperative local-field reduction
+# (QUI-852). Clamped at dispatch to the largest power of two that the
+# compiled pipeline supports; must match the kernel's `threadgroup float
+# sdata[256]`. The gibbs pipeline stays at one thread per replica.
+_SA_THREADGROUP_WIDTH = 256
+
 # ---------------------------------------------------------------------------
 # Metal kernel sources (Metal Shading Language)
 #
@@ -69,7 +75,9 @@ _SUPPORTED_SCHEDULES = frozenset({"geometric", "linear"})
 #   gibbs_metal: 0:h 1:J 2:beta 3:samples 4:energies
 #                5:col_starts 6:col_counts 7:col_nodes
 #                8:n 9:num_sweeps 10:base_seed 11:num_colors 12:is_spin
-# Each threadgroup (one thread) owns one replica via threadgroup_position_in_grid.
+# Each threadgroup owns one replica via threadgroup_position_in_grid.
+# sa_metal runs _SA_THREADGROUP_WIDTH cooperating threads per replica
+# (local-field reduction, QUI-852); gibbs_metal remains single-thread.
 # ---------------------------------------------------------------------------
 
 _RNG_PRELUDE = r"""
@@ -109,42 +117,65 @@ kernel void sa_metal(
     constant int&       num_sweeps [[buffer(6)]],
     constant uint&      base_seed  [[buffer(7)]],
     constant int&       is_spin    [[buffer(8)]],
-    uint3 tgid [[threadgroup_position_in_grid]]
+    uint3 tgid  [[threadgroup_position_in_grid]],
+    uint3 tpitg [[thread_position_in_threadgroup]],
+    uint3 tptg  [[threads_per_threadgroup]]
 ) {
+    /* One threadgroup per replica; tptg.x threads cooperate on the O(n)
+       local-field reduction. Spin updates stay strictly sequential on
+       thread 0 -- same proposal order, acceptance rule, and RNG consumption
+       as the single-thread kernel (QUI-852). tptg.x is always a power of
+       two <= 256 (host clamps); only float summation order changes. */
+    threadgroup float sdata[256];
     int rid = (int)tgid.x;
+    int tid = (int)tpitg.x;
+    int nthreads = (int)tptg.x;
     device int* x = samples + rid * n;
     uint rng = seed_for_replica(base_seed, rid);
 
-    /* initial energy */
     float energy = 0.0f;
-    for (int i = 0; i < n; i++) {
-        float xi = (float)x[i];
-        energy += h[i] * xi;
-        for (int j = i + 1; j < n; j++) {
-            energy += J[i * n + j] * xi * (float)x[j];
+    if (tid == 0) {
+        for (int i = 0; i < n; i++) {
+            float xi = (float)x[i];
+            energy += h[i] * xi;
+            for (int j = i + 1; j < n; j++) {
+                energy += J[i * n + j] * xi * (float)x[j];
+            }
         }
     }
+    threadgroup_barrier(mem_flags::mem_device);
 
     for (int sweep = 0; sweep < num_sweeps; sweep++) {
         float beta = beta_sched[sweep];
         for (int i = 0; i < n; i++) {
-            float local = h[i];
-            for (int j = 0; j < n; j++) {
+            float partial = 0.0f;
+            for (int j = tid; j < n; j += nthreads) {
                 if (j == i) continue;
-                local += J[i * n + j] * (float)x[j];
+                partial += J[i * n + j] * (float)x[j];
             }
-            float delta_E = (is_spin != 0)
-                ? (-2.0f * (float)x[i] * local)
-                : (local * (float)(1 - 2 * x[i]));
+            sdata[tid] = partial;
+            threadgroup_barrier(mem_flags::mem_threadgroup);
 
-            float r = rand_unit(rng);
-            if (delta_E <= 0.0f || r < exp(-delta_E * beta)) {
-                x[i] = (is_spin != 0) ? -x[i] : (1 - x[i]);
-                energy += delta_E;
+            for (int s = nthreads / 2; s > 0; s >>= 1) {
+                if (tid < s) sdata[tid] += sdata[tid + s];
+                threadgroup_barrier(mem_flags::mem_threadgroup);
             }
+
+            if (tid == 0) {
+                float local = h[i] + sdata[0];
+                float delta_E = (is_spin != 0)
+                    ? (-2.0f * (float)x[i] * local)
+                    : (local * (float)(1 - 2 * x[i]));
+                float r = rand_unit(rng);
+                if (delta_E <= 0.0f || r < exp(-delta_E * beta)) {
+                    x[i] = (is_spin != 0) ? -x[i] : (1 - x[i]);
+                    energy += delta_E;
+                }
+            }
+            threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup);
         }
     }
-    energies[rid] = energy;
+    if (tid == 0) energies[rid] = energy;
 }
 """
 )
@@ -228,7 +259,10 @@ class SolverMetalGPU(Solver):
 
     Runs parallel-replica sampling on an Apple Silicon GPU. Each replica
     (controlled by ``num_reads``) executes independently in its own
-    threadgroup. ``strategy`` selects the kernel:
+    threadgroup. Within a threadgroup, ``_SA_THREADGROUP_WIDTH`` threads
+    cooperate on the local-field reduction while spin updates remain
+    sequential (QUI-852); the gibbs pipeline is out of scope and stays
+    single-threaded per replica. ``strategy`` selects the kernel:
 
     * ``"sa"`` -- simulated annealing with Metropolis acceptance.
     * ``"gibbs"`` -- block Gibbs sampling over a greedy graph colouring.
@@ -545,11 +579,11 @@ class SolverMetalGPU(Solver):
         view = buffer.contents().as_buffer(count * itemsize)
         return np.frombuffer(view, dtype=dtype, count=count).copy()
 
-    def _dispatch(self, pipeline, encoder, num_reads: int) -> None:
+    def _dispatch(self, pipeline, encoder, num_reads: int, threads_per_group: int = 1) -> None:
         """Encode and dispatch one threadgroup per replica."""
         encoder.setComputePipelineState_(pipeline)
         grid = self._metal.MTLSizeMake(num_reads, 1, 1)
-        per_group = self._metal.MTLSizeMake(1, 1, 1)
+        per_group = self._metal.MTLSizeMake(threads_per_group, 1, 1)
         encoder.dispatchThreadgroups_threadsPerThreadgroup_(grid, per_group)
         encoder.endEncoding()
 
@@ -601,7 +635,9 @@ class SolverMetalGPU(Solver):
         encoder.setBytes_length_atIndex_(self._scalar_bytes(num_sweeps, np.int32), 4, 6)
         encoder.setBytes_length_atIndex_(self._scalar_bytes(base_seed, np.uint32), 4, 7)
         encoder.setBytes_length_atIndex_(self._scalar_bytes(int(is_spin), np.int32), 4, 8)
-        self._dispatch(self._sa_pipeline, encoder, num_reads)
+        max_threads = int(self._sa_pipeline.maxTotalThreadsPerThreadgroup())
+        width = min(_SA_THREADGROUP_WIDTH, 1 << (max_threads.bit_length() - 1))
+        self._dispatch(self._sa_pipeline, encoder, num_reads, threads_per_group=width)
         self._commit_and_wait(command_buffer)
 
         return self._collect_best(samples_buf, energies_buf, num_reads, n)

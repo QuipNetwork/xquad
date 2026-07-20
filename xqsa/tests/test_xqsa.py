@@ -795,11 +795,29 @@ class TestSolverCudaGPUMocked:
         real_kernel = solver._binary_kernel
 
         def wrapper(grid, block, args):
+            captured["grid"] = grid
+            captured["block"] = block
             captured["args"] = args
             return real_kernel(grid, block, args)
 
         solver.__dict__["_binary_kernel"] = wrapper
         return captured
+
+    def test_launch_shape_parallel_reduction_mocked(self, mock_cupy_env) -> None:
+        """Each replica's block launches _THREADS_PER_REPLICA threads (QUI-852)."""
+        from xqsa.cuda_gpu import _THREADS_PER_REPLICA
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+
+        solver = _Solver(num_reads=7, num_sweeps=10, seed=1)
+        captured = self._capture_kernel_args(solver)
+        solver.solve(model)
+
+        assert captured["grid"] == (7,)
+        assert captured["block"] == (_THREADS_PER_REPLICA,)
+        assert _THREADS_PER_REPLICA == 256
 
     def test_num_sweeps_per_beta_schedule_buffer_mocked(self, mock_cupy_env) -> None:
         """The kernel receives a per-sweep buffer holding each level for N sweeps.
@@ -1156,6 +1174,31 @@ class TestSolverCudaGPU:
         assert result.energy == 0
         assert result.metadata["params"]["beta_schedule_type"] == "geometric"
 
+    def test_reduction_consistency_integer_n512(self) -> None:
+        """Kernel-accumulated energy matches the exact host energy at n=512.
+
+        n > _THREADS_PER_REPLICA exercises multi-element strides plus the full
+        block-wide reduction on real hardware: the bit-identical trajectory
+        gate ran at n in {64, 256}, where the strided loop gives each thread
+        at most one term, so the intra-thread multi-term accumulation was
+        never verified integer-exact. Integer coefficients keep every float64
+        sum exact, so any reduction race, mis-partition, or missing barrier
+        surfaces as a mismatch between the incrementally accumulated kernel
+        energy and the host recompute.
+        """
+        rng = np.random.default_rng(0)
+        n = 512
+        model = XQMX.binary_model(n)
+        for i in range(n):
+            for j in range(i + 1, n):
+                if rng.random() < 0.25:
+                    model.set_quadratic(i, j, 1.0)
+
+        solver = SolverCudaGPU(strategy="sa", num_reads=10, num_sweeps=100, seed=42)
+        result = solver.solve(model)
+
+        assert float(result.metadata["params"]["raw_energy"]) == float(result.energy)
+
 
 # ---------------------------------------------------------------------------
 # SolverMetalGPU -- mocked tests (no Apple GPU required, runs everywhere)
@@ -1303,6 +1346,7 @@ def mock_metal_env(monkeypatch):
 
         def dispatchThreadgroups_threadsPerThreadgroup_(self, grid, per_group):
             self.num_reads = int(grid[0])
+            self.threads_per_group = tuple(int(v) for v in per_group)
 
         def endEncoding(self):
             pass
@@ -1801,6 +1845,121 @@ class TestSolverMetalGPUMocked:
         for i, j in model.quadratic:
             assert color_of[i] != color_of[j]
 
+    def test_sa_dispatch_width_mocked(self, mock_metal_env) -> None:
+        """The sa pipeline dispatches _SA_THREADGROUP_WIDTH threads per replica (QUI-852)."""
+        from xqsa.metal_gpu import _SA_THREADGROUP_WIDTH
+        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+
+        solver = _Solver(strategy="sa", num_reads=5, num_sweeps=10, seed=1)
+        captured: dict = {}
+        original_queue = solver._device.newCommandQueue
+
+        def capturing_queue():
+            queue = original_queue()
+            original_buffer = queue.commandBuffer
+
+            def capturing_buffer():
+                cb = original_buffer()
+                original_encoder = cb.computeCommandEncoder
+
+                def capturing_encoder():
+                    encoder = original_encoder()
+                    captured["encoder"] = encoder
+                    return encoder
+
+                cb.computeCommandEncoder = capturing_encoder
+                return cb
+
+            queue.commandBuffer = capturing_buffer
+            return queue
+
+        solver._device.newCommandQueue = capturing_queue
+        solver.solve(model)
+
+        assert _SA_THREADGROUP_WIDTH == 256
+        # Mock pipeline reports maxTotalThreadsPerThreadgroup == 1024, so the
+        # clamp resolves to the full width.
+        assert captured["encoder"].threads_per_group == (256, 1, 1)
+
+    def test_gibbs_dispatch_width_mocked(self, mock_metal_env) -> None:
+        """The gibbs pipeline keeps one thread per replica (out of QUI-852 scope)."""
+        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+
+        solver = _Solver(strategy="gibbs", num_reads=5, num_sweeps=10, seed=1)
+        captured: dict = {}
+        original_queue = solver._device.newCommandQueue
+
+        def capturing_queue():
+            queue = original_queue()
+            original_buffer = queue.commandBuffer
+
+            def capturing_buffer():
+                cb = original_buffer()
+                original_encoder = cb.computeCommandEncoder
+
+                def capturing_encoder():
+                    encoder = original_encoder()
+                    captured["encoder"] = encoder
+                    return encoder
+
+                cb.computeCommandEncoder = capturing_encoder
+                return cb
+
+            queue.commandBuffer = capturing_buffer
+            return queue
+
+        solver._device.newCommandQueue = capturing_queue
+        solver.solve(model)
+
+        assert captured["encoder"].threads_per_group == (1, 1, 1)
+
+    def test_sa_dispatch_width_down_clamps_mocked(self, mock_metal_env) -> None:
+        """The sa dispatch clamps to the largest power of two <= the pipeline max (QUI-852)."""
+        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+
+        solver = _Solver(strategy="sa", num_reads=5, num_sweeps=10, seed=1)
+        # Force the cached_property to compile and cache the sa pipeline now, so
+        # patching its class below is visible to the (already-cached) instance
+        # that solve() will use.
+        type(solver._sa_pipeline).maxTotalThreadsPerThreadgroup = lambda self: 96
+
+        captured: dict = {}
+        original_queue = solver._device.newCommandQueue
+
+        def capturing_queue():
+            queue = original_queue()
+            original_buffer = queue.commandBuffer
+
+            def capturing_buffer():
+                cb = original_buffer()
+                original_encoder = cb.computeCommandEncoder
+
+                def capturing_encoder():
+                    encoder = original_encoder()
+                    captured["encoder"] = encoder
+                    return encoder
+
+                cb.computeCommandEncoder = capturing_encoder
+                return cb
+
+            queue.commandBuffer = capturing_buffer
+            return queue
+
+        solver._device.newCommandQueue = capturing_queue
+        solver.solve(model)
+
+        # 96 is not a power of two; the largest power of two <= 96 is 64.
+        assert captured["encoder"].threads_per_group == (64, 1, 1)
+
 
 # ---------------------------------------------------------------------------
 # SolverMetalGPU -- real GPU tests (requires macOS + Metal)
@@ -2028,3 +2187,26 @@ class TestSolverMetalGPU:
             "beta_schedule_type",
             "raw_energy",
         }
+
+    def test_reduction_consistency_integer_n512(self) -> None:
+        """Kernel-accumulated energy matches the exact host energy at n=512.
+
+        n > _SA_THREADGROUP_WIDTH exercises multi-element strides plus the full
+        threadgroup reduction on real hardware (the other metal tests use tiny
+        n where most lanes are idle). Integer coefficients keep every float32
+        sum exact below 2**24, so any reduction race, mis-partition, or missing
+        barrier surfaces as a mismatch between the incrementally accumulated
+        kernel energy and the host recompute.
+        """
+        rng = np.random.default_rng(0)
+        n = 512
+        model = XQMX.binary_model(n)
+        for i in range(n):
+            for j in range(i + 1, n):
+                if rng.random() < 0.25:
+                    model.set_quadratic(i, j, 1.0)
+
+        solver = SolverMetalGPU(strategy="sa", num_reads=10, num_sweeps=100, seed=42)
+        result = solver.solve(model)
+
+        assert float(result.metadata["params"]["raw_energy"]) == float(result.energy)
