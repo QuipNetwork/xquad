@@ -33,6 +33,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import numpy.typing as npt
 
 from xqvm_py.xqmx import XQMX, XQMXDomain
 
@@ -42,6 +43,7 @@ if TYPE_CHECKING:
     import cupy as cp
 
 _SUPPORTED_STRATEGIES = frozenset({"sa"})
+_SUPPORTED_SCHEDULES = frozenset({"geometric", "linear"})
 
 # ---------------------------------------------------------------------------
 # CUDA kernel sources
@@ -55,10 +57,9 @@ void sa_binary(
     int*          __restrict__ samples,
     double*       __restrict__ energies,
     const double* __restrict__ randoms,
+    const double* __restrict__ betas,
     int    n,
-    int    num_sweeps,
-    double beta_start,
-    double beta_end
+    int    num_sweeps
 ) {
     int rid = blockIdx.x;
     int* x = samples + rid * n;
@@ -76,14 +77,7 @@ void sa_binary(
     }
 
     for (int sweep = 0; sweep < num_sweeps; sweep++) {
-        double beta;
-        if (num_sweeps <= 1) {
-            beta = beta_start;
-        } else {
-            beta = beta_start
-                + (beta_end - beta_start)
-                    * ((double)sweep / (double)(num_sweeps - 1));
-        }
+        double beta = betas[sweep];
 
         for (int i = 0; i < n; i++) {
             /* delta_E for flipping x_i */
@@ -113,10 +107,9 @@ void sa_spin(
     int*          __restrict__ samples,
     double*       __restrict__ energies,
     const double* __restrict__ randoms,
+    const double* __restrict__ betas,
     int    n,
-    int    num_sweeps,
-    double beta_start,
-    double beta_end
+    int    num_sweeps
 ) {
     int rid = blockIdx.x;
     int* s = samples + rid * n;
@@ -132,14 +125,7 @@ void sa_spin(
     }
 
     for (int sweep = 0; sweep < num_sweeps; sweep++) {
-        double beta;
-        if (num_sweeps <= 1) {
-            beta = beta_start;
-        } else {
-            beta = beta_start
-                + (beta_end - beta_start)
-                    * ((double)sweep / (double)(num_sweeps - 1));
-        }
+        double beta = betas[sweep];
 
         for (int i = 0; i < n; i++) {
             /* delta_E for flipping s_i */
@@ -169,6 +155,20 @@ class SolverCudaGPU(Solver):
     replica (controlled by ``num_reads``) executes independently in its
     own CUDA thread block.
 
+    ``num_sweeps_per_beta`` holds each inverse-temperature (beta) for that
+    many consecutive sweeps, decoupling the number of temperature levels
+    from the total sweep count: ``num_betas = num_sweeps //
+    num_sweeps_per_beta`` (``num_sweeps`` must be divisible by it). The
+    default of 1 keeps one beta per sweep, bit-identical to the previous
+    behaviour for ``num_sweeps >= 2``. When ``num_betas == 1`` the whole run
+    is a cold greedy quench at ``beta_range[-1]``, matching
+    ``SolverDWaveCPU`` and ``SolverMetalGPU`` (QUI-685); the previous CUDA
+    kernel used ``beta_start`` for this degenerate case.
+
+    ``beta_schedule_type`` selects the schedule shape: ``"linear"`` (the
+    default, preserving the historical CUDA ramp) or ``"geometric"``.
+    Note: ``SolverMetalGPU`` defaults to ``"geometric"``.
+
     Examples:
 
     ```python
@@ -187,7 +187,7 @@ class SolverCudaGPU(Solver):
     Raises:
         ImportError: if ``cupy-cuda12x`` is not installed.
         RuntimeError: if no NVIDIA CUDA GPU is detected.
-        ValueError: if ``strategy`` is not supported.
+        ValueError: if ``strategy`` or ``beta_schedule_type`` is not supported.
     """
 
     def __init__(
@@ -195,7 +195,9 @@ class SolverCudaGPU(Solver):
         strategy: str = "sa",
         num_reads: int = 100,
         num_sweeps: int = 1000,
+        num_sweeps_per_beta: int = 1,
         beta_range: tuple[float, float] | None = None,
+        beta_schedule_type: str = "linear",
         seed: int | None = None,
     ) -> None:
         try:
@@ -209,11 +211,18 @@ class SolverCudaGPU(Solver):
         if strategy not in _SUPPORTED_STRATEGIES:
             raise ValueError(f"Unsupported strategy {strategy!r}. Supported: {sorted(_SUPPORTED_STRATEGIES)}")
 
+        if beta_schedule_type not in _SUPPORTED_SCHEDULES:
+            raise ValueError(
+                f"Unsupported beta_schedule_type {beta_schedule_type!r}. Supported: {sorted(_SUPPORTED_SCHEDULES)}"
+            )
+
         self._cp = _cupy
         self.strategy = strategy
         self.num_reads = num_reads
         self.num_sweeps = num_sweeps
+        self.num_sweeps_per_beta = num_sweeps_per_beta
         self.beta_range = beta_range
+        self.beta_schedule_type = beta_schedule_type
         self.seed = seed
 
     @functools.cached_property
@@ -238,17 +247,30 @@ class SolverCudaGPU(Solver):
         strategy = kwargs.get("strategy", self.strategy)
         num_reads = kwargs.get("num_reads", self.num_reads)
         num_sweeps = kwargs.get("num_sweeps", self.num_sweeps)
+        num_sweeps_per_beta = kwargs.get("num_sweeps_per_beta", self.num_sweeps_per_beta)
         beta_range = kwargs.get("beta_range", self.beta_range)
+        beta_schedule_type = kwargs.get("beta_schedule_type", self.beta_schedule_type)
         seed = kwargs.get("seed", self.seed)
 
-        if kwargs.get("num_sweeps_per_beta", 1) != 1:
-            raise ValueError("SolverCudaGPU does not yet support num_sweeps_per_beta (QUI-854 follow-up)")
         if strategy not in _SUPPORTED_STRATEGIES:
             raise ValueError(f"Unsupported strategy {strategy!r}. Supported: {sorted(_SUPPORTED_STRATEGIES)}")
         if num_reads < 1:
-            raise ValueError("num_reads must be >= 1")
+            raise ValueError(f"num_reads must be >= 1, got {num_reads}")
         if num_sweeps < 1:
-            raise ValueError("num_sweeps must be >= 1")
+            raise ValueError(f"num_sweeps must be >= 1, got {num_sweeps}")
+        if beta_schedule_type not in _SUPPORTED_SCHEDULES:
+            raise ValueError(
+                f"Unsupported beta_schedule_type {beta_schedule_type!r}. Supported: {sorted(_SUPPORTED_SCHEDULES)}"
+            )
+        if not isinstance(num_sweeps_per_beta, int):
+            raise ValueError(f"num_sweeps_per_beta must be an int, got {type(num_sweeps_per_beta).__name__}")
+        if num_sweeps_per_beta < 1:
+            raise ValueError(f"num_sweeps_per_beta must be >= 1, got {num_sweeps_per_beta}")
+        num_betas, rem = divmod(num_sweeps, num_sweeps_per_beta)
+        if rem != 0:
+            raise ValueError(
+                f"num_sweeps ({num_sweeps}) must be divisible by num_sweeps_per_beta ({num_sweeps_per_beta})"
+            )
 
         h, j_matrix = self._to_dense_arrays(model)
 
@@ -259,6 +281,9 @@ class SolverCudaGPU(Solver):
             j_matrix=j_matrix,
             num_reads=num_reads,
             num_sweeps=num_sweeps,
+            num_sweeps_per_beta=num_sweeps_per_beta,
+            num_betas=num_betas,
+            beta_schedule_type=beta_schedule_type,
             beta_range=beta_range,
             seed=seed,
         )
@@ -276,7 +301,10 @@ class SolverCudaGPU(Solver):
                 "params": {
                     "strategy": strategy,
                     "num_sweeps": num_sweeps,
+                    "num_sweeps_per_beta": num_sweeps_per_beta,
+                    "num_betas": num_betas,
                     "beta_range": beta_range,
+                    "beta_schedule_type": beta_schedule_type,
                     "raw_energy": raw_energy,
                 },
             },
@@ -316,13 +344,58 @@ class SolverCudaGPU(Solver):
         beta_end = 10.0 / max_coeff
         return (beta_start, beta_end)
 
+    def _compute_beta_schedule(
+        self, num_betas: int, beta_range: tuple[float, float], schedule_type: str
+    ) -> npt.NDArray[np.float64]:
+        """Build the per-temperature-level inverse-temperature schedule.
+
+        Returns ``num_betas`` beta points; ``_run_sa`` expands this to the
+        per-sweep kernel buffer via ``np.repeat(..., num_sweeps_per_beta)``.
+
+        The buffer is float64 because the CUDA pipeline is float64
+        end-to-end (``h``, ``J``, ``randoms``, and ``betas`` are all
+        ``const double*`` in the kernels), unlike ``SolverMetalGPU``, whose
+        pipeline -- including its float32 schedule -- trades precision for
+        Metal throughput. The bit-identical-default guarantee below also
+        requires float64.
+
+        The ``"linear"`` branch reproduces the retired in-kernel ramp
+        ``beta_start + (beta_end - beta_start) * (sweep / (num_sweeps - 1))``
+        term-for-term in float64, so for ``num_sweeps >= 2`` the default
+        configuration (``num_sweeps_per_beta=1``) is bit-identical to the
+        pre-buffer kernel output. Do not replace it with ``np.linspace``,
+        which computes linear spacing differently in the last ulp.
+
+        The degenerate ``num_betas == 1`` case deliberately departs from the
+        retired kernel, whose ``num_sweeps <= 1`` branch used ``beta_start``;
+        see the branch comment below.
+        """
+        beta_start, beta_end = beta_range
+        if num_betas == 1:
+            # A single temperature level anneals at beta_end (coldest), a
+            # greedy quench matching SolverDWaveCPU and SolverMetalGPU
+            # (QUI-685). This intentionally differs from the retired kernel's
+            # num_sweeps <= 1 branch, which used beta_start: cross-backend
+            # consistency wins over bit-identity on a level that performs no
+            # annealing at all.
+            return np.array([beta_end], dtype=np.float64)
+        if schedule_type == "geometric":
+            start = max(beta_start, 1e-12)
+            return np.geomspace(start, beta_end, num_betas).astype(np.float64)
+        steps = np.arange(num_betas, dtype=np.float64) / np.float64(num_betas - 1)
+        return np.float64(beta_start) + (np.float64(beta_end) - np.float64(beta_start)) * steps
+
     def _run_sa(
         self,
         model: XQMX,
+        *,
         h: cp.ndarray,
         j_matrix: cp.ndarray,
         num_reads: int,
         num_sweeps: int,
+        num_sweeps_per_beta: int,
+        num_betas: int,
+        beta_schedule_type: str,
         beta_range: tuple[float, float] | None,
         seed: int | None,
     ) -> tuple[dict[int, int], float]:
@@ -338,7 +411,11 @@ class SolverCudaGPU(Solver):
         if beta_range is None:
             beta_range = self._auto_beta_range(h, j_matrix)
 
-        beta_start, beta_end = beta_range
+        # Host-built per-sweep schedule: num_betas levels, each held for
+        # num_sweeps_per_beta consecutive sweeps (both validated in solve).
+        # Replaces the retired in-kernel linear ramp.
+        betas_host = self._compute_beta_schedule(num_betas, beta_range, beta_schedule_type)
+        beta_schedule = cupy.asarray(np.repeat(betas_host, num_sweeps_per_beta))
 
         rng = cupy.random.default_rng(seed)
 
@@ -375,10 +452,9 @@ class SolverCudaGPU(Solver):
                 samples,
                 energies,
                 randoms,
+                beta_schedule,
                 np.int32(n),
                 np.int32(num_sweeps),
-                np.float64(beta_start),
-                np.float64(beta_end),
             ),
         )
         cupy.cuda.Device().synchronize()

@@ -522,11 +522,9 @@ def mock_cupy_env(monkeypatch):
         """Return a callable that simulates SA on CPU via numpy."""
 
         def _kernel(grid, block, args):
-            h, J, samples, energies, randoms, n_val, ns_val, bs, be = args
+            h, J, samples, energies, randoms, betas, n_val, ns_val = args
             n = int(n_val)
             num_sweeps = int(ns_val)
-            beta_start = float(bs)
-            beta_end = float(be)
             num_reads = samples.shape[0]
             is_binary = name == "sa_binary"
 
@@ -549,10 +547,7 @@ def mock_cupy_env(monkeypatch):
                             energy += J[i, j] * float(x[i]) * float(x[j])
 
                 for sweep in range(num_sweeps):
-                    if num_sweeps <= 1:
-                        beta = beta_start
-                    else:
-                        beta = beta_start + (beta_end - beta_start) * (sweep / (num_sweeps - 1))
+                    beta = float(betas[sweep])
 
                     for i in range(n):
                         if is_binary:
@@ -653,14 +648,6 @@ class TestSolverCudaGPUMocked:
         assert result.metadata["reads"] == 5
         assert result.metadata["seed"] == 99
 
-    def test_num_sweeps_per_beta_guard_mocked(self, mock_cupy_env) -> None:
-        """Unsupported CUDA temperature-level repeats fail before dispatch."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
-
-        model = XQMX.binary_model(2)
-        with pytest.raises(ValueError, match="does not yet support num_sweeps_per_beta"):
-            _Solver().solve(model, num_sweeps_per_beta=2)
-
     def test_metadata_schema_mocked(self, mock_cupy_env) -> None:
         """Metadata has exactly {seed, reads, params} keys (mocked)."""
         from xqsa.cuda_gpu import SolverCudaGPU as _Solver
@@ -672,6 +659,15 @@ class TestSolverCudaGPUMocked:
         result = solver.solve(model)
 
         assert set(result.metadata.keys()) == {"seed", "reads", "params"}
+        assert set(result.metadata["params"].keys()) == {
+            "strategy",
+            "num_sweeps",
+            "num_sweeps_per_beta",
+            "num_betas",
+            "beta_range",
+            "beta_schedule_type",
+            "raw_energy",
+        }
 
     def test_missing_cupy_raises(self, monkeypatch) -> None:
         """ImportError with install hint when cupy is not installed."""
@@ -711,6 +707,227 @@ class TestSolverCudaGPUMocked:
         with pytest.raises(ValueError, match="GPU memory"):
             solver.solve(model)
 
+    def test_compute_beta_schedule_mocked(self, mock_cupy_env) -> None:
+        """_compute_beta_schedule returns num_betas float64 points for both types."""
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        solver = _Solver()
+        for schedule_type in ("geometric", "linear"):
+            schedule = solver._compute_beta_schedule(20, (0.05, 5.0), schedule_type)
+            assert schedule.shape == (20,)
+            assert schedule.dtype == np.float64
+
+    def test_compute_beta_schedule_linear_bit_identical_mocked(self, mock_cupy_env) -> None:
+        """The linear schedule reproduces the retired in-kernel ramp bit-for-bit."""
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        solver = _Solver()
+        schedule = solver._compute_beta_schedule(200, (0.05, 5.0), "linear")
+        expected = 0.05 + (5.0 - 0.05) * (np.arange(200, dtype=np.float64) / np.float64(199))
+        np.testing.assert_array_equal(schedule, expected)
+
+    def test_compute_beta_schedule_single_level_mocked(self, mock_cupy_env) -> None:
+        """A single temperature level anneals at beta_end (coldest quench)."""
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        solver = _Solver()
+        for schedule_type in ("geometric", "linear"):
+            schedule = solver._compute_beta_schedule(1, (0.05, 5.0), schedule_type)
+            assert schedule.shape == (1,)
+            assert schedule[0] == np.float64(5.0)
+
+    def test_num_sweeps_per_beta_validation_mocked(self, mock_cupy_env) -> None:
+        """num_sweeps_per_beta < 1 raises, and indivisible counts raise (mocked)."""
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        with pytest.raises(ValueError, match="num_sweeps_per_beta"):
+            _Solver().solve(model, num_sweeps_per_beta=0)
+        with pytest.raises(ValueError, match="divisible"):
+            _Solver().solve(model, num_sweeps=200, num_sweeps_per_beta=7)
+        with pytest.raises(ValueError, match="must be an int"):
+            _Solver().solve(model, num_sweeps_per_beta=2.0)
+
+    def test_range_errors_carry_offending_value_mocked(self, mock_cupy_env) -> None:
+        """num_reads / num_sweeps range errors name the rejected value (QUI-685)."""
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        with pytest.raises(ValueError, match=r"num_reads must be >= 1, got 0"):
+            _Solver().solve(model, num_reads=0)
+        with pytest.raises(ValueError, match=r"num_sweeps must be >= 1, got -3"):
+            _Solver().solve(model, num_sweeps=-3)
+
+    def test_beta_schedule_type_validation_mocked(self, mock_cupy_env) -> None:
+        """Unsupported beta_schedule_type raises in constructor and solve (mocked)."""
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        with pytest.raises(ValueError, match="beta_schedule_type"):
+            _Solver(beta_schedule_type="exponential")
+        with pytest.raises(ValueError, match="beta_schedule_type"):
+            _Solver().solve(model, beta_schedule_type="exponential")
+
+    def test_num_sweeps_per_beta_run_mocked(self, mock_cupy_env) -> None:
+        """num_sweeps_per_beta > 1 solves and records the schedule split (mocked)."""
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        model.set_linear(1, 1.0)
+
+        solver = _Solver(num_reads=10, num_sweeps=200, num_sweeps_per_beta=10, seed=42)
+        result = solver.solve(model)
+
+        assert result.energy == 0
+        assert result.metadata["params"]["num_sweeps"] == 200
+        assert result.metadata["params"]["num_sweeps_per_beta"] == 10
+        assert result.metadata["params"]["num_betas"] == 20
+        assert result.metadata["params"]["beta_schedule_type"] == "linear"
+
+    @staticmethod
+    def _capture_kernel_args(solver) -> dict:
+        """Shadow the cached binary kernel with a wrapper that records call args."""
+        captured: dict = {}
+        real_kernel = solver._binary_kernel
+
+        def wrapper(grid, block, args):
+            captured["args"] = args
+            return real_kernel(grid, block, args)
+
+        solver.__dict__["_binary_kernel"] = wrapper
+        return captured
+
+    def test_num_sweeps_per_beta_schedule_buffer_mocked(self, mock_cupy_env) -> None:
+        """The kernel receives a per-sweep buffer holding each level for N sweeps.
+
+        Verifies the divide semantics end-to-end: buffer length num_sweeps,
+        constant within each num_sweeps_per_beta block, and the levels are
+        20 distinct, strictly increasing betas (a collapsed-constant schedule
+        would fail the uniqueness assertions).
+        """
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+
+        solver = _Solver(num_reads=5, num_sweeps=200, num_sweeps_per_beta=10, beta_range=(0.05, 5.0), seed=7)
+        captured = self._capture_kernel_args(solver)
+        solver.solve(model)
+
+        betas = np.asarray(captured["args"][5])
+        assert betas.shape == (200,)
+        levels = betas.reshape(20, 10)
+        for level in levels:
+            assert np.all(level == level[0])
+        assert np.unique(levels[:, 0]).size == 20
+        assert np.all(np.diff(levels[:, 0]) > 0)
+
+    def test_default_schedule_bit_identical_mocked(self, mock_cupy_env) -> None:
+        """num_sweeps_per_beta=1 + linear reproduces the retired kernel ramp bit-for-bit."""
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+
+        solver = _Solver(num_reads=5, num_sweeps=200, beta_range=(0.05, 5.0), seed=7)
+        captured = self._capture_kernel_args(solver)
+        solver.solve(model)
+
+        betas = np.asarray(captured["args"][5])
+        expected = 0.05 + (5.0 - 0.05) * (np.arange(200, dtype=np.float64) / np.float64(199))
+        np.testing.assert_array_equal(betas, expected)
+
+    def test_single_beta_level_uses_beta_end_mocked(self, mock_cupy_env) -> None:
+        """num_sweeps_per_beta == num_sweeps runs a cold quench at beta_end.
+
+        Matches SolverDWaveCPU and SolverMetalGPU (QUI-685); the retired
+        in-kernel ramp used beta_start for this degenerate case.
+        """
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+
+        solver = _Solver(num_reads=5, num_sweeps=50, num_sweeps_per_beta=50, beta_range=(0.05, 5.0), seed=7)
+        captured = self._capture_kernel_args(solver)
+        result = solver.solve(model)
+
+        betas = np.asarray(captured["args"][5])
+        assert betas.shape == (50,)
+        assert np.all(betas == np.float64(5.0))
+        assert result.metadata["params"]["num_betas"] == 1
+
+    def test_geometric_schedule_mocked(self, mock_cupy_env) -> None:
+        """The geometric schedule solves a trivial model and is recorded (mocked)."""
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        model.set_linear(1, 1.0)
+
+        solver = _Solver(num_reads=10, num_sweeps=100, beta_schedule_type="geometric", seed=42)
+        result = solver.solve(model)
+
+        assert result.energy == 0
+        assert result.metadata["params"]["beta_schedule_type"] == "geometric"
+
+    def test_geometric_schedule_shape_mocked(self, mock_cupy_env) -> None:
+        """The geometric schedule has a constant level ratio and spans beta_range."""
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+
+        solver = _Solver(
+            num_reads=5,
+            num_sweeps=200,
+            num_sweeps_per_beta=10,
+            beta_range=(0.05, 5.0),
+            beta_schedule_type="geometric",
+            seed=7,
+        )
+        captured = self._capture_kernel_args(solver)
+        solver.solve(model)
+
+        betas = np.asarray(captured["args"][5])
+        levels = betas.reshape(20, 10)[:, 0]
+        ratios = np.diff(np.log(levels))
+        assert np.allclose(ratios, ratios[0])
+        assert levels[0] == pytest.approx(0.05)
+        assert levels[-1] == pytest.approx(5.0)
+
+    def test_num_sweeps_per_beta_spin_run_mocked(self, mock_cupy_env) -> None:
+        """num_sweeps_per_beta > 1 solves a spin model through the spin kernel (mocked)."""
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        model = XQMX.spin_model(2)
+        model.set_linear(0, -1.0)
+        model.set_linear(1, -1.0)
+
+        solver = _Solver(num_reads=10, num_sweeps=100, num_sweeps_per_beta=10, seed=42)
+        result = solver.solve(model)
+
+        assert result.energy == -2
+        assert result.metadata["params"]["num_betas"] == 10
+
+    def test_num_sweeps_per_beta_kwargs_override_mocked(self, mock_cupy_env) -> None:
+        """Per-call kwargs override non-default constructor values (mocked)."""
+        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+
+        solver = _Solver(num_reads=10, num_sweeps=100, num_sweeps_per_beta=10, seed=1)
+        result = solver.solve(model, num_sweeps_per_beta=5, beta_schedule_type="geometric")
+
+        assert result.metadata["params"]["num_sweeps_per_beta"] == 5
+        assert result.metadata["params"]["num_betas"] == 20
+        assert result.metadata["params"]["beta_schedule_type"] == "geometric"
+
 
 # ---------------------------------------------------------------------------
 # SolverCudaGPU -- real GPU tests (requires cupy + NVIDIA GPU)
@@ -743,12 +960,15 @@ class TestSolverCudaGPU:
         assert solver.num_sweeps == 1000
         assert solver.beta_range is None
         assert solver.seed is None
+        assert solver.num_sweeps_per_beta == 1
+        assert solver.beta_schedule_type == "linear"
 
     def test_custom_params(self) -> None:
         """SolverCudaGPU accepts custom parameters."""
-        solver = SolverCudaGPU(strategy="sa", num_reads=50, num_sweeps=500, seed=42)
+        solver = SolverCudaGPU(strategy="sa", num_reads=50, num_sweeps=500, num_sweeps_per_beta=5, seed=42)
         assert solver.num_reads == 50
         assert solver.num_sweeps == 500
+        assert solver.num_sweeps_per_beta == 5
         assert solver.seed == 42
 
     def test_solve_trivial_binary(self) -> None:
@@ -893,9 +1113,48 @@ class TestSolverCudaGPU:
         assert set(result.metadata["params"].keys()) == {
             "strategy",
             "num_sweeps",
+            "num_sweeps_per_beta",
+            "num_betas",
             "beta_range",
+            "beta_schedule_type",
             "raw_energy",
         }
+
+    def test_num_sweeps_per_beta_validation(self) -> None:
+        """num_sweeps_per_beta < 1 raises, and indivisible counts raise."""
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        solver = SolverCudaGPU()
+        with pytest.raises(ValueError, match="num_sweeps_per_beta"):
+            solver.solve(model, num_sweeps_per_beta=0)
+        with pytest.raises(ValueError, match="divisible"):
+            solver.solve(model, num_sweeps=200, num_sweeps_per_beta=7)
+
+    def test_num_sweeps_per_beta_run(self) -> None:
+        """num_sweeps_per_beta > 1 solves and records the schedule split."""
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        model.set_linear(1, 1.0)
+
+        solver = SolverCudaGPU(num_reads=20, num_sweeps=200, num_sweeps_per_beta=10, seed=42)
+        result = solver.solve(model)
+
+        assert result.energy == 0
+        assert result.metadata["params"]["num_sweeps"] == 200
+        assert result.metadata["params"]["num_sweeps_per_beta"] == 10
+        assert result.metadata["params"]["num_betas"] == 20
+
+    def test_geometric_schedule(self) -> None:
+        """The geometric beta schedule solves a trivial model on real hardware."""
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.0)
+        model.set_linear(1, 1.0)
+
+        solver = SolverCudaGPU(num_reads=20, num_sweeps=200, beta_schedule_type="geometric", seed=42)
+        result = solver.solve(model)
+
+        assert result.energy == 0
+        assert result.metadata["params"]["beta_schedule_type"] == "geometric"
 
 
 # ---------------------------------------------------------------------------
