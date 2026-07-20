@@ -54,29 +54,71 @@ _THREADS_PER_REPLICA = 256
 # CUDA kernel sources
 # ---------------------------------------------------------------------------
 
-_SA_BINARY_KERNEL = r"""
+# Device RNG (QUI-705): mirrors SolverMetalGPU's on-device strategy
+# (xqsa/metal_gpu.py _RNG_PRELUDE) with 64-bit state so acceptance draws
+# stay float64 (53-bit uniform). Metal's float32 is an MSL platform limit,
+# not a precision decision. Python mirrors live in tests/test_xqsa.py;
+# keep constants in sync bit-for-bit.
+_RNG_PRELUDE = r"""
+typedef unsigned long long u64;
+
+__device__ __forceinline__ u64 splitmix64(u64 x) {
+    x += 0x9E3779B97F4A7C15ULL;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+    return x ^ (x >> 31);
+}
+
+/* Per-replica stream seed: Metal's seed_for_replica shape (base ^ odd
+   constant * (rid+1)) widened to 64 bits, finalized through splitmix64
+   for stream decorrelation. xorshift64 has a zero fixed point, so never
+   return 0. */
+__device__ __forceinline__ u64 seed_for_replica(u64 base_seed, int rid) {
+    u64 s = splitmix64(base_seed ^ (0x9E3779B97F4A7C15ULL * (u64)(rid + 1)));
+    return (s == 0ULL) ? 1ULL : s;
+}
+
+__device__ __forceinline__ u64 xorshift64(u64 &state) {
+    u64 x = state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    state = x;
+    return x;
+}
+
+/* Uniform double in [0, 1): top 53 bits / 2^53. */
+__device__ __forceinline__ double rand_unit(u64 &state) {
+    return (double)(xorshift64(state) >> 11) * (1.0 / 9007199254740992.0);
+}
+"""
+
+_SA_BINARY_KERNEL = (
+    _RNG_PRELUDE
+    + r"""
 extern "C" __global__
 void sa_binary(
     const double* __restrict__ h,
     const double* __restrict__ J,
     int*          __restrict__ samples,
     double*       __restrict__ energies,
-    const double* __restrict__ randoms,
     const double* __restrict__ betas,
     int    n,
-    int    num_sweeps
+    int    num_sweeps,
+    unsigned long long base_seed
 ) {
     /* One block per replica; blockDim.x threads cooperate on the O(n)
        local-field reduction. Spin updates stay strictly sequential on
-       thread 0: same proposal order, same acceptance rule, same RNG
-       consumption order as the single-thread kernel (QUI-852). Only the
-       floating-point summation order of the local field changes. */
+       thread 0: same proposal order, same acceptance rule (QUI-852).
+       Acceptance randomness is drawn on-device (QUI-705): thread 0 owns
+       the per-replica RNG stream. Only the floating-point summation
+       order of the local field changes. */
     __shared__ double sdata[256];
     int rid = blockIdx.x;
     int tid = threadIdx.x;
     int nthreads = blockDim.x;
     int* x = samples + rid * n;
-    const double* rand_ptr = randoms + (long long)rid * num_sweeps * n;
+    u64 rng = seed_for_replica(base_seed, rid);
 
     /* initial energy: one-time O(n^2), thread 0 only */
     double energy = 0.0;
@@ -114,7 +156,7 @@ void sa_binary(
             if (tid == 0) {
                 double local = h[i] + sdata[0];
                 double delta_E = local * (double)(1 - 2 * x[i]);
-                double r = rand_ptr[(long long)sweep * n + i];
+                double r = rand_unit(rng);
                 if (delta_E <= 0.0 || r < exp(-delta_E * beta)) {
                     x[i] = 1 - x[i];
                     energy += delta_E;
@@ -126,18 +168,21 @@ void sa_binary(
     if (tid == 0) energies[rid] = energy;
 }
 """
+)
 
-_SA_SPIN_KERNEL = r"""
+_SA_SPIN_KERNEL = (
+    _RNG_PRELUDE
+    + r"""
 extern "C" __global__
 void sa_spin(
     const double* __restrict__ h,
     const double* __restrict__ J,
     int*          __restrict__ samples,
     double*       __restrict__ energies,
-    const double* __restrict__ randoms,
     const double* __restrict__ betas,
     int    n,
-    int    num_sweeps
+    int    num_sweeps,
+    unsigned long long base_seed
 ) {
     /* See sa_binary: cooperative local-field reduction, sequential updates. */
     __shared__ double sdata[256];
@@ -145,7 +190,7 @@ void sa_spin(
     int tid = threadIdx.x;
     int nthreads = blockDim.x;
     int* s = samples + rid * n;
-    const double* rand_ptr = randoms + (long long)rid * num_sweeps * n;
+    u64 rng = seed_for_replica(base_seed, rid);
 
     double energy = 0.0;
     if (tid == 0) {
@@ -178,7 +223,7 @@ void sa_spin(
             if (tid == 0) {
                 double local = h[i] + sdata[0];
                 double delta_E = -2.0 * (double)s[i] * local;
-                double r = rand_ptr[(long long)sweep * n + i];
+                double r = rand_unit(rng);
                 if (delta_E <= 0.0 || r < exp(-delta_E * beta)) {
                     s[i] = -s[i];
                     energy += delta_E;
@@ -190,6 +235,7 @@ void sa_spin(
     if (tid == 0) energies[rid] = energy;
 }
 """
+)
 
 
 class SolverCudaGPU(Solver):
@@ -200,6 +246,10 @@ class SolverCudaGPU(Solver):
     own CUDA thread block. Within a block, ``_THREADS_PER_REPLICA``
     threads cooperate on the local-field reduction while spin updates
     remain sequential (QUI-852).
+
+    Acceptance randomness is generated on-device per replica (xorshift64
+    seeded via splitmix64 from a 64-bit base seed), so no
+    ``(num_reads, num_sweeps, n)`` buffer is allocated (QUI-705).
 
     ``num_sweeps_per_beta`` holds each inverse-temperature (beta) for that
     many consecutive sweeps, decoupling the number of temperature levels
@@ -474,17 +524,11 @@ class SolverCudaGPU(Solver):
             samples = raw * 2 - 1  # map {0,1} -> {-1,+1}
             samples = samples.astype(cupy.int32)
 
-        # Pre-generate all random acceptance thresholds.
-        # Memory: num_reads * num_sweeps * n * 8 bytes (float64).
-        random_bytes = num_reads * num_sweeps * n * 8
-        gpu_free = cupy.cuda.Device().mem_info[0]
-        if random_bytes > gpu_free * 0.8:
-            raise ValueError(
-                f"Random buffer requires {random_bytes / 1e9:.1f} GB "
-                f"GPU memory ({gpu_free / 1e9:.1f} GB free). "
-                f"Reduce num_reads or num_sweeps."
-            )
-        randoms = rng.random(size=(num_reads, num_sweeps, n), dtype=cupy.float64)
+        # Acceptance randomness is generated on-device per replica
+        # (QUI-705); only a 64-bit base seed crosses the host boundary.
+        # Derived from an independent numpy stream so the cupy `rng` used
+        # for replica init keeps its historical consumption order.
+        base_seed = np.uint64(np.random.default_rng(seed).integers(0, 2**64, dtype=np.uint64))
 
         energies = cupy.zeros(num_reads, dtype=cupy.float64)
 
@@ -497,10 +541,10 @@ class SolverCudaGPU(Solver):
                 j_matrix,
                 samples,
                 energies,
-                randoms,
                 beta_schedule,
                 np.int32(n),
                 np.int32(num_sweeps),
+                base_seed,
             ),
         )
         cupy.cuda.Device().synchronize()
