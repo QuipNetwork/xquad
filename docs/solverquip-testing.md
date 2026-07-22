@@ -100,9 +100,11 @@ Sibling repos under `~/code/gitlab.com/quip.network/`:
 
 ### Bring-up
 
-Prerequisites: Docker Desktop running; logged in to the GitLab registry
-(`docker login registry.gitlab.com` with a `read_registry` PAT);
-`nodes.quip.network` on the latest `main`.
+Prerequisites: Docker Desktop running; `nodes.quip.network` on the latest
+`main`. The `quip.network` GitLab container registry is public, so the
+`make localdev` image pulls resolve anonymously: `docker login` is NOT
+required (logging in only raises registry rate limits). If you do want to
+log in, use `docker login registry.gitlab.com` with a `read_registry` PAT.
 
 From `nodes.quip.network`:
 
@@ -264,6 +266,19 @@ once when the fleet is active.
   tightened to `first_solution_at + block_wait` once a first solution lands. An
   order that expires with zero solutions can be auto-reclaimed (SolverQuip does
   this and raises a job-failed error, releasing the reserved reward).
+- **Fleet answers can be valid but suboptimal:** the TestNet fleet runs
+  heuristic GPU solvers and may return a correct, chain-consistent assignment
+  that is not the global optimum -- observed: a 3-var binary model whose true
+  optimum is -2 came back as -1, while the controlled DevNet CPU fleet returns
+  -2 deterministically. Do not assert global optimality against a live fleet.
+  `TestEndToEnd` asserts only pipeline correctness (`energy_matches_chain`, a
+  returned solution, domain feasibility); encoding and optimality correctness
+  are guarded deterministically offline by
+  `test_quip.py::test_encoded_problem_argmin_decodes_to_optimum`.
+- **Direct `pytest` invocation:** export `QUIP_RPC_URL` / `QUIP_FAUCET_URL` as
+  environment variables before the command. Passing them as trailing `KEY=VAL`
+  args is a make-ism (`make VAR=val`); pytest reads trailing `KEY=VAL` tokens
+  as file paths and errors with "file or directory not found".
 
 ## Manual smoke solve (optional)
 
@@ -283,7 +298,8 @@ then:
     print("energy:", r.energy, "| matches chain:", r.metadata["energy_matches_chain"])
     PY
 
-Expect `energy: -2.0` and `energy_matches_chain: True`. Get the account id to
+Expect `energy_matches_chain: True`; energy is typically `-2.0`, though a
+heuristic fleet may return a valid but suboptimal value. Get the account id to
 fund via
 `load_or_generate_keystore('/tmp/quip-ks.json').account_id.hex()` and POST
 `{"dest":"0x<accountid>","amount":10000000000000}` to the faucet's `/request`
