@@ -31,6 +31,7 @@ from .quip import (
     QuipJobFailedError,
     QuipSubmissionError,
     QuipTimeoutError,
+    QuipTopologyError,
     SolverQuip,
 )
 from .quip_codec import EncodingError, PlacementError, QuipError, QuipSigningError
@@ -49,6 +50,7 @@ __all__ = [
     "QuipConnectionError",
     "QuipSubmissionError",
     "QuipTimeoutError",
+    "QuipTopologyError",
     "QuipJobFailedError",
     "QuipSigningError",
     "PlacementError",
