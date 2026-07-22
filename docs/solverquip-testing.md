@@ -55,9 +55,9 @@ the two the recipe forwards.
 
 - **submit + lifecycle** (always run against any healthy chain): connectivity,
   the live `propose_job` SCALE / extras contract (a clean submission with no
-  `System.ExtrinsicFailed`), the topology fetch, the balance pre-check, the
-  timeout path, and expired-no-solution auto-reclaim. These need no returned
-  solution.
+  `System.ExtrinsicFailed`), the topology fetch, the mineability pre-check
+  (`MineableTopologies` membership), the balance pre-check, the timeout path,
+  and expired-no-solution auto-reclaim. These need no returned solution.
 - **end-to-end** (`TestEndToEnd`): need the fleet to actually solve. They are
   guarded by the `solving_miner` fixture, which proposes a throwaway order and
   waits for a solution; it skips the tier cleanly when no fleet is active. A
@@ -229,7 +229,10 @@ topology from chain `QuantumPow.DefaultTopology` at construction -- the pinned
 `ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH` is only a fallback, and `topology=` overrides.
 On the TestNet `DefaultTopology` is `0xe66d3dfa...` and is the sole
 `MineableTopologies` entry, so jobs against it are eligible to be mined. Never
-assume the DevNet hash on the TestNet or vice versa.
+assume the DevNet hash on the TestNet or vice versa. `solve()` pre-validates that
+the resolved hash is in `MineableTopologies` before reserving the reward (raising
+`QuipTopologyError`). Only a runtime that lacks the `MineableTopologies` storage
+item entirely skips the check; a present-but-empty set rejects.
 
 ### Run the suite
 

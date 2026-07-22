@@ -280,6 +280,17 @@ class TestConnectivity:
         solver = make_solver()
         assert solver._topology_hash == _as_hex(default)
 
+    def test_default_topology_is_mineable(self, make_solver) -> None:
+        # The default topology the solver resolves must be in the chain's mineable
+        # set -- both localdev and testnet seed MineableTopologies with the default
+        # hash. Exercises the real query_map decode + membership the submit-path
+        # gate relies on; _ensure_mineable is a no-op on a correctly-seeded node.
+        solver = make_solver()
+        mineable = solver._mineable_topologies()
+        if not mineable:
+            pytest.skip("MineableTopologies is empty/unset on this node; expected the default topology seeded")
+        solver._ensure_mineable(solver._topology_hash)  # does not raise on a seeded node
+
 
 # ---------------------------------------------------------------------------
 # Submit + lifecycle -- runs without a returned solution

@@ -7,6 +7,15 @@ exclude = [
     ".git/**",
     "target/**",
     "**/Cargo.lock",
+    # Developer-local / gitignored artifacts (mirrors .gitignore). These are
+    # never committed, so taplo must not lint stray TOML inside them. In git
+    # worktrees these may be symlinks back to the primary checkout; taplo uses
+    # globset (not gitignore syntax), so a root-anchored `dir/**` pattern still
+    # matches files reached through the symlink.
+    ".venv/**",
+    ".claude/**",
+    "scratch/**",
+    "graphify-out/**",
 ]
 
 [formatting]

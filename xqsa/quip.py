@@ -71,6 +71,7 @@ from xqsa.quip_codec import (
     Topology,
     _as_hex,
     _as_int_or_none,
+    _canonical_hex,
     _event_ids,
     check_allowed_values,
     decode_solution,
@@ -111,6 +112,12 @@ JOB_PROPOSED_EVENT = "JobProposed"
 JOB_ORDERS_STORAGE = "JobOrders"
 ORDER_SOLUTIONS_STORAGE = "OrderSolutions"
 
+# ``QuantumPow`` topology storage this backend reads. ``RegisteredTopologies``
+# (queried in ``_fetch_topology``) is the topology set; ``MineableTopologies``
+# is the subset miners actually match on -- a hash can be registered without
+# being mineable, so both are checked before the reward is reserved.
+MINEABLE_TOPOLOGIES_STORAGE = "MineableTopologies"
+
 
 class QuipConnectionError(QuipError):
     """Raised when the Quip node is unreachable or missing expected chain state."""
@@ -118,6 +125,17 @@ class QuipConnectionError(QuipError):
 
 class QuipSubmissionError(QuipError):
     """Raised when an extrinsic cannot be submitted or is rejected by the chain."""
+
+
+class QuipTopologyError(QuipError):
+    """Raised when the resolved topology is registered but not in the mineable set.
+
+    A distinct pre-submit configuration error: the hash exists in
+    ``QuantumPow.RegisteredTopologies`` (so ``_fetch_topology`` succeeds) but is
+    absent from ``QuantumPow.MineableTopologies``, so no miner would match a job
+    proposed against it. Raised before the reward is reserved, unlike the
+    connection/submission/finality errors around it.
+    """
 
 
 class QuipTimeoutError(QuipError):
@@ -377,6 +395,100 @@ class SolverQuip(Solver):
         topology = Topology.from_chain(entry.value)
         self._topology_cache[key] = topology
         return topology
+
+    def _mineable_topologies(self) -> frozenset[str] | None:
+        """Return the canonical hashes in ``QuantumPow.MineableTopologies``, or ``None``.
+
+        ``MineableTopologies`` is a ``StorageMap<H256, ()>`` -- a set keyed by
+        topology hash. It is enumerated (via ``query_map``) rather than probed
+        with a keyed lookup so a defined-but-empty map is distinguishable from a
+        hash simply being absent from a populated one: a keyed read returning
+        ``None`` cannot tell those apart, and the two demand opposite outcomes.
+
+        Returns ``None`` only when the storage item is genuinely absent from the
+        runtime -- the pallet does not compile the item into metadata at all.
+        That is the sole "skip the mineability check" signal: a runtime that
+        *does* compile the pallet always exposes the item in metadata, so a
+        deployment which simply does not use the feature can only surface it as
+        an empty map, never as runtime absence. A defined-but-empty set therefore
+        returns an empty ``frozenset`` (no topology is mineable, so the caller
+        rejects), never ``None``.
+
+        Distinguishes genuine runtime absence from a transport/decode fault,
+        mirroring :meth:`_chain_default_topology`: a read fault, or entries that
+        are present but all fail to decode to a hash, surface as a connection
+        error rather than silently skipping the check.
+
+        Raises:
+            QuipConnectionError: if reading the storage map fails for any reason
+                other than the item being absent from the runtime, or if the map
+                returns entries that none decode to a canonical hash.
+        """
+        try:
+            entries = self._iface.query_map("QuantumPow", MINEABLE_TOPOLOGIES_STORAGE)
+        except Exception as exc:  # noqa: BLE001 -- classify absence vs. fault below.
+            if _is_storage_absent(exc):
+                return None  # the runtime does not define this storage item.
+            raise QuipConnectionError(
+                f"could not read QuantumPow.{MINEABLE_TOPOLOGIES_STORAGE}: {exc}; retry or verify chain connectivity."
+            ) from exc
+        # query_map yields decoded key objects; the H256 key may be wrapped
+        # (``.value``, as in _fetch_solutions) or a bare hex/bytes hash. Unwrap
+        # then canonicalise so membership is prefix/case robust on both sides.
+        hashes: set[str] = set()
+        saw_entry = False
+        for key, _value in entries:
+            saw_entry = True
+            raw = key.value if hasattr(key, "value") else key
+            canonical = _canonical_hex(raw)
+            if canonical is not None:
+                hashes.add(canonical)
+        if saw_entry and not hashes:
+            # Entries were present but none decoded to a canonical hash: a
+            # populated set whose keys all fail to decode is a fault, not an
+            # empty set. Surface it rather than masquerading as unset.
+            raise QuipConnectionError(
+                f"QuantumPow.{MINEABLE_TOPOLOGIES_STORAGE} returned entries but none decoded to a "
+                "topology hash; retry or verify chain connectivity."
+            )
+        # A genuinely-empty set returns an empty frozenset (not None): only a
+        # runtime lacking the storage item entirely skips the check.
+        return frozenset(hashes)
+
+    def _ensure_mineable(self, topology_hash: str | None = None) -> None:
+        """Raise if the resolved topology is registered but not in the mineable set.
+
+        Called from :meth:`solve` after :meth:`_fetch_topology` (which already
+        confirmed the hash is registered) and before the reward is reserved.
+        ``topology_hash`` defaults to the hash resolved at construction, mirroring
+        :meth:`_fetch_topology`'s defaulting so both validate the same hash from a
+        single source of truth.
+
+        A ``MineableTopologies`` absent from the runtime skips the check (see
+        :meth:`_mineable_topologies`); a defined-but-empty set, or a populated set
+        that omits the hash, rejects -- no miner would match the proposed job.
+
+        Raises:
+            QuipTopologyError: if the set is defined and omits the hash.
+            QuipConnectionError: if the set cannot be read (transport/decode fault).
+        """
+        key = topology_hash or self._topology_hash
+        mineable = self._mineable_topologies()
+        if mineable is None:
+            logger.debug("QuantumPow.%s is unset; skipping the mineability check", MINEABLE_TOPOLOGIES_STORAGE)
+            return
+        if not mineable:
+            raise QuipTopologyError(
+                f"the chain's mineable set (QuantumPow.{MINEABLE_TOPOLOGIES_STORAGE}) is empty; no topology "
+                f"is currently mineable, so a job proposed against {_as_hex(key)} would sit unsolved until "
+                "expiry. Seed a topology into MineableTopologies on-chain."
+            )
+        if _canonical_hex(key) not in mineable:
+            raise QuipTopologyError(
+                f"topology {_as_hex(key)} is registered but not in the chain's mineable set "
+                f"(QuantumPow.{MINEABLE_TOPOLOGIES_STORAGE}); no miner would pick up a job proposed against "
+                "it. Pass a mineable topology= or seed the topology into MineableTopologies on-chain."
+            )
 
     def _check_balance(self, required: int) -> int:
         """Return the account's free balance, raising if it cannot cover ``required``.
@@ -739,6 +851,9 @@ class SolverQuip(Solver):
             mapping: explicit variable -> node placement (else searched).
 
         Raises:
+            QuipTopologyError: if the resolved topology is registered but not in
+                the chain's mineable set (raised before the reward is reserved).
+            QuipConnectionError: if the mineable-set read faults (transport/decode).
             QuipSubmissionError: if proposing the job fails.
             QuipTimeoutError: if the order does not finalize within ``timeout``
                 (the order id is recoverable via :meth:`query`).
@@ -746,6 +861,12 @@ class SolverQuip(Solver):
         """
         self._validate_model(model)
         topology = self._fetch_topology(kwargs.get("topology"))
+        # Gate on mineability before committing funds: a registered-but-unmineable
+        # hash would otherwise propose a job no miner matches, wasting a full
+        # propose -> expiry -> reclaim round-trip. Kept here (not in
+        # _fetch_topology) so query()'s order recovery stays independent of the
+        # current mineable set.
+        self._ensure_mineable(kwargs.get("topology"))
         job = model_to_ising(model, topology, mapping=kwargs.get("mapping"))
         self._maybe_warn_allowed_values(job)
         self._check_balance(self._reward + FEE_HEADROOM_PLANCK)
