@@ -504,6 +504,44 @@ def test_encode_decode_roundtrip_matches_brute_force(domain: XQMXDomain) -> None
     assert compute_energy(model, decoded) == optimum_energy
 
 
+@pytest.mark.parametrize("domain", [XQMXDomain.SPIN, XQMXDomain.BINARY])
+def test_encoded_problem_argmin_decodes_to_optimum(domain: XQMXDomain) -> None:
+    """The encoded problem's argmin decodes to the original model's optimum.
+
+    This exercises the production placement, milli-quantized encoding, and
+    decoding paths. The binary model is the QUI-848 TestNet ``-1`` regression:
+    its true optimum is ``-2`` despite a live heuristic fleet returning ``-1``.
+    """
+    model = XQMX.spin_model(3) if domain == XQMXDomain.SPIN else XQMX.binary_model(3)
+    if domain == XQMXDomain.SPIN:
+        model.set_linear(0, 1)
+        model.set_linear(1, -2)
+        model.set_linear(2, 3)
+        model.set_quadratic(0, 1, 1)
+        model.set_quadratic(1, 2, -1)
+    else:
+        model.set_linear(0, -1)
+        model.set_linear(1, 2)
+        model.set_quadratic(0, 1, -3)
+        model.set_quadratic(1, 2, 1)
+
+    job = model_to_ising(model, PATH5)
+    argmin_vector: list[int] | None = None
+    argmin_energy: int | None = None
+    for spins in itertools.product((-1, 1), repeat=model.size):
+        vector = [-1] * PATH5.num_nodes
+        for var, node in job.mapping.items():
+            vector[PATH5.index_of(node)] = spins[var]
+        energy = ising_energy_milli(job, vector)
+        if argmin_energy is None or energy < argmin_energy:
+            argmin_energy = energy
+            argmin_vector = vector
+
+    assert argmin_vector is not None
+    decoded = decode_solution(job, argmin_vector, model)
+    assert compute_energy(model, decoded) == _brute_force_optimum(model)[1]
+
+
 # ---------------------------------------------------------------------------
 # Lifecycle expiry math (mirrors pallet lifecycle.rs)
 # ---------------------------------------------------------------------------
