@@ -18,7 +18,7 @@ Run locally what CI enforces. Mark a language N/A if this MR does not touch it.
 
 ### Optional Checks
 - [ ] `make test-miri` passes -- run if the MR adds or changes `unsafe` code (not a CI gate)
-- [ ] `make test-quip` passes -- run if the MR changes SolverQuip (`xqsa/quip*.py`); needs a running Quip devnet or testnet -- see `docs/solverquip-testing.md`
+- [ ] `make test-quip` passes -- run if the MR changes SolverQuip (`xqsa/quip*.py`); needs a running Quip devnet or testnet -- see `docs/guide/solverquip-testing.md`
 
 ### Commits & Documentation
 - [ ] Commit subject lines are 72 characters or fewer and use the imperative mood

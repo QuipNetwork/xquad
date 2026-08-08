@@ -73,12 +73,17 @@ coverage.xml
 
 ### IDE ###
 .idea/
-.orca/
 .vscode/
 *.swp
 *.swo
 *~
+
+# Orca. No trailing slash on .orca: worktrees symlink it back to the primary
+# checkout, and a trailing-slash pattern matches directories only -- never a
+# symlink. See the note under developer artifacts below.
+.orca
 orca.yaml
+.worktreeinclude
 
 ### Developer-local agent/tool artifacts ###
 
@@ -93,6 +98,7 @@ AGENTS.local.md
 # symlink. A slashless, unanchored name matches a file, dir, or symlink at any
 # depth, so it holds in both the primary checkout and symlinked worktrees.
 .claude
+docs/superpowers
 graphify-out
 scratch
 

@@ -1,6 +1,5 @@
-# Documentation pipeline — asserts the committed
-# docs/bytecode-semantics.md is in sync with conformance/opcodes.yaml,
-# then builds the mdbook.
+# Documentation pipeline -- checks generated docs and book drift in lint,
+# then builds the mdBook site in the docs stage.
 
 .install-deps: &install-deps
     - export PATH="${CARGO_HOME}/bin:${PATH}"
@@ -11,13 +10,28 @@
     - export PATH="${HOME}/.local/bin:${PATH}"
     - uv sync
 
+lint:docs-generated:
+    stage: lint
+    cache: []
+    before_script:
+        - *install-uv
+    script:
+        - make docs-check
+
+lint:docs-drift:
+    stage: lint
+    image: alpine:3
+    cache: []
+    before_script:
+        - apk add --no-cache bash grep
+    script:
+        - bash scripts/check-docs-drift.sh
+
 docs:build:
     stage: docs
     before_script:
         - *install-deps
-        - *install-uv
     script:
-        - make docs-check
         - make docs
     artifacts:
         paths:

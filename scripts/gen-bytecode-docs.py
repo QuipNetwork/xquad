@@ -16,32 +16,35 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Regenerate docs/bytecode-semantics.md from conformance/opcodes.yaml.
+"""Regenerate opcode reference pages from conformance/opcodes.yaml.
 
 The YAML is the single source of truth for the XQVM opcode set. This
-script derives a concise reference table (one row per opcode, grouped by
-category) suitable as a quick look-up alongside spec/xqvm/SPEC.md. The
+script derives concise reference tables (one row per opcode, grouped by
+category) suitable as quick look-ups alongside spec/xqvm/SPEC.md. The
 richer instruction-by-instruction semantics live in
-docs/book/src/instructions/*.md and are not generated.
+docs/book/src/xqvm/instructions/*.md and are not generated.
 
 Modes:
-  (default)   Overwrite docs/bytecode-semantics.md.
-  --check     Render to a string and diff against the committed file;
-              exit 1 on any difference. Used by the `docs-build` CI job.
+  (default)   Overwrite conformance/opcodes.md and docs/book/src/xqvm/opcodes.md.
+  --check     Render to strings and diff against the committed files;
+              exit 1 on any difference. Setup errors exit 2. Used by the
+              docs-generated lint job.
 """
 
 from __future__ import annotations
 
 import argparse
-import difflib
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
-import yaml
+from _docsgen import SetupError, Target, banner, emit, format_setup_error, load_yaml, require_key, require_mapping
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 YAML_PATH = REPO_ROOT / "conformance" / "opcodes.yaml"
-DOC_PATH = REPO_ROOT / "docs" / "bytecode-semantics.md"
+CONFORMANCE_DOC_PATH = REPO_ROOT / "conformance" / "opcodes.md"
+BOOK_DOC_PATH = REPO_ROOT / "docs" / "book" / "src" / "xqvm" / "opcodes.md"
+GITLAB_BLOB_URL = "https://gitlab.com/quip.network/xquad/-/blob/main"
 
 # Section ordering and display titles. Matches the spec/xqvm/SPEC.md
 # section layout so the generated doc scans in the same order a reader
@@ -63,43 +66,87 @@ CATEGORIES: list[tuple[str, str]] = [
     ("special", "Special"),
 ]
 
-HEADER = """<!--
-  AUTO-GENERATED FILE. DO NOT EDIT.
-  This file is regenerated from `conformance/opcodes.yaml` by
-  `scripts/gen-bytecode-docs.py`. Edit the YAML (and the opcodes! x-macro
-  in xqvm/src/bytecode/types/table.rs, which is checked against the YAML
-  at compile time), then run `make docs-regen`.
+CONFORMANCE_HEADER = (
+    banner(
+        "scripts/gen-bytecode-docs.py",
+        "conformance/opcodes.yaml",
+        """
+        Edit the YAML (and the opcodes! x-macro in
+        xqvm/src/bytecode/types/table.rs, which is checked against the YAML at
+        compile time), then run `make docs-regen`.
 
-  For the long-form human-readable semantics of each instruction see
-  `docs/book/src/instructions/*.md` or `spec/xqvm/SPEC.md`.
--->
+        For the long-form human-readable semantics of each instruction see
+        `docs/book/src/xqvm/instructions/*.md` or `spec/xqvm/SPEC.md`.
+        """,
+    )
+    + """
 
 # XQVM Bytecode Semantics
 
 Concise reference table for every opcode in the XQVM bytecode format.
-Derived directly from [`conformance/opcodes.yaml`](../conformance/opcodes.yaml),
+Derived directly from [`conformance/opcodes.yaml`](opcodes.yaml),
 which is kept in sync with the Rust `opcodes!` x-macro (enforced at
 compile time by `xqvm/build.rs`) and the Python `Opcode` enum (enforced
 by `scripts/check-opcode-parity.py`).
 
 Columns:
-- **Code** — wire-encoding byte.
-- **Mnemonic** — uppercase assembly name.
-- **Operands** — post-opcode operand layout; empty for no-operand instructions.
-- **Stack** — stack effect as `pop → push`; `0 → 1` means one value produced.
-- **Description** — single-sentence semantic summary.
+- **Code** -- wire-encoding byte.
+- **Mnemonic** -- uppercase assembly name.
+- **Operands** -- post-opcode operand layout; empty for no-operand instructions.
+- **Stack** -- stack effect as `pop → push`; `0 → 1` means one value produced.
+- **Description** -- single-sentence semantic summary.
 
-Reserved wire bytes (rejected by the decoder as illegal): """
+"""
+)
+
+BOOK_HEADER = (
+    banner(
+        "scripts/gen-bytecode-docs.py",
+        "conformance/opcodes.yaml",
+        """
+        Edit the YAML (and the opcodes! x-macro in
+        xqvm/src/bytecode/types/table.rs, which is checked against the YAML at
+        compile time), then run `make docs-regen`.
+
+        Do not edit this book page directly. For teaching prose about each
+        instruction category, edit `docs/book/src/xqvm/instructions/*.md`.
+        """,
+    )
+    + f"""
+
+# Opcode Reference
+
+Concise reference table for every opcode in the XQVM bytecode format.
+Derived directly from [`conformance/opcodes.yaml`]({GITLAB_BLOB_URL}/conformance/opcodes.yaml),
+which is kept in sync with the Rust [`opcodes!` x-macro]({GITLAB_BLOB_URL}/xqvm/src/bytecode/types/table.rs)
+and the Python [`Opcode` enum]({GITLAB_BLOB_URL}/xqvm_py/opcodes.py).
+
+For the normative bytecode specification, see
+[`spec/xqvm/SPEC.md`]({GITLAB_BLOB_URL}/spec/xqvm/SPEC.md).
+
+Columns:
+- **Code** -- wire-encoding byte.
+- **Mnemonic** -- uppercase assembly name.
+- **Operands** -- post-opcode operand layout; empty for no-operand instructions.
+- **Stack** -- stack effect as `pop → push`; `0 → 1` means one value produced.
+- **Description** -- single-sentence semantic summary.
+
+"""
+)
 
 
-def format_operands(operands: list[dict]) -> str:
+def format_operands(operands: list[object], entry_path: str) -> str:
     if not operands:
-        return "—"
+        return "--"
     parts: list[str] = []
-    for op in operands:
-        name = op["name"]
+    for index, value in enumerate(operands):
+        op_path = f"{entry_path}.operands[{index}]"
+        op = require_mapping(value, op_path)
+        name = require_key(op, op_path, "name", str)
         width = op.get("width", 1)
-        kind = op["type"]
+        if not isinstance(width, int):
+            raise SetupError(f"{op_path}: optional key `width` must be int, got {type(width).__name__}")
+        kind = require_key(op, op_path, "type", str)
         if kind == "register":
             parts.append(f"`{name}: Register`")
         elif kind == "label":
@@ -110,20 +157,39 @@ def format_operands(operands: list[dict]) -> str:
     return ", ".join(parts)
 
 
-def render(data: dict) -> str:
-    by_category: dict[str, list[dict]] = {cat: [] for cat, _ in CATEGORIES}
-    for entry in data["opcodes"]:
-        by_category.setdefault(entry["category"], []).append(entry)
+def _reserved_codes(data: Mapping[str, object]) -> list[int]:
+    reserved = data.get("reserved", [])
+    if reserved is None:
+        raise SetupError(f"{YAML_PATH}: optional key `reserved` must be list, got null")
+    if not isinstance(reserved, list):
+        raise SetupError(f"{YAML_PATH}: optional key `reserved` must be list, got {type(reserved).__name__}")
+    for index, code in enumerate(reserved):
+        if not isinstance(code, int):
+            raise SetupError(f"{YAML_PATH}: reserved[{index}] must be int, got {type(code).__name__}")
+    return reserved
+
+
+def render_tables(data: dict) -> str:
+    opcodes = require_key(data, YAML_PATH, "opcodes", list)
+    by_category: dict[str, list[Mapping[str, object]]] = {cat: [] for cat, _ in CATEGORIES}
+    for index, value in enumerate(opcodes):
+        entry_path = f"{YAML_PATH}: opcodes[{index}]"
+        entry = require_mapping(value, entry_path)
+        category = require_key(entry, entry_path, "category", str)
+        by_category.setdefault(category, []).append(entry)
 
     lines: list[str] = []
-    reserved = ", ".join(f"`0x{c:02X}`" for c in sorted(data.get("reserved", [])))
-    lines.append(HEADER + reserved + ".")
+    reserved = ", ".join(f"`0x{c:02X}`" for c in sorted(_reserved_codes(data)))
+    lines.append(f"Reserved wire bytes (rejected by the decoder as illegal): {reserved}.")
     lines.append("")
-    lines.append(f"Total: **{len(data['opcodes'])} opcodes**.")
+    lines.append(f"Total: **{len(opcodes)} opcodes**.")
     lines.append("")
 
     for cat_slug, cat_title in CATEGORIES:
-        entries = sorted(by_category.get(cat_slug, []), key=lambda e: int(e["code"]))
+        entries = sorted(
+            by_category.get(cat_slug, []),
+            key=lambda e: int(require_key(e, f"{YAML_PATH}: opcode entry", "code", int)),
+        )
         if not entries:
             continue
         lines.append("---")
@@ -133,15 +199,22 @@ def render(data: dict) -> str:
         lines.append("| Code | Mnemonic | Operands | Stack | Description |")
         lines.append("|------|----------|----------|-------|-------------|")
         for entry in entries:
-            code = int(entry["code"])
-            mnemonic = entry["mnemonic"]
-            operands = format_operands(entry["operands"])
-            stack = f"`{entry['stack_pop']} → {entry['stack_push']}`"
-            doc = entry["doc"].replace("|", "\\|")
+            entry_path = f"{YAML_PATH}: {entry.get('mnemonic', 'opcode entry')}"
+            code = require_key(entry, entry_path, "code", int)
+            mnemonic = require_key(entry, entry_path, "mnemonic", str)
+            operands = format_operands(require_key(entry, entry_path, "operands", list), entry_path)
+            stack_pop = require_key(entry, entry_path, "stack_pop", int)
+            stack_push = require_key(entry, entry_path, "stack_push", int)
+            stack = f"`{stack_pop} → {stack_push}`"
+            doc = require_key(entry, entry_path, "doc", str).replace("|", "\\|")
             lines.append(f"| `0x{code:02X}` | `{mnemonic}` | {operands} | {stack} | {doc} |")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def render_page(data: dict, header: str) -> str:
+    return header + render_tables(data)
 
 
 def main() -> int:
@@ -153,29 +226,17 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    with YAML_PATH.open(encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    try:
+        data = load_yaml(YAML_PATH)
+        targets = [
+            Target(CONFORMANCE_DOC_PATH, render_page(data, CONFORMANCE_HEADER)),
+            Target(BOOK_DOC_PATH, render_page(data, BOOK_HEADER)),
+        ]
+    except SetupError as exc:
+        sys.stderr.write(f"docs generation setup error: {format_setup_error(exc, REPO_ROOT)}\n")
+        return 2
 
-    generated = render(data)
-
-    if args.check:
-        existing = DOC_PATH.read_text(encoding="utf-8") if DOC_PATH.exists() else ""
-        if existing == generated:
-            print(f"{DOC_PATH.relative_to(REPO_ROOT)}: up to date")
-            return 0
-        diff_lines = difflib.unified_diff(
-            existing.splitlines(keepends=True),
-            generated.splitlines(keepends=True),
-            fromfile=str(DOC_PATH.relative_to(REPO_ROOT)) + " (committed)",
-            tofile=str(DOC_PATH.relative_to(REPO_ROOT)) + " (regenerated)",
-        )
-        sys.stderr.write(f"{DOC_PATH.relative_to(REPO_ROOT)} is stale — run `make docs-regen`.\n\n")
-        sys.stderr.writelines(diff_lines)
-        return 1
-
-    DOC_PATH.write_text(generated, encoding="utf-8")
-    print(f"wrote {DOC_PATH.relative_to(REPO_ROOT)}")
-    return 0
+    return emit(targets, repo_root=REPO_ROOT, check=args.check)
 
 
 if __name__ == "__main__":

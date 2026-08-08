@@ -188,5 +188,5 @@ echo "existing Rust behaviour), add a commit-message trailer of the form:"
 echo ""
 echo "    Atomic-Spec-Exempt: <reason>"
 echo ""
-echo "See docs/xquad-development-workflow.md for the contract."
+echo "See docs/guide/development-workflow.md for the contract."
 exit 1

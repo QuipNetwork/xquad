@@ -31,10 +31,11 @@ Intended to be invoked from the `opcode-parity` CI job and the
 from __future__ import annotations
 
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
+from _docsgen import SetupError, load_yaml, require_key, require_mapping
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 YAML_PATH = REPO_ROOT / "conformance" / "opcodes.yaml"
@@ -64,25 +65,39 @@ class Row:
 
 
 def load_yaml_rows(path: Path) -> dict[int, Row]:
-    with path.open(encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    data = load_yaml(path)
+    opcodes = require_key(data, path, "opcodes", list)
     rows: dict[int, Row] = {}
-    for entry in data["opcodes"]:
-        code = int(entry["code"])
-        operand_byte_width = sum(int(op.get("width", 1)) for op in entry["operands"])
+    for index, value in enumerate(opcodes):
+        entry_path = f"{path}: opcodes[{index}]"
+        entry = require_mapping(value, entry_path)
+        operands = require_key(entry, entry_path, "operands", list)
+        code = int(require_key(entry, entry_path, "code", int))
+        operand_maps: list[tuple[str, Mapping[str, object]]] = []
+        for operand_index, value in enumerate(operands):
+            op_path = f"{entry_path}.operands[{operand_index}]"
+            operand_maps.append((op_path, require_mapping(value, op_path)))
+        operand_byte_width = sum(_operand_width(op, op_path) for op_path, op in operand_maps)
         operand_types: tuple[str, ...] = ()
-        for op in entry["operands"]:
-            py_type = YAML_TYPE_TO_PYTHON[op["type"]]
-            operand_types += (py_type,) * int(op.get("width", 1))
+        for op_path, op in operand_maps:
+            py_type = YAML_TYPE_TO_PYTHON[require_key(op, op_path, "type", str)]
+            operand_types += (py_type,) * _operand_width(op, op_path)
         rows[code] = Row(
             code=code,
-            mnemonic=entry["mnemonic"],
-            stack_pop=int(entry["stack_pop"]),
-            stack_push=int(entry["stack_push"]),
+            mnemonic=require_key(entry, entry_path, "mnemonic", str),
+            stack_pop=int(require_key(entry, entry_path, "stack_pop", int)),
+            stack_push=int(require_key(entry, entry_path, "stack_push", int)),
             operand_byte_width=operand_byte_width,
             operand_types=operand_types,
         )
     return rows
+
+
+def _operand_width(op: Mapping[str, object], path: str) -> int:
+    width = op.get("width", 1)
+    if not isinstance(width, int):
+        raise SetupError(f"{path}: optional key `width` must be int, got {type(width).__name__}")
+    return width
 
 
 def load_python_rows() -> dict[int, Row]:
@@ -132,7 +147,11 @@ def diff(yaml_rows: dict[int, Row], py_rows: dict[int, Row]) -> list[str]:
 
 
 def main() -> int:
-    yaml_rows = load_yaml_rows(YAML_PATH)
+    try:
+        yaml_rows = load_yaml_rows(YAML_PATH)
+    except SetupError as exc:
+        print(f"opcode parity setup error: {exc}", file=sys.stderr)
+        return 2
     py_rows = load_python_rows()
 
     errors = diff(yaml_rows, py_rows)

@@ -59,7 +59,7 @@ lint:changelog:
         - make changelog-render
 
 # Atomic spec-MR guard — enforces the two-impl development discipline
-# documented in docs/xquad-development-workflow.md. VM-semantics MRs
+# documented in docs/guide/development-workflow.md. VM-semantics MRs
 # must touch spec + xqvm + xqvm_py + conformance in the same MR.
 # Runs on merge requests only; the guard is about MR shape, not about
 # branch-level pushes.

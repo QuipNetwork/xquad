@@ -5,7 +5,8 @@ language = "en"
 src      = "docs/book/src"
 
 [build]
-build-dir = "docs/book/build"
+build-dir      = "docs/book/build"
+create-missing = false
 
 [preprocessor.mermaid]
 command = "mdbook-mermaid"
