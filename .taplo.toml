@@ -16,6 +16,12 @@ exclude = [
     ".claude/**",
     "scratch/**",
     "graphify-out/**",
+    # `.orca` must be excluded at the root. In a worktree it symlinks to the
+    # primary checkout, which contains the worktree, so following it recurses:
+    # .orca/worktrees/<wt>/.orca/worktrees/<wt>/... Root-anchored patterns like
+    # `.cargo/**` do not match the nested copies reached that way, so without
+    # this entry `taplo fmt --check` never terminates cleanly in any worktree.
+    ".orca/**",
 ]
 
 [formatting]

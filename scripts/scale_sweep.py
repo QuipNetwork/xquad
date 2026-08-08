@@ -24,7 +24,7 @@ re-runs the shipped example encoding through the full
 compile -> encode -> solve -> verify -> decode pipeline with per-stage
 timers.
 
-Design: docs/superpowers/specs/2026-07-13-qui-167-scale-sweep-design.md
+Design: docs/design/specs/2026-07-13-qui-167-scale-sweep-design.md
 
 Usage:
     uv run --no-sync python scripts/scale_sweep.py --smoke

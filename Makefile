@@ -1,5 +1,5 @@
 .PHONY: all xquad repl \
-        preflight preflight-rs preflight-py preflight-parity \
+        preflight preflight-rs preflight-py preflight-parity preflight-docs \
         deps deps-docs deps-miri deps-py deps-wasm \
         install-hooks \
         lint lint-clippy lint-doc lint-deny-rs lint-py \
@@ -9,7 +9,7 @@
         opcode-parity opcode-parity-rs opcode-parity-py \
         conformance conformance-rs conformance-py \
         example-smoke \
-        docs docs-regen docs-check docs-serve \
+        docs docs-regen docs-regen-opcodes docs-regen-examples docs-check docs-drift docs-serve \
         changelog changelog-render changelog-release
 
 all: fmt lint test
@@ -21,7 +21,8 @@ all: fmt lint test
 # CI invokes; when a CI job is added, add its leaf target here.
 #
 # preflight-rs is pure-Rust (no uv / maturin prereqs); preflight-py and
-# preflight-parity pull the deps-py maturin rebuild via their leaf prereqs.
+# preflight-parity pull the deps-py maturin rebuild via their leaf prereqs;
+# preflight-docs needs uv for docs generation but not the maturin rebuild.
 # test-miri is deliberately excluded -- not a CI gate, needs nightly; it
 # lives under Optional Checks in the MR template.
 preflight-rs: fmt-check-rs fmt-check-toml lint-clippy lint-doc lint-deny-rs test-unit-rs test-integ-rs test-doc
@@ -30,7 +31,9 @@ preflight-py: fmt-check-toml fmt-check-py lint-py test-py
 
 preflight-parity: opcode-parity conformance example-smoke
 
-preflight: preflight-rs preflight-py preflight-parity
+preflight-docs: docs-check docs-drift
+
+preflight: preflight-rs preflight-py preflight-parity preflight-docs
 
 # -- Local setup ------------------------------------------------------------
 
@@ -295,18 +298,34 @@ example-smoke: deps-py
 
 # -- Documentation ----------------------------------------------------------
 
-docs: docs-check
+docs:
 	mdbook-mermaid install .
 	mdbook build
 
-# Regenerate docs/bytecode-semantics.md from conformance/opcodes.yaml.
-docs-regen:
+# Regenerate generated documentation from conformance/opcodes.yaml and
+# examples/manifest.yaml.
+docs-regen: docs-regen-opcodes docs-regen-examples
+
+docs-regen-opcodes:
 	uv run python scripts/gen-bytecode-docs.py
 
-# Assert the committed docs/bytecode-semantics.md matches the regenerated
-# output; used by the CI docs-build job to prevent silent drift.
+docs-regen-examples:
+	uv run python scripts/gen-example-docs.py
+
+# Assert committed generated documentation matches regenerated output. Both
+# generators run even when the first one fails, so stale targets are not masked.
+# GNU make reports failing recipes as exit 2, so setup-vs-stale distinction
+# lives in the generator stderr rather than this recipe's final status.
 docs-check:
-	uv run python scripts/gen-bytecode-docs.py --check
+	@status=0; \
+	uv run python scripts/gen-bytecode-docs.py --check || status=1; \
+	uv run python scripts/gen-example-docs.py --check || status=1; \
+	exit "$$status"
+
+# Guard book prose and SUMMARY.md coverage against known documentation drift.
+# The in-script allowlist is a QUI-977 to-do list, not a permanent exemption.
+docs-drift:
+	bash scripts/check-docs-drift.sh
 
 docs-serve:
 	mdbook-mermaid install .

@@ -1,16 +1,43 @@
+<!--
+  AUTO-GENERATED FILE. DO NOT EDIT.
+  This file is regenerated from `examples/manifest.yaml` by
+  `scripts/gen-example-docs.py`.
+  Edit the manifest, then run `make docs-regen`.
+-->
+
 # Examples
 
-This section contains worked examples demonstrating XQVM in practice.
+<a id="graph-problems"></a>
 
-## Available Examples
+## Graph problems
 
-- [Travelling Salesman Problem](tsp.md) -- a complete three-program pipeline
-  that formulates, verifies, and decodes a TSP as a QUBO.
+Examples that encode graph cuts, colouring, covers, independent sets, and tours.
 
-## Running Examples
+- [Max-Cut](maxcut.md) -- Find a 2-colour partition of a weighted graph that maximises the cut weight.
+- [Graph Coloring](graph_coloring.md) -- Assign colours to graph nodes so adjacent nodes do not share a colour.
+- [Maximum Independent Set](max_independent_set.md) -- Select the largest subset of graph nodes with no selected edge between them.
+- [Vertex Cover](vertex_cover.md) -- Select the smallest vertex subset that covers every graph edge.
+- [Travelling Salesman Problem](tsp.md) -- Find the shortest Hamiltonian tour through a random symmetric distance matrix.
 
-The TSP example is included in the repository as a Rust integration test:
+<a id="selection-and-packing"></a>
 
-```sh
-cargo run --example tsp -p aglais-xqvm-vm
-```
+## Selection and packing
+
+Examples that select subsets, cover demands, pack bins, and balance integer weights.
+
+- [Knapsack](knapsack.md) -- Select items that maximise value while respecting a capacity constraint.
+- [Bin Packing](bin_packing.md) -- Pack items into the minimum number of fixed-capacity bins.
+- [Set Cover](set_cover.md) -- Select the minimum set collection whose union covers the universe.
+- [Weighted Set Cover](weighted_set_cover.md) -- Select sets with capacities to cover element demands at minimum cost.
+- [Number Partition](number_partition.md) -- Split positive integers into two subsets with nearly equal sums.
+- [Portfolio Optimization](portfolio_opt.md) -- Select a fixed-size portfolio while penalising higher-order risk interactions.
+
+<a id="satisfiability-and-higher-order"></a>
+
+## Satisfiability and higher-order
+
+Examples that reduce clauses and higher-order pseudo-Boolean objectives to quadratic models.
+
+- [Max-3-SAT](max3sat.md) -- Find the assignment that satisfies the maximum number of 3-literal clauses.
+- [Cubic Optimization](cubic_opt.md) -- Minimise a cubic pseudo-Boolean objective through HOBO degree reduction.
+- [Quartic Optimization](quartic_opt.md) -- Minimise a degree-4 pseudo-Boolean objective through two-stage REDUCE chaining.

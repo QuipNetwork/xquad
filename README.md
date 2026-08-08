@@ -185,7 +185,7 @@ The binary format is a bare instruction stream — no header, no constant
 pool — just an opcode byte followed by its operands in big-endian byte
 order.
 
-See [`docs/bytecode-semantics.md`](docs/bytecode-semantics.md) for
+See [`conformance/opcodes.md`](conformance/opcodes.md) for
 instruction-by-instruction semantics and
 [`spec/xqvm/SPEC.md`](spec/xqvm/SPEC.md) for the normative spec.
 

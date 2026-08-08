@@ -60,6 +60,12 @@ make test-integ-rs    # cargo nextest --test '*'
 make test-miri        # cargo +nightly miri test (requires make deps-miri)
 ```
 
+## Documentation Layout
+
+Contributor-facing guides live under `docs/guide/`. Design notes and AI-workflow artifacts that are useful to retain in git live under `docs/design/`.
+
+New local or generated workflow artifacts should stay under the gitignored `docs/superpowers/` tree unless they are intentionally promoted.
+
 ## Commits
 
 All commit messages must follow the [Conventional Commits](https://www.conventionalcommits.org/) format:
@@ -212,7 +218,7 @@ CI enforces this via `lint:atomic-spec-mr` (`scripts/check-atomic-spec-mr.sh`). 
 Atomic-Spec-Exempt: Python-only fix bringing impl in line with existing Rust behaviour
 ```
 
-See [docs/xquad-development-workflow.md](docs/xquad-development-workflow.md) for the full rationale and exempt cases.
+See [docs/guide/development-workflow.md](docs/guide/development-workflow.md) for the full rationale and exempt cases.
 
 ---
 

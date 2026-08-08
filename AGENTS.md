@@ -31,10 +31,11 @@ make xquad            # bootstrap local dev: Python venv + install xquad CLI
 make install-hooks    # point git at .githooks/ pre-commit hook
 
 # Preflight (run locally exactly what CI enforces; N/A a language you didn't touch)
-make preflight        # preflight-rs + preflight-py + preflight-parity
+make preflight        # preflight-rs + preflight-py + preflight-parity + preflight-docs
 make preflight-rs     # fmt, taplo, clippy, rustdoc, deny, unit/integration/doc tests
 make preflight-py     # taplo, ruff format + lint, pytest
 make preflight-parity # opcode parity, conformance, example smoke
+make preflight-docs   # generated-doc freshness + docs drift guard
 
 # Rust
 make fmt              # cargo fmt + taplo fmt + ruff format
@@ -68,9 +69,10 @@ make conformance      # conformance-rs + conformance-py
 make example-smoke    # run examples on both interpreters, check valid == 1
 
 # Documentation
-make docs             # mdbook build (runs docs-check first)
-make docs-regen       # regenerate docs/bytecode-semantics.md from opcodes.yaml
-make docs-check       # assert bytecode-semantics.md matches regenerated output
+make docs             # mdbook build
+make docs-regen       # regenerate generated opcode and example book pages
+make docs-check       # assert generated docs match regenerated output
+make docs-drift       # guard book prose and SUMMARY.md against known drift
 make docs-serve       # mdbook serve --open
 
 # Changelog (CHANGELOG.md is gitignored; cliff.toml + git history is source of truth)
@@ -304,7 +306,7 @@ Behavioural parity between `xqvm_py` (Python reference) and the Rust `xqvm` crat
 
 Any MR that changes VM semantics must touch **all four** layers in the same MR: (1) `spec/xqvm/*.md`, (2) `xqvm/src/**/*.rs`, (3) `xqvm_py/{executor,opcodes,xqmx,state,vector,tracer,errors}.py`, (4) `conformance/vectors/**` or `conformance/opcodes.yaml`. CI enforces this via `lint:atomic-spec-mr` (`scripts/check-atomic-spec-mr.sh`). MRs touching 0 or all 4 layers pass; partial changes (1-3 layers) fail.
 
-For deliberately one-sided changes (e.g. aligning one impl to existing behaviour), add an `Atomic-Spec-Exempt: <reason>` trailer to a commit message. The guard scans every commit in the MR range and bypasses when it finds at least one trailer. See `docs/xquad-development-workflow.md` for the full rationale and exempt cases.
+For deliberately one-sided changes (e.g. aligning one impl to existing behaviour), add an `Atomic-Spec-Exempt: <reason>` trailer to a commit message. The guard scans every commit in the MR range and bypasses when it finds at least one trailer. See `docs/guide/development-workflow.md` for the full rationale and exempt cases.
 
 ### Rust-Python Bindings (xqffi)
 
@@ -318,10 +320,10 @@ For deliberately one-sided changes (e.g. aligning one impl to existing behaviour
 
 | Stage | What it covers |
 | --- | --- |
-| lint | clippy, rustdoc, cargo-deny, ruff, format checks, opcode parity, atomic spec-MR guard, changelog render |
+| lint | clippy, rustdoc, cargo-deny, ruff, format checks, opcode parity, generated-docs freshness, docs drift guard, atomic spec-MR guard, changelog render |
 | test | unit, integration, doc tests (Rust); pytest (Python) |
 | conformance | Rust + Python conformance vectors, example smoke tests |
-| docs | mdbook build + bytecode-semantics freshness check |
+| docs | mdbook build |
 | release | packaging, publishing, GitLab Release notes via git-cliff |
 
 Jobs are authored in per-stage files under `.gitlab/ci/` and composed via `include:` in the root `.gitlab-ci.yml`.
