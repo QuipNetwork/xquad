@@ -16,3 +16,9 @@ git-repository-url = "https://gitlab.com/quip.network/xquad"
 edit-url-template  = "https://gitlab.com/quip.network/xquad/-/edit/main/{path}"
 mathjax-support    = true
 additional-js      = [ "mermaid.min.js", "mermaid-init.js" ]
+# The book is published under a subdirectory of the docs host. Without
+# site-url the generated 404 page resolves its assets relative to whatever
+# path the visitor missed, so it renders unstyled and without navigation.
+# The theme directory carries the pre-launch noindex gate (QUI-988).
+site-url = "/xquad/"
+theme    = "docs/book/theme"

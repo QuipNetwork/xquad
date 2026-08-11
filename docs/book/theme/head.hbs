@@ -1,0 +1,16 @@
+{{!--
+    Pre-launch indexing gate (QUI-988).
+
+    The book is deployed at docs.quip.network/xquad but not yet announced,
+    and QUI-977 is still correcting content. Deleting the meta tag below is
+    the launch flip.
+
+    Do not gate this in robots.txt instead: a disallowed page is never
+    fetched, so a crawler never sees this tag, and the URL stays eligible
+    for URL-only indexing. Crawlable plus noindex is what actually keeps
+    pages out of the index.
+
+    This is a handlebars comment, so it is stripped from the rendered page
+    rather than shipped in the published HTML.
+--}}
+<meta name="robots" content="noindex, nofollow">

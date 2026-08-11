@@ -1,0 +1,10 @@
+# GitLab Pages redirect rules, copied to the root of public/ by the `pages`
+# job. See .gitlab/ci/docs.yml.
+#
+# The book is served from /xquad/, so the host root would otherwise be a dead
+# end. Send it to the main Quip documentation. Domain-level (external)
+# redirects are generally available since GitLab 17.4 and accept only 301/302.
+#
+# The rule matches the root path exactly, so /robots.txt, /404.html and
+# everything under /xquad/ are unaffected.
+/ https://quip.gitbook.io/docs 301
