@@ -1,5 +1,6 @@
 # Documentation pipeline -- checks generated docs and book drift in lint,
-# then builds the mdBook site in the docs stage.
+# builds the mdBook site in the docs stage, then publishes it to GitLab Pages
+# at https://docs.quip.network/xquad/ (QUI-988).
 
 .install-deps: &install-deps
     - export PATH="${CARGO_HOME}/bin:${PATH}"
@@ -36,3 +37,37 @@ docs:build:
     artifacts:
         paths:
             - docs/book/build/
+
+# Publish the book. Reuses the docs:build artifact rather than rebuilding, so
+# this job needs no Rust toolchain and no cargo cache.
+#
+# The job must be named exactly `pages` for GitLab to treat it as a Pages
+# deployment. It only runs on direct pushes to main, so merge request and tag
+# pipelines build the book without publishing it.
+pages:
+    stage: pages
+    image: alpine:3
+    cache: []
+    needs:
+        - job: docs:build
+          artifacts: true
+    environment:
+        name: pages
+        url: https://docs.quip.network/xquad/
+    script:
+        - mkdir -p public/xquad
+        - cp -r docs/book/build/. public/xquad/
+        # On a custom domain GitLab Pages serves only /404.html, from the root
+        # of public/ -- public/xquad/404.html is never reached. The copy at the
+        # root resolves its assets through book.toml's site-url.
+        - cp docs/book/build/404.html public/404.html
+        - cp .gitlab/pages/_redirects .gitlab/pages/robots.txt public/
+        - sh scripts/gen-sitemap.sh public/xquad https://docs.quip.network/xquad > public/xquad/sitemap.xml
+    artifacts:
+        paths:
+            - public
+    rules:
+        # Only on direct pushes to main -- not on tag pipelines or MR
+        # pipelines (MR pipelines run before the merge; we publish after).
+        - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
+          when: on_success

@@ -1,0 +1,10 @@
+# Copied to the root of public/ by the `pages` job. See .gitlab/ci/docs.yml.
+#
+# Crawling is deliberately allowed while the book is still pre-launch. The
+# indexing gate is the noindex meta tag in docs/book/theme/head.hbs: a crawler
+# has to fetch a page to see that tag, so disallowing it here would leave the
+# URLs eligible for URL-only indexing instead of blocking them.
+User-agent: *
+Allow: /
+
+Sitemap: https://docs.quip.network/xquad/sitemap.xml

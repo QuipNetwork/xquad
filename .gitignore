@@ -41,6 +41,11 @@ docs/book/build/
 mermaid.min.js
 mermaid-init.js
 
+### GitLab Pages ###
+# Assembled by the `pages` job from the docs/book/build/ artifact; also the
+# output path when replicating that job locally.
+/public/
+
 ### Python ###
 __pycache__/
 *.py[cod]

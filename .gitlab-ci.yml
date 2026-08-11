@@ -71,12 +71,21 @@ variables:
     # Use the sparse registry protocol (default on 1.68+, belt-and-
     # braces for older runner images).
     CARGO_REGISTRIES_CRATES_IO_PROTOCOL: "sparse"
+    # uv installs a wheel by cloning its files out of the uv cache.
+    # Those clone syscalls intermittently fail with `Resource
+    # temporarily unavailable` (os error 11) on the group runners,
+    # which aborts the whole `uv sync` / `uv tool install`. `copy`
+    # takes uv's plain-copy path instead: marginally slower, and it
+    # does not use the syscall that fails. Set pipeline-wide because
+    # every uv job is exposed, not just the release dry-runs.
+    UV_LINK_MODE: "copy"
 
 stages:
     - lint
     - test
     - conformance
     - docs
+    - pages
     - release
 
 include:
