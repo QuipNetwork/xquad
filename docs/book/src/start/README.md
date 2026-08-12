@@ -110,7 +110,7 @@ solver class that needs it does, raising `ImportError` with a
 
 Per-solver parameters, driver-level troubleshooting, and what a QPU
 result contains that a CPU one does not are covered in
-[Solving Overview](../solving/README.md), [Local Solvers](../solving/local.md),
+[Solving Overview](../solving/), [Local Solvers](../solving/local.md),
 and [D-Wave QPU](../solving/dwave-qpu.md). This section only covers what
 to install before you get there.
 
@@ -120,8 +120,8 @@ to install before you get there.
   end and get a real answer back.
 - **[What Happened](what-happened.md)** -- the explanation of what that
   run just did.
-- **[XQVM Reference](../xqvm/README.md)** -- a minimal hand-written
+- **[XQVM Reference](../xqvm/)** -- a minimal hand-written
   `.xqasm` program, if you want to see the machine underneath before
   running anything larger.
-- **[Toolchain Map](../concepts/README.md)** -- the pieces XQuad is built
+- **[Toolchain Map](../concepts/)** -- the pieces XQuad is built
   from, and how they hand off to each other.

@@ -25,7 +25,7 @@ can read start to finish.
 
 Stop here if you have a combinatorial problem to model and no existing
 `.xqasm` source. Keep reading if you already have compiled bytecode and
-need to run or inspect it. Full coverage: [Modelling](../modelling/README.md).
+need to run or inspect it. Full coverage: [Modelling](../modelling/).
 
 ## `xquad.program` -- Program and Session
 
@@ -42,7 +42,7 @@ each `run()` starts clean.
 Stop here if you are driving an already-compiled program from Python and
 want calldata handling and output decoding done for you. Keep reading if
 you are choosing between this and the raw FFI below. Full coverage:
-[Running Programs](../running/README.md).
+[Running Programs](../running/).
 
 ## `xqffi.vm` -- The Raw FFI
 
@@ -61,7 +61,7 @@ reason to prefer it for anything but a single one-off program.
 Reach for `Vm` directly only if you are building your own convenience
 layer on top, or the `Program`/`Session` assumptions do not fit -- most
 Python users want `xquad.program` or `xquad.vm` instead. Full coverage:
-[Running Programs](../running/README.md).
+[Running Programs](../running/).
 
 ## `xquad.vm` -- Backend Dispatch
 
@@ -76,7 +76,7 @@ internally. Every example runner under `examples/` imports `VM` and
 Stop here if you want backend-parity checking or your calldata and
 outputs are already in `xquad.types` terms. Keep reading if you need
 the raw FFI underneath instead. Full coverage: [Running
-Programs](../running/README.md#the-other-two-vm-surfaces).
+Programs](../running/#the-other-two-vm-surfaces).
 
 ## `xquad` CLI
 
@@ -88,11 +88,11 @@ program before running it.
 `xquad asm add.xqasm -o add.xqb` followed by `xquad run add.xqb`,
 `xquad dism add.xqb`, and `xquad verify add.xqb` assembles, runs,
 disassembles, and verifies the four-instruction `add.xqasm` from
-[Toolchain Map](README.md).
+[Toolchain Map](./).
 
 Stop here if you are working from a shell or from CI. Keep reading if you
 need to drive many runs programmatically rather than one at a time. Full
-coverage: [CLI](../xqvm/cli/README.md).
+coverage: [CLI](../xqvm/cli/).
 
 ## Rust Embedding
 

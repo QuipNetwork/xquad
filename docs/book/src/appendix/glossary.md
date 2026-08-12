@@ -44,7 +44,7 @@ QPU](../solving/dwave-qpu.md#what-embedding-means).
 
 **Embedding (Rust).** Using the `xqvm` and `xqasm` crates directly from a
 Rust program, without the Python packages. See [Embedding
-Overview](../embedding/README.md).
+Overview](../embedding/).
 
 **Encoder.** One of the three programs a problem compiles to: reads
 runtime inputs from calldata and builds the model. See
@@ -99,7 +99,7 @@ variable count with the model it answers, but not its shape. See
 **Solver.** Anything implementing the `xqsa` interface: takes a model,
 returns a sample and its reported energy. `xqsa` ships five: a CPU
 annealer, CUDA and Metal GPU annealers, the D-Wave QPU, and the Quip
-network. See [Solving Overview](../solving/README.md).
+network. See [Solving Overview](../solving/).
 
 **Step limit.** The maximum number of instructions a VM run will execute
 before faulting with `StepLimitExceeded`, guarding against runaway
@@ -128,7 +128,7 @@ counts, code length, checksum) followed by the raw instruction stream. See
 
 **XQCP.** X-Quadratic Constraint Programming: the Python DSL that turns a
 problem description into the three XQVM programs. See [Modelling
-Lifecycle](../modelling/README.md).
+Lifecycle](../modelling/).
 
 **XQMX.** The matrix type the VM allocates and manipulates, in either of
 two modes: a model (`XqmxModel`, a Hamiltonian's coefficients) or a
@@ -136,8 +136,8 @@ sample (`XqmxSample`, one candidate assignment). See [VM
 Architecture](../xqvm/machine-model.md).
 
 **XQSA.** X-Quadratic Solver Adapters: the Python package holding one
-adapter per solving backend. See [Solving Overview](../solving/README.md).
+adapter per solving backend. See [Solving Overview](../solving/).
 
 **XQVM.** X-Quadratic Virtual Machine: the stack machine every XQuad
 problem compiles to, and the layer both the Rust and Python
-implementations implement. See [XQVM Reference](../xqvm/README.md).
+implementations implement. See [XQVM Reference](../xqvm/).

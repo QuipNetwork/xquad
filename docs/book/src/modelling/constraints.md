@@ -219,7 +219,7 @@ boundary of `1` -- a real bound, not the largest single coefficient, and
 worth using only until you can afford to enumerate a representative case.
 
 The seed-42 knapsack run printed in
-[One Problem, Once](README.md#one-problem-once) has values
+[One Problem, Once](./#one-problem-once) has values
 `[5, 4, 18, 3, 19]`, and knapsack's objective is `-values` (see
 [Objectives](objectives.md)), so the same fallback sum is
 `5 + 4 + 18 + 3 + 19 = 49`. The runner's own `penalty = 100` clears that sum

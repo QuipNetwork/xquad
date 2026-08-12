@@ -149,5 +149,5 @@ decoder -- see
 [Compiling](compiling.md#what-compile_verifier-and-compile_decoder-do) for
 what a verifier's validity check does and does not cover. Choosing a solver
 and judging solution quality belong to
-[Solving Overview](../solving/README.md) and
-[Running Programs](../running/README.md), not here.
+[Solving Overview](../solving/) and
+[Running Programs](../running/), not here.

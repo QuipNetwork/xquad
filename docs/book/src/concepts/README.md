@@ -52,7 +52,7 @@ stack (bottom to top):
 Here the pipeline is just two rows: the assembler and the VM. The `xquad`
 CLI plays the host program's role, reading `add.xqb` from disk and
 printing the result, and that already runs the real toolchain end to end.
-[XQVM Reference](../xqvm/README.md) walks through this same `add.xqasm`
+[XQVM Reference](../xqvm/) walks through this same `add.xqasm`
 again, from the machine's side: what each instruction does to the stack as
 it runs.
 
@@ -78,8 +78,8 @@ role in each of the six ways to work with XQuad.
 - **[Backends](backends.md)** -- the solvers that sit in the gap between
   encoder and verifier.
 
-Past this chapter: [Modelling](../modelling/README.md) builds a model with
-the DSL, [Running Programs](../running/README.md) and
-[Solving Overview](../solving/README.md) execute it and hand it to a
-solver, and [XQVM Reference](../xqvm/README.md) is the machine this whole
+Past this chapter: [Modelling](../modelling/) builds a model with
+the DSL, [Running Programs](../running/) and
+[Solving Overview](../solving/) execute it and hand it to a
+solver, and [XQVM Reference](../xqvm/) is the machine this whole
 pipeline compiles down to.

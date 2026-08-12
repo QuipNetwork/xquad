@@ -100,7 +100,7 @@ for the implementation the rest of this section describes.
 
 These are the constructor's own defaults. `xqsa.build_solver`, the
 backend-agnostic constructor covered in
-[Solving Overview](README.md#picking-a-backend-by-name), raises
+[Solving Overview](./#picking-a-backend-by-name), raises
 `num_reads` to 200 and `num_sweeps` to 2000 for both GPU backends
 instead of using these defaults.
 

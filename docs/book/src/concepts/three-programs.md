@@ -146,12 +146,12 @@ role.
 ## Beyond `xqcp`
 
 A hand-assembled `.xqasm` program is free to read inputs, build a model,
-and produce output in one file, the way [Toolchain Map](README.md)'s
+and produce output in one file, the way [Toolchain Map](./)'s
 minimal `add.xqasm` example does -- the interpreter does not enforce the
 three-program split. The split earns its cost once an external solver sits
 in the loop and a sample needs independent checking, which is exactly when
 reaching for `xqcp`, or hand-writing the same three-program shape, starts
 to pay off. See [Modelling: Compiling](../modelling/compiling.md) for how
 the compiler produces the three programs, and
-[Running Programs](../running/README.md) and
-[Solving Overview](../solving/README.md) for executing each stage.
+[Running Programs](../running/) and
+[Solving Overview](../solving/) for executing each stage.

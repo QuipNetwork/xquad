@@ -90,7 +90,7 @@ to fix a rejected program.
 ## Substrate pallet fixture limits
 
 `fixtures/pallet-xqvm` (excluded from the main Cargo workspace build; see
-[Embedding Overview](../embedding/README.md)) adds two additional bounds on
+[Embedding Overview](../embedding/)) adds two additional bounds on
 top of the ones above, enforced by the runtime's `Config` trait rather than
 the VM:
 

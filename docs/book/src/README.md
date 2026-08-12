@@ -76,20 +76,20 @@ followed by its operands in big-endian byte order. See
 
 ## Where to go next
 
-- **[Getting Started](start/README.md)** -- install the toolchain and run
+- **[Getting Started](start/)** -- install the toolchain and run
   your first program.
-- **[Concepts](concepts/README.md)** -- what a QUBO/Ising model is, the ways
+- **[Concepts](concepts/)** -- what a QUBO/Ising model is, the ways
   to use XQuad, and the backends it targets.
-- **[Modelling with XQCP](modelling/README.md)** -- write a problem with the
+- **[Modelling with XQCP](modelling/)** -- write a problem with the
   constraint-programming DSL.
-- **[Running Programs](running/README.md)** and
-  **[Solving](solving/README.md)** -- execute a compiled program and hand it
+- **[Running Programs](running/)** and
+  **[Solving](solving/)** -- execute a compiled program and hand it
   to a solver.
-- **[XQVM Reference](xqvm/README.md)** -- the machine model, assembly
+- **[XQVM Reference](xqvm/)** -- the machine model, assembly
   language, instruction set, and bytecode format.
-- **[Embedding](embedding/README.md)** -- using the Rust crates directly,
+- **[Embedding](embedding/)** -- using the Rust crates directly,
   `no_std` support, and cross-implementation conformance.
-- **[Examples](examples/README.md)** -- worked problems including a
+- **[Examples](examples/)** -- worked problems including a
   Travelling Salesman Problem.
 
 ## License

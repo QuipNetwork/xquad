@@ -67,7 +67,7 @@ def test_rewrite_links_skips_fenced_code():
         "```sh",
         "echo ../../xqsa/README.md",
         "```",
-        "See [xqsa solver quick-starts](../solving/README.md).",
+        "See [xqsa solver quick-starts](../solving/).",
     ]
 
 
@@ -119,8 +119,8 @@ def test_transform_readme_preserves_headings_and_strips_canonical_output(tmp_pat
     assert "Source: [examples/graph_coloring/README.md]" in rendered
     assert "## QUBO formulation" in rendered
     assert "### Encoding strategy" in rendered
-    assert "../start/README.md" in rendered
-    assert "../solving/README.md" in rendered
+    assert "](../start/)" in rendered
+    assert "](../solving/)" in rendered
     assert "## Canonical output" not in rendered
     assert "# fenced heading does not end the section" not in rendered
     assert "Do not publish this." not in rendered
