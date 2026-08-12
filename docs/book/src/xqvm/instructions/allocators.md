@@ -46,6 +46,15 @@ decision, not an implementation detail:
   two-point domain \\(\\{-1, 0\\}\\), which degenerates to a binary
   choice that `BQMX` already covers, not a genuinely discrete one.
 
+<!-- xquad:defect QUI-1024 -->
+> **Known issue.** The discrete domain is specified two different ways:
+> `spec/xqvm/ISA.md`, `spec/xqvm/SPEC.md` and the Rust VM use the signed centered
+> range \\(\\{-k, \ldots, k-1\\}\\), while `spec/xqsa/DOMAINS.md` and the Python
+> reference VM use \\(\\{0, \ldots, k-1\\}\\); neither implementation validates a
+> value against the domain at runtime. Do not rely on the two agreeing -- check
+> discrete values against the implementation you actually run. Report problems at
+> the [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+
 ## Sample Allocators
 
 `BSMX`, `SSMX` and `XSMX` mirror the three model allocators, including the

@@ -75,6 +75,14 @@ runs once before `NEXT` pops it, and an `LVAL` in that body faults with
 specifies a skip here; the Rust VM keeps do-while semantics instead, and this
 book documents the VM.
 
+<!-- xquad:defect QUI-1025 -->
+> **Known issue.** The spec requires an empty `ITER` to skip its body, but both
+> the Rust VM and `xqvm_py` run it once instead; `RANGE` with a count of zero
+> does skip, so the two loop openers behave differently from each other. Guard
+> an `ITER` over a possibly-empty slice, or use `RANGE` where a zero count must
+> skip. Report problems at the
+> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+
 ## LVAL -- Reading the Loop Value
 
 `LVAL reg` copies the current loop value into a register:

@@ -17,6 +17,12 @@ opcodes (`EQUALITY`, `ATLEAST`, `ATLEASTW`, `REDUCE`) operate on arbitrary
 variable sets. All coefficients are `i64`. For each opcode's byte value and
 operand layout, see the [Opcode Reference](../opcodes.md).
 
+<!-- xquad:defect QUI-1022 -->
+> **Known issue.** With no grid set, `ONEHOTR` and `ONEHOTC` write no coefficients and raise
+> no error on the Rust VM, so the constraint is silently absent from the model; `xqvm_py`
+> raises instead. Call `RESIZE` to set the grid dimensions before either instruction. Report
+> problems at the [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+
 ## `ONEHOTR reg`
 
 **Register effect:** `mutate`

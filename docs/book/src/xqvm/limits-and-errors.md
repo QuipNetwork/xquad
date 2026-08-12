@@ -19,6 +19,11 @@ this reason.
 | Grid dimensions | rows and cols must be > 0 | VM: `InvalidGridDimensions` |
 | Discrete domain size (`XQMX`/`XSMX`) | `k >= 2` | VM: `InvalidDiscreteK` |
 
+<!-- xquad:defect QUI-1024 -->
+> **Known issue.** Discrete domain bounds are inconsistent between specs and
+> implementations; see [Allocators](instructions/allocators.md). Report problems
+> at the [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+
 ## Configurable Limits
 
 | Limit | Library default | Method | VM error when exceeded |

@@ -73,6 +73,13 @@ model.linear[0] = xq_not(a == b)
 compiles to `LOAD`, `LOAD`, `EQ`, `NOT`, and gives `1` when `a` and `b`
 differ, `0` when they match.
 
+<!-- xquad:defect QUI-1027 -->
+> **Known issue.** `a != b`, `a and b` and `a or b` are not overloaded, so each silently
+> evaluates to a plain Python value at problem-definition time instead of building an
+> expression; the result is invalid assembly or a silently wrong model, reported far from the
+> mistake. Use `xq_not(a == b)`, `xq_and(a, b)` and `xq_or(a, b)` instead. Report problems at
+> the [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+
 ## Bitwise: Bit-Level Values
 
 `& | ^ ~ << >>` compile to `BAND BOR BXOR BNOT SHL SHR`, useful wherever a
@@ -101,6 +108,13 @@ depend on argument order, per the swap rule
 [`spec/xqvm/ISA.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/ISA.md)
 gives for `IDXTRIU`. `xq_triu(2, 5)` returns `12`
 (`5 * 4 // 2 + 2`; no swap needed, since `2 <= 5`).
+
+<!-- xquad:defect QUI-1021 -->
+> **Known issue.** The spec and the Python reference VM swap `i` and `j` when `i > j` before
+> packing the index; the Rust VM does not, so the two implementations disagree whenever
+> `i > j`. Pass indices already ordered so that `i <= j`; see
+> [Index Math](../xqvm/instructions/index-math.md) for detail. Report problems at the
+> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
 
 ## Logical and Other Free Functions
 

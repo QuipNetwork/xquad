@@ -3,6 +3,16 @@
 Pack N items with given integer sizes into the minimum number of bins, each
 with a fixed capacity C.
 
+<!-- xquad:defect QUI-1029 -->
+> **Known issue.** The objective places a uniform `+1` bias on every cell as a proxy for bin
+> count, but that quantity is identically N on every feasible packing under the assignment
+> constraint, so the objective cannot discriminate bin counts. Separately, the runner reuses
+> one fixed `start_index` across the per-bin `SLACK` calls, so slack variables are allocated
+> once and shared across bins instead of per bin. Read this example as a demonstration of
+> assignment and capacity modelling, not a working bin-count minimiser -- the default run
+> spreads four items of total size 5 across three bins of capacity 5. Report problems at the
+> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+
 ## QUBO formulation
 
 - **Input**: N item sizes (Vec), number of bins B, bin capacity C

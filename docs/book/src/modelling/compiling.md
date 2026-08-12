@@ -239,6 +239,13 @@ that was never allocated raises `OutputIndex` on the Rust interpreter (see
 [Limits and Errors](../xqvm/limits-and-errors.md)). The Python interpreter
 accepts it silently.
 
+<!-- xquad:defect QUI-1023 -->
+> **Known issue.** `OUTPUT` against a slot that was never allocated raises `OutputIndex` on
+> the Rust interpreter and is accepted silently on the Python interpreter. Call
+> `set_output_slots` before `vm.run` for every program rather than relying on either behaviour
+> to catch a missing call. Report problems at the
+> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+
 ## Inspecting the Emitted Assembly
 
 `programs.encoder`, `programs.verifier` and `programs.decoder` are plain

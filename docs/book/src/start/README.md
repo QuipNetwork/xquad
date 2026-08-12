@@ -36,6 +36,13 @@ Examples](#get-the-examples) below: its `git clone` plus `make deps-py`
 path gives a working `import xquad` regardless of what the published
 wheel does.
 
+<!-- xquad:defect QUI-1020 -->
+> **Known issue.** The published wheels for `xquad`, `xqcp`, `xqsa` and `xqvm_py` carry no
+> importable package directory, so the install reports success while `import xquad` fails;
+> the Rust CLI is unaffected. Use the `git clone` plus `make deps-py` path in [Get the
+> Examples](#get-the-examples) below for a working install today. Report problems at the
+> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+
 ## Get the Examples
 
 Every `uv run python examples/...` command in this book, including on
@@ -79,6 +86,12 @@ extras, and `xquad/pyproject.toml` forwards to the ones it re-exports:
   xquad[quip]` does not install it; `pip install xqsa[quip]` does.
 
 `xqcp`, `xqffi`, and `xqvm_py` define no optional dependencies at all.
+
+<!-- xquad:defect QUI-1020 -->
+> **Known issue.** `xquad` declares `cuda`, `dwave` and `metal` extras but no `quip`
+> extra, so `pip install xquad[quip]` fails while every sibling extra installs
+> successfully. Install directly from `xqsa` instead: `pip install xqsa[quip]`. Report
+> problems at the [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
 
 The only extra this page can fully specify is `[dwave]`: it needs a D-Wave
 Leap account and a `DWAVE_API_TOKEN`, and `dwave ping` confirms both. A

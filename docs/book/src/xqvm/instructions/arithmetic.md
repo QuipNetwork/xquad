@@ -41,6 +41,13 @@ the same program, while the Rust VM wraps. Write bytecode that keeps
 values away from the `i64` boundary rather than relying on either
 behaviour.
 
+<!-- xquad:defect QUI-998 -->
+> **Known issue.** The spec leaves overflow implementation-defined, and the two
+> reference interpreters took opposite options: the same program wraps on the
+> Rust VM and raises `ArithmeticOverflow` on the Python VM. Keep values away
+> from the `i64` boundary rather than relying on either behaviour. Report
+> problems at the [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+
 ## Division and Remainder
 
 `DIV` rounds toward negative infinity: it is floor division, matching

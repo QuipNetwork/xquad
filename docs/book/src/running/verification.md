@@ -224,6 +224,14 @@ so both arms inherit it.
 
 ## What passing verification does not guarantee
 
+<!-- xquad:defect QUI-1026 -->
+> **Known issue.** The bytecode verifier passes programs that fault at runtime: a
+> back-edge to the entry block escapes the join-point check, and the net-delta stack
+> scan cannot see an operand-ordering error, so both a stack overflow and a stack
+> underflow can pass verification. Treat a verification pass as a static check, not a
+> guarantee that the program runs to completion. Report problems at the
+> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+
 A pass means every phase's static checks succeeded. It does not mean the
 program runs to completion. The stack-depth phase reasons about each basic
 block's net effect. It does not count how many times a backward jump
@@ -311,6 +319,14 @@ and running `xquad verify` against the verifier program's `.xqasm` text
 does not check whether a sample is a good answer.
 
 ## The generated verifier's `valid` flag does not check every constraint
+
+<!-- xquad:defect QUI-1026 -->
+> **Known issue.** The generated solution verifier emits a row-sum check only for
+> `onehot_row` and a column-sum check only for `onehot_col`, and otherwise checks only
+> domain membership, so a sample violating any other constraint kind can still report
+> `valid = 1`. Check feasibility in the host for problems built from other constraint
+> kinds, rather than trusting the `valid` flag. Report problems at the
+> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
 
 The verifier program's `valid` output checks the sample's domain, plus a
 row- or column-sum check when the problem used `onehot_row` or
