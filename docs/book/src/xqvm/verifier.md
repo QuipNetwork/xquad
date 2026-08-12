@@ -171,7 +171,7 @@ diagnostic can point at the exact spot in the bytecode.
 
 A verifier failure is a load-time rejection: nothing in the program has
 executed. `xquad verify` runs the pipeline from the command line without
-running the program; see [CLI](cli/README.md). For what to change in your
+running the program; see [CLI](cli/). For what to change in your
 source when a specific error fires, see
 [Verification](../running/verification.md), which covers the same errors
 from the side of fixing them rather than defining them.

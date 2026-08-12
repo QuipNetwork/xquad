@@ -15,7 +15,7 @@ is the same problem, runnable, on a graph you pick the size of.
 ## Run It
 
 With XQuad installed and the examples checked out, per [Install
-XQuad](README.md):
+XQuad](./):
 
 ```sh
 $ uv run python examples/maxcut/runner.py --seed 42

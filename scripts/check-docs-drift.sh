@@ -27,6 +27,10 @@
 # It also holds the known-issue defect blocks (QUI-1036) to their registry, so a
 # block cannot outlive the defect it describes.
 #
+# Finally it resolves every relative link between book pages against the source
+# tree (QUI-1040), so a link that would 404 on the published site is caught
+# here rather than by a reader.
+#
 # Usage:
 #   scripts/check-docs-drift.sh
 #
@@ -44,8 +48,8 @@
 #
 # Exit codes:
 #   0  -- pass
-#   1  -- drift detected, stale allowlist entry, SUMMARY coverage mismatch, or
-#         a defect block that disagrees with the registry
+#   1  -- drift detected, stale allowlist entry, SUMMARY coverage mismatch, a
+#         defect block that disagrees with the registry, or a dead page link
 #   2  -- setup error
 
 set -euo pipefail
@@ -354,6 +358,141 @@ check_summary_coverage() {
     return "${failed}"
 }
 
+# Collapse `.` and `..` segments in a slash-separated relative path.
+#
+# Pure string work: there is no `realpath` on macOS bash 3.2, the alpine job
+# installs only bash and grep, and the path being resolved is a link target
+# that need not exist for the answer to be defined.
+#
+# A path that climbs above its own starting point keeps its leading `..`, which
+# is how `check_page_links` spots a link escaping the book source tree.
+normalise_path() {
+    local rest="${1}"
+    local out=""
+    local segment
+
+    while [[ -n "${rest}" ]]; do
+        if [[ "${rest}" == */* ]]; then
+            segment="${rest%%/*}"
+            rest="${rest#*/}"
+        else
+            segment="${rest}"
+            rest=""
+        fi
+
+        case "${segment}" in
+            "" | ".") ;;
+            "..")
+                if [[ -z "${out}" || "${out}" == ".." || "${out}" == *"/.." ]]; then
+                    out="${out:+${out}/}.."
+                elif [[ "${out}" == */* ]]; then
+                    out="${out%/*}"
+                else
+                    out=""
+                fi
+                ;;
+            *) out="${out:+${out}/}${segment}" ;;
+        esac
+    done
+
+    printf '%s\n' "${out}"
+}
+
+# Relative links between book pages (QUI-1040).
+#
+# mdBook's index preprocessor renames `<dir>/README.md` to `<dir>/index.html`
+# in the output, but in-page relative links are rewritten by swapping `.md` for
+# `.html`. The two rules disagree, so `](concepts/README.md)` renders as
+# `concepts/README.html` -- a file mdBook never generates -- and every such link
+# 404s on the published site. `](concepts/index.md)` resolves on the site but
+# names a file that does not exist in the repository. The trailing-slash
+# directory form `](concepts/)` is the only spelling that works in both places,
+# so it is the one this check requires.
+#
+# The check resolves every link rather than only banning the `README.md` form,
+# because the same pass then catches a mistyped filename or a page renamed
+# without its inbound links, which is the same defect one keystroke earlier.
+#
+# SUMMARY.md is excluded. mdBook resolves its entries against `src/` as source
+# paths rather than as hrefs, so `README.md` is correct there and the build
+# fails without it; `check_summary_coverage` is what validates that file.
+#
+# Deliberately a source-text check and not a build-output one: `lint:docs-drift`
+# runs on alpine:3 with no Rust toolchain and no mdBook, and walking the source
+# catches this class without a build.
+check_page_links() {
+    local failed=0
+    local file rel rel_page page_dir line lineno rest link target suggestion resolved abspath
+    local link_re=']\(([^)]*)\)'
+
+    while IFS= read -r file; do
+        rel="$(rel_path "${file}")"
+        rel_page="${file#"${BOOK_SRC}/"}"
+        if [[ "${rel_page}" == */* ]]; then
+            page_dir="${rel_page%/*}"
+        else
+            page_dir=""
+        fi
+
+        lineno=0
+        while IFS= read -r line || [[ -n "${line}" ]]; do
+            lineno=$((lineno + 1))
+            rest="${line}"
+
+            while [[ "${rest}" =~ ${link_re} ]]; do
+                link="${BASH_REMATCH[1]}"
+                rest="${rest#*"${BASH_REMATCH[0]}"}"
+
+                case "${link}" in
+                    *://* | mailto:* | "#"*) continue ;;
+                    /*)
+                        failed=1
+                        echo "error: page-link: ${rel}:${lineno}: ${link} is an absolute path; the book is served under /xquad/, so links between pages must be relative" >&2
+                        continue
+                        ;;
+                esac
+
+                # An anchor plays no part in resolving the target, and a link
+                # that is nothing but an anchor was skipped above.
+                target="${link%%#*}"
+                [[ -n "${target}" ]] || continue
+
+                case "${target}" in
+                    README.md | */README.md)
+                        failed=1
+                        suggestion="${link/README.md/}"
+                        case "${suggestion}" in
+                            "" | "#"*) suggestion="./${suggestion}" ;;
+                        esac
+                        echo "error: page-link: ${rel}:${lineno}: ${link} renders to README.html, which mdBook never generates; use the directory form ${suggestion}" >&2
+                        continue
+                        ;;
+                esac
+
+                resolved="$(normalise_path "${page_dir:+${page_dir}/}${target}")"
+                if [[ "${resolved}" == ".." || "${resolved}" == "../"* ]]; then
+                    failed=1
+                    echo "error: page-link: ${rel}:${lineno}: ${link} resolves outside docs/book/src, so it cannot resolve in the built site; link the file on GitLab by its full URL instead" >&2
+                    continue
+                fi
+
+                abspath="${BOOK_SRC}${resolved:+/${resolved}}"
+                if [[ "${target}" == */ ]]; then
+                    if [[ ! -f "${abspath}/README.md" ]]; then
+                        failed=1
+                        echo "error: page-link: ${rel}:${lineno}: ${link} is not a section directory holding a README.md" >&2
+                    fi
+                elif [[ ! -f "${abspath}" ]]; then
+                    failed=1
+                    echo "error: page-link: ${rel}:${lineno}: ${link} does not exist" >&2
+                fi
+            done
+        done < "${file}"
+    done < <(find "${BOOK_SRC}" -type f -name '*.md' ! -name 'SUMMARY.md' | sort)
+
+    return "${failed}"
+}
+
 validate_defect_block() {
     local rel="${1}"
     local start="${2}"
@@ -529,6 +668,7 @@ main() {
     check_content_rules || failed=1
     check_matched_allowlist || failed=1
     check_summary_coverage || failed=1
+    check_page_links || failed=1
     check_defect_blocks || failed=1
 
     if [[ "${failed}" -ne 0 ]]; then

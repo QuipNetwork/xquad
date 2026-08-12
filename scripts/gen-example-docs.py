@@ -46,9 +46,15 @@ BOOK_EXAMPLES_ROOT = REPO_ROOT / "docs" / "book" / "src" / "examples"
 SUMMARY_PATH = REPO_ROOT / "docs" / "book" / "src" / "SUMMARY.md"
 GITLAB_BLOB_URL = "https://gitlab.com/quip.network/xquad/-/blob/main"
 SOURCE_SCHEMES = ("http://", "https://", "mailto:", "#")
+# Keys are the repo-relative links as written in `examples/*/README.md`, where
+# `README.md` is correct: those pages are browsed on GitLab. Values are the
+# book-relative rewrites, where a section index must be named by its directory
+# -- mdBook renames `<dir>/README.md` to `<dir>/index.html` but rewrites links
+# by swapping `.md` for `.html`, so a `README.md` target renders as a dead
+# `README.html` (QUI-1040).
 LINK_MAP = {
-    "../../README.md#gpuqpu-support": "../start/README.md",
-    "../../xqsa/README.md": "../solving/README.md",
+    "../../README.md#gpuqpu-support": "../start/",
+    "../../xqsa/README.md": "../solving/",
     "../../docs/book/src/concepts/three-programs.md": "../concepts/three-programs.md",
     (
         "../../docs/book/src/modelling/constraints.md#why-the-reported-energy-is-not-just--total_value"
@@ -63,7 +69,7 @@ LINK_MAP = {
 SOLVER_SECTION_REPLACEMENT = [
     "Solver selection and install extras are the same for every example: see",
     "[Using the Examples](using-examples.md#running-one) and",
-    "[Solving Overview](../solving/README.md). The default is `dwave-cpu`, and a",
+    "[Solving Overview](../solving/). The default is `dwave-cpu`, and a",
     "non-default solver will not reproduce the output shown here.",
 ]
 INLINE_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")

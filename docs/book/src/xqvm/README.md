@@ -5,7 +5,7 @@ with a 256-slot register file that executes compiled quadratic-optimisation
 programs. This section is the reference for that machine -- its execution
 model, assembly language, instruction set, binary format, and verifier. For
 what a QUBO/Ising model is and why you would want one, start at
-[Concepts](../concepts/README.md) instead; this section assumes you already
+[Concepts](../concepts/) instead; this section assumes you already
 have a program, or want to write one directly in `.xqasm`, and want to know
 exactly what the machine does with it.
 
@@ -44,11 +44,11 @@ add.xqasm` skips the separate assembly step and runs the source directly.
   execution tracing.
 - **[Assembly](assembly.md)** -- the `.xqasm` text syntax.
 - **[Assembly Examples](assembly-examples.md)** -- worked `.xqasm` programs.
-- **[Instructions](instructions/README.md)** -- all 93 instructions, by
+- **[Instructions](instructions/)** -- all 93 instructions, by
   category.
 - **[Opcode Reference](opcodes.md)** -- the generated opcode table.
 - **[Bytecode Format](bytecode-format.md)** -- the `.xqb` wire format.
 - **[Verifier](verifier.md)** -- what the pre-execution verifier checks.
-- **[CLI](cli/README.md)** -- the `xquad` command-line tool.
+- **[CLI](cli/)** -- the `xquad` command-line tool.
 - **[Limits and Errors](limits-and-errors.md)** -- fixed and configurable
   limits, and every runtime and verifier error.

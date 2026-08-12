@@ -72,7 +72,7 @@ make example-smoke    # run examples on both interpreters, check valid == 1
 make docs             # mdbook build
 make docs-regen       # regenerate generated opcode and example book pages
 make docs-check       # assert generated docs match regenerated output
-make docs-drift       # guard book prose and SUMMARY.md against known drift
+make docs-drift       # guard book prose, SUMMARY.md coverage, and page links
 make docs-readme      # guard published package READMEs against the 100-line limit
 make docs-serve       # mdbook serve --open
 

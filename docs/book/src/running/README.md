@@ -6,7 +6,7 @@ Python: loading it, supplying calldata, running it, and reading outputs back.
 is the full coverage for three of them: `xquad.program`, and the two VM
 wrappers underneath and alongside it. For writing a problem with the `xqcp`
 DSL, see
-[Modelling](../modelling/README.md). For what `xquad verify` checks and how
+[Modelling](../modelling/). For what `xquad verify` checks and how
 to fix a rejected program, see [Verification](verification.md).
 
 Every example on this page ran against the Rust backend, the default for
@@ -274,7 +274,7 @@ program's own `.set_calldata` order and `.set_output_slots` count are fixed
 by what it was compiled from -- [Compiling](../modelling/compiling.md#the-calldata-and-output-contract)
 has the full table. A real pipeline replaces the hand-picked `sample` above
 with `xqsa.build_solver(...).solve(model).sample`; see [Solving
-Overview](../solving/README.md).
+Overview](../solving/).
 
 ## What this page does not cover
 

@@ -57,7 +57,7 @@ uv run python examples/vertex_cover/runner.py --n 7 --interpreter rust
 
 Solver selection and install extras are the same for every example: see
 [Using the Examples](using-examples.md#running-one) and
-[Solving Overview](../solving/README.md). The default is `dwave-cpu`, and a
+[Solving Overview](../solving/). The default is `dwave-cpu`, and a
 non-default solver will not reproduce the output shown here.
 
 The canonical output and its invariants are defined in the [source README](https://gitlab.com/quip.network/xquad/-/blob/main/examples/vertex_cover/README.md).

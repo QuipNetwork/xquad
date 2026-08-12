@@ -337,7 +337,7 @@ A problem built only from `EQUALITY`, `ATLEAST`, `ATLEASTW`, `EXCLUDE`, or
 them -- domain membership is the only thing tested, so an infeasible
 sample can still read `valid = 1`.
 
-[Running Programs](README.md#a-complete-run-across-three-programs) runs
+[Running Programs](./#a-complete-run-across-three-programs) runs
 this end to end on the knapsack example: a sample selecting items that
 weigh `12` against a capacity of `8` -- an infeasible selection -- still
 comes back `valid = 1`, because knapsack's only constraint is `EQUALITY`

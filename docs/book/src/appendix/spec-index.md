@@ -102,6 +102,6 @@ Normative for the solver-adapter interface between a model and a backend.
 
 Every file above assumes the concepts this book explains from scratch --
 what a quadratic model is, why a problem becomes three programs, what a
-penalty weight does. Arrive from [Concepts](../concepts/README.md) or the
+penalty weight does. Arrive from [Concepts](../concepts/) or the
 relevant chapter first; the spec files are where to go once you need the
 exact rule the book page summarised, not where to start.

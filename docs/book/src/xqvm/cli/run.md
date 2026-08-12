@@ -22,7 +22,7 @@ xquad run [OPTIONS] <FILE>
 | `--text` | off | Treat `FILE` as assembly source and assemble it before running. |
 | `--calldata <CALLDATA>` | none | Comma-separated `i64` integers passed to `INPUT` instructions. |
 | `--outputs <OUTPUTS>` | `16` | Number of output slots available for `OUTPUT` instructions. |
-| `--step-limit <STEP_LIMIT>` | `10000000` | Maximum number of instructions to execute. `0` leaves the interpreter's built-in 10,000,000-step default in force; it does not remove the limit. See [Step limits](../../running/README.md#step-limits). |
+| `--step-limit <STEP_LIMIT>` | `10000000` | Maximum number of instructions to execute. `0` leaves the interpreter's built-in 10,000,000-step default in force; it does not remove the limit. See [Step limits](../../running/#step-limits). |
 | `--trace` | off | Enable step-by-step execution tracing. |
 | `--trace-format <TRACE_FORMAT>` | `text` | Trace output format: `text` or `json`. Requires `--trace`. |
 | `--trace-file <TRACE_FILE>` | stderr | Write trace output to a file instead of stderr. Requires `--trace`. |
@@ -150,7 +150,7 @@ Error: xqvm::runtime_error
 `Vm::set_step_limit` when the flag is greater than zero, so `0` leaves the
 interpreter's own built-in default of 10,000,000 steps in force -- the
 same behaviour the Python `Session` layer documents at
-[Step limits](../../running/README.md#step-limits). `countloop.xqb` needs
+[Step limits](../../running/#step-limits). `countloop.xqb` needs
 14 steps, well under that default, so it still runs to completion:
 
 ```sh

@@ -94,7 +94,7 @@ For the architectural reason two implementations exist at all --
 independent verification of a solver's answer, not just parity between
 runtimes -- see [Three Programs](../concepts/three-programs.md). For what
 each VM actually does with a program, see the [XQVM
-Reference](../xqvm/README.md).
+Reference](../xqvm/).
 
 ## Coverage Is Per-Opcode, and Incomplete
 

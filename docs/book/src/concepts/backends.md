@@ -57,7 +57,7 @@ up belongs to the pages below.
 
 This page is orientation, not a manual. Backend-specific setup, parameter
 tuning, and result interpretation belong to
-[Solving Overview](../solving/README.md),
+[Solving Overview](../solving/),
 [Local Solvers](../solving/local.md),
 [D-Wave QPU](../solving/dwave-qpu.md),
 [Quip Network](../solving/quip-network.md), and

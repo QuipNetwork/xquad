@@ -324,8 +324,9 @@ docs-check:
 	uv run python scripts/gen-example-docs.py --check || status=1; \
 	exit "$$status"
 
-# Guard book prose and SUMMARY.md coverage against known documentation drift.
-# The in-script allowlist is a QUI-977 to-do list, not a permanent exemption.
+# Guard book prose, SUMMARY.md coverage, and the relative links between book
+# pages against known documentation drift and dead links. The in-script
+# allowlist is a QUI-977 to-do list, not a permanent exemption.
 docs-drift:
 	bash scripts/check-docs-drift.sh
 

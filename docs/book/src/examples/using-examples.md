@@ -1,7 +1,7 @@
 # Using the Examples
 
 `examples/` holds fourteen self-contained problems, one directory each,
-listed on the [gallery page](README.md). This page covers what every
+listed on the [gallery page](./). This page covers what every
 directory has in common, how to run one, and how to turn one into a
 problem of your own -- the task the rest of this chapter does not cover,
 because it is not specific to any single example.
@@ -18,7 +18,7 @@ programs are and [Compiling](../modelling/compiling.md) for what
 
 - **`build_problem(...)`** -- an `xqcp` `Problem` definition: inputs, a
   model, an objective, constraints, and outputs. This is the part that
-  changes from problem to problem, and the part [Modelling](../modelling/README.md)
+  changes from problem to problem, and the part [Modelling](../modelling/)
   covers in full.
 - **`run(programs, ...)`** -- three `VM.run()` calls against the compiled
   encoder, verifier, and decoder, with one `xqsa` solver call between the

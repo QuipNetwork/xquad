@@ -8,7 +8,7 @@ names five recurring shapes instead, each grounded in the example or
 examples that embody it and shown as code that actually ran. One further
 page covers getting the arithmetic right once a shape is chosen.
 
-This chapter assumes [Modelling](../modelling/README.md) -- it builds
+This chapter assumes [Modelling](../modelling/) -- it builds
 problems with the same `xqcp` calls that chapter introduces and does not
 re-explain them. It also assumes
 [Quadratic Models](../concepts/quadratic-models.md) for what a penalty

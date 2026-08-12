@@ -94,7 +94,7 @@ the same way it is for the three simulated-annealing backends
 (`params["annealing_time"]`, `params["raw_energy"]`) -- only `solver`
 and `qpu_timing` sit outside `params`, and this call does not set
 `metadata["seed"]` at all (there is no seed on physical hardware). See
-[Solving Overview](README.md#the-solver-interface) for the full,
+[Solving Overview](./#the-solver-interface) for the full,
 per-backend split. If you write code against `result.metadata` for
 more than one backend, do not assume its shape is identical across all
 five; check the backend you are calling.
