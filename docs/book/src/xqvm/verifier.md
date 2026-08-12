@@ -29,6 +29,13 @@ not bound how many times a loop iterates, so a backward jump that grows the
 stack by a fixed amount on every pass can still overflow the real stack at
 runtime even though the program verified.
 
+<!-- xquad:defect QUI-1026 -->
+> **Known issue.** Verification passes some programs that fault at runtime, because the
+> stack-depth phase does not bound how many times a loop iterates. See
+> [Verification](../running/verification.md) for the specific failure modes and what to
+> do about them today. Report problems at the
+> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+
 ## Pipeline
 
 | Order | Phase | Checks |

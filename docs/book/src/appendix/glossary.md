@@ -31,6 +31,11 @@ partition, a set of selected items). See
 model and the sample solving it must share a domain. See [Quadratic
 Models](../concepts/quadratic-models.md#three-domains).
 
+<!-- xquad:defect QUI-1024 -->
+> **Known issue.** Discrete domain bounds are inconsistent between specs and
+> implementations; see [Allocators](../xqvm/instructions/allocators.md). Report
+> problems at the [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+
 **Embedding (D-Wave).** Mapping a model's logical variables onto a QPU's
 physical qubit graph, called *minor embedding*: each logical variable
 becomes a chain of one or more physical qubits held together by chain

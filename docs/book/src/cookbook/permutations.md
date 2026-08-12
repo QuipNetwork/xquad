@@ -103,3 +103,9 @@ out as the single most expensive mistake in that instruction family, since
 neither `xquad verify` nor `xquad run` catches it. The Python reference
 VM (`xqvm_py`) does not share that silence: it raises `ValueError`
 instead, so which symptom you see depends on `--interpreter`.
+
+<!-- xquad:defect QUI-1022 -->
+> **Known issue.** On the Rust VM, applying `ONEHOTR`/`ONEHOTC` with no grid set silently
+> omits the constraint instead of raising; see
+> [High-Level Constraints](../xqvm/instructions/constraints.md). Report problems at the
+> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).

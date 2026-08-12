@@ -24,6 +24,9 @@
 # `xq` binary name, and jump-table prose, then checks that every book page is
 # listed in SUMMARY.md.
 #
+# It also holds the known-issue defect blocks (QUI-1036) to their registry, so a
+# block cannot outlive the defect it describes.
+#
 # Usage:
 #   scripts/check-docs-drift.sh
 #
@@ -41,7 +44,8 @@
 #
 # Exit codes:
 #   0  -- pass
-#   1  -- drift detected, stale allowlist entry, or SUMMARY coverage mismatch
+#   1  -- drift detected, stale allowlist entry, SUMMARY coverage mismatch, or
+#         a defect block that disagrees with the registry
 #   2  -- setup error
 
 set -euo pipefail
@@ -95,6 +99,48 @@ add_rule "xq-binary" '(^|[^[:alnum:]_.-])xq($|[^[:alnum:]_])'
 # lookup -- and spares the two that are correct today, `jump_table()` and
 # `JumpTable`, neither of which is ever followed by `[`.
 add_rule "jump-table" '[Jj]ump[[:space:]-][Tt]able|jump_table\['
+
+# Known-issue defect blocks (QUI-1036).
+#
+# Each reader-visible block is introduced by an `<!-- xquad:defect QUI-NNN -->`
+# marker naming the ticket that removes it. The registry below declares where
+# every block lives, so the relationship is checked in both directions: a
+# declared block that has gone missing fails, and a marker nobody declared
+# fails. That is what makes "remove its drift-guard entry" a real step in each
+# fix ticket's acceptance criteria rather than a promise.
+#
+# Entries are `ticket|path|count`. Delete the entry in the same MR that removes
+# the block, exactly as with the allowlist above.
+#
+# Generated pages are skipped: `examples/bin_packing/README.md` is the source of
+# truth for the block that reaches `docs/book/src/examples/bin_packing.md`, and
+# `make docs-check` already fails if the two disagree. Declaring both would be
+# the same fact twice.
+DEFECTS=()
+
+defect() {
+    DEFECTS+=("${1}|${2}|${3}")
+}
+
+defect "QUI-1020" "docs/book/src/start/README.md" 2
+defect "QUI-1021" "docs/book/src/xqvm/instructions/index-math.md" 1
+defect "QUI-1021" "docs/book/src/modelling/expressions.md" 1
+defect "QUI-1022" "docs/book/src/xqvm/instructions/constraints.md" 1
+defect "QUI-1022" "docs/book/src/cookbook/permutations.md" 1
+defect "QUI-1023" "docs/book/src/modelling/compiling.md" 1
+defect "QUI-1023" "docs/book/src/modelling/outputs-and-decoding.md" 1
+defect "QUI-1024" "docs/book/src/xqvm/instructions/allocators.md" 1
+defect "QUI-1024" "docs/book/src/appendix/glossary.md" 1
+defect "QUI-1024" "docs/book/src/xqvm/limits-and-errors.md" 1
+defect "QUI-1025" "docs/book/src/xqvm/loops.md" 1
+defect "QUI-1026" "docs/book/src/running/verification.md" 2
+defect "QUI-1026" "docs/book/src/xqvm/verifier.md" 1
+defect "QUI-1027" "docs/book/src/modelling/expressions.md" 1
+defect "QUI-1027" "docs/book/src/modelling/outputs-and-decoding.md" 1
+defect "QUI-1029" "examples/bin_packing/README.md" 1
+defect "QUI-998" "docs/book/src/xqvm/instructions/arithmetic.md" 1
+
+DEFECT_TRACKER='https://gitlab.com/quip.network/xquad/-/issues'
 
 die_setup() {
     echo "error: $1" >&2
@@ -308,6 +354,155 @@ check_summary_coverage() {
     return "${failed}"
 }
 
+validate_defect_block() {
+    local rel="${1}"
+    local start="${2}"
+    local ticket="${3}"
+    local text="${4}"
+    local failed=0
+
+    # No marker seen yet, so there is no block to validate.
+    [[ -n "${ticket}" ]] || return 0
+
+    if [[ -z "${text}" ]]; then
+        echo "error: defect-block: ${rel}:${start}: marker is not followed by a blockquote" >&2
+        return 1
+    fi
+
+    case "${text}" in
+        *QUI-[0-9]*)
+            failed=1
+            echo "error: defect-block: ${rel}:${start}: block text names a ticket; tracking belongs in the marker comment, not in prose the reader cannot resolve" >&2
+            ;;
+    esac
+
+    case "${text}" in
+        *"${DEFECT_TRACKER}"*) ;;
+        *)
+            failed=1
+            echo "error: defect-block: ${rel}:${start}: block does not link the issue tracker" >&2
+            ;;
+    esac
+
+    return "${failed}"
+}
+
+defect_declared() {
+    local key="${1}"
+    local entry
+
+    for entry in ${DEFECTS[@]+"${DEFECTS[@]}"}; do
+        if [[ "${entry}" == "${key}|"* ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# Book pages plus the example READMEs that feed the generator. `BOOK_SRC` alone
+# would miss `examples/*/README.md`, which is where a block on a generated page
+# has to be authored.
+defect_scan_files() {
+    find "${BOOK_SRC}" -type f -name '*.md' ! -name 'SUMMARY.md'
+    find "${REPO_ROOT}/examples" -type f -name 'README.md'
+}
+
+check_defect_blocks() {
+    local failed=0
+    local file rel line lineno key entry
+    local entry_ticket entry_path entry_count actual
+    local block_ticket block_start block_text expect_quote
+    local marker_re='^<!--[[:space:]]+xquad:defect[[:space:]]+(QUI-[0-9]+)[[:space:]]+-->[[:space:]]*$'
+
+    : > "${tmp_dir}/defect-markers"
+
+    while IFS= read -r file; do
+        # Generated pages carry a copy of whatever their source authored, and
+        # `make docs-check` is what holds the two together.
+        if grep -Fq 'AUTO-GENERATED FILE. DO NOT EDIT.' "${file}"; then
+            continue
+        fi
+
+        rel="$(rel_path "${file}")"
+        lineno=0
+        block_ticket=""
+        block_start=0
+        block_text=""
+        expect_quote=0
+
+        while IFS= read -r line || [[ -n "${line}" ]]; do
+            lineno=$((lineno + 1))
+
+            if [[ "${line}" =~ ${marker_re} ]]; then
+                validate_defect_block "${rel}" "${block_start}" "${block_ticket}" "${block_text}" || failed=1
+                block_ticket="${BASH_REMATCH[1]}"
+                block_start="${lineno}"
+                block_text=""
+                expect_quote=1
+                printf '%s|%s\n' "${block_ticket}" "${rel}" >> "${tmp_dir}/defect-markers"
+                continue
+            fi
+
+            case "${line}" in
+                ">"*)
+                    if [[ -n "${block_ticket}" ]]; then
+                        block_text="${block_text} ${line}"
+                        expect_quote=0
+                    fi
+                    ;;
+                *)
+                    if [[ "${expect_quote}" -eq 1 ]]; then
+                        # A blank line between the marker and its blockquote is
+                        # still a detached marker: mdBook renders the two apart.
+                        validate_defect_block "${rel}" "${block_start}" "${block_ticket}" "" || failed=1
+                        block_ticket=""
+                        expect_quote=0
+                    elif [[ -n "${block_ticket}" ]]; then
+                        validate_defect_block "${rel}" "${block_start}" "${block_ticket}" "${block_text}" || failed=1
+                        block_ticket=""
+                        block_text=""
+                    fi
+                    ;;
+            esac
+        done < "${file}"
+
+        validate_defect_block "${rel}" "${block_start}" "${block_ticket}" "${block_text}" || failed=1
+    done < <(defect_scan_files | sort)
+
+    for entry in ${DEFECTS[@]+"${DEFECTS[@]}"}; do
+        IFS='|' read -r entry_ticket entry_path entry_count <<< "${entry}"
+
+        if [[ ! "${entry_count}" =~ ^[1-9][0-9]*$ ]]; then
+            die_setup "defect registry count must be a positive integer: ${entry}"
+        fi
+
+        if [[ ! -f "${REPO_ROOT}/${entry_path}" ]]; then
+            die_setup "defect registry entry points at a missing file: ${entry}"
+        fi
+
+        actual="$(grep -Fxc "${entry_ticket}|${entry_path}" "${tmp_dir}/defect-markers" || true)"
+        actual="${actual//[[:space:]]/}"
+
+        if [[ "${actual}" -ne "${entry_count}" ]]; then
+            failed=1
+            echo "error: defect-block: ${entry_path}: registry expects ${entry_count} ${entry_ticket} block(s), found ${actual}; remove the registry entry in the MR that removes the block" >&2
+        fi
+    done
+
+    sort -u "${tmp_dir}/defect-markers" > "${tmp_dir}/defect-keys"
+
+    while IFS= read -r key; do
+        [[ -n "${key}" ]] || continue
+        if ! defect_declared "${key}"; then
+            failed=1
+            echo "error: defect-block: ${key#*|}: ${key%%|*} block is not declared in the defect registry in scripts/check-docs-drift.sh" >&2
+        fi
+    done < "${tmp_dir}/defect-keys"
+
+    return "${failed}"
+}
+
 check_matched_allowlist() {
     local failed=0
     local key
@@ -334,6 +529,7 @@ main() {
     check_content_rules || failed=1
     check_matched_allowlist || failed=1
     check_summary_coverage || failed=1
+    check_defect_blocks || failed=1
 
     if [[ "${failed}" -ne 0 ]]; then
         exit 1
