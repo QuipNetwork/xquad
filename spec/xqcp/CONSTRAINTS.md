@@ -105,7 +105,7 @@ At-least-k constraint with weighted variables. Allocates slack variables, growin
 
 ### `model.apply_inequality(indices_vec, coeffs_vec, target, capacity, penalty)`
 
-Inequality constraint via composition: generates slack variables with `SLACK`, then applies `EQUALITY`. Equivalent to `sum(a_k * x_k) <= target` with slack capacity.
+Inequality constraint via composition: generates slack variables with `SLACK`, then applies `EQUALITY`. Equivalent to `sum(a_k * x_k) <= capacity`. `target` is the slack start index (normally the count of real variables), not a bound; `capacity` is both the slack bound and the `EQUALITY` target.
 
 | Property | Value |
 |----------|-------|

@@ -6,7 +6,7 @@ Mechanical cross-implementation check that the Rust production VM
 by [`spec/xqvm/SPEC.md`](../spec/xqvm/SPEC.md).
 
 The harness is a Rust test crate (`xquad-conformance`). Each vector
-becomes two `#[test]` functions — one per runtime — generated at
+becomes two `#[test]` functions -- one per runtime -- generated at
 `cargo build` time by [`build.rs`](build.rs). CI runs them as two
 independent GitLab jobs so a Python-side regression cannot mask a
 Rust-side pass (or vice versa).
@@ -23,7 +23,9 @@ conformance/
 │   │   └── expected.json       {"outputs": [i64|null, ...], "final_stack": [i64, ...]}
 │   ├── control-flow/<name>/
 │   ├── energy/<name>/
-│   └── constraints/<name>/
+│   ├── constraints/<name>/
+│   ├── vector-ops/<name>/
+│   └── xqmx-grid/<name>/
 ├── src/                  Rust library + manual CLI binary
 ├── tests/rust.rs         generated in-process Rust runner tests
 └── tests/python.rs       generated subprocess Python runner tests
@@ -35,7 +37,7 @@ conformance/
 
 Canonical human-readable source. The assembler is authoritative: whatever
 `xqasm::assemble_source()` produces becomes the canonical bytecode.
-Prefer explicit `PUSH1`/`PUSH2`/… forms when the constant width matters
+Prefer explicit `PUSH1`/`PUSH2`/... forms when the constant width matters
 for the vector; use the `PUSH` sugar where it doesn't.
 
 The harness assembles `program.xqasm` in-process on every run; encoding
@@ -64,25 +66,27 @@ the first value, slot 1 the second, and so on.
 }
 ```
 
-`outputs` is a sparse map per `spec/xqvm/SPEC.md:46` — each entry is
-either an `i64` (the value written by `OUTPUT`) or `null` (the slot
-was reserved but explicitly zeroed by a peer entry). Trailing unset
-slots are omitted entirely, so a program that writes slot 0 out of 16
-reserved slots produces `[42]`, not `[42, null, …]`. Explicitly-written
-zeroes are preserved; only slots that `OUTPUT` never touched disappear.
-`final_stack` is the residual stack at `HALT` (bottom to top); an
-empty stack is typical.
+`outputs` is a sparse map, per the state model in `spec/xqvm/SPEC.md` --
+each entry is either an `i64` (the value written by `OUTPUT`) or `null`
+(the slot was reserved but explicitly zeroed by a peer entry). Trailing
+unset slots are omitted entirely, so a program that writes slot 0 out of
+16 reserved slots produces `[42]`, not `[42, null, ...]`.
+Explicitly-written zeroes are preserved; only slots that `OUTPUT` never
+touched disappear. `final_stack` is the residual stack at `HALT` (bottom
+to top); an empty stack is typical.
 
 ## Authoring a new vector
 
 1. Write `program.xqasm` with a minimal scenario that exercises the
    behaviour you care about.
-2. Pick the matching category directory (or create a new one; the
-   category slug must match a section in `opcodes.yaml`).
+2. Pick the matching vector directory under `vectors/` (or create a new
+   one). These directory names are a separate, coarser vocabulary from
+   `opcodes.yaml`'s own `category` field -- the two do not need to match,
+   and mostly don't.
 3. Write `inputs.json` with the calldata the program reads.
 4. Produce `expected.json` by running one of the two impls and
    inspecting the result. The harness then asserts the *other* impl
-   agrees. If they disagree, you've found spec drift — file a bug
+   agrees. If they disagree, you've found spec drift -- file a bug
    ticket, and either fix the divergent impl or exclude the vector
    with a comment referencing the ticket.
 
@@ -91,12 +95,12 @@ empty stack is typical.
 There is no `DRIFT.md`. Either every vector passes on both runtimes or
 the build is broken. Concrete enforcement:
 
-- **Opcode table** — `xqvm/build.rs` asserts `opcodes.yaml ↔ opcodes!
-  x-macro` at compile time; `scripts/check-opcode-parity.py` asserts
-  `opcodes.yaml ↔ xqvm_py/opcodes.py` in CI.
-- **Bytecode encoding** — owned by the `xqasm` crate's own test suite
+- **Opcode table** -- `xqvm/build.rs` asserts `opcodes.yaml` against the
+  `opcodes!` x-macro at compile time; `scripts/check-opcode-parity.py`
+  asserts `opcodes.yaml` against `xqvm_py/opcodes.py` in CI.
+- **Bytecode encoding** -- owned by the `xqasm` crate's own test suite
   (`xqasm/tests/integration.rs` plus assembler unit tests).
-- **Observable behaviour** — [`check_vector`](src/lib.rs) asserts the
+- **Observable behaviour** -- [`check_vector`](src/lib.rs) asserts the
   observed `{outputs, final_stack}` matches `expected.json` for both
   runtimes.
 

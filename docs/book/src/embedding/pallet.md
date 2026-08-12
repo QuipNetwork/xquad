@@ -1,155 +1,142 @@
-# Pallet Integration
+# Pallet Fixture
 
-XQVM can run on-chain as a Substrate pallet. The pallet provides two
-extrinsics: one to store programs and one to execute them. This chapter
-describes the pallet's interface, configuration, and weight model.
+[`pallet-xqvm`](https://gitlab.com/quip.network/xquad/-/tree/main/fixtures/pallet-xqvm)
+embeds `xqvm` inside a Substrate FRAME runtime, as a compile-time and
+runtime integration gate. Its own module documentation states the purpose
+plainly: if `xqvm`'s public API changes in a way that breaks Substrate
+pallet integration, CI fails here first.
+`fixtures/pallet-xqvm` is an excluded member of the main Cargo workspace,
+declared in
+[`Cargo.toml`](https://gitlab.com/quip.network/xquad/-/blob/main/Cargo.toml),
+because it pulls in a heavy polkadot-sdk git dependency.
+Treat this chapter as a reference integration and a fixture to build on,
+not as a supported deployment path with its own release cycle.
+
+CI still runs it on every pipeline. `test:substrate-fixture` in
+[`.gitlab/ci/test.yml`](https://gitlab.com/quip.network/xquad/-/blob/main/.gitlab/ci/test.yml)
+carries no `rules:`, `only:`, or `allow_failure:`, and `make
+test-substrate-fixture` runs `cargo test --manifest-path
+fixtures/pallet-xqvm/Cargo.toml`, exercising six pallet tests plus two
+runtime-integrity checks FRAME generates from `construct_runtime!`. Every
+claim below is checked against
+[`fixtures/pallet-xqvm/src/lib.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/fixtures/pallet-xqvm/src/lib.rs).
 
 ## Configuration
 
 The pallet is configured via the `Config` trait:
 
-```rust
+```rust,ignore
 #[pallet::config]
-pub trait Config: frame_system::Config {
-    type RuntimeEvent: From<Event<Self>>
-        + IsType<<Self as frame_system::Config>::RuntimeEvent>;
-
-    /// Maximum size of a stored XQVM program in bytes.
+pub trait Config: frame_system::Config<RuntimeEvent: From<Event<Self>>> {
+    /// Maximum byte length of an uploaded XQBC program.
+    #[pallet::constant]
     type MaxProgramSize: Get<u32>;
 
-    /// Maximum number of calldata entries (i64 values).
-    type MaxCallDataLen: Get<u32>;
-
-    /// Maximum number of output slots.
-    type MaxOutputSlots: Get<u32>;
-
-    /// Maximum step limit per execution.
-    type MaxStepLimit: Get<u64>;
-
-    /// Weight charged per XQVM execution step (ref_time component).
-    type WeightPerStep: Get<Weight>;
-
-    type WeightInfo: WeightInfo;
+    /// Maximum number of calldata input slots and output slots.
+    #[pallet::constant]
+    type MaxCalldata: Get<u32>;
 }
 ```
 
-### Configuration Constants
-
-| Constant | Purpose | Example Value |
-|----------|---------|---------------|
-| `MaxProgramSize` | Upper bound on bytecode size in bytes. | 65,536 |
-| `MaxCallDataLen` | Maximum calldata entries for `execute`. | 32 |
-| `MaxOutputSlots` | Maximum output slots for `execute`. | 32 |
-| `MaxStepLimit` | Cap on the `step_limit` parameter. | 100,000 |
-| `WeightPerStep` | Weight charged per VM instruction. | 1,000 ref_time |
+Two associated types, both bounds rather than tunable behaviour. The mock
+runtime used by the fixture's own tests sets `MaxProgramSize = 65_536` (64
+KiB) and `MaxCalldata = 256`, matching the VM's 256-slot register file. A
+single `MaxCalldata` bound caps both the calldata a caller supplies and the
+outputs the pallet can return -- there is no separate output-side limit.
 
 ## Storage
 
-| Item | Key | Value | Description |
-|------|-----|-------|-------------|
-| `Programs` | `T::Hash` (Blake2-256) | `BoundedVec<u8, T::MaxProgramSize>` | Stored bytecode, keyed by hash. |
-| `ProgramOwner` | `T::Hash` | `T::AccountId` | Account that stored each program. |
+```rust,ignore
+#[pallet::storage]
+pub type StoredProgram<T: Config> =
+    StorageValue<_, BoundedVec<u8, T::MaxProgramSize>, OptionQuery>;
+```
 
-Programs are keyed by their Blake2-256 hash for deduplication. Storing the same
-bytecode twice is rejected with `ProgramAlreadyExists`.
+One value, not a map. `StoredProgram` holds the bytecode of the most
+recently executed program; calling the pallet's extrinsic again overwrites
+it. There is no per-program storage keyed by hash, and no record of which
+account submitted which program beyond the event stream below.
 
-## Extrinsics
+## The `submit_program` Extrinsic
 
-### `store_program` (call index 0)
+The pallet exposes exactly one dispatchable, call index 0:
 
-Store an XQVM program on-chain.
-
-**Parameters:**
+```rust,ignore
+#[pallet::call_index(0)]
+pub fn submit_program(
+    origin: OriginFor<T>,
+    bytecode: BoundedVec<u8, T::MaxProgramSize>,
+    calldata: BoundedVec<i64, T::MaxCalldata>,
+) -> DispatchResult
+```
 
 | Parameter | Type | Description |
-|-----------|------|-------------|
-| `bytecode` | `BoundedVec<u8, T::MaxProgramSize>` | Encoded XQVM bytecode. |
+|---|---|---|
+| `bytecode` | `BoundedVec<u8, T::MaxProgramSize>` | XQBC-encoded program, produced by `InstructionBuilder::build().encode()` or by assembling `.xqasm` source. |
+| `calldata` | `BoundedVec<i64, T::MaxCalldata>` | Integer values injected as `RegVal::Int` into the VM's calldata slots, in order. |
 
-**Behaviour:**
+Decode, execute, store, in that order:
 
-1. Validate the bytecode by decoding it as a `Program`.
-2. Compute the Blake2-256 hash.
-3. Check for duplicates.
-4. Store the bytecode and record the owner.
-5. Emit `ProgramStored`.
+1. Require a signed origin (`ensure_signed`); an unsigned call is rejected
+   with `BadOrigin` before pallet logic runs.
+2. Decode `bytecode` as an `xqvm::Program`. A decode failure returns
+   `Error::BytecodeInvalid` and nothing is stored.
+3. Read `program.output_slots()` -- the number of `OUTPUT` instructions the
+   program itself declares -- and use it as the output-slot count. The
+   caller does not choose this; it comes from the bytecode.
+4. Build a fresh `Vm`, set the calldata and output-slot count, and run the
+   program. Any VM fault returns `Error::ExecutionFailed`; the pallet does
+   not distinguish which fault occurred.
+5. Collect the `Int` outputs (any other `RegVal` variant in an output slot
+   is silently dropped from the result) and bound them to `T::MaxCalldata`.
+   Exceeding that bound returns `Error::OutputOverflow`.
+6. Store `bytecode` in `StoredProgram`, overwriting any previous value, and
+   emit `Event::ProgramExecuted { who, outputs }`.
 
-**Errors:** `InvalidBytecode`, `ProgramAlreadyExists`.
+There is no separate store-then-execute split, no program lookup by hash,
+and no explicit `step_limit` parameter -- the VM runs with its own default
+step limit. Off-chain, produce the bytecode however you like; the assembler
+CLI is `xquad asm`.
 
-### `execute` (call index 1)
+## Weight
 
-Execute a stored XQVM program.
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `program_hash` | `T::Hash` | Blake2-256 hash of the stored program. |
-| `calldata` | `BoundedVec<i64, T::MaxCallDataLen>` | Integer calldata values. |
-| `output_slots` | `u32` | Number of output slots to allocate. |
-| `step_limit` | `u64` | Maximum instructions to execute. |
-
-**Behaviour:**
-
-1. Validate `step_limit ≤ MaxStepLimit` and `output_slots ≤ MaxOutputSlots`.
-2. Look up the program by hash.
-3. Create a VM, configure calldata, outputs, and step limit.
-4. Execute the program.
-5. Collect integer outputs.
-6. Emit `ProgramExecuted` with actual steps used and outputs.
-7. Refund unused weight.
-
-**Weight model:**
-
-Weight is pre-charged based on `step_limit`:
-
-```
-pre_charged = execute_base + WeightPerStep * step_limit
+```rust,ignore
+#[pallet::weight(Weight::from_parts(10_000, 0).saturating_add(T::DbWeight::get().writes(1)))]
 ```
 
-After execution, actual weight is calculated from the real step count:
+A fixed placeholder, not a metered cost model: the same weight is charged
+regardless of program size or step count actually used. The extrinsic
+neither computes an actual weight from `vm.steps()` nor refunds any
+difference via `PostDispatchInfo`. The pallet's own source comment says as
+much: a production integration must supply real benchmarks. This weight
+exists only so the extrinsic compiles and the fixture's tests can dispatch
+it.
 
-```
-actual = execute_base + WeightPerStep * steps_used
-```
-
-The difference is refunded via `PostDispatchInfo`. This means users pay only
-for the instructions actually executed, not the worst-case limit.
-
-**Errors:** `ProgramNotFound`, `StepLimitTooHigh`, `TooManyOutputSlots`, and
-any VM runtime error (mapped from `aglais_xqvm_vm::Error`).
-
-## Events
+## Events and Errors
 
 | Event | Fields | Description |
-|-------|--------|-------------|
-| `ProgramStored` | `program_hash`, `owner`, `size` | Emitted when bytecode is stored. |
-| `ProgramExecuted` | `caller`, `program_hash`, `steps_used`, `outputs` | Emitted after successful execution. |
+|---|---|---|
+| `ProgramExecuted` | `who`, `outputs` | Emitted once, after a successful run. `outputs` holds only the `Int`-valued output slots, in slot order. |
 
-## Error Mapping
+| Error | Meaning |
+|---|---|
+| `BytecodeInvalid` | `bytecode` failed XQBC decode. |
+| `ExecutionFailed` | The VM faulted at runtime -- stack underflow, an unresolved jump, or any other `xqvm::Error` variant, all mapped to this one case. |
+| `OutputOverflow` | The program produced more `Int` outputs than `MaxCalldata` allows. |
 
-VM runtime errors are mapped to pallet errors:
+## What the Fixture's Tests Check
 
-| VM Error | Pallet Error |
-|----------|-------------|
-| `StackUnderflow` | `VmStackUnderflow` |
-| `StackOverflow` | `VmStackOverflow` |
-| `DivisionByZero` | `VmDivisionByZero` |
-| `StepLimitExceeded` | `VmStepLimitExceeded` |
-| `BadOpcode`, `TruncatedInstruction` | `VmBadBytecode` |
-| `RegisterType` | `VmRegisterType` |
-| All other errors | `VmRuntimeError` |
+`fixtures/pallet-xqvm/src/tests.rs` covers three happy-path cases (an
+arithmetic program with no calldata, a calldata passthrough, and a
+two-value sum) and three error paths (invalid bytecode, a stack underflow
+that reaches `ExecutionFailed`, and an unsigned origin rejected by
+`ensure_signed`). Running `make test-substrate-fixture` against this tree
+passes all eight tests: the six above, plus the two FRAME-generated
+checks, a genesis-config build and a `construct_runtime!` integrity test.
 
 ## Calldata Limitations
 
-The pallet's `execute` extrinsic only supports `i64` calldata values (not
-models, vectors, or samples). For richer input types, programs must construct
-them internally or receive them through a different mechanism.
-
-## Workflow
-
-A typical on-chain workflow:
-
-1. **Off-chain:** Assemble the program with `xq asm`.
-2. **On-chain:** Call `store_program` with the bytecode.
-3. **On-chain:** Call `execute` with calldata and desired output slots.
-4. **Off-chain:** Read the `ProgramExecuted` event to get outputs.
+`submit_program` only accepts `i64` calldata (not models, vectors, or
+samples), because `BoundedVec<i64, T::MaxCalldata>` is the extrinsic's
+parameter type. A program that needs a richer input must construct it
+internally rather than receive it from the caller.

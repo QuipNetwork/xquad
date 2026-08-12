@@ -34,7 +34,7 @@ HALT
 
 ### `PUSH` Sugar
 
-The assembler accepts `PUSH <value>` as syntactic sugar for the `PUSH1`–`PUSH8` family. The assembler parses the signed integer, selects the smallest `PUSHn` opcode that fits, and encodes the value as big-endian signed two's complement byte operands. The desugared forms (`PUSH1 0xFF`, `PUSH2 0x01 0x00`, etc.) remain valid.
+The assembler accepts `PUSH <value>` as syntactic sugar for the `PUSH1`–`PUSH8` family. The assembler parses the signed integer, selects the smallest `PUSHn` opcode that fits, and encodes the value as big-endian signed two's complement byte operands. The desugared forms (`PUSH1 0xFF`, `PUSH2 0x01 0x00`, etc.) are not accepted as assembler input; only the `PUSH <value>` sugar is typeable, and the assembler selects the width.
 
 ```assembly
 PUSH 42            ; → PUSH1 42

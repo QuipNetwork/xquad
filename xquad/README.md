@@ -1,4 +1,4 @@
-# xquad — Primary user-facing package for the XQuad toolchain
+# xquad -- Primary user-facing package for the XQuad toolchain
 
 `xquad` is the Python distribution most users should install. It provides the interactive `Program` / `Session` / `RunResult` API, a unified `VM` wrapper that dispatches to either the Rust or Python interpreter, and re-exports the lower-level peer packages (`xqffi`, `xqcp`, `xqsa`) under a single namespace.
 
@@ -74,22 +74,23 @@ So `isinstance` works whether the caller imported directly from the peer or via 
 
 | `xquad.*` | Origin | Contents |
 |-----------|--------|----------|
-| `xquad.program` | first-party | Interactive API — `Program`, `Session`, `RunResult` |
+| `xquad.program` | first-party | Interactive API -- `Program`, `Session`, `RunResult` |
 | `xquad.vm` | first-party | Unified `VM` wrapper with backend dispatch (`VMBackend.RUST` / `VMBackend.PYTHON`) |
 | `xquad.types` | first-party | Canonical Python type aliases used across the API |
 | `xquad.asm` | re-exports `xqffi.asm` | `parse_xqasm`, `assemble_source`, `disassemble` |
-| `xquad.cp` | re-exports `xqcp` | DSL — `Problem`, `Types`, expression builders |
+| `xquad.verifier` | re-exports `xqffi.verifier` | `verify`, `verify_source` |
+| `xquad.cp` | re-exports `xqcp` | DSL -- `Problem`, `Types`, expression builders |
 | `xquad.sa` | re-exports `xqsa` | Solvers -- `SolverDWaveCPU`, `Solver` |
 
 Lower-level escape hatches remain available directly via the peer packages (`xqffi.vm.Vm` for the raw FFI one-shot surface; `xqvm_py.Executor` for the pure-Python reference VM).
 
 ## Also see
 
-- [`xqffi`](../xqffi/) — PyO3 FFI bindings (low-level / conformance).
-- [`xqvm_py`](../xqvm_py/) — pure-Python reference VM (conformance oracle).
-- [`xqcp`](../xqcp/) — constraint-programming DSL.
-- [`xqsa`](../xqsa/) — solver adapters.
-- [`docs/python-api-walkthrough.md`](../docs/python-api-walkthrough.md) — end-to-end tour including both the direct-peer and umbrella import styles.
+- [`xqffi`](https://gitlab.com/quip.network/xquad/-/tree/main/xqffi) -- PyO3 FFI bindings (low-level / conformance).
+- [`xqvm_py`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm_py) -- pure-Python reference VM (conformance oracle).
+- [`xqcp`](https://gitlab.com/quip.network/xquad/-/tree/main/xqcp) -- constraint-programming DSL.
+- [`xqsa`](https://gitlab.com/quip.network/xquad/-/tree/main/xqsa) -- solver adapters.
+- [Running Programs](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/running/README.md) -- end-to-end tour including the Program/Session, `xqffi.vm`, and `xquad.vm` surfaces.
 
 ## License
 

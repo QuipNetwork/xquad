@@ -1,72 +1,96 @@
 # Introduction
 
-XQVM is a hardware-agnostic virtual machine for quantum computing. It is the
-module within the Aglais platform responsible for expressing binary optimisation
-models and objective functions. The current scope targets X-quadratic models for
-quantum annealers (QUBO/Ising formulations).
+XQuad is a hardware-agnostic toolchain for expressing and running quadratic
+optimisation problems -- QUBO, Ising, and discrete formulations -- on quantum
+annealers and classical solvers. A problem is written once against the XQVM
+instruction set and runs unchanged on any backend the toolchain supports.
 
-Think of it as **LLVM for quantum computing**: write a problem once, compile it
-to XQVM bytecode, and run it on any supported backend.
+Think of it as **LLVM for quantum computing**: write a problem once, compile
+it to XQVM bytecode, and run it on any supported backend.
 
-## Goals
+## What XQuad solves
 
-- **Hardware-agnostic** -- write a problem once, run it on any supported backend.
-- **Unified bytecode** -- a common intermediate representation for binary
-  optimisation problems targeting quantum annealers.
-- **Embeddable** -- the core VM and bytecode crates support `no_std + alloc`,
-  enabling deployment in WASM runtimes, bare-metal environments, and Substrate
-  pallets.
+Combinatorial optimisation problems -- travelling salesman, graph colouring,
+knapsack, set cover, and their relatives -- can be expressed as quadratic
+binary models and handed to a quantum annealer or a classical sampler. XQuad
+gives that pipeline a single intermediate representation, XQVM bytecode, and
+a reference virtual machine, so the same compiled program runs on a D-Wave
+QPU, a local simulated-annealing sampler, or the Quip network without a
+rewrite. See [Quadratic Models](concepts/quadratic-models.md) for what a
+QUBO/Ising model actually is, and [Backends](concepts/backends.md) for the
+solvers XQuad targets.
 
-## Workspace Crates
+## The real components
 
-The project is organised into five Rust crates:
+The toolchain is dual-language: a Rust core (VM, assembler, bytecode, CLI)
+with Python interfaces (reference VM, constraint-programming DSL, solver
+adapters, FFI bindings).
 
-| Crate | Binary | Description |
+Three Rust crates, published to crates.io:
+
+| Crate | Binary | Role |
 |---|---|---|
-| `aglais-xqvm-bytecode` | -- | Opcode table, instruction types, builder, binary codec, stream reader |
-| `aglais-xqvm-asm` | -- | Text assembler: `.xqasm` source &rarr; bytecode |
-| `aglais-xqvm-disasm` | -- | Bytecode &rarr; human-readable listing |
-| `aglais-xqvm-vm` | -- | Bytecode interpreter: stack, register file, QUBO/Ising model execution |
-| `aglais-xqvm-cli` | `xq` | Unified CLI driver (`xq asm`, `xq dism`, `xq run`) |
+| [`xqvm`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm) | -- | Bytecode definitions, opcode table, instruction builder, binary codec, an incremental instruction-stream reader, the VM interpreter, and a disassembler |
+| [`xqasm`](https://gitlab.com/quip.network/xquad/-/tree/main/xqasm) | -- | Text assembler: `.xqasm` source to bytecode |
+| [`xqcli`](https://gitlab.com/quip.network/xquad/-/tree/main/xqcli) | `xquad` | The unified CLI -- `xquad asm`, `xquad dism`, `xquad run`, `xquad verify` |
 
-## Architecture at a Glance
+A fourth crate, [`xqffi`](https://gitlab.com/quip.network/xquad/-/tree/main/xqffi),
+is a PyO3 bridge that exposes `xqvm` and `xqasm` to Python. It ships as a
+Python wheel rather than a crates.io library.
 
-XQVM is a **stack-based interpreter** with a **256-slot register file**. The
-value stack holds `i64` integers. Registers hold typed values (`RegVal`):
-integers, integer vectors, QUBO/Ising models (`XqmxModel`), model vectors, and
-candidate solutions (`XqmxSample`). A dedicated loop stack drives `RANGE`/`ITER`
-iteration.
+Five Python distributions, published to PyPI:
 
-The instruction set comprises **93 instructions** across 14 categories:
-control flow, register I/O, stack manipulation, arithmetic, comparison, logical,
-bitwise, allocators, vector operations, index math, coefficient access, grid
-operations, high-level constraints, and energy evaluation.
+| Package | Role |
+|---|---|
+| [`xqvm_py`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm_py) | Pure-Python reference VM, used as the cross-implementation conformance oracle |
+| [`xqcp`](https://gitlab.com/quip.network/xquad/-/tree/main/xqcp) | High-level constraint-programming DSL that compiles to XQVM assembly |
+| [`xqsa`](https://gitlab.com/quip.network/xquad/-/tree/main/xqsa) | Solver adapters for XQMX models: local simulated annealing, D-Wave, and the Quip network |
+| [`xqffi`](https://gitlab.com/quip.network/xquad/-/tree/main/xqffi) | The PyO3 FFI bindings crate above, packaged as a wheel |
+| [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) | Umbrella package re-exporting `xqffi`, `xqcp`, and `xqsa` under one namespace, with an interactive `Program` / `Session` / `RunResult` API |
 
-The opcode table (`opcodes!` x-macro in `crates/bytecode/src/types/table.rs`) is
-the single source of truth. The `Opcode` enum, `Instruction` enum, mnemonic
-strings, operand arity, codec, and builder methods are all derived from it.
+Parity on every committed conformance vector between the Rust `xqvm`
+interpreter and the Python `xqvm_py` reference VM is enforced mechanically:
+each vector runs on both implementations in CI, and disagreement fails the
+build. See [Conformance](embedding/conformance.md) for what a vector does
+and does not cover.
 
-Programs are serialised as a jump table followed by a raw instruction stream.
-Each instruction is an opcode byte followed by its operands in big-endian byte
-order.
+## Architecture at a glance
 
-## What This Book Covers
+XQVM is a stack-based interpreter with a 256-slot register file. The value
+stack holds `i64` integers; registers hold typed values (`RegVal`): integers,
+integer vectors, QUBO/Ising/discrete models (`XqmxModel`), model vectors, and
+candidate solutions (`XqmxSample`). A dedicated loop stack drives `RANGE` and
+`ITER` iteration.
 
-- **[Getting Started](start/README.md)** -- installation, building, and
-  running your first program.
-- **[CLI Reference](xqvm/cli/README.md)** -- the `xq` command-line tool.
-- **[VM Architecture](xqvm/machine-model.md)** -- stack, registers, loops,
-  I/O, and the execution model.
-- **[Assembly Language](xqvm/assembly.md)** -- the `.xqasm` syntax.
-- **[Instruction Set Reference](xqvm/instructions/README.md)** -- all 93
-  instructions with full semantics.
-- **[Bytecode Format](xqvm/bytecode-format.md)** -- the binary wire format.
-- **[Builder API](embedding/builder-api.md)** -- programmatic bytecode construction in
-  Rust.
-- **[Pallet Integration](embedding/pallet.md)** -- running XQVM on-chain
-  via a Substrate pallet.
-- **[Examples](examples/README.md)** -- worked examples including a Travelling
-  Salesman Problem.
+The instruction set comprises 93 instructions, declared once in the
+`opcodes!` table at
+[`xqvm/src/bytecode/types/table.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/bytecode/types/table.rs).
+The `Opcode` enum, the `Instruction` enum, mnemonic strings, and operand
+arity are all derived from that single table.
+
+Every `.xqb` file opens with a fixed 15-byte XQBC header -- magic bytes,
+format version, calldata/output-slot counts, instruction-stream length, and
+a CRC-32 checksum -- followed by the raw instruction stream: an opcode byte
+followed by its operands in big-endian byte order. See
+[Bytecode Format](xqvm/bytecode-format.md) for the full field layout.
+
+## Where to go next
+
+- **[Getting Started](start/README.md)** -- install the toolchain and run
+  your first program.
+- **[Concepts](concepts/README.md)** -- what a QUBO/Ising model is, the ways
+  to use XQuad, and the backends it targets.
+- **[Modelling with XQCP](modelling/README.md)** -- write a problem with the
+  constraint-programming DSL.
+- **[Running Programs](running/README.md)** and
+  **[Solving](solving/README.md)** -- execute a compiled program and hand it
+  to a solver.
+- **[XQVM Reference](xqvm/README.md)** -- the machine model, assembly
+  language, instruction set, and bytecode format.
+- **[Embedding](embedding/README.md)** -- using the Rust crates directly,
+  `no_std` support, and cross-implementation conformance.
+- **[Examples](examples/README.md)** -- worked problems including a
+  Travelling Salesman Problem.
 
 ## License
 

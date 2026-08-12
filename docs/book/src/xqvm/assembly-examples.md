@@ -20,19 +20,19 @@ Skip an instruction if a condition is true:
 ```asm
 PUSH 5
 PUSH 10
-GT             ; 5 > 10 ? → 0 (false)
+GT             ; 5 > 10 ? -> 0 (false)
 JUMPI .0       ; condition is 0, so we fall through
 PUSH 99        ; this executes (condition was false)
-.0: TARGET
-HALT
+JUMP .1
+.0: PUSH 0     ; taken path leaves the stack at the same depth
+.1: HALT
 ```
 
-## Countdown Loop
+## Summing a Range
 
-Count down from 3 to 0 using a range loop:
+Accumulate the values of a range loop into a register:
 
 ```asm
-PUSH 3         ; start = 3
 PUSH 0         ; accumulator in r0
 STOW r0
 
@@ -68,8 +68,8 @@ PUSH 1
 VECPUSH r1     ; vec = [0, 1]
 
 ; Compute remaining values
-PUSH 2
 LOAD r0
+PUSH 2
 SUB            ; count = N - 2
 STOW r2
 

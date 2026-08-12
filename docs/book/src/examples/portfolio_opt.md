@@ -44,7 +44,7 @@ objective (body) actions because it lands in the constraint section.
 2. **Assemble** -- `.xqasm` text to bytecode via `xquad.asm`
 3. **Encode** -- run encoder on chosen XQVM to produce the XQMX model
 4. **Sample** -- solver runs SA/QPU/GPU over the model
-5. **Verify** -- verifier checks budget constraint and computes energy
+5. **Verify** -- verifier computes energy and checks the sample is binary. It does not check the budget constraint: see [the generated verifier's `valid` flag](../running/verification.md#the-generated-verifiers-valid-flag-does-not-check-every-constraint)
 6. **Decode** -- decoder extracts the selected assets
 
 ## Usage
@@ -65,18 +65,9 @@ uv run python examples/portfolio_opt/runner.py --n 6 --budget 3 --interpreter ru
 
 ## Choosing a solver
 
-| Name | Hardware | Install |
-|------|----------|---------|
-| `dwave-cpu` | CPU (default) | `pip install xquad` |
-| `dwave-qpu` | D-Wave Leap account | `pip install xquad[dwave]` |
-| `cuda-gpu` | NVIDIA CUDA GPU | `pip install xquad[cuda]` |
-| `metal-gpu` | Apple Silicon (macOS) | `pip install xquad[metal]` |
-
-See [GPU/QPU installation](../start/README.md) for driver
-prerequisites and [xqsa solver quick-starts](../solving/README.md) for
-per-solver parameter tuning.
-
-Non-default solvers will not reproduce the canonical output (different
-RNG/hardware). `example-smoke` always runs `dwave-cpu`.
+Solver selection and install extras are the same for every example: see
+[Using the Examples](using-examples.md#running-one) and
+[Solving Overview](../solving/README.md). The default is `dwave-cpu`, and a
+non-default solver will not reproduce the output shown here.
 
 The canonical output and its invariants are defined in the [source README](https://gitlab.com/quip.network/xquad/-/blob/main/examples/portfolio_opt/README.md).

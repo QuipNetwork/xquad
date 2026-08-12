@@ -58,7 +58,7 @@ CATEGORIES: list[tuple[str, str]] = [
     ("logical", "Logical Boolean"),
     ("bitwise", "Bitwise"),
     ("allocators", "Allocators"),
-    ("vector-access", "Vector Access"),
+    ("vector-ops", "Vector Operations"),
     ("index-math", "Index Math"),
     ("xqmx-access", "XQMX Coefficient Access"),
     ("xqmx-grid", "XQMX Grid"),
@@ -152,34 +152,73 @@ def format_operands(operands: list[object], entry_path: str) -> str:
         elif kind == "label":
             bits = width * 8
             parts.append(f"`{name}: u{bits}`")
-        else:  # immediate
+        elif kind == "immediate":
             parts.append(f"`{name}: [u8; {width}]`")
+        else:
+            raise SetupError(
+                f"{op_path}: operand `{name}` has type `{kind}`, which is not one of "
+                "register/label/immediate recognised by format_operands in "
+                "scripts/gen-bytecode-docs.py; add support there or fix the type in "
+                "conformance/opcodes.yaml"
+            )
     return ", ".join(parts)
 
 
-def _reserved_codes(data: Mapping[str, object]) -> list[int]:
-    reserved = data.get("reserved", [])
-    if reserved is None:
-        raise SetupError(f"{YAML_PATH}: optional key `reserved` must be list, got null")
-    if not isinstance(reserved, list):
-        raise SetupError(f"{YAML_PATH}: optional key `reserved` must be list, got {type(reserved).__name__}")
-    for index, code in enumerate(reserved):
-        if not isinstance(code, int):
-            raise SetupError(f"{YAML_PATH}: reserved[{index}] must be int, got {type(code).__name__}")
-    return reserved
+def _format_reserved_range(start: int, end: int) -> str:
+    if start == end:
+        return f"`0x{start:02X}`"
+    return f"`0x{start:02X}`-`0x{end:02X}`"
+
+
+def _reserved_ranges(assigned: set[int]) -> list[str]:
+    """Collapse the wire bytes with no assigned opcode into ranges.
+
+    Derived by complementing `assigned` against the full 0x00-0xFF byte
+    space, not by reading a hand-maintained list, so the reserved set can
+    never drift out of step with the opcode table itself.
+    """
+    gaps = sorted(byte for byte in range(256) if byte not in assigned)
+    ranges: list[str] = []
+    start: int | None = None
+    prev: int | None = None
+    for byte in gaps:
+        if start is None:
+            start = prev = byte
+        elif prev is not None and byte == prev + 1:
+            prev = byte
+        else:
+            ranges.append(_format_reserved_range(start, prev))
+            start = prev = byte
+    if start is not None and prev is not None:
+        ranges.append(_format_reserved_range(start, prev))
+    return ranges
 
 
 def render_tables(data: dict) -> str:
     opcodes = require_key(data, YAML_PATH, "opcodes", list)
+    known_slugs = {cat for cat, _ in CATEGORIES}
     by_category: dict[str, list[Mapping[str, object]]] = {cat: [] for cat, _ in CATEGORIES}
     for index, value in enumerate(opcodes):
         entry_path = f"{YAML_PATH}: opcodes[{index}]"
         entry = require_mapping(value, entry_path)
         category = require_key(entry, entry_path, "category", str)
+        if category not in known_slugs:
+            mnemonic = entry.get("mnemonic", "<unknown>")
+            raise SetupError(
+                f"{entry_path}: opcode `{mnemonic}` has category `{category}`, which is not "
+                "in the CATEGORIES list in scripts/gen-bytecode-docs.py; add the slug there "
+                "or fix the category in conformance/opcodes.yaml"
+            )
         by_category.setdefault(category, []).append(entry)
 
+    assigned_codes = {
+        int(require_key(entry, f"{YAML_PATH}: {entry.get('mnemonic', 'opcode entry')}", "code", int))
+        for entries in by_category.values()
+        for entry in entries
+    }
+
     lines: list[str] = []
-    reserved = ", ".join(f"`0x{c:02X}`" for c in sorted(_reserved_codes(data)))
+    reserved = ", ".join(_reserved_ranges(assigned_codes))
     lines.append(f"Reserved wire bytes (rejected by the decoder as illegal): {reserved}.")
     lines.append("")
     lines.append(f"Total: **{len(opcodes)} opcodes**.")

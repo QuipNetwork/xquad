@@ -30,7 +30,7 @@ quadratic term `-P*w*x_k`.
 2. **Assemble** -- `.xqasm` text to bytecode via `xquad.asm`
 3. **Encode** -- run encoder on chosen XQVM to produce the XQMX model
 4. **Sample** -- solver runs SA/QPU/GPU over the model
-5. **Verify** -- verifier checks constraints and computes energy
+5. **Verify** -- verifier computes energy and checks the sample is binary; the Rosenberg REDUCE terms are not checked
 6. **Decode** -- decoder extracts the variable assignment
 
 ## Usage
@@ -57,6 +57,7 @@ uv run python examples/max3sat/runner.py --n 8 --m 10 --interpreter rust
 | `dwave-qpu` | D-Wave Leap account | `pip install xquad[dwave]` |
 | `cuda-gpu` | NVIDIA CUDA GPU | `pip install xquad[cuda]` |
 | `metal-gpu` | Apple Silicon (macOS) | `pip install xquad[metal]` |
+| `quip` | Quip Network (remote miner, env-configured) | `pip install xqsa[quip]` |
 
 See [GPU/QPU installation](../../README.md#gpuqpu-support) for driver
 prerequisites and [xqsa solver quick-starts](../../xqsa/README.md) for

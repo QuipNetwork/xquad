@@ -1,5 +1,5 @@
 [book]
-title    = "XQVM Documentation"
+title    = "XQuad Documentation"
 authors  = [ "Postquant Labs Incorporated" ]
 language = "en"
 src      = "docs/book/src"

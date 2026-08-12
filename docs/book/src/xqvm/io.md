@@ -32,7 +32,7 @@ vm.set_calldata(vec![
 ### Setting Calldata (CLI)
 
 ```sh
-xq run program.xqb --calldata 10,20,30
+xquad run program.xqb --calldata 10,20,30
 ```
 
 The CLI `--calldata` flag only supports integer values. For richer types, use
@@ -40,8 +40,9 @@ the Rust API.
 
 ## Output Slots
 
-Output slots are a writable array of `RegVal` values, initialised to `Int(0)`.
-Programs write to output slots via the `OUTPUT` instruction:
+Output slots are a writable array of `RegVal` values, initialised to `Unset`
+(the same default a fresh register holds). Programs write to output slots via
+the `OUTPUT` instruction:
 
 ```asm
 PUSH 0       ; slot index
@@ -62,10 +63,11 @@ for (i, val) in vm.outputs().iter().enumerate() {
 
 ### Reading Outputs (CLI)
 
-`xq run` prints all non-default output slots after execution:
+`xquad run` prints all non-default (not `Unset`) output slots after
+execution. `--outputs` defaults to 16 when omitted:
 
 ```sh
-xq run program.xqb --outputs 4
+xquad run program.xqb --outputs 4
 ```
 
 ```
@@ -90,3 +92,5 @@ marshals outputs from one VM into calldata for the next.
 
 - **`CallDataIndex`** -- `INPUT` with an index ≥ calldata length.
 - **`OutputIndex`** -- `OUTPUT` with an index ≥ output slot count.
+- **`UnsetRegister`** -- `OUTPUT` from a register that was never written, or
+  was reset with `DROP`.

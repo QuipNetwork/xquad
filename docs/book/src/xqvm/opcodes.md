@@ -27,7 +27,7 @@ Columns:
 - **Stack** -- stack effect as `pop → push`; `0 → 1` means one value produced.
 - **Description** -- single-sentence semantic summary.
 
-Reserved wire bytes (rejected by the decoder as illegal): `0x0D`, `0x19`, `0x35`.
+Reserved wire bytes (rejected by the decoder as illegal): `0x0D`, `0x19`, `0x1D`-`0x1F`, `0x2D`-`0x2F`, `0x35`, `0x46`-`0x49`, `0x4D`-`0x4F`, `0x55`-`0x59`, `0x5C`-`0x5F`, `0x6B`-`0x6F`, `0x78`-`0x7E`, `0x80`-`0xEF`, `0xF1`-`0xFE`.
 
 Total: **93 opcodes**.
 
@@ -56,7 +56,7 @@ Total: **93 opcodes**.
 |------|----------|----------|-------|-------------|
 | `0x0A` | `LOAD` | `reg: Register` | `0 → 1` | Push the value of an int register onto the stack. |
 | `0x0B` | `STOW` | `reg: Register` | `1 → 0` | Pop the top of the stack into an int register. |
-| `0x0C` | `DROP` | `reg: Register` | `0 → 0` | Reset a register to Int(0). |
+| `0x0C` | `DROP` | `reg: Register` | `0 → 0` | Reset a register to Unset, releasing any value it held. |
 | `0x0E` | `INPUT` | `reg: Register` | `1 → 0` | Pop a calldata slot index and load that slot into a register. |
 | `0x0F` | `OUTPUT` | `reg: Register` | `1 → 0` | Pop an output slot index and write the register to it. |
 
@@ -88,7 +88,7 @@ Total: **93 opcodes**.
 | `0x20` | `ADD` | -- | `2 → 1` | Pop b and a; push a + b. |
 | `0x21` | `SUB` | -- | `2 → 1` | Pop b and a; push a - b. |
 | `0x22` | `MUL` | -- | `2 → 1` | Pop b and a; push a * b. |
-| `0x23` | `DIV` | -- | `2 → 1` | Pop b and a; push a / b (truncating integer division). |
+| `0x23` | `DIV` | -- | `2 → 1` | Pop b and a; push a / b (floor division, rounds toward negative infinity). |
 | `0x24` | `MOD` | -- | `2 → 1` | Pop b and a; push a % b. |
 | `0x25` | `SQR` | -- | `1 → 1` | Pop a; push a * a. |
 | `0x26` | `ABS` | -- | `1 → 1` | Pop a; push \|a\|. |
@@ -147,9 +147,21 @@ Total: **93 opcodes**.
 | `0x43` | `BSMX` | `reg: Register` | `1 → 0` | Pop size; allocate a binary sample ([0, 1] domain) into a register. |
 | `0x44` | `SSMX` | `reg: Register` | `1 → 0` | Pop size; allocate a spin sample ([-1, 1] domain) into a register. |
 | `0x45` | `XSMX` | `reg: Register` | `2 → 0` | Pop k then size; allocate a discrete sample with signed centered domain [-k, k-1] into a register. Errors when k < 2. |
-| `0x4A` | `VEC` | `reg: Register` | `0 → 0` | Create an empty vec (element type inferred on first push) in a register. |
+| `0x4A` | `VEC` | `reg: Register` | `0 → 0` | Create an empty `vec<int>` in a register, identical to VECI. |
 | `0x4B` | `VECI` | `reg: Register` | `0 → 0` | Create an empty `vec<int>` in a register. |
 | `0x4C` | `VECX` | `reg: Register` | `0 → 0` | Create an empty `vec<xqmx>` in a register. |
+
+---
+
+## Vector Operations
+
+| Code | Mnemonic | Operands | Stack | Description |
+|------|----------|----------|-------|-------------|
+| `0x50` | `VECPUSH` | `reg: Register` | `1 → 0` | Pop a value; append it to the register's vec. |
+| `0x51` | `VECGET` | `reg: Register` | `1 → 1` | Pop index; push `vec[index]` from the register's vec. |
+| `0x52` | `VECSET` | `reg: Register` | `2 → 0` | Pop value and index; set `vec[index]` in the register's vec. |
+| `0x53` | `VECLEN` | `reg: Register` | `0 → 1` | Push the length of the register's vec onto the stack. |
+| `0x54` | `SLACK` | `indices: Register`, `coeffs: Register` | `2 → 0` | Pop capacity and start_index; append slack variable indices and power-of-two coefficients to two register vecs. |
 
 ---
 
@@ -166,9 +178,9 @@ Total: **93 opcodes**.
 
 | Code | Mnemonic | Operands | Stack | Description |
 |------|----------|----------|-------|-------------|
-| `0x60` | `GETLINE` | `reg: Register` | `1 → 1` | Pop i; push `linear[i]` from the register's model (0 if absent). |
-| `0x61` | `SETLINE` | `reg: Register` | `2 → 0` | Pop value and i; set `linear[i]` in the register's model. |
-| `0x62` | `ADDLINE` | `reg: Register` | `2 → 0` | Pop delta and i; add delta to `linear[i]` in the register's model. |
+| `0x60` | `GETLINE` | `reg: Register` | `1 → 1` | Pop i; push `linear[i]` from the register's model (0 if absent), or a sample's assignment at i; `xquad verify` requires a model. |
+| `0x61` | `SETLINE` | `reg: Register` | `2 → 0` | Pop value and i; set `linear[i]` in the register's model, or a sample's assignment at i; `xquad verify` requires a model. |
+| `0x62` | `ADDLINE` | `reg: Register` | `2 → 0` | Pop delta and i; add delta to `linear[i]` in the register's model, or a sample's assignment at i; `xquad verify` requires a model. |
 | `0x63` | `GETQUAD` | `reg: Register` | `2 → 1` | Pop j and i; push `quadratic[i, j]` from the register's model (0 if absent). |
 | `0x64` | `SETQUAD` | `reg: Register` | `3 → 0` | Pop value, j, and i; set `quadratic[i, j]` in the register's model. |
 | `0x65` | `ADDQUAD` | `reg: Register` | `3 → 0` | Pop delta, j, and i; add delta to `quadratic[i, j]` in the register's model. |
@@ -179,7 +191,7 @@ Total: **93 opcodes**.
 
 | Code | Mnemonic | Operands | Stack | Description |
 |------|----------|----------|-------|-------------|
-| `0x66` | `RESIZE` | `reg: Register` | `2 → 0` | Pop cols and rows; set the grid dimensions of the register's model. |
+| `0x66` | `RESIZE` | `reg: Register` | `2 → 0` | Pop cols and rows; set the grid dimensions of the register's model or sample. |
 | `0x67` | `ROWFIND` | `reg: Register` | `2 → 1` | Pop value and row; push the first column where the value matches, or -1. |
 | `0x68` | `COLFIND` | `reg: Register` | `2 → 1` | Pop value and col; push the first row where the value matches, or -1. |
 | `0x69` | `ROWSUM` | `reg: Register` | `1 → 1` | Pop row; push the sum of all linear values in that grid row. |

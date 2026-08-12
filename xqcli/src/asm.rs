@@ -15,7 +15,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! `xq asm` subcommand -- assembles XQVM source into bytecode.
+//! `xquad asm` subcommand -- assembles XQVM source into bytecode.
 
 use std::io::Write as _;
 use std::path::PathBuf;

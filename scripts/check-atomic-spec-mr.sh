@@ -69,9 +69,16 @@ fi
 
 # --- Escape hatch: commit-message exemption --------------------------------
 
+# Deliberately not a pipeline. Under `set -o pipefail`, `git log | grep -q`
+# is a race: `grep -q` exits at the first match, `git log` then dies of
+# SIGPIPE and returns 141, and the pipeline reports 141 even though the
+# trailer was found. The guard read that as "no exemption" and failed with a
+# message asking for the trailer that was already present, on roughly two
+# runs in three. Capture first, match second.
 _has_exempt() {
-    git log --format=%B "${1}..${2}" \
-        | grep -Eq '^[[:space:]]*Atomic-Spec-Exempt:[[:space:]]*[^[:space:]]'
+    local messages
+    messages="$(git log --format=%B "${1}..${2}")"
+    grep -Eq '^[[:space:]]*Atomic-Spec-Exempt:[[:space:]]*[^[:space:]]' <<< "${messages}"
 }
 
 if _has_exempt "${BASE_REF}" "${HEAD_REF}"; then

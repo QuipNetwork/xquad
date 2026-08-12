@@ -16,7 +16,7 @@ adjacent nodes share the same color (proper C-coloring).
 
 - **Input**: number of nodes N, number of colors C, edge list
 - **Model**: N*C binary variables in an N x C grid. `x[v,c] = 1` if node v gets color c.
-- **Objective**: energy 0 for any valid C-coloring; minimise constraint violations.
+- **Objective**: none. The problem is pure constraint satisfaction: a colouring is scored only by its constraint violations. A valid C-colouring scores `-penalty * N`, not `0`, because XQMX has no constant-term field and each satisfied ONEHOTR stores `-penalty` rather than `0`. That is `-1000` at the `--n 5`, penalty `200` defaults. See [Constraints](../modelling/constraints.md#why-the-reported-energy-is-not-just--total_value).
 - **Constraints**:
   - One-hot per node: `sum_c x[v,c] = 1` (ONEHOTR, penalty 200)
   - Exclusion per (edge, color): `x[u,c] + x[v,c] <= 1` (EXCLUDE, penalty 200)
@@ -42,7 +42,7 @@ IDXGRID: `u * num_colors + c` and `v * num_colors + c`.
 2. **Assemble** -- `.xqasm` text to bytecode via `xquad.asm`
 3. **Encode** -- run encoder on chosen XQVM to produce the XQMX model
 4. **Sample** -- solver runs SA/QPU/GPU over the model
-5. **Verify** -- verifier checks one-hot and exclusion constraints and computes energy
+5. **Verify** -- verifier checks the one-hot row sums and computes energy. It does not check the exclusion constraints: see [the generated verifier's `valid` flag](../running/verification.md#the-generated-verifiers-valid-flag-does-not-check-every-constraint)
 6. **Decode** -- decoder extracts the color assignment per node
 
 ## Usage
@@ -63,18 +63,9 @@ uv run python examples/graph_coloring/runner.py --n 6 --colors 3 --interpreter r
 
 ## Choosing a solver
 
-| Name | Hardware | Install |
-|------|----------|---------|
-| `dwave-cpu` | CPU (default) | `pip install xquad` |
-| `dwave-qpu` | D-Wave Leap account | `pip install xquad[dwave]` |
-| `cuda-gpu` | NVIDIA CUDA GPU | `pip install xquad[cuda]` |
-| `metal-gpu` | Apple Silicon (macOS) | `pip install xquad[metal]` |
-
-See [GPU/QPU installation](../start/README.md) for driver
-prerequisites and [xqsa solver quick-starts](../solving/README.md) for
-per-solver parameter tuning.
-
-Non-default solvers will not reproduce the canonical output (different
-RNG/hardware). `example-smoke` always runs `dwave-cpu`.
+Solver selection and install extras are the same for every example: see
+[Using the Examples](using-examples.md#running-one) and
+[Solving Overview](../solving/README.md). The default is `dwave-cpu`, and a
+non-default solver will not reproduce the output shown here.
 
 The canonical output and its invariants are defined in the [source README](https://gitlab.com/quip.network/xquad/-/blob/main/examples/graph_coloring/README.md).

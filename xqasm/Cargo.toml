@@ -5,6 +5,7 @@ version              = "0.3.1"
 license.workspace    = true
 repository.workspace = true
 edition              = "2024"
+readme               = "README.md"
 
 [lints]
 workspace = true

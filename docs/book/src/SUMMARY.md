@@ -54,18 +54,17 @@
   - [Quartic Optimization](examples/quartic_opt.md)
 - [Cookbook](cookbook/README.md)
   - [Permutations](cookbook/permutations.md)
-  - [Selection Under Budget](cookbook/selection-under-budget.md)
   - [Assignment](cookbook/assignment.md)
+  - [Selection Under Budget](cookbook/selection-under-budget.md)
   - [Mutual Exclusion](cookbook/mutual-exclusion.md)
-  - [Soft vs Hard Constraints](cookbook/soft-vs-hard-constraints.md)
-  - [Penalty-Weight Tuning](cookbook/penalty-weight-tuning.md)
+  - [Soft vs. Hard Constraints](cookbook/soft-vs-hard-constraints.md)
   - [Integer Scaling](cookbook/integer-scaling.md)
 
 # Part V -- XQVM Reference
 
 - [XQVM Reference](xqvm/README.md)
-- [Machine Model](xqvm/machine-model.md)
-- [Loops](xqvm/loops.md)
+- [VM Architecture](xqvm/machine-model.md)
+- [Loop Stack](xqvm/loops.md)
 - [Calldata and Outputs](xqvm/io.md)
 - [Execution](xqvm/execution.md)
 - [Assembly](xqvm/assembly.md)
@@ -89,9 +88,9 @@
 - [Bytecode Format](xqvm/bytecode-format.md)
 - [Verifier](xqvm/verifier.md)
 - [CLI](xqvm/cli/README.md)
-  - [Run](xqvm/cli/run.md)
   - [Assemble](xqvm/cli/asm.md)
   - [Disassemble](xqvm/cli/dism.md)
+  - [Run](xqvm/cli/run.md)
   - [Verify](xqvm/cli/verify.md)
 - [Limits and Errors](xqvm/limits-and-errors.md)
 

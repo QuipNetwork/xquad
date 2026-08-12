@@ -28,6 +28,15 @@ lint:docs-drift:
     script:
         - bash scripts/check-docs-drift.sh
 
+lint:docs-readme:
+    stage: lint
+    image: alpine:3
+    cache: []
+    before_script:
+        - apk add --no-cache bash grep
+    script:
+        - bash scripts/check-readme-length.sh
+
 docs:build:
     stage: docs
     before_script:

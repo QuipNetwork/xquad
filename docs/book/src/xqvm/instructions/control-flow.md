@@ -1,135 +1,123 @@
 # Control Flow
 
-Instructions for branching, looping, and program termination.
+Instructions for branching, looping, and program termination: `TARGET`,
+`JUMP1`/`JUMP2`, `JUMPI1`/`JUMPI2`, `NEXT`, `LVAL`, `LIDX`, `RANGE`, `ITER`,
+`NOP`, and `HALT`. For each instruction's opcode byte, operand layout, and
+stack effect, see the [Opcode Reference](../opcodes.md).
 
-| Code | Mnemonic | Arguments | Stack Effect | Register Effect | Description |
-|------|----------|-----------|--------------|-----------------|-------------|
-| `0x00` | `NOP` | -- | \\([\ldots] \to [\ldots]\\) | -- | No operation. |
-| `0x01` | `TARGET` | -- | \\([\ldots] \to [\ldots]\\) | -- | Mark a valid jump destination. Required at every label that `JUMP`/`JUMPI` may target; treated as `NOP` at runtime. The assembler emits this automatically wherever a label is placed, either via the `.N:` shorthand or the explicit `TARGET .N` directive. |
-| `0x02` | `JUMP2` | `label: u16` | \\([\ldots] \to [\ldots]\\) | -- | Seek the instruction stream to `jump_table[label].start`. Unconditional. Wide form: takes a `u16` label index. |
-| `0x03` | `JUMPI2` | `label: u16` | \\([\ldots, c] \to [\ldots]\\) | -- | Pop \\(c\\). If \\(c \neq 0\\), seek to `jump_table[label].start`; otherwise fall through. Wide form: takes a `u16` label index. |
-| `0x80` | `JUMP1` | `label: u8` | \\([\ldots] \to [\ldots]\\) | -- | Same as `JUMP2` but with a single-byte `u8` label index. Used by the assembler when the label id fits in `u8` to save one byte per call site. |
-| `0x81` | `JUMPI1` | `label: u8` | \\([\ldots, c] \to [\ldots]\\) | -- | Same as `JUMPI2` but with a single-byte `u8` label index. |
-| `0x04` | `NEXT` | -- | \\([\ldots] \to [\ldots]\\) | -- | Advance the active loop frame. For Range: increment current; if \\(\text{current} < \text{end}\\), seek to body start, else pop frame. For Iter: increment index; if \\(\text{index} < \text{len}\\), seek to body start, else pop frame. Errors if no loop frame is active. |
-| `0x05` | `LVAL` | `reg: Register` | \\([\ldots] \to [\ldots]\\) | `write` | Copy the current loop value into `reg`. For Range: \\(\text{reg} \leftarrow \text{Int}(\text{current})\\). For Iter: \\(\text{reg} \leftarrow \text{vec}[\text{index}]\\). |
-| `0x06` | `RANGE` | -- | \\([\ldots, s, n] \to [\ldots]\\) | -- | Pop \\(n\\) (count), then \\(s\\) (start). Push a Range loop frame with \\(\text{current} = s,\; \text{end} = s + n\\). |
-| `0x07` | `ITER` | `reg: Register` | \\([\ldots, s, e] \to [\ldots]\\) | `read` | Pop \\(e\\) (`end_idx`), then \\(s\\) (`start_idx`). Validate that `reg` holds `VecInt` or `VecXqmx`, copy `vec[s..e]` into a new Iter loop frame with \\(\text{start\\_offset} = s\\) and \\(\text{index} = 0\\). The slice is *copied*, so mutations to the source vec inside the loop body do not affect what `LVAL` sees. Errors with `IndexOutOfBounds` if either index is negative, exceeds `vec.len()`, or if `s > e`. |
-| `0x08` | `LIDX` | `reg: Register` | \\([\ldots] \to [\ldots]\\) | `write` | Copy the current loop *index* into `reg` as `Int`. For Range: \\(\text{reg} \leftarrow \text{Int}(\text{current})\\) (equivalent to `LVAL` because Range values are already indices). For Iter: \\(\text{reg} \leftarrow \text{Int}(\text{start\\_offset} + \text{index})\\), i.e. the absolute position inside the *source* vec, not the 0-based slice position. Errors with `NoActiveLoop` if no loop frame is active. |
-| `0x09` | `HALT` | -- | \\([\ldots] \to [\ldots]\\) | -- | Stop execution immediately. |
+## The `TARGET` pre-scan
 
-## Branching
+`TARGET` has no operand and does nothing at runtime -- it exists purely to
+mark a valid jump destination at a fixed byte position. Before execution
+begins, the VM scans the raw instruction stream once for `TARGET` opcodes:
+the first one encountered is assigned sequential id `0`, the second id `1`,
+and so on in program order, with each id recorded against the byte offset
+where its `TARGET` starts. This is the same scan the
+[verifier](../verifier.md) uses to check that every jump references a valid
+id, and the [Bytecode Format](../bytecode-format.md) chapter covers its
+wire-level details.
 
-`JUMP` and `JUMPI` use label indices, not raw byte offsets. The label index
-maps to a byte range via the program's jump table. At the assembly level,
-labels are written as `.N` (e.g. `.0`, `.1`); the assembler resolves them to
-indices automatically and picks the narrowest encoding:
+`JUMP1`, `JUMP2`, `JUMPI1`, and `JUMPI2` operands carry one of these
+sequential ids -- never a raw byte offset, and never the `.N` token that
+appears in `.xqasm` source. `.N` is resolved to the sequential id by the
+assembler before encoding and is never itself emitted into the bytecode.
+When the VM executes a jump, it looks up the id's recorded byte offset and
+seeks the instruction stream there; see [Execution Model](../execution.md#control-flow-results)
+for how this fits into the fetch-decode-execute loop.
 
-- `JUMP1` / `JUMPI1` (`0x80` / `0x81`) use a single-byte `u8` label index.
-  The assembler emits these whenever the label id is `< 256`, so most
-  programs will use them exclusively (each call site saves one byte).
-- `JUMP2` / `JUMPI2` (`0x02` / `0x03`) use a two-byte `u16` label index.
-  The assembler falls back to these only for labels with id `>= 256`.
-
-The assembly source still spells these as `JUMP .N` and `JUMPI .N`; the
-narrow-vs-wide selection happens at assembly time and is transparent to
-authors. Disassembled output, on the other hand, shows the explicit form
-(`JUMP1 .N`, `JUMP2 .N`, etc.) so the round-tripped source preserves the
-exact wire encoding.
-
-`TARGET` must appear at every label destination. It is a no-op at runtime but
-serves as a validation marker -- the VM verifies that jump targets land on
-`TARGET` instructions. The assembler inserts a `TARGET` automatically wherever
-a label is *placed*, so authors do not normally type it by hand. Two equivalent
-spellings produce the same bytecode:
+`TARGET` must appear at every label destination. The assembler inserts one
+automatically wherever a label is *placed* in source, so authors do not
+normally type it by hand:
 
 ```asm
 ; Shorthand: label form
 .0: HALT
+```
 
+```asm
 ; Explicit form: TARGET directive bound to a label
 TARGET .0
 HALT
 ```
 
-Both compile to `[TARGET, HALT]`. Use whichever is clearer in context. A bare
-`TARGET` (with no operand) emits a raw `Target` opcode without binding any
-label; that is only useful for direct bytecode construction and most user
-programs should prefer one of the label-bearing forms.
+Both compile to `[TARGET, HALT]`. Use whichever is clearer in context. A
+bare `TARGET` (with no operand) emits a raw `Target` opcode without binding
+any label; that is only useful for direct bytecode construction, and most
+user programs should prefer one of the label-bearing forms above.
+
+## Branching
+
+`JUMP` unconditionally seeks to the byte offset recorded for a label.
+`JUMPI` pops the top of the stack and seeks only if that value is
+non-zero; otherwise it falls through to the next instruction.
+
+Each has a narrow and a wide encoding, distinguished by the width of the
+label operand:
+
+- `JUMP1` / `JUMPI1` encode the label as a single `u8` byte.
+- `JUMP2` / `JUMPI2` encode the label as a `u16` big-endian pair.
+
+At the assembly level, both are written as `JUMP .N` / `JUMPI .N` (`.N` being
+the dot-prefixed label token, e.g. `.0`, `.1`); the assembler resolves `.N`
+to its sequential id and picks the narrowest encoding automatically -- the
+`*1` form whenever the id fits in a `u8` (the common case, since most
+programs have fewer than 256 labels), falling back to the `*2` form
+otherwise. The desugared forms (`JUMP1 .N`, `JUMP2 .N`, `JUMPI1 .N`,
+`JUMPI2 .N`) are accepted by the grammar, but the assembler's unused-label
+check does not count them as a use: a program whose only reference to `.0`
+is `JUMP1 .0` fails with `xqasm::unused_label`, whichever side of the label
+the jump sits on. The one exception is a label whose `TARGET` lands at byte
+offset 0, the entry block, which the check exempts. Write `JUMP`/`JUMPI`
+and let the assembler pick the width. Disassembled output
+always shows the explicit form the program was actually encoded with, so a
+round-tripped disassembly preserves the exact wire encoding rather than
+the assembler's shorthand.
 
 ## Looping
 
-XQVM provides two loop primitives:
-
-### Range Loops
-
-`RANGE` pops \\(n\\) and \\(s\\) from the stack and creates a loop frame that
-iterates `current` from \\(s\\) to \\(s + n - 1\\). Use `LVAL` inside the
-loop body to copy the current value into a register, and `NEXT` to advance:
+`RANGE` and `ITER` each push a loop frame and hand control to the loop body;
+`NEXT` advances the innermost frame, seeking back to the body's start until
+the loop is exhausted, then pops the frame. `LVAL` copies the current loop
+*value* into a register, and `LIDX` copies the current loop *index*. Calling
+`LVAL`, `LIDX`, or `NEXT` with no active loop frame raises `NoActiveLoop`.
 
 ```asm
 PUSH 0       ; start
 PUSH 10      ; count
 RANGE
   LVAL r0    ; r0 = current iteration value (0, 1, ..., 9)
-  ; ... loop body ...
 NEXT
+HALT
 ```
 
-### Iterator Loops
-
-`ITER` takes a register holding a `VecInt` or `VecXqmx` plus two stack
-operands `start_idx` and `end_idx` (with `end_idx` on top), and iterates over
-the half-open slice `vec[start_idx..end_idx]`:
-
 ```asm
+VECI r1
+PUSH 10
+VECPUSH r1
+PUSH 20
+VECPUSH r1
+PUSH 30
+VECPUSH r1
+PUSH 40
+VECPUSH r1
+
 PUSH 0       ; start_idx
 PUSH 4       ; end_idx
 ITER r1      ; r1 must hold a VecInt or VecXqmx
-  LVAL r2    ; r2 = current element (from the slice copy)
-  LIDX r3    ; r3 = absolute position in r1 (start_idx + index)
-  ; ... loop body ...
+  LVAL r2    ; r2 = current element (10, 20, 30, 40)
+  LIDX r3    ; r3 = absolute position in r1 (0, 1, 2, 3)
 NEXT
+HALT
 ```
 
-Both indices must satisfy \\(0 \le \text{start} \le \text{end} \le \text{vec.len()}\\); otherwise
-`ITER` raises `IndexOutOfBounds`. To iterate the entire vec, push
-\\(\text{start} = 0\\) and \\(\text{end} = \text{vec.len()}\\) (use `VECLEN` for
-the latter).
+Loops nest to arbitrary depth; `LVAL`, `LIDX`, and `NEXT` always act on the
+innermost frame. [Loops](../loops.md) covers frame contents, the `RANGE`
+versus `ITER` distinction, nesting, and the full error conditions in depth
+-- this page only orients; that one is the reference.
 
-`ITER` *copies* the slice into the loop frame at the time it runs, so
-subsequent in-loop mutations of the source vec via `VECSET`/`VECPUSH` are not
-visible to `LVAL` or `LIDX`. This makes loop bodies safe to mutate the
-register they iterate over.
+## `NOP` and `HALT`
 
-Loops can be nested. Each `RANGE` or `ITER` pushes a frame onto the loop stack;
-`NEXT` pops the frame when the loop completes.
-
-### Loop Index vs. Loop Value
-
-`LVAL` reads the current loop *value*: the integer being iterated for `RANGE`
-loops, or the actual vec element for `ITER` loops. `LIDX` reads the current
-loop *index* into the iteration source instead. The two opcodes have
-overlapping but distinct semantics:
-
-| Loop kind | `LVAL` | `LIDX` |
-|-----------|--------|--------|
-| `RANGE` | `Int(current)` | `Int(current)` -- identical to `LVAL`, because the values *are* indices |
-| `ITER`  | the slice element at the current index (`Int` or `Model`) | `Int(start_offset + index)` -- the absolute position in the source vec |
-
-Use `LIDX` inside an `ITER` loop when you need to know *where* the current
-element lives in the source vec -- typically for index-based lookups or
-constraint generation. With slicing, `LIDX` reports the absolute index in
-the source vec, not the 0-based position within the slice:
-
-```asm
-PUSH 2       ; iterate r1[2..5]
-PUSH 5
-ITER r1
-  LIDX r2    ; r2 = 2, 3, 4 (absolute position in r1)
-  LVAL r3    ; r3 = element value at that position
-  ; ... loop body uses both r2 and r3 ...
-NEXT
-```
-
-Calling either `LIDX` or `LVAL` outside any active loop produces a
-`NoActiveLoop` runtime error.
+`NOP` does nothing and advances to the next instruction; it exists mainly
+for hand-assembled bytecode and testing. `HALT` stops execution
+immediately, leaving the stack and registers as they were at the point of
+the halt.

@@ -14,17 +14,17 @@ Each frame records:
 
 ### Range Loops
 
-```
-LoopKind::Range {
-    current: i64,    // current iteration value
-    end: i64,        // exclusive upper bound (start + count)
-}
-```
+A range frame tracks two values:
+
+- **`current`** -- the current iteration value.
+- **`end`** -- the exclusive upper bound (`start + count`).
 
 `RANGE` pops `count` and `start` from the stack. The loop iterates `current`
 from `start` to `end - 1` (where `end = start + count`, wrapping). On each
 `NEXT`, `current` is incremented. If `current < end`, execution seeks back to
-`body_start`; otherwise the frame is popped and execution falls through.
+`body_start`; otherwise the frame is popped and execution falls through. If
+`count` is zero or negative, no frame is pushed at all: execution scans
+forward past the matching `NEXT` and the body never runs.
 
 ```asm
 PUSH 5       ; start = 5
@@ -37,26 +37,22 @@ NEXT
 
 ### Iterator Loops
 
-```
-LoopKind::Iter {
-    elements: IterElements,  // slice copy of vec[start..end]
-    start_offset: usize,     // original `start` index, used by LIDX
-    index: usize,            // current position within `elements`
-}
+An iterator frame tracks three values:
 
-enum IterElements {
-    Int(Vec<i64>),
-    Xqmx(Vec<XqmxModel>),
-}
-```
+- **`elements`** -- a copy of the slice `vec[start_idx..end_idx]`, holding
+  either integers or models depending on the source register's variant.
+- **`start_offset`** -- the original `start_idx`, used by `LIDX` to report
+  absolute positions.
+- **`index`** -- the current position within `elements`.
 
 `ITER reg` pops `end_idx`, then `start_idx`, validates that `reg` holds
 `VecInt` or `VecXqmx`, and copies `vec[start_idx..end_idx]` into a new
 frame with `index = 0`. The slice is *duplicated* so that mutations to the
 source vec inside the loop body do not affect what `LVAL` sees.
 
-On each `NEXT`, `index` is incremented. If `index < elements.len()`,
-execution seeks back to `body_start`; otherwise the frame is popped.
+On each `NEXT`, `index` is incremented. If `index` is still within the
+copied elements, execution seeks back to `body_start`; otherwise the frame
+is popped.
 
 ```asm
 ; Assume r1 holds VecInt([10, 20, 30, 40, 50])
@@ -71,6 +67,13 @@ NEXT
 
 `ITER` errors with `IndexOutOfBounds` if either index is negative, exceeds
 `vec.len()`, or if `start_idx > end_idx`.
+
+An empty slice (`start_idx == end_idx`) is legal, and it does **not** behave
+like `RANGE` with a count of zero. `ITER` still pushes a frame, so the body
+runs once before `NEXT` pops it, and an `LVAL` in that body faults with
+`IndexOutOfBounds` because there is no element to read. `spec/xqvm/ISA.md`
+specifies a skip here; the Rust VM keeps do-while semantics instead, and this
+book documents the VM.
 
 ## LVAL -- Reading the Loop Value
 
@@ -117,5 +120,5 @@ NEXT
 
 ## Errors
 
-- **`NoActiveLoop`** -- `NEXT` or `LVAL` with an empty loop stack.
+- **`NoActiveLoop`** -- `NEXT`, `LVAL`, or `LIDX` with an empty loop stack.
 - **`RegisterType`** -- `ITER` on a register that is not `VecInt` or `VecXqmx`.

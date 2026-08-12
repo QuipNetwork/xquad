@@ -24,7 +24,7 @@ most balanced split when the total is odd.
 2. **Assemble** -- `.xqasm` text to bytecode via `xquad.asm`
 3. **Encode** -- run encoder on chosen XQVM to produce the XQMX model
 4. **Sample** -- solver runs SA/QPU/GPU over the model
-5. **Verify** -- verifier checks the partition constraint and computes energy
+5. **Verify** -- verifier computes energy and checks the sample is binary. It does not check the partition constraint: see [the generated verifier's `valid` flag](../../docs/book/src/running/verification.md#the-generated-verifiers-valid-flag-does-not-check-every-constraint)
 6. **Decode** -- decoder extracts the subset assignment
 
 ## Usage
@@ -50,6 +50,7 @@ uv run python examples/number_partition/runner.py --n 8 --interpreter rust
 | `dwave-qpu` | D-Wave Leap account | `pip install xquad[dwave]` |
 | `cuda-gpu` | NVIDIA CUDA GPU | `pip install xquad[cuda]` |
 | `metal-gpu` | Apple Silicon (macOS) | `pip install xquad[metal]` |
+| `quip` | Quip Network (remote miner, env-configured) | `pip install xqsa[quip]` |
 
 See [GPU/QPU installation](../../README.md#gpuqpu-support) for driver
 prerequisites and [xqsa solver quick-starts](../../xqsa/README.md) for

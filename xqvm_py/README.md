@@ -1,8 +1,8 @@
 # xqvm_py
 
-> **Status — transitional.** `xqvm_py` is the executable conformance
+> **Status -- transitional.** `xqvm_py` is the executable conformance
 > oracle for the XQuad toolchain: every vector under
-> [`../conformance/`](../conformance/) must produce identical
+> [`conformance/`](https://gitlab.com/quip.network/xquad/-/tree/main/conformance) must produce identical
 > observable state on both this Python reference and the Rust `xqvm`
 > production runtime. The arrangement is explicitly transitional. Once
 > the Rust runtime is fully battle-tested, `xqvm_py` may be **dropped
@@ -13,7 +13,7 @@
 > that hard-depends on `xqvm_py`'s existence.
 
 Python reference implementation of the X-Quadratic Virtual Machine.
-See [`../spec/xqvm/SPEC.md`](../spec/xqvm/SPEC.md) for the authoritative
+See [`spec/xqvm/SPEC.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/SPEC.md) for the authoritative
 technical specification.
 
 ## Scope
@@ -23,14 +23,14 @@ technical specification.
 - **No** assembler or disassembler: the Rust `xqasm` crate is the only
   implementation, exposed to Python via `xqffi.asm` (pyo3). Tests
   and the CLI shim call
-  [`xqvm_py.program_from_xqasm`](program.py) to turn `.xqasm` text
+  [`xqvm_py.program_from_xqasm`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm_py/program.py) to turn `.xqasm` text
   into an executable `Program`.
 
 ## Layout
 
 ```text
 xqvm_py/                  <-- this directory IS the package (flat layout)
-  __init__.py             re-exports the public surface (Executor, Program, …)
+  __init__.py             re-exports the public surface (Executor, Program, ...)
   __main__.py             entry point for `python -m xqvm_py`
   executor.py             fetch-decode-execute loop
   state.py                stack, registers, loop control, jump table
@@ -73,6 +73,6 @@ print(executor.state.get_register(0))  # 15
 
 Behavioural parity with the Rust `xqvm` crate is enforced by the
 `xquad-conformance` Rust test harness at
-[`../conformance/`](../conformance/). New VM semantics require a new
+[`conformance/`](https://gitlab.com/quip.network/xquad/-/tree/main/conformance). New VM semantics require a new
 vector. Divergence between implementations fails CI with no "drift
 tracking" middle ground.
