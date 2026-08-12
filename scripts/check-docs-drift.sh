@@ -29,10 +29,15 @@
 #
 # Escape hatch:
 #   Known legacy prose is allowlisted below as rule-scoped entries of the form
-#   `rule|path|count|reason`. Every entry must name QUI-977, must point at an
-#   existing file, must still match its rule, and must not gain more matches
-#   than the count records. Remove each entry in the same MR that fixes the
-#   corresponding page.
+#   `rule|path|count|reason`. Every entry must name a tracking issue
+#   (`QUI-NNN`), must point at an existing file, must still match its rule, and
+#   must not gain more matches than the count records. Remove each entry in the
+#   same MR that fixes the corresponding page.
+#
+#   The list is empty as of QUI-977, which drained the 28 entries QUI-853
+#   shipped. Empty is the intended steady state: an entry is a debt marker, and
+#   the guard errors on one that no longer matches so it cannot outlive its
+#   page.
 #
 # Exit codes:
 #   0  -- pass
@@ -50,6 +55,14 @@ trap 'rm -rf "${tmp_dir}"' EXIT
 
 RULE_NAMES=()
 RULE_PATTERNS=()
+
+# The allowlist is expected to reach zero entries, and an empty array is the
+# steady state rather than an edge case. Under `set -u`, bash before 4.4 treats
+# `"${ALLOW[@]}"` on an empty array as an unbound variable: the guard then
+# aborted inside `validate_allowlist` and `main`'s `|| failed=1` swallowed it,
+# so the script exited 0 without printing "passed" and without validating
+# anything. macOS ships bash 3.2, which is what `make docs-drift` runs against
+# locally, so every expansion below uses the `${ALLOW[@]+...}` form.
 ALLOW=()
 
 add_rule() {
@@ -62,42 +75,26 @@ allow() {
 }
 
 add_rule "aglais-product" '(^|[^[:alnum:]_-])[Aa]glais'
-allow "aglais-product" "docs/book/src/README.md" "6" "Legacy Aglais platform and crate-name prose; QUI-977 naming sweep must replace it."
-allow "aglais-product" "docs/book/src/xqvm/assembly.md" "1" "Legacy assembler crate name in moved XQVM prose; QUI-977 naming sweep must replace it."
-allow "aglais-product" "docs/book/src/xqvm/instructions/energy.md" "1" "Legacy host type path in moved instruction prose; QUI-977 naming sweep must replace it."
-allow "aglais-product" "docs/book/src/embedding/builder-api.md" "5" "Legacy builder crate imports in moved embedding prose; QUI-977 naming sweep must replace them."
-allow "aglais-product" "docs/book/src/embedding/pallet.md" "1" "Legacy VM error type path in moved pallet prose; QUI-977 naming sweep must replace it."
 
 add_rule "aglais-crate" 'aglais-xqvm-'
-allow "aglais-crate" "docs/book/src/README.md" "5" "Legacy hyphenated crate-name table; QUI-977 naming sweep must replace it."
-allow "aglais-crate" "docs/book/src/xqvm/assembly.md" "1" "Legacy hyphenated assembler crate name; QUI-977 naming sweep must replace it."
 
 add_rule "crates-path" '(^|[^/.[:alnum:]])crates/'
-allow "crates-path" "docs/book/src/README.md" "1" "Legacy pre-workspace opcode-table path; QUI-977 path sweep must replace it."
-allow "crates-path" "docs/book/src/xqvm/assembly.md" "1" "Legacy pre-workspace grammar path; QUI-977 path sweep must replace it."
-allow "crates-path" "docs/book/src/xqvm/limits-and-errors.md" "1" "Legacy pre-workspace VM error path; QUI-977 path sweep must replace it."
 
 add_rule "xq-binary" '(^|[^[:alnum:]_.-])xq($|[^[:alnum:]_])'
-allow "xq-binary" "docs/book/src/README.md" "2" "Legacy binary name in introduction and CLI table; QUI-977 CLI sweep must replace it."
-allow "xq-binary" "docs/book/src/start/README.md" "7" "Legacy binary name in unsplit getting-started page; QUI-977 CLI sweep must replace it."
-allow "xq-binary" "docs/book/src/xqvm/assembly.md" "1" "Legacy binary name in assembly page; QUI-977 CLI sweep must replace it."
-allow "xq-binary" "docs/book/src/xqvm/io.md" "3" "Legacy binary name in calldata/output examples; QUI-977 CLI sweep must replace it."
-allow "xq-binary" "docs/book/src/xqvm/cli/README.md" "8" "Legacy CLI overview for old binary name; QUI-977 CLI sweep must replace it."
-allow "xq-binary" "docs/book/src/xqvm/cli/asm.md" "5" "Legacy asm command examples for old binary name; QUI-977 CLI sweep must replace them."
-allow "xq-binary" "docs/book/src/xqvm/cli/dism.md" "4" "Legacy dism command examples for old binary name; QUI-977 CLI sweep must replace them."
-allow "xq-binary" "docs/book/src/xqvm/cli/run.md" "10" "Legacy run command examples for old binary name; QUI-977 CLI sweep must replace them."
-allow "xq-binary" "docs/book/src/embedding/pallet.md" "1" "Legacy off-chain assembly command; QUI-977 CLI sweep must replace it."
-allow "xq-binary" "docs/book/src/xqvm/instructions/energy.md" "2" "Legacy xq-py and xq-rs names in energy prose; QUI-977 CLI sweep must replace them."
-allow "xq-binary" "docs/book/src/xqvm/instructions/bitwise.md" "1" "Legacy xq-py name in bitwise prose; QUI-977 CLI sweep must replace it."
 
-add_rule "jump-table" '[Jj]ump[[:space:]_-][Tt]able'
-allow "jump-table" "docs/book/src/README.md" "1" "Legacy wire-format description with removed jump table; QUI-977 encoding sweep must replace it."
-allow "jump-table" "docs/book/src/xqvm/assembly.md" "2" "Legacy label-resolution prose with removed jump table; QUI-977 encoding sweep must replace it."
-allow "jump-table" "docs/book/src/xqvm/execution.md" "3" "Legacy execution prose with removed jump table; QUI-977 encoding sweep must replace it."
-allow "jump-table" "docs/book/src/xqvm/cli/dism.md" "2" "Legacy disassembler prose with removed jump table; QUI-977 encoding sweep must replace it."
-allow "jump-table" "docs/book/src/xqvm/instructions/README.md" "1" "Legacy label-operand notation with removed jump table; QUI-977 encoding sweep must replace it."
-allow "jump-table" "docs/book/src/xqvm/instructions/control-flow.md" "3" "Legacy control-flow instruction prose with removed jump table; QUI-977 encoding sweep must replace it."
-allow "jump-table" "docs/book/src/embedding/builder-api.md" "5" "Legacy builder API section for removed jump table; QUI-977 encoding sweep must replace it."
+# Two alternatives, because the stale prose and the live API share a name.
+#
+# `d43791e` moved the jump table out of the wire format and into a load-time
+# scan; it did not remove it. `Program::jump_table()`
+# (`xqvm/src/bytecode/program.rs`) and the exported `JumpTable` type are both
+# live public API that the embedding chapter has to be able to document.
+#
+# So the rule bans the two spellings that only ever appear in stale prose --
+# the English phrase, whitespace- or hyphen-separated, and the subscripted
+# pseudo-code form `jump_table[...]` describing the removed wire-format
+# lookup -- and spares the two that are correct today, `jump_table()` and
+# `JumpTable`, neither of which is ever followed by `[`.
+add_rule "jump-table" '[Jj]ump[[:space:]-][Tt]able|jump_table\['
 
 die_setup() {
     echo "error: $1" >&2
@@ -131,7 +128,7 @@ is_allowed() {
     local path="${2}"
     local entry
 
-    for entry in "${ALLOW[@]}"; do
+    for entry in ${ALLOW[@]+"${ALLOW[@]}"}; do
         if [[ "${entry}" == "${rule}|${path}|"* ]]; then
             return 0
         fi
@@ -145,7 +142,7 @@ allow_expected_count() {
     local path="${2}"
     local entry entry_rule entry_path expected_count reason
 
-    for entry in "${ALLOW[@]}"; do
+    for entry in ${ALLOW[@]+"${ALLOW[@]}"}; do
         IFS='|' read -r entry_rule entry_path expected_count reason <<< "${entry}"
         if [[ "${entry_rule}" == "${rule}" && "${entry_path}" == "${path}" ]]; then
             printf '%s\n' "${expected_count}"
@@ -176,14 +173,14 @@ validate_allowlist() {
     : > "${tmp_dir}/allow-matches"
     : > "${tmp_dir}/stale-allow-keys"
 
-    for entry in "${ALLOW[@]}"; do
+    for entry in ${ALLOW[@]+"${ALLOW[@]}"}; do
         IFS='|' read -r rule path expected_count reason <<< "${entry}"
         [[ -n "${rule}" && -n "${path}" && -n "${expected_count}" && -n "${reason}" ]] \
             || die_setup "malformed allowlist entry: ${entry}"
         [[ "${expected_count}" =~ ^[1-9][0-9]*$ ]] \
             || die_setup "allowlist entry count must be a positive integer: ${entry}"
-        [[ "${reason}" == *QUI-977* ]] \
-            || die_setup "allowlist entry must name QUI-977: ${entry}"
+        [[ "${reason}" =~ QUI-[0-9]+ ]] \
+            || die_setup "allowlist entry reason must name a tracking issue (QUI-NNN): ${entry}"
         pattern="$(rule_pattern "${rule}")" \
             || die_setup "allowlist entry names unknown rule '${rule}': ${entry}"
         [[ -f "${REPO_ROOT}/${path}" ]] \

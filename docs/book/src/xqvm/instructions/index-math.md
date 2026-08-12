@@ -1,34 +1,62 @@
 # Index Math
 
-Utilities for mapping 2-D coordinates to flat array indices. All arithmetic is
-wrapping on `i64`.
+`IDXGRID` and `IDXTRIU` compute the two flat-indexing schemes the rest of
+the VM relies on, so that bytecode which builds indices by hand does not
+have to reimplement either formula. Byte values, operand layouts and stack
+effects are in the [Index Math](../opcodes.md#index-math) section of the
+opcode reference. Neither instruction touches a register, and both use the
+same wrapping `i64` arithmetic as [Arithmetic](arithmetic.md); a
+sufficiently large `IDXGRID` product wraps rather than trapping, the same
+as `MUL` would.
 
-| Code | Mnemonic | Stack Effect | Description |
-|------|----------|--------------|-------------|
-| `0x5A` | `IDXGRID` | \\([\ldots, r, c, C] \to [\ldots, r \cdot C + c]\\) | Row-major flat index. Pops \\(C\\) (cols), then \\(c\\) (col), then \\(r\\) (row). |
-| `0x5B` | `IDXTRIU` | \\([\ldots, i, j] \to [\ldots, j(j{-}1)/2 + i]\\) | Upper-triangular index for the pair \\((i, j)\\) with \\(i \le j\\). |
+## IDXGRID: Row-Major Flat Index
 
-None of these instructions have register effects.
+`IDXGRID` pops `C` (columns), then `c` (column), then `r` (row), and
+pushes
 
-## Use Cases
+$$\text{index} = r \cdot C + c$$
 
-### `IDXGRID`
+the same row-major convention [`RESIZE`](grid.md) attaches to a model.
+Computing this by hand and computing it with `IDXGRID` produce identical
+results, since `RESIZE` does not change how flat indices are interpreted
+internally; `IDXGRID` exists so bytecode that needs the flat index as an
+ordinary stack value, for example to pass to
+[`SETLINE`/`SETQUAD`](coefficient-access.md) without going through a grid
+instruction, does not have to spell out `r * C + c` as separate `MUL` and
+`ADD` instructions.
 
-Computes the row-major flat index:
+A worked example: a TSP over 4 cities and 4 positions models
+\\(x[\text{city}][\text{position}]\\) as a \\(4 \times 4\\) grid, so city 2
+at position 1 is variable
 
-$$\text{index} = \text{row} \cdot \text{cols} + \text{col}$$
+```asm
+PUSH 2        ; row = city = 2
+PUSH 1        ; col = position = 1
+PUSH 4        ; cols = 4
+IDXGRID       ; index = 2 * 4 + 1 = 9
+```
 
-Used to convert 2-D grid coordinates to a flat index for models with grid
-dimensions set by `RESIZE`. For example, in a TSP with \\(N\\) cities and \\(N\\) positions,
-variable \\(x[\text{city}][\text{position}]\\) maps to flat index \\(\text{city} \cdot N + \text{position}\\).
+This program's result, read back with `STOW`/`OUTPUT`, is `9`.
 
-### `IDXTRIU`
+## IDXTRIU: Upper-Triangular Packed Index
 
-Computes the upper-triangular packed index:
+`IDXTRIU` pops `j`, then `i`, and pushes
 
 $$\text{index} = \frac{j \cdot (j - 1)}{2} + i \qquad (i \le j)$$
 
-Used to index into the upper triangle of a symmetric matrix. For a pair of
-variables \\((i, j)\\) with \\(i \le j\\), the upper-triangular index gives a unique
-position in a packed representation. This is useful for iterating over quadratic
-coefficient pairs without double-counting.
+the packed index for the pair \\((i, j)\\) in the upper triangle of a
+symmetric matrix, useful for iterating over quadratic coefficient pairs
+without visiting \\((i, j)\\) and \\((j, i)\\) as two different positions.
+If `i > j`, `IDXTRIU` swaps them before computing the index, so the
+result is order-independent: \\((i, j)\\) and \\((j, i)\\) pack to the
+same value, the same guarantee
+[`SETQUAD`/`GETQUAD`](coefficient-access.md) give by normalising the pair
+internally.
+
+```asm
+PUSH 1        ; i = 1
+PUSH 3        ; j = 3
+IDXTRIU       ; index = 3 * 2 / 2 + 1 = 4
+```
+
+This program's result is `4`.

@@ -13,10 +13,12 @@ The VM processes instructions in a loop:
 4. Decode the opcode byte and operands
 5. Dispatch to the handler for that instruction
 6. Handle the control flow result:
-   - Continue  → advance to next instruction
-   - Halt      → stop execution
-   - Jump(lbl) → seek to jump_table[lbl].start
-   - Seek(off) → seek to byte offset (used by NEXT)
+   - Continue   → advance to next instruction
+   - Halt       → stop execution
+   - Jump(id)   → seek to the byte offset recorded for that TARGET id
+   - Seek(off)  → seek to byte offset (used by NEXT)
+   - StartLoop  → a loop frame was pushed; continue to the next instruction
+   - SkipLoop   → loop count was zero or negative; scan past the matching NEXT
 7. Repeat from step 1
 ```
 
@@ -27,9 +29,15 @@ one instruction at a time, advancing the cursor past the opcode byte and its
 operands. The stream supports seeking to arbitrary byte offsets for jumps and
 loop backs.
 
+Before execution begins, the raw bytecode is scanned once for `TARGET`
+opcodes: each is assigned the next sequential id (0, 1, 2, ...) in program
+order, and its byte offset is recorded against that id. A `Jump` result
+carries one of these ids; the run loop resolves it to the recorded offset and
+seeks the stream there.
+
 Each decoded instruction yields:
 - **Byte offset** -- position in the bytecode buffer.
-- **Optional label** -- if a jump table entry starts at this offset.
+- **Optional label** -- the sequential `TARGET` id recorded at this offset, if any.
 - **Instruction** -- the fully decoded instruction with typed operands.
 
 ## Step Counting
@@ -45,9 +53,15 @@ vm.set_step_limit(1_000_000);  // custom limit
 // set_step_limit(0) sets the limit to u64::MAX (effectively unlimited)
 ```
 
-The step counter is accessible after execution via `vm.steps()`, which reports
-the actual number of instructions executed. This is used by the pallet for
-weight refunds.
+The step counter is accessible after execution via `vm.steps()`. For a
+`HALT`-terminated program it reports the exact number of instructions
+executed, since the loop breaks right after dispatching `HALT`. A program
+that runs off the end of the instruction stream without a `HALT` gets one
+extra count: the counter increments before the next instruction is fetched,
+so the fetch that finds nothing and breaks the loop has already been
+counted. `xqvm_py`'s executor increments after checking for more
+instructions, so the two interpreters can disagree by one on the same
+non-`HALT`-terminated program.
 
 ## Control Flow Results
 
@@ -58,9 +72,10 @@ what to do next:
 |--------|---------|
 | `Continue` | Advance to the next instruction in sequence. |
 | `Halt` | Stop execution. Returned by `HALT`. |
-| `Jump(label)` | Seek the instruction stream to `jump_table[label].start`. |
+| `Jump(label)` | Seek the instruction stream to the byte offset recorded for that `TARGET` id. |
 | `Seek(offset)` | Seek to a raw byte offset. Used by `NEXT` to loop back. |
 | `StartLoop` | A loop frame was pushed; continue to the next instruction (which becomes the loop body start). |
+| `SkipLoop` | The loop count was zero or negative; scan forward past the matching `NEXT` without pushing a frame. |
 
 ## Tracing
 

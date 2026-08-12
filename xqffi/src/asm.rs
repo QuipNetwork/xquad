@@ -124,7 +124,7 @@ fn assemble_source<'py>(py: Python<'py>, source: &str) -> PyResult<Bound<'py, Py
 
 /// Disassemble XQVM bytecode into a human-readable listing.
 ///
-/// The listing format matches `xquad dsm`: one instruction per line
+/// The listing format matches `xquad dism`: one instruction per line
 /// with pc offsets and `.N` labels for jump targets. It is **not**
 /// round-trippable through [`parse_xqasm`] — use it for display only.
 ///

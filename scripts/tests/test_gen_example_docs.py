@@ -127,6 +127,67 @@ def test_transform_readme_preserves_headings_and_strips_canonical_output(tmp_pat
     assert "The canonical output and its invariants are defined in the [source README]" in rendered
 
 
+def test_transform_readme_replaces_solver_section_with_a_pointer(tmp_path, monkeypatch):
+    module = load_generator_module()
+    readme = tmp_path / "examples" / "maxcut" / "README.md"
+    readme.parent.mkdir(parents=True)
+    readme.write_text(
+        "\n".join(
+            [
+                "# Max-Cut",
+                "",
+                "## Usage",
+                "",
+                "Run it.",
+                "",
+                "## Choosing a solver",
+                "",
+                "| Name | Hardware | Install |",
+                "|------|----------|---------|",
+                "| `dwave-cpu` | CPU (default) | `pip install xquad` |",
+                "",
+                "## Notes",
+                "",
+                "Kept.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "EXAMPLES_ROOT", tmp_path / "examples")
+    entry = module.ExampleEntry(directory="maxcut", title="Max-Cut", blurb="Cut a graph.")
+
+    rendered = module.transform_readme(entry)
+
+    # The heading survives so the page keeps its shape; the table does not.
+    assert "## Choosing a solver" in rendered
+    assert "`dwave-cpu` | CPU (default)" not in rendered
+    assert "Solver selection and install extras are the same for every example" in rendered
+    assert "## Notes" in rendered
+    assert "Kept." in rendered
+
+
+def test_render_repo_index_links_into_the_example_directories(tmp_path, monkeypatch):
+    module = load_generator_module()
+    groups = [
+        module.ExampleGroup(
+            identifier="graph-problems",
+            title="Graph problems",
+            intro="Examples that encode graph cuts.",
+            examples=[module.ExampleEntry(directory="maxcut", title="Max-Cut", blurb="Cut a graph.")],
+        )
+    ]
+
+    rendered = module.render_repo_index(groups)
+
+    assert rendered.startswith("<!--\n  AUTO-GENERATED FILE. DO NOT EDIT.")
+    assert "# XQuad Examples" in rendered
+    assert "## Graph problems" in rendered
+    # Repo-relative, unlike the book gallery's `maxcut.md`.
+    assert "[Max-Cut](maxcut/README.md) -- Cut a graph." in rendered
+    assert "../docs/book/src/examples/using-examples.md" in rendered
+
+
 def test_validate_summary_examples_matches_manifest_order(tmp_path, monkeypatch):
     module = load_generator_module()
     summary_path = tmp_path / "SUMMARY.md"

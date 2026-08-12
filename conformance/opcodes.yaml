@@ -17,7 +17,9 @@
 #   stack_push: number of stack slots produced.
 #   doc:       single-sentence description (used by gen-bytecode-docs.py).
 #
-# Reserved wire bytes (rejected by the decoder as illegal): 0x0D, 0x19, 0x35.
+# Reserved wire bytes (rejected by the decoder as illegal) are derived by
+# scripts/gen-bytecode-docs.py as the complement of the assigned codes above;
+# no byte list is maintained here.
 
 version: 1
 
@@ -156,7 +158,7 @@ opcodes:
       - {name: reg, type: register, width: 1}
     stack_pop: 0
     stack_push: 0
-    doc: "Reset a register to Int(0)."
+    doc: "Reset a register to Unset, releasing any value it held."
 
   - code: 0x0E
     mnemonic: INPUT
@@ -305,7 +307,7 @@ opcodes:
   - {code: 0x20, mnemonic: ADD, variant: Add, category: arithmetic, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push a + b."}
   - {code: 0x21, mnemonic: SUB, variant: Sub, category: arithmetic, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push a - b."}
   - {code: 0x22, mnemonic: MUL, variant: Mul, category: arithmetic, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push a * b."}
-  - {code: 0x23, mnemonic: DIV, variant: Div, category: arithmetic, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push a / b (truncating integer division)."}
+  - {code: 0x23, mnemonic: DIV, variant: Div, category: arithmetic, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push a / b (floor division, rounds toward negative infinity)."}
   - {code: 0x24, mnemonic: MOD, variant: Modulo, category: arithmetic, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push a % b."}
   - {code: 0x25, mnemonic: SQR, variant: Sqr, category: arithmetic, operands: [], stack_pop: 1, stack_push: 1, doc: "Pop a; push a * a."}
   - {code: 0x26, mnemonic: ABS, variant: Abs, category: arithmetic, operands: [], stack_pop: 1, stack_push: 1, doc: "Pop a; push |a|."}
@@ -408,7 +410,7 @@ opcodes:
   # Allocators — Vec (0x4A-0x4C)
   # ------------------------------------------------------------------------
 
-  - {code: 0x4A, mnemonic: VEC,  variant: Vec,  category: allocators, operands: [{name: reg, type: register, width: 1}], stack_pop: 0, stack_push: 0, doc: "Create an empty vec (element type inferred on first push) in a register."}
+  - {code: 0x4A, mnemonic: VEC,  variant: Vec,  category: allocators, operands: [{name: reg, type: register, width: 1}], stack_pop: 0, stack_push: 0, doc: "Create an empty `vec<int>` in a register, identical to VECI."}
   - {code: 0x4B, mnemonic: VECI, variant: VecI, category: allocators, operands: [{name: reg, type: register, width: 1}], stack_pop: 0, stack_push: 0, doc: "Create an empty `vec<int>` in a register."}
   - {code: 0x4C, mnemonic: VECX, variant: VecX, category: allocators, operands: [{name: reg, type: register, width: 1}], stack_pop: 0, stack_push: 0, doc: "Create an empty `vec<xqmx>` in a register."}
 
@@ -443,9 +445,9 @@ opcodes:
   # XQMX Coefficient Access (0x60-0x65)
   # ------------------------------------------------------------------------
 
-  - {code: 0x60, mnemonic: GETLINE, variant: GetLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 1, stack_push: 1, doc: "Pop i; push `linear[i]` from the register's model (0 if absent)."}
-  - {code: 0x61, mnemonic: SETLINE, variant: SetLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop value and i; set `linear[i]` in the register's model."}
-  - {code: 0x62, mnemonic: ADDLINE, variant: AddLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop delta and i; add delta to `linear[i]` in the register's model."}
+  - {code: 0x60, mnemonic: GETLINE, variant: GetLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 1, stack_push: 1, doc: "Pop i; push `linear[i]` from the register's model (0 if absent), or a sample's assignment at i; `xquad verify` requires a model."}
+  - {code: 0x61, mnemonic: SETLINE, variant: SetLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop value and i; set `linear[i]` in the register's model, or a sample's assignment at i; `xquad verify` requires a model."}
+  - {code: 0x62, mnemonic: ADDLINE, variant: AddLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop delta and i; add delta to `linear[i]` in the register's model, or a sample's assignment at i; `xquad verify` requires a model."}
   - {code: 0x63, mnemonic: GETQUAD, variant: GetQuad, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 1, doc: "Pop j and i; push `quadratic[i, j]` from the register's model (0 if absent)."}
   - {code: 0x64, mnemonic: SETQUAD, variant: SetQuad, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop value, j, and i; set `quadratic[i, j]` in the register's model."}
   - {code: 0x65, mnemonic: ADDQUAD, variant: AddQuad, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop delta, j, and i; add delta to `quadratic[i, j]` in the register's model."}
@@ -454,7 +456,7 @@ opcodes:
   # XQMX Grid (0x66-0x6A)
   # ------------------------------------------------------------------------
 
-  - {code: 0x66, mnemonic: RESIZE,  variant: Resize,  category: xqmx-grid, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop cols and rows; set the grid dimensions of the register's model."}
+  - {code: 0x66, mnemonic: RESIZE,  variant: Resize,  category: xqmx-grid, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop cols and rows; set the grid dimensions of the register's model or sample."}
   - {code: 0x67, mnemonic: ROWFIND, variant: RowFind, category: xqmx-grid, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 1, doc: "Pop value and row; push the first column where the value matches, or -1."}
   - {code: 0x68, mnemonic: COLFIND, variant: ColFind, category: xqmx-grid, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 1, doc: "Pop value and col; push the first row where the value matches, or -1."}
   - {code: 0x69, mnemonic: ROWSUM,  variant: RowSum,  category: xqmx-grid, operands: [{name: reg, type: register, width: 1}], stack_pop: 1, stack_push: 1, doc: "Pop row; push the sum of all linear values in that grid row."}

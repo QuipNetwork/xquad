@@ -3,24 +3,12 @@
 XQVM is a stack-based bytecode interpreter. A running VM holds four pieces of
 mutable state:
 
-```mermaid
-block-beta
-  columns 2
-  block:header:2
-    columns 1
-    title["XQVM State"]
-  end
-  A["Stack"] B["Vec‹i64›, max 8192 items (LIFO operand stack)"]
-  C["Register File"] D["[RegVal; 256], indexed r0--r255"]
-  E["Loop Stack"] F["Vec‹LoopFrame› for RANGE/ITER iteration"]
-  G["Calldata / Outputs"] H["Vec‹RegVal› -- read-only inputs (INPUT) and writable output slots (OUTPUT)"]
-
-  style title fill:none,stroke:none
-  style A text-align:left
-  style C text-align:left
-  style E text-align:left
-  style G text-align:left
-```
+| State | Holds | Notes |
+|-------|-------|-------|
+| Stack | `i64` values | LIFO operand stack, max 8,192 items |
+| Register File | `RegVal` values | 256 slots, indexed r0--r255 |
+| Loop Stack | loop frames | one per active `RANGE`/`ITER`; see [Loops](loops.md) |
+| Calldata / Outputs | `RegVal` values | read-only inputs (`INPUT`) and writable output slots (`OUTPUT`); see [Calldata and Outputs](io.md) |
 
 ## Design Principles
 
@@ -36,14 +24,6 @@ block-beta
   random instructions or non-deterministic operations.
 - **Embeddable** -- the VM crate supports `no_std + alloc`, enabling deployment
   in WASM runtimes and bare-metal environments.
-
-## Chapters
-
-- Operand stack -- the `i64` value stack
-- Register file -- the 256-slot typed register array
-- [Loop Stack](loops.md) -- range and iterator loop frames
-- [Calldata and Outputs](io.md) -- external I/O slots
-- [Execution Model](execution.md) -- the fetch-decode-execute cycle
 
 ## Operand Stack
 
@@ -108,13 +88,14 @@ Each slot holds a typed `RegVal` value.
 | Count | 256 (r0--r255) |
 | Index type | `u8` |
 | Value type | `RegVal` (polymorphic enum) |
-| Default value | `Int(0)` for all slots |
+| Default value | `Unset` for all slots |
 
 ### RegVal Variants
 
 | Variant | Rust Type | Description |
 |---------|-----------|-------------|
-| `Int(i64)` | `i64` | Default. Exchanged with the stack via `LOAD`/`STOW`. |
+| `Unset` | -- | Default. No value; a register never written, or reset by `DROP`. |
+| `Int(i64)` | `i64` | Exchanged with the stack via `LOAD`/`STOW`. |
 | `VecInt(Vec<i64>)` | `Vec<i64>` | Integer vector. Created by `VEC`/`VECI`. |
 | `VecXqmx(Vec<XqmxModel>)` | `Vec<XqmxModel>` | Vector of models. Created by `VECX`. |
 | `Model(XqmxModel)` | struct | QUBO/Ising/discrete Hamiltonian. Created by `BQMX`/`SQMX`/`XQMX`. |
@@ -126,7 +107,9 @@ Register access is type-checked at runtime. Instructions that expect a
 specific variant (e.g. `LOAD` expects `Int`, `VECPUSH` expects `VecInt`,
 `SETLINE` expects `Model`) will produce a `RegisterType` error if the register
 holds a different variant. The error message includes the expected and actual
-type names.
+type names. Reading an `Unset` register (via `LOAD` or `OUTPUT`) is a separate
+case: it produces an `UnsetRegister` error rather than `RegisterType`, since
+there is no variant to compare against.
 
 ### XqmxModel Structure
 
@@ -154,11 +137,15 @@ A sample holds a vector of variable assignments:
 XqmxSample {
     domain: Domain,        // must match the model's domain
     values: Vec<i64>,      // one value per variable
+    rows: usize,           // grid rows (set by RESIZE; 0 if ungridded)
+    cols: usize,           // grid cols (set by RESIZE; 0 if ungridded)
 }
 ```
 
 ### Memory Management
 
 There is no garbage collector. Registers hold their values until explicitly
-overwritten. Use `DROP reg` to reset a register to `Int(0)`, releasing any
-heap allocation (models, vectors, samples) it held.
+overwritten. Use `DROP reg` to reset a register to `Unset`, releasing any
+heap allocation (models, vectors, samples) it held. A register reset this way
+faults with `UnsetRegister` on the next `LOAD` or `OUTPUT`, until something is
+written back into it.

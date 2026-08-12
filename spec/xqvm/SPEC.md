@@ -2,7 +2,7 @@
 
 ## X-Quadratic Virtual Machine
 
-A specialized virtual machine for encoding, verifying, and decoding quantum optimization problems. Provides a unified instruction set for manipulating quadratic models across variable domains (binary, spin, chromatic).
+A specialized virtual machine for encoding, verifying, and decoding quantum optimization problems. Provides a unified instruction set for manipulating quadratic models across variable domains (binary, spin, discrete).
 
 ## Three-Program Architecture
 
@@ -76,7 +76,7 @@ Programs execute independently with no shared state. Communication occurs only t
 
 - Sparse x-quadratic matrix
 - **Mode:** `model` (linear & quadratic are hamiltonian coefficients) or `sample` (linear are variable assignments, quadratic is nil)
-- **Domain:** `[0,1]` binary, `[-1,1]` spin, `[-k, ..., k-1]` chromatic
+- **Domain:** `[0,1]` binary, `[-1,1]` spin, `[-k, ..., k-1]` discrete
 - **Dimension:** `size` (total linear variables), optional `rows`/`cols` for grid layout
 - **Storage:** Sparse tables for `linear` and `quadratic`
 - Constraint opcodes (ONEHOTR, ONEHOTC, EXCLUDE, IMPLIES, EQUALITY, ATLEAST, ATLEASTW, REDUCE) are only valid in model mode

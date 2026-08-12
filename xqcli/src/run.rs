@@ -15,7 +15,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! `xq run` subcommand -- runs XQVM bytecode with optional tracing.
+//! `xquad run` subcommand -- runs XQVM bytecode with optional tracing.
 
 use std::fs::File;
 use std::io::{BufWriter, Write};

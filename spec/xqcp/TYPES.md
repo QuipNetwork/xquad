@@ -179,7 +179,7 @@ Functions in the `xq_*` namespace handle operations that Python operators cannot
 
 | Function | Assembly | Description |
 |----------|----------|-------------|
-| `xq_triu(i, j)` | `IDXTRIU` | Upper triangular index: `i * (i - 1) / 2 + j` |
+| `xq_triu(i, j)` | `IDXTRIU` | Upper triangular index: `j * (j - 1) / 2 + i` |
 | `xq_grid(row, col, cols)` | `IDXGRID` | Grid flat index: `row * cols + col` |
 
 ### Arithmetic

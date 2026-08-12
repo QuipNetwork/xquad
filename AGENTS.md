@@ -35,7 +35,7 @@ make preflight        # preflight-rs + preflight-py + preflight-parity + preflig
 make preflight-rs     # fmt, taplo, clippy, rustdoc, deny, unit/integration/doc tests
 make preflight-py     # taplo, ruff format + lint, pytest
 make preflight-parity # opcode parity, conformance, example smoke
-make preflight-docs   # generated-doc freshness + docs drift guard
+make preflight-docs   # generated-doc freshness + docs drift + README length guards
 
 # Rust
 make fmt              # cargo fmt + taplo fmt + ruff format
@@ -73,6 +73,7 @@ make docs             # mdbook build
 make docs-regen       # regenerate generated opcode and example book pages
 make docs-check       # assert generated docs match regenerated output
 make docs-drift       # guard book prose and SUMMARY.md against known drift
+make docs-readme      # guard published package READMEs against the 100-line limit
 make docs-serve       # mdbook serve --open
 
 # Changelog (CHANGELOG.md is gitignored; cliff.toml + git history is source of truth)
@@ -243,8 +244,8 @@ After modifying files, run `make fmt` to format everything, or the per-file equi
 | Crate | Path | Role |
 | --- | --- | --- |
 | `xqvm` | `xqvm/` | Bytecode definitions, opcode table, instruction types, builder, codec, stream reader, VM interpreter, disassembler |
-| `xqasm` | `xqasm/` | Text assembler: pest parser -> AST -> bytecode; `xqasm` binary |
-| `xqcli` | `xqcli/` | CLI binary (`xquad`): run, disassemble subcommands |
+| `xqasm` | `xqasm/` | Text assembler: pest parser -> AST -> bytecode |
+| `xqcli` | `xqcli/` | CLI binary (`xquad`): asm, dism, run, verify subcommands |
 | `xqffi` | `xqffi/` | PyO3 bindings exposing xqasm + xqvm to Python |
 | `xquad-conformance` | `conformance/` | Cross-implementation conformance harness |
 
@@ -320,7 +321,7 @@ For deliberately one-sided changes (e.g. aligning one impl to existing behaviour
 
 | Stage | What it covers |
 | --- | --- |
-| lint | clippy, rustdoc, cargo-deny, ruff, format checks, opcode parity, generated-docs freshness, docs drift guard, atomic spec-MR guard, changelog render |
+| lint | clippy, rustdoc, cargo-deny, ruff, format checks, opcode parity, generated-docs freshness, docs drift guard, package README length guard, atomic spec-MR guard, changelog render |
 | test | unit, integration, doc tests (Rust); pytest (Python) |
 | conformance | Rust + Python conformance vectors, example smoke tests |
 | docs | mdbook build |

@@ -1,11 +1,12 @@
 [package]
 name                 = "xqvm"
-description          = "X-Quadratic Virtual Machine — bytecode interpreter for the XQuad Toolchain"
+description          = "X-Quadratic Virtual Machine -- bytecode interpreter for the XQuad Toolchain"
 version              = "0.3.1"
 license.workspace    = true
 repository.workspace = true
 edition              = "2024"
 build                = "build.rs"
+readme               = "README.md"
 
 [lints]
 workspace = true

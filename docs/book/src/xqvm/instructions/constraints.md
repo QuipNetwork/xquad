@@ -3,13 +3,22 @@
 These instructions inject QUBO penalty terms for common combinatorial
 constraints, expanding into linear and quadratic coefficient deltas
 automatically. The model register must hold a `Model` in model mode.
-Grid-based opcodes (`ONEHOTR`, `ONEHOTC`) require grid dimensions pre-set by
-`RESIZE`. Vec-based opcodes (`EQUALITY`, `ATLEAST`, `ATLEASTW`, `REDUCE`)
-operate on arbitrary variable sets. All coefficients are `i64`.
+Grid-based opcodes (`ONEHOTR`, `ONEHOTC`) read the grid dimensions set by
+`RESIZE`, but do not require them: on a model with no grid set (`rows` and
+`cols` both `0`), `ONEHOTR`/`ONEHOTC` write nothing and raise no error --
+both loops run zero times, so the instruction succeeds and the constraint
+is silently absent from the model. Forgetting `RESIZE` is the single most
+expensive mistake this page can warn about, since neither `xquad verify`
+nor `xquad run` catches it; the Python reference implementation
+(`xqvm_py`) raises `ValueError("ONEHOTR requires grid dimensions to be
+set")` instead, so this is a behavioural divergence between the two
+implementations rather than documented, uniform behaviour. Vec-based
+opcodes (`EQUALITY`, `ATLEAST`, `ATLEASTW`, `REDUCE`) operate on arbitrary
+variable sets. All coefficients are `i64`. For each opcode's byte value and
+operand layout, see the [Opcode Reference](../opcodes.md).
 
-## `0x70` -- `ONEHOTR reg`
+## `ONEHOTR reg`
 
-**Stack:** \\([\ldots, \text{row}, \text{penalty}] \to [\ldots]\\)
 **Register effect:** `mutate`
 
 Pop `penalty`, then `row`. Apply the one-hot constraint over all variables in
@@ -23,9 +32,8 @@ $$\text{linear}[\text{row} \cdot \text{cols} + c] \mathrel{+}= -\text{penalty} \
 
 $$\text{quad}[\text{row} \cdot \text{cols} + c_i,\; \text{row} \cdot \text{cols} + c_j] \mathrel{+}= 2 \cdot \text{penalty} \qquad \forall\; c_i < c_j$$
 
-## `0x71` -- `ONEHOTC reg`
+## `ONEHOTC reg`
 
-**Stack:** \\([\ldots, \text{col}, \text{penalty}] \to [\ldots]\\)
 **Register effect:** `mutate`
 
 Pop `penalty`, then `col`. One-hot over all variables in grid column `col`:
@@ -34,9 +42,8 @@ $$\text{linear}[r_i \cdot \text{cols} + \text{col}] \mathrel{+}= -\text{penalty}
 
 $$\text{quad}[r_i \cdot \text{cols} + \text{col},\; r_j \cdot \text{cols} + \text{col}] \mathrel{+}= 2 \cdot \text{penalty} \qquad \forall\; r_i < r_j$$
 
-## `0x72` -- `EXCLUDE reg`
+## `EXCLUDE reg`
 
-**Stack:** \\([\ldots, i, j, \text{penalty}] \to [\ldots]\\)
 **Register effect:** `mutate`
 
 Pop `penalty`, then \\(j\\), then \\(i\\). Add mutual-exclusion: penalise
@@ -44,9 +51,8 @@ Pop `penalty`, then \\(j\\), then \\(i\\). Add mutual-exclusion: penalise
 
 $$\text{quad}[i, j] \mathrel{+}= \text{penalty}$$
 
-## `0x73` -- `IMPLIES reg`
+## `IMPLIES reg`
 
-**Stack:** \\([\ldots, i, j, \text{penalty}] \to [\ldots]\\)
 **Register effect:** `mutate`
 
 Pop `penalty`, then \\(j\\), then \\(i\\). Add implication \\(i \Rightarrow j\\):
@@ -58,9 +64,8 @@ $$\text{linear}[i] \mathrel{+}= \text{penalty}$$
 
 $$\text{quad}[i, j] \mathrel{+}= -\text{penalty}$$
 
-## `0x74` -- `EQUALITY model indices coeffs`
+## `EQUALITY model indices coeffs`
 
-**Stack:** \\([\ldots, \text{target}, \text{penalty}] \to [\ldots]\\)
 **Register effect:** `read` indices, coeffs; `mutate` model
 
 Pop `penalty`, then `target`. Read variable indices from `indices` (`VecInt`)
@@ -76,37 +81,51 @@ $$\text{linear}[\text{idx}_k] \mathrel{+}= P \cdot a_k \cdot (a_k - 2b) \qquad \
 $$\text{quad}[\text{idx}_k, \text{idx}_m] \mathrel{+}= 2P \cdot a_k \cdot a_m \qquad \forall\; k < m$$
 
 The constant term \\(P \cdot b^2\\) is dropped. `EQUALITY` is the general form of
-`ONEHOTR`/`ONEHOTC` — setting all \\(a_k = 1\\) and \\(b = 1\\) produces the same
+`ONEHOTR`/`ONEHOTC` -- setting all \\(a_k = 1\\) and \\(b = 1\\) produces the same
 expansion.
 
-## `0x75` -- `ATLEAST model indices`
+If an index in `indices` is at or past the model's current size, `EQUALITY`
+grows `model.size` to fit it rather than erroring -- unlike `ATLEAST` and
+`ATLEASTW` below, which validate incoming indices against the model's
+existing size and raise `IndexOutOfBounds` on an out-of-range one. Otherwise,
+`indices` and `coeffs` must have equal length or the instruction raises
+`VecLengthMismatch`.
 
-**Stack:** \\([\ldots, k, \text{penalty}] \to [\ldots]\\)
+## `ATLEAST model indices`
+
 **Register effect:** `read` indices; `mutate` model (grows size)
 
 Pop `penalty`, then \\(k\\). Read variable indices from `indices`. Enforce
 \\(\sum x_i \ge k\\) by allocating \\(S = \lfloor\log_2(N - k)\rfloor + 1\\)
 slack variables at `model.size` and applying an `EQUALITY` expansion with
-target \\(k\\):
+target \\(k\\), where \\(N\\) is the number of indices:
 
 $$\sum_i x_{\text{idx}_i} - \sum_{j=0}^{S-1} 2^j \cdot s_j = k$$
 
-Error `ValueError` if \\(k \le 0\\) or \\(k > N\\).
+This formula covers \\(N - k > 0\\). When \\(N - k \le 0\\) -- only
+possible at \\(k = N\\), since `IndexOutOfBounds` below already rejects
+\\(k > N\\) -- the constraint is already an equality with nothing left to
+slacken, so `ATLEAST` allocates zero slack variables and applies the
+`EQUALITY` expansion directly, with no \\(S\\) term at all.
 
-## `0x76` -- `ATLEASTW model indices coeffs`
+Raises `IndexOutOfBounds` if \\(k \le 0\\) or \\(k > N\\), and if any index in
+`indices` is at or past the model's existing size -- `ATLEAST` does not grow
+the model to fit an out-of-range input index, only to hold the slack
+variables it allocates itself.
 
-**Stack:** \\([\ldots, k, \text{penalty}] \to [\ldots]\\)
+## `ATLEASTW model indices coeffs`
+
 **Register effect:** `read` indices, coeffs; `mutate` model (grows size)
 
 Pop `penalty`, then \\(k\\). Same as `ATLEAST` but with arbitrary weights from
 `coeffs`. Enforces \\(\sum w_i \cdot x_i \ge k\\). The slack count is computed
 from \\(\text{max\_excess} = \sum w_i - k\\).
 
-Error `ValueError` if \\(k \le 0\\) or lengths of indices and coefficients differ.
+Raises `VecLengthMismatch` if `indices` and `coeffs` have different lengths,
+or `IndexOutOfBounds` if \\(k \le 0\\).
 
-## `0x77` -- `REDUCE model`
+## `REDUCE model`
 
-**Stack:** \\([\ldots, \text{var\_a}, \text{var\_b}, P_{\text{aux}}] \to [\ldots, w]\\)
 **Register effect:** `mutate` model (grows size)
 
 Pop \\(P_{\text{aux}}\\), then \\(\text{var\_b}\\), then \\(\text{var\_a}\\).
@@ -129,7 +148,7 @@ reduce a quartic \\(x_i x_j x_k x_l\\) by calling `REDUCE` twice to get
 ## Usage Pattern
 
 Constraint instructions are designed to work with grid models. A typical
-pattern for a TSP:
+pattern for a TSP-style assignment grid:
 
 ```asm
 ; Allocate model and set grid
@@ -157,4 +176,6 @@ RANGE
   PUSH 100
   ONEHOTC r0     ; each position has exactly one city
 NEXT
+
+HALT
 ```

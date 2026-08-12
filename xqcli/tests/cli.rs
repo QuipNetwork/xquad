@@ -102,7 +102,7 @@ const LOOP_1M: &str = "PUSH 0\nPUSH 1000000\nRANGE\n  LVAL r0\nNEXT\nHALT\n";
 /// Source that is not valid XQASM.
 const INVALID_SRC: &str = "NOTANOPCODE\n";
 
-// ── xq asm ───────────────────────────────────────────────────────────────────
+// ── xquad asm ────────────────────────────────────────────────────────────────
 
 #[test]
 fn asm_writes_default_xqb_file() {
@@ -157,7 +157,7 @@ fn asm_invalid_source_exits_nonzero() {
         .failure();
 }
 
-// ── xq dism ──────────────────────────────────────────────────────────────────
+// ── xquad dism ───────────────────────────────────────────────────────────────
 
 #[test]
 fn dism_file_listing_contains_push() {
@@ -182,7 +182,7 @@ fn dism_reads_stdin_when_no_file() {
         .stdout(predicate::str::contains("PUSH"));
 }
 
-// ── xq run ───────────────────────────────────────────────────────────────────
+// ── xquad run ────────────────────────────────────────────────────────────────
 
 #[test]
 fn run_binary_file_prints_stack() {

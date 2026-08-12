@@ -9,7 +9,8 @@
         opcode-parity opcode-parity-rs opcode-parity-py \
         conformance conformance-rs conformance-py \
         example-smoke \
-        docs docs-regen docs-regen-opcodes docs-regen-examples docs-check docs-drift docs-serve \
+        docs docs-regen docs-regen-opcodes docs-regen-examples docs-check docs-drift \
+        docs-readme docs-serve \
         changelog changelog-render changelog-release
 
 all: fmt lint test
@@ -31,7 +32,7 @@ preflight-py: fmt-check-toml fmt-check-py lint-py test-py
 
 preflight-parity: opcode-parity conformance example-smoke
 
-preflight-docs: docs-check docs-drift
+preflight-docs: docs-check docs-drift docs-readme
 
 preflight: preflight-rs preflight-py preflight-parity preflight-docs
 
@@ -43,7 +44,7 @@ preflight: preflight-rs preflight-py preflight-parity preflight-docs
 #     with the maturin-built xqffi extension and the workspace .pth
 #     so any script in the repo can `import xqcp` etc.
 #   - Rust CLI installed as the `xquad` binary under ~/.cargo/bin/ so
-#     `xquad run …`, `xquad dsm …`, etc. work from any shell.
+#     `xquad run …`, `xquad dism …`, etc. work from any shell.
 #
 # Run once per environment; re-run after a pull that touches Rust
 # sources or workspace deps. Publishing / wheel distribution is out
@@ -290,9 +291,10 @@ repl: deps-py
 # -- Examples ---------------------------------------------------------------
 
 # Run each top-level example on both the Python and the Rust XQVM
-# interpreters with the canonical seed and diff the decoded outputs
-# against the checked-in golden.json. Catches drift between the two
-# interpreters and regressions in either path.
+# interpreters with the canonical seed and check each finds a valid
+# solution (valid == 1). The check is invariant-based rather than a
+# golden-file diff: simulated annealing is sensitive to BQM construction
+# order, so the two paths can land on different but equally valid optima.
 example-smoke: deps-py
 	uv run --no-sync python scripts/example-smoke.py
 
@@ -326,6 +328,11 @@ docs-check:
 # The in-script allowlist is a QUI-977 to-do list, not a permanent exemption.
 docs-drift:
 	bash scripts/check-docs-drift.sh
+
+# Keep published package READMEs to a landing page rather than a second copy
+# of the book. `--list` prints every package and its count without enforcing.
+docs-readme:
+	bash scripts/check-readme-length.sh
 
 docs-serve:
 	mdbook-mermaid install .

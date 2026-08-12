@@ -97,9 +97,9 @@ Preconditions enforced:
 - Type mismatches (e.g., reading a `Model` register where `Int` is required)
   are rejected.
 - The `DROP` instruction resets a register to `Unset` in the type-state model --
-  a subsequent read is rejected as `ReadUnsetRegister`. Note: at VM runtime
-  `DROP` writes `Int(0)` (a readable value), but the verifier applies the more
-  conservative semantics to prevent accidental reads of dropped registers.
+  a subsequent read is rejected as `ReadUnsetRegister`. At VM runtime `DROP`
+  also writes `Unset`, and a subsequent `LOAD` or `OUTPUT` faults as
+  `UnsetRegister`; the verifier models that behaviour faithfully.
 
 Unreachable blocks (entry state equals `[Any; 256]`) are skipped, so dead code
 after unconditional jumps does not produce false positives.

@@ -6,15 +6,18 @@
 
 ## Register Allocation
 
-A simple incrementing counter allocates registers from `r0` to `r255`. Allocation order:
+A simple incrementing counter allocates registers from `r0` to `r255`. Inputs, the cols register (2D models only) and the model register claim the first registers, in this fixed order:
 
 1. Inputs (`r0`, `r1`, ...) -- one per `problem.input()` call
-2. Model register -- allocated by `define_model()`
-3. Cols register -- if the model is 2D, a register holds the column count
-4. Loop variables -- allocated on demand by `range()` and `iter()`
-5. Stowed values -- one register per `stow()` call (or reuse if an existing `RegLoad` is passed as target)
-6. Vector registers -- allocated by `problem.vec()`
-7. Output registers -- allocated by `problem.output()`
+2. Cols register -- if the model is 2D, a register holds the column count, allocated by `define_model()` before the model register
+3. Model register -- allocated by `define_model()`
+
+Every other register-allocating construct claims a register in call order, not in a fixed precedence relative to the others:
+
+- Loop variables -- allocated on demand by `range()` and `iter()`
+- Stowed values -- one register per `stow()` call (or reuse if an existing `RegLoad` is passed as target)
+- Vector registers -- allocated by `problem.vec()`
+- Output registers -- allocated by `problem.output()`
 
 Exceeding 256 registers raises `RuntimeError`.
 

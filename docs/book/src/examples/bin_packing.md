@@ -16,10 +16,10 @@ with a fixed capacity C.
 
 - **Input**: N item sizes (Vec), number of bins B, bin capacity C
 - **Model**: N*B binary variables in an N x B grid. `x[i,b] = 1` if item i is placed in bin b.
-- **Objective**: minimise `sum_{i,b} x[i,b]` (proxy for number of bins used)
+- **Objective**: uniform `+1` bias on every cell. Note this is constant under the assignment constraint (`sum_b x[i,b] = 1` forces `sum_{i,b} x[i,b] = N`), so the model does not minimise the bin count -- it finds a feasible packing. A true bin-count objective needs a per-bin indicator variable.
 - **Constraints**:
-  - Assignment per item i: `sum_b x[i,b] = 1` (EQUALITY with unit coefficients)
-  - Capacity per bin b: `sum_i s_i * x[i,b] <= C` (SLACK + EQUALITY)
+  - Assignment per item i: `sum_b x[i,b] = 1` (EQUALITY with unit coefficients, penalty 200)
+  - Capacity per bin b: `sum_i s_i * x[i,b] <= C` (SLACK + EQUALITY, penalty 100)
 
 The capacity inequality is encoded by appending binary slack variable entries
 to the column index/coefficient vectors, converting it to a weighted equality.
@@ -36,7 +36,7 @@ to the column index/coefficient vectors, converting it to a weighted equality.
 2. **Assemble** -- `.xqasm` text to bytecode via `xquad.asm`
 3. **Encode** -- run encoder on chosen XQVM to produce the XQMX model
 4. **Sample** -- solver runs SA/QPU/GPU over the model
-5. **Verify** -- verifier checks assignment and capacity constraints and computes energy
+5. **Verify** -- verifier computes energy and checks the sample is binary. It does not check the assignment or capacity constraints: see [the generated verifier's `valid` flag](../running/verification.md#the-generated-verifiers-valid-flag-does-not-check-every-constraint)
 6. **Decode** -- decoder extracts the bin assignments
 
 ## Usage
@@ -57,18 +57,9 @@ uv run python examples/bin_packing/runner.py --n 5 --bins 4 --interpreter rust
 
 ## Choosing a solver
 
-| Name | Hardware | Install |
-|------|----------|---------|
-| `dwave-cpu` | CPU (default) | `pip install xquad` |
-| `dwave-qpu` | D-Wave Leap account | `pip install xquad[dwave]` |
-| `cuda-gpu` | NVIDIA CUDA GPU | `pip install xquad[cuda]` |
-| `metal-gpu` | Apple Silicon (macOS) | `pip install xquad[metal]` |
-
-See [GPU/QPU installation](../start/README.md) for driver
-prerequisites and [xqsa solver quick-starts](../solving/README.md) for
-per-solver parameter tuning.
-
-Non-default solvers will not reproduce the canonical output (different
-RNG/hardware). `example-smoke` always runs `dwave-cpu`.
+Solver selection and install extras are the same for every example: see
+[Using the Examples](using-examples.md#running-one) and
+[Solving Overview](../solving/README.md). The default is `dwave-cpu`, and a
+non-default solver will not reproduce the output shown here.
 
 The canonical output and its invariants are defined in the [source README](https://gitlab.com/quip.network/xquad/-/blob/main/examples/bin_packing/README.md).

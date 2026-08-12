@@ -49,7 +49,23 @@ SOURCE_SCHEMES = ("http://", "https://", "mailto:", "#")
 LINK_MAP = {
     "../../README.md#gpuqpu-support": "../start/README.md",
     "../../xqsa/README.md": "../solving/README.md",
+    "../../docs/book/src/concepts/three-programs.md": "../concepts/three-programs.md",
+    (
+        "../../docs/book/src/modelling/constraints.md#why-the-reported-energy-is-not-just--total_value"
+    ): "../modelling/constraints.md#why-the-reported-energy-is-not-just--total_value",
+    (
+        "../../docs/book/src/modelling/constraints.md#choosing-a-penalty-weight"
+    ): "../modelling/constraints.md#choosing-a-penalty-weight",
+    (
+        "../../docs/book/src/running/verification.md#the-generated-verifiers-valid-flag-does-not-check-every-constraint"
+    ): "../running/verification.md#the-generated-verifiers-valid-flag-does-not-check-every-constraint",
 }
+SOLVER_SECTION_REPLACEMENT = [
+    "Solver selection and install extras are the same for every example: see",
+    "[Using the Examples](using-examples.md#running-one) and",
+    "[Solving Overview](../solving/README.md). The default is `dwave-cpu`, and a",
+    "non-default solver will not reproduce the output shown here.",
+]
 INLINE_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 REFERENCE_LINK_RE = re.compile(r"^\s*\[[^\]]+\]:")
 
@@ -245,16 +261,25 @@ def rewrite_links(lines: list[str]) -> list[str]:
     return [line if in_fence else INLINE_LINK_RE.sub(replace, line) for _, line, in_fence in iter_prose_lines(lines)]
 
 
-def strip_canonical_output(lines: list[str]) -> tuple[list[str], bool]:
-    """Remove the CI-only Canonical output section."""
+def replace_section(lines: list[str], heading: str, replacement: list[str] | None) -> tuple[list[str], bool]:
+    """Drop a whole `## ` section, or substitute a new body under its heading.
+
+    Sections run from their heading to the next `#` or `##` heading, so an
+    `###` subheading stays inside. Passing `None` removes the heading too.
+    Returns the rewritten lines and whether the section was found.
+    """
 
     kept: list[str] = []
     skipping = False
-    stripped = False
+    found = False
     for _, line, in_fence in iter_prose_lines(lines):
-        if not in_fence and line.strip() == "## Canonical output":
+        if not in_fence and line.strip() == heading:
             skipping = True
-            stripped = True
+            found = True
+            if replacement is not None:
+                kept.append(line)
+                kept.append("")
+                kept.extend(replacement)
             continue
         if skipping and not in_fence and line.startswith("#") and not line.startswith("###"):
             skipping = False
@@ -262,7 +287,7 @@ def strip_canonical_output(lines: list[str]) -> tuple[list[str], bool]:
             kept.append(line)
     while kept and kept[-1] == "":
         kept.pop()
-    return kept, stripped
+    return kept, found
 
 
 def transform_readme(entry: ExampleEntry) -> str:
@@ -276,7 +301,11 @@ def transform_readme(entry: ExampleEntry) -> str:
     body = lines[1:]
     if body and body[0] == "":
         body = body[1:]
-    body, stripped_canonical_output = strip_canonical_output(body)
+    body, stripped_canonical_output = replace_section(body, "## Canonical output", None)
+    # The solver table is identical in all fourteen source READMEs, where each
+    # one is a standalone page. Inside the book it would be the same eighteen
+    # lines fourteen times over, one click from the chapter that owns them.
+    body, _ = replace_section(body, "## Choosing a solver", SOLVER_SECTION_REPLACEMENT)
     rewritten_body = rewrite_links(body)
     source_url = f"{GITLAB_BLOB_URL}/examples/{entry.directory}/README.md"
 
@@ -329,6 +358,65 @@ def render_gallery(groups: list[ExampleGroup]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def render_repo_index(groups: list[ExampleGroup]) -> str:
+    """Render the repository-side examples index.
+
+    The book gallery and this page list the same examples from the same
+    manifest and differ only in where their links point: the gallery links
+    to book pages, this one to the source directory a reader browsing the
+    repository is already standing in. Generating both from `manifest.yaml`
+    is what stops the two lists disagreeing.
+    """
+
+    lines = [
+        banner(
+            "scripts/gen-example-docs.py",
+            "examples/manifest.yaml",
+            "Edit the manifest, then run `make docs-regen`.",
+        ),
+        "",
+        "# XQuad Examples",
+        "",
+        "Fourteen self-contained optimisation problems, one directory each. Every",
+        "directory holds a `README.md` describing the formulation and a `runner.py`",
+        "that builds the model, solves it, and verifies the result end to end.",
+        "",
+        "Run one from the repository root:",
+        "",
+        "```sh",
+        "uv run python examples/maxcut/runner.py --seed 42",
+        "```",
+        "",
+        "Every runner accepts `--seed`, `--interpreter` (`python` or `rust`),",
+        "`--solver`, and `-o`/`--output`. Problem size flags vary; each directory's",
+        "`README.md` carries the exact table.",
+        "",
+    ]
+    for group in groups:
+        lines.append(f"## {group.title}")
+        lines.append("")
+        lines.append(group.intro)
+        lines.append("")
+        for entry in group.examples:
+            lines.append(f"- [{entry.title}]({entry.directory}/README.md) -- {entry.blurb}")
+        lines.append("")
+
+    lines.extend(
+        [
+            "## Further reading",
+            "",
+            "- [Using the Examples](../docs/book/src/examples/using-examples.md) -- what every",
+            "  directory has in common, how to run one, and how to adapt one into a problem",
+            "  of your own",
+            "- [Modelling with XQCP](../docs/book/src/modelling/README.md) -- the DSL these",
+            "  runners are written in",
+            "- [Cookbook](../docs/book/src/cookbook/README.md) -- the recurring encoding",
+            "  patterns these examples are built from",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def validate_summary_examples(groups: list[ExampleGroup]) -> None:
     """Check SUMMARY.md keeps example titles in manifest order."""
 
@@ -346,7 +434,10 @@ def validate_summary_examples(groups: list[ExampleGroup]) -> None:
 def build_targets(groups: list[ExampleGroup]) -> list[Target]:
     """Render every generated example target."""
 
-    targets = [Target(BOOK_EXAMPLES_ROOT / "README.md", render_gallery(groups))]
+    targets = [
+        Target(BOOK_EXAMPLES_ROOT / "README.md", render_gallery(groups)),
+        Target(EXAMPLES_ROOT / "README.md", render_repo_index(groups)),
+    ]
     targets.extend(
         Target(BOOK_EXAMPLES_ROOT / f"{entry.directory}.md", transform_readme(entry)) for entry in _all_entries(groups)
     )

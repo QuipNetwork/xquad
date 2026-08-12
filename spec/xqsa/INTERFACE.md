@@ -42,7 +42,7 @@ All solver implementations inherit from `Solver` and override `solve()`.
 2. Must measure wall-clock timing via `time.perf_counter()`
 3. Must return the best sample (lowest energy) if multiple reads are performed
 4. Must populate `SolverResult.energy` with the authoritative integer energy computed via `_recompute_energy(model, sample)` (see [ENERGY.md](ENERGY.md))
-5. Must populate all mandated metadata keys (see [Metadata Schema](#metadata-schema))
+5. Must populate the metadata keys its backend documents (see [Metadata Schema](#metadata-schema))
 
 **Failure semantics:**
 - `solve()` raises on failure; it only returns `SolverResult` on success
@@ -70,7 +70,7 @@ class SolverResult:
     sample: XQMX               # Solution as XQMX in SAMPLE mode
     energy: int                 # Authoritative Hamiltonian energy
     timing: float               # Wall-clock seconds spent solving
-    metadata: dict[str, Any]    # Mandated + solver-specific keys
+    metadata: dict[str, Any]    # Solver-specific keys
 ```
 
 **Invariants:**
@@ -84,7 +84,7 @@ class SolverResult:
 
 ## Metadata Schema
 
-`SolverResult.metadata` contains three mandated top-level keys plus a solver-specific namespace:
+`SolverResult.metadata`'s shape is solver-specific; there is no single schema every solver honours. `SolverDWaveCPU`, `SolverCudaGPU`, and `SolverMetalGPU` populate exactly three top-level keys:
 
 | Key | Type | Description |
 |-----|------|-------------|
@@ -92,7 +92,7 @@ class SolverResult:
 | `reads` | `int` | Number of samples/reads taken by the solver. |
 | `params` | `dict[str, Any]` | Solver-specific parameters and diagnostics. |
 
-All solver-specific keys must go under `params`. No other top-level keys are permitted beyond `seed`, `reads`, and `params`.
+`SolverDWaveQPU` omits `seed` (no seed exists on physical hardware) and adds `solver` and `qpu_timing` as top-level keys rather than nesting them under `params`. `SolverQuip` returns a different set of top-level keys entirely -- `order_id`, `solver`, `best_energy_milli`, `energy_matches_chain`, `num_submissions`, `num_solutions` -- with no `seed`, `reads`, or `params` key at all. A caller must know which solver produced a `SolverResult` before indexing into `metadata`.
 
 **Example (SolverDWaveCPU):**
 

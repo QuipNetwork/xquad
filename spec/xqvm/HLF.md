@@ -43,7 +43,9 @@ quad[i, j]   += -penalty
 
 ## Model Growth
 
-`ATLEAST`, `ATLEASTW`, and `REDUCE` allocate new variables during execution: slack variables for constraints, auxiliary variables for degree reduction. These are the only opcodes that modify `model.size`. New variables are always allocated at the current `model.size` (append semantics). Existing variable indices remain valid after growth.
+`ATLEAST`, `ATLEASTW`, and `REDUCE` allocate new variables during execution: slack variables for constraints, auxiliary variables for degree reduction. New variables are always allocated at the current `model.size` (append semantics). Existing variable indices remain valid after growth. `ATLEAST` and `ATLEASTW` validate the indices in `indices` against the model's existing size before allocating slack variables, and raise on an out-of-range one; they grow `model.size` only to hold the slack variables they allocate themselves.
+
+`EQUALITY` also modifies `model.size`, on the opposite rule: an index in `indices` at or past the model's current size grows `model.size` to fit it rather than raising. `ATLEAST`, `ATLEASTW`, `REDUCE`, and `EQUALITY` are together the opcodes that modify `model.size`.
 
 ## `EQUALITY` Expansion
 
@@ -129,4 +131,4 @@ E = Σ_i linear_model[i] × x_sample[i]
   + Σ_{i<j} quad_model[i,j] × x_sample[i] × x_sample[j]
 ```
 
-Where `x_sample[i] = sample.linear[i]` (the variable assignment). Error: `ValueError` if `model.size != sample.size`.
+Where `x_sample[i] = sample.values[i]` (the variable assignment). Error if `model.size != sample.size`: `xqvm_py` raises `ValueError`, the Rust `xqvm` VM raises `SizeMismatch`.

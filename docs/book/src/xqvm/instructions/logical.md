@@ -1,22 +1,28 @@
 # Logical Boolean
 
-Operands are treated as booleans: \\(0\\) is false, any non-zero value is true.
-Results are \\(1_{i64}\\) or \\(0_{i64}\\).
+`NOT`, `AND`, `OR` and `XOR` treat their operands as booleans under the
+integer convention: `0` is false, any non-zero value, including negative
+values, is true. Results are always exactly `1` or `0`. Byte values,
+operand layouts and stack effects are in the
+[Logical Boolean](../opcodes.md#logical-boolean) section of the opcode
+reference. None of these instructions touch a register.
 
-| Code | Mnemonic | Stack Effect | Description |
-|------|----------|--------------|-------------|
-| `0x36` | `NOT` | \\([\ldots, a] \to [\ldots, [a = 0]]\\) | Logical NOT. |
-| `0x37` | `AND` | \\([\ldots, a, b] \to [\ldots, [a \neq 0 \;\wedge\; b \neq 0]]\\) | Logical AND. Both operands are already popped; no short-circuit. |
-| `0x38` | `OR` | \\([\ldots, a, b] \to [\ldots, [a \neq 0 \;\vee\; b \neq 0]]\\) | Logical OR. |
-| `0x39` | `XOR` | \\([\ldots, a, b] \to [\ldots, [a \neq 0 \;\oplus\; b \neq 0]]\\) | Logical XOR. True iff exactly one operand is non-zero. |
-
-None of these instructions have register effects.
+`AND`, `OR` and `XOR` each pop both operands unconditionally before
+producing a result; there is no short-circuit evaluation the way there
+would be in a language with lazy boolean operators, since a stack VM has
+already evaluated both operand expressions and pushed both values by the
+time the logical instruction runs. This only matters if evaluating one of
+the operand expressions has a side effect, register writes, or a
+[Coefficient Access](coefficient-access.md) mutation, that a
+short-circuiting language would skip; `AND`/`OR`/`XOR` never skip it.
 
 ## Logical vs. Bitwise
 
-These instructions perform **logical** (boolean) operations. For bitwise
-operations on the raw `i64` bit pattern, see the
-[Bitwise](bitwise.md) instructions (`BAND`, `BOR`, `BXOR`, `BNOT`).
-
-The key difference: \\(\text{NOT}\; 5 = 0\\) (logically false), while
-\\(\text{BNOT}\; 5 = \mathord{\sim}5\\) (bitwise complement, a large negative number).
+These instructions perform boolean operations on the truthiness of a
+value, not on its bit pattern. For bit-pattern operations, see
+[Bitwise](bitwise.md) (`BAND`, `BOR`, `BXOR`, `BNOT`). The two families
+diverge sharply outside `{0, 1}` inputs: `NOT 5` is `0` (`5` is truthy, so
+its logical negation is false), while `BNOT 5` is `~5`, the bitwise
+complement, a large negative number (`-6`). `NOT` on `5` returns `0`, and
+`BNOT` on `5` returns `-6`, from the same program run against both
+instructions.

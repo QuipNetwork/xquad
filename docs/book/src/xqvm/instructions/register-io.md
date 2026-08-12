@@ -1,29 +1,63 @@
 # Register I/O
 
-Instructions for moving data between the stack, register file, calldata, and
-output slots.
+Instructions for moving data between the value stack, the 256-slot register
+file, calldata, and output slots: `LOAD`, `STOW`, `DROP`, `INPUT`, `OUTPUT`.
+Byte values, operand layouts and stack effects are in the
+[Register I/O](../opcodes.md#register-io) section of the opcode reference.
 
-| Code | Mnemonic | Arguments | Stack Effect | Register Effect | Description |
-|------|----------|-----------|--------------|-----------------|-------------|
-| `0x0A` | `LOAD` | `reg: Register` | \\([\ldots] \to [\ldots, v]\\) | `read` | `reg` must hold \\(\text{Int}(v)\\). Push \\(v\\) onto the stack. Errors if `reg` holds any other variant. |
-| `0x0B` | `STOW` | `reg: Register` | \\([\ldots, v] \to [\ldots]\\) | `write` | Pop \\(v\\). Write \\(\text{reg} \leftarrow \text{Int}(v)\\). |
-| `0x0C` | `DROP` | `reg: Register` | \\([\ldots] \to [\ldots]\\) | `write` | Write \\(\text{reg} \leftarrow \text{Int}(0)\\), releasing any heap allocation the slot held (models, vectors, samples). |
-| `0x0E` | `INPUT` | `reg: Register` | \\([\ldots, s] \to [\ldots]\\) | `write` | Pop \\(s\\) (slot index). Clone \\(\text{calldata}[s]\\) into `reg`. Any `RegVal` variant is transferable. Errors if \\(s\\) is out of range. |
-| `0x0F` | `OUTPUT` | `reg: Register` | \\([\ldots, s] \to [\ldots]\\) | `read` | Pop \\(s\\) (slot index). Clone `reg`'s value into \\(\text{outputs}[s]\\). Errors if \\(s\\) is out of range. |
+## Registers Default to Unset, Not Int(0)
+
+Every register starts as `RegVal::Unset`, not `Int(0)`. Only `LOAD` and
+`OUTPUT` fault `UnsetRegister` when reading an unset register; every other
+instruction that reads a register instead reports `RegisterType`, with
+`unset` as the actual variant held, for example `register r7 holds unset,
+expected vec<int>` from `VECPUSH r7`, `register r7 holds unset, expected
+model|sample` from `GETLINE r7`, or `register r7 holds unset, expected
+sample` from `ENERGY r0 r7`. `LOAD r3` as the first instruction of a
+program, before anything has written to `r3`, fails at runtime with
+`register r3 is unset`. The verifier's uninitialised-register check
+catches the same defect statically for straight-line code, one reason to
+run `xquad verify` before `xquad run`: the sequence `PUSH 1 / STOW r0 /
+DROP r0 / LOAD r0` is rejected by `verify` with `register r0 read at byte
+0x0006 before being written`, before the runtime fault is ever reached.
+
+`LOAD` distinguishes two failure modes for a register that is not usable
+as an integer. An unset register faults `UnsetRegister`; a register holding
+something other than `Int`, for example a `Model` from
+[`BQMX`](allocators.md), faults `RegisterType` instead, naming the actual
+variant held. `LOAD` on a register that holds a freshly allocated `Model`
+fails with `register r0 holds model, expected int`, a different message
+from the unset case.
 
 ## Stack-Register Bridge
 
-The stack holds only `i64` integers. To move richer types (models, vectors,
-samples) into and out of the VM, use `INPUT` and `OUTPUT` with the calldata and
-output slot arrays.
+The value stack holds only `i64` integers. `LOAD` pushes a register's
+`Int` value onto the stack; `STOW` pops the stack top and writes it into a
+register as `Int`. Neither coerces: `LOAD` on a non-`Int` register errors
+rather than reinterpreting the value as an integer.
 
-`LOAD` and `STOW` bridge the stack and register file for integer values only.
-`LOAD` errors if the register does not hold `Int` -- it will not silently coerce
-other types.
+Richer types, models, vectors and samples, never touch the stack directly.
+Moving them into or out of the VM goes through `INPUT` and `OUTPUT`
+instead, against the calldata and output-slot arrays rather than the
+stack. `INPUT reg` pops a calldata slot index and clones
+`calldata[slot]` into `reg`; `OUTPUT reg` pops an output slot index and
+clones `reg`'s current value into `outputs[slot]`. Either direction
+transfers any `RegVal` variant, not only `Int`, since calldata and outputs
+are typed as `Vec<RegVal>` on the Rust side; the `xquad` CLI's
+`--calldata` flag only accepts a comma-separated integer list, so
+injecting a `Model` or `Sample` through calldata is something host code
+building on the `xqvm`/`xqasm` crates can do, not something the CLI
+exposes directly. `PUSH 0; INPUT r0; PUSH 0; OUTPUT r0`, given
+`--calldata 77`, round-trips a value through a register with no
+arithmetic in between: output slot `0` ends up holding `Int(77)`.
+Both `INPUT` and `OUTPUT` fault with `CallDataIndex`/`OutputIndex`
+respectively when the popped slot index is out of range, and `OUTPUT`
+faults `UnsetRegister` if `reg` was never written, the same as `LOAD`.
 
 ## Memory Management
 
-`DROP` is the only way to explicitly free a register's allocation. Setting a
-register to \\(\text{Int}(0)\\) releases any model, vector, or sample that was previously
-stored there. This is important for controlling memory usage in long-running
-programs.
+`DROP reg` is the only instruction that explicitly frees a register's
+allocation, resetting it to `Unset` and releasing whatever `Model`,
+`Sample`, `VecInt` or `VecXqmx` the slot held. It does not leave an integer
+zero behind: the register is unreadable until the next `STOW`, `INPUT` or
+allocator call.

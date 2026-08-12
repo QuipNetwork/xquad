@@ -2,7 +2,7 @@
 Copyright (C) 2026 Postquant Labs Incorporated
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
-# Contributing to Aglais XQVM
+# Contributing to XQuad
 
 Thank you for your interest in contributing. This document covers the development workflow and requirements for getting changes merged.
 

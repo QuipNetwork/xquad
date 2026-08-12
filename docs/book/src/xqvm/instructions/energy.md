@@ -1,24 +1,33 @@
 # Energy Evaluation
 
-## `0x7F` -- `ENERGY model sample`
+`ENERGY` is the sole instruction in this category: it evaluates a model's
+Hamiltonian against a candidate sample and pushes the result. Byte value,
+operand layout and stack effect are in the
+[XQMX High-Level Constraints](../opcodes.md#xqmx-high-level-constraints)
+section of the opcode reference. See [Allocators](allocators.md) for how a
+`Model` and a `Sample` are built in the first place.
 
-**Stack:** \\([\ldots] \to [\ldots, E]\\)
+## `ENERGY model sample`
+
 **Register effect:** `read` -- both `model` and `sample` are read-only
 
-This is the only instruction with two register operands.
-
-The `model` register must hold a `Model` and the `sample` register must hold
-a `Sample`. Both checks are strict: a `RegisterType` error is raised if either
-register holds the wrong kind of value. The previous "model-as-sample"
-shortcut, where a `Model` could appear in the sample slot and have its linear
-table read as variable assignments, was removed in QUI-410 to align with
-`spec/xqvm/HLF.md` and the xq-py reference.
+`ENERGY` takes two register operands, `model` and `sample`. Both checks are
+strict: the `model` register must hold a `Model`, the `sample` register must
+hold a `Sample`, and a `RegisterType` error is raised if either register
+holds any other variant -- a `Model` cannot be passed in the `sample` slot
+or vice versa.
 
 To populate a sample with concrete variable assignments, construct an
-`XqmxSample` in the host (via `aglais_xqvm_vm::XqmxSample`) and pass it to the
-program through a calldata slot, then `INPUT` it into a register before
-calling `ENERGY`. xq-rs does not currently expose a bytecode opcode to mutate
-sample values in-place.
+`xqvm::XqmxSample` in the host and pass it to the program through a
+calldata slot, then `INPUT` it into a register before calling `ENERGY`.
+At the VM level, `SETLINE` and `ADDLINE` can also write a sample's
+per-variable assignment values in place, the same way they write a
+model's linear bias map -- see [Coefficient Access](coefficient-access.md).
+`xquad verify` requires a `Model` register for that instruction family,
+though, so a program that mutates a sample this way cannot pass
+verification; building a new `XqmxSample` in the host and passing it in
+through calldata is the supported way to change what a verified program
+evaluates.
 
 ## Hamiltonian
 
@@ -26,7 +35,9 @@ Evaluates the quadratic Hamiltonian:
 
 $$E = \sum_{i} \text{linear}[i] \cdot x_i \;+\; \sum_{i < j} \text{quad}[i,j] \cdot x_i \cdot x_j$$
 
-The result is pushed as `i64`. Arithmetic uses wrapping semantics on overflow.
+where \\(x_i\\) is `sample.values[i]`, the variable assignment at index
+\\(i\\). The result is pushed as `i64`. Arithmetic uses wrapping semantics
+on overflow.
 
 ## Errors
 

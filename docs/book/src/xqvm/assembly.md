@@ -1,7 +1,7 @@
 # Assembly Language
 
 XQVM programs are written in a simple assembly language and stored in `.xqasm`
-files. The assembler (`aglais-xqvm-asm` crate, invoked via `xq asm`) parses
+files. The assembler (the `xqasm` crate, invoked via `xquad asm`) parses
 the source, resolves labels, and emits compact bytecode.
 
 ## Overview
@@ -26,7 +26,7 @@ HALT
 ## Assembly Syntax
 
 This page defines the complete syntax of the XQVM assembly language, derived
-from the canonical PEG grammar in `crates/asm/src/grammar.pest`.
+from the canonical PEG grammar in `xqasm/src/grammar.pest`.
 
 ## Line Structure
 
@@ -44,7 +44,7 @@ All three parts are optional. Blank lines and comment-only lines are valid.
                         ; blank line (valid)
 ; this is a comment     ; comment-only line
 PUSH 42                 ; instruction only
-.0: TARGET              ; label + instruction
+.0: NOP                 ; label + instruction
 .1:                     ; label only (anchors a jump target)
 LOAD r0                 ; register operand
 JUMP .0                 ; label reference operand
@@ -71,9 +71,18 @@ push 42
 Push 42
 ```
 
-The assembler recognises all 93 XQVM instruction mnemonics. `PUSH` is a
-special mnemonic that accepts an integer operand and automatically selects the
-smallest `PUSH1`--`PUSH8` encoding. `PUSHC` is an alias for `PUSH`.
+The assembler recognises 85 of the 93 XQVM mnemonics directly. The eight
+`PUSH1`--`PUSH8` opcodes are not typeable: `PUSH` is a special mnemonic that
+accepts an integer operand and selects the smallest of those encodings for
+you, and writing one of them by hand is rejected as an unknown mnemonic.
+`PUSHC` is an alias for `PUSH`. `JUMP` and `JUMPI` are the same kind of
+sugar, but layered on top of opcodes that are themselves among the 85:
+`JUMP1`, `JUMPI1`, `JUMP2`, `JUMPI2` are part of the 93 and can be written
+directly, though doing so interacts badly with the unused-label check -- see
+[Control Flow](instructions/control-flow.md#branching). `JUMP` and `JUMPI`
+are two further mnemonics, not among the 93, that pick the narrowest width
+for you the same way `PUSH` picks a `PUSHn` width. See [Stack
+Manipulation](instructions/stack-manipulation.md) for the width rules.
 
 ## Operands
 
@@ -107,7 +116,8 @@ are supported. An optional `+` or `-` sign may precede the digits.
 ```
 
 A dot followed by one or more decimal digits. Label references are used as
-operands for `JUMP` and `JUMPI` instructions.
+operands for the `JUMP`/`JUMPI` mnemonics (and their explicit-width forms
+`JUMP1`/`JUMPI1`/`JUMP2`/`JUMPI2`).
 
 ## Labels
 
@@ -122,11 +132,11 @@ TARGET .2          ; explicit form: identical to ".2:"
 HALT
 ```
 
-Both forms compile to the same bytecode: the assembler emits an inline
-`TARGET` opcode at the label position *and* records the position in the jump
-table. `.0:` and `TARGET .0` are interchangeable spellings for the same
-operation; pick whichever reads better in context. Defining the same label
-with both forms is a `DuplicateLabel` error, the same as defining `.N:`
+Both forms compile to the same bytecode: placing a label emits an inline
+`TARGET` opcode at the current position and records that position under the
+label's assigned id. `.0:` and `TARGET .0` are interchangeable spellings for
+the same operation; pick whichever reads better in context. Defining the same
+label with both forms is a `DuplicateLabel` error, the same as defining `.N:`
 twice.
 
 A bare `TARGET` (no operand) emits a raw `Target` opcode without binding any
@@ -138,9 +148,13 @@ Labels must be defined before or after they are referenced -- both forward and
 backward references are resolved by the assembler. Every label used as a
 `JUMP`/`JUMPI` target must be defined somewhere in the program.
 
-The assembler converts labels to jump table entries. At runtime, `JUMP .N` looks
-up the byte offset of label `.N` in the jump table and seeks the instruction
-stream to that position (which is the byte holding the inline `TARGET`).
+The `.N` digits are assembler-only syntax: they let the assembler pair a
+`JUMP`/`JUMPI` reference with the `.N:` (or `TARGET .N`) that defines it, and
+they are never emitted into the bytecode. What reaches the instruction
+stream is only a sequence of bare `TARGET` opcodes. See [Bytecode
+Format](bytecode-format.md#target-and-the-label-pre-scan) for how a decoder
+assigns those opcodes their sequential ids and resolves a jump operand
+against them.
 
 ## Whitespace
 
@@ -167,9 +181,17 @@ diagnostics. Errors include the source file name, line/column numbers, and a
 snippet highlighting the problematic token:
 
 ```
-Error: unknown mnemonic
-  ┌─ program.xqasm:3:1
-  │
-3 │ INVALID_MNEMONIC r0
-  │ ^^^^^^^^^^^^^^^^ unknown instruction
+Error: xqasm::unknown_mnemonic
+
+  × unknown mnemonic `BADOP`
+   ╭─[bad.xqasm:2:1]
+ 1 │ PUSH 1
+ 2 │ BADOP r0
+   · ──┬──
+   ·   ╰── unknown mnemonic
+ 3 │ HALT
+   ╰────
 ```
+
+[`xquad asm`](cli/asm.md#error-reporting) shows the same diagnostics from the
+command line.

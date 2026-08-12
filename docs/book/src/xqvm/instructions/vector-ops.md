@@ -1,26 +1,23 @@
 # Vector Operations
 
-Instructions for reading, writing, and querying register-held vectors.
+Instructions for reading, writing and querying the `VecInt` and `VecXqmx`
+containers that [Allocators](allocators.md) create. Byte values, operand
+layouts and stack effects are in the
+[Vector Operations](../opcodes.md#vector-operations) section of the opcode
+reference. This page covers the type rules that apply across the family and
+the details of `SLACK`, the one instruction here that does more than plain
+container access.
 
-| Code | Mnemonic | Arguments | Stack Effect | Register Effect | Description |
-|------|----------|-----------|--------------|-----------------|-------------|
-| `0x50` | `VECPUSH` | `reg: Register` | \\([\ldots, v] \to [\ldots]\\) | `mutate` | Pop \\(v\\). Append \\(v\\) to `reg`'s `VecInt`. |
-| `0x51` | `VECGET` | `reg: Register` | \\([\ldots, i] \to [\ldots, v]\\) | `read` | Pop \\(i\\). Bounds-check: \\(0 \le i < \text{len}\\). Push \\(\text{vec}[i]\\). |
-| `0x52` | `VECSET` | `reg: Register` | \\([\ldots, i, v] \to [\ldots]\\) | `mutate` | Pop \\(v\\), then \\(i\\). Bounds-check: \\(0 \le i < \text{len}\\). Set \\(\text{vec}[i] \leftarrow v\\). |
-| `0x53` | `VECLEN` | `reg: Register` | \\([\ldots] \to [\ldots, n]\\) | `read` | `reg` must hold `VecInt` or `VecXqmx`. Push \\(\lvert\text{vec}\rvert\\) as `i64`. |
-| `0x54` | `SLACK` | `indices: Register, coeffs: Register` | \\([\ldots, \text{start}, \text{cap}] \to [\ldots]\\) | `mutate` | Pop `cap` and `start`. Append \\(S = \lfloor\log_2(\text{cap})\rfloor + 1\\) slack entries to both vecs. |
+## Reading, Writing and Sizing
 
-## Type Requirements
-
-- `VECPUSH`, `VECGET`, and `VECSET` require the register to hold `VecInt`.
-- `VECLEN` accepts both `VecInt` and `VecXqmx`.
-- `SLACK` requires both registers to hold `VecInt`. It appends (does not
-  overwrite) so that item variables and slack variables coexist in one vec pair.
-  If `cap <= 0`, no elements are appended.
-- All indexing operations perform bounds checking and error with
-  `IndexOutOfBounds` on violation.
-
-## Example
+`VECPUSH` appends to the end of a `VecInt`, growing it by one element.
+`VECGET` and `VECSET` read and write by index, both bounds-checked against
+the current length: an out-of-range index errors `IndexOutOfBounds` at
+runtime rather than reading past the end of the vector. `VECLEN` reads the
+current length as an `i64`, and is the only instruction in this family that
+accepts either `VecInt` or `VecXqmx`; the other three require `VecInt`
+specifically, since `VecXqmx` elements are whole models rather than
+integers and there is no `VECXGET`/`VECXSET`.
 
 ```asm
 VEC r0          ; r0 = empty VecInt
@@ -29,26 +26,45 @@ VECPUSH r0      ; r0 = [10]
 PUSH 20
 VECPUSH r0      ; r0 = [10, 20]
 PUSH 0
-VECGET r0       ; stack = [..., 10]
+VECGET r0       ; stack top = 10
 ```
 
-## SLACK Details
+An `OUTPUT` of the loaded value writes `10` to the output slot, and a
+`VECLEN r0` issued after the two `VECPUSH`es reads `2`.
 
-`SLACK indices coeffs` pops `capacity` (top) then `start_index` from the stack.
-It computes \\(S = \lfloor\log_2(\text{capacity})\rfloor + 1\\) and appends:
+## SLACK
 
-- To `indices`: \\([\text{start}, \text{start}+1, \ldots, \text{start}+S-1]\\)
-- To `coeffs`: \\([1, 2, 4, \ldots, 2^{S-1}]\\)
+`SLACK indices coeffs` is the one instruction in this family that is not a
+plain accessor: it exists to turn an inequality constraint into an equality
+one, by appending binary-weighted slack variables to two parallel vecs.
+Pop `capacity` (top of stack), then `start_index`. Compute
 
-This generates binary-weighted slack variables for inequality-to-equality
-conversion. Combined with `EQUALITY`, it enforces knapsack-style capacity
-constraints without manual coefficient loops.
+$$S = \lfloor \log_2(\text{capacity}) \rfloor + 1$$
+
+and append \\(S\\) entries to each register:
+
+- to `indices`: \\([\text{start}, \text{start}{+}1, \ldots, \text{start}{+}S{-}1]\\),
+  consecutive variable indices for the new slack variables;
+- to `coeffs`: \\([1, 2, 4, \ldots, 2^{S-1}]\\), their binary weights.
+
+`SLACK` appends rather than overwrites, so item variables and slack
+variables coexist in the same `indices`/`coeffs` pair, ready to hand to
+[`EQUALITY`](constraints.md). This is what makes a knapsack-style "total
+weight at most `capacity`" constraint expressible as a single weighted
+equality: the slack variables absorb any unused capacity, so the equality
+holds exactly whenever the inequality would have held. If `capacity <= 0`,
+no slack variables are needed and `SLACK` appends nothing.
 
 ```asm
 VEC r5            ; indices
 VEC r6            ; coeffs
 ; ... populate with item indices and weights ...
-PUSH 3            ; start_index (first slack var index)
+PUSH 3            ; start_index (first slack variable index)
 PUSH 10           ; capacity
-SLACK r5 r6       ; appends 4 slack entries (floor(log2(10))+1 = 4)
+SLACK r5 r6       ; appends 4 slack entries: floor(log2(10)) + 1 = 4
 ```
+
+With `start_index = 3`, `capacity = 10`: `VECLEN r5` after `SLACK` reads
+`4`, `indices` starts at `3` and ends at `6` (`[3, 4, 5, 6]`), and
+`coeffs` is `[1, 2, 4, 8]`, matching \\(S = 4\\) and the powers of two up
+to \\(2^{S-1}\\).

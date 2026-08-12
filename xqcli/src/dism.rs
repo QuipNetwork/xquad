@@ -15,7 +15,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! `xq dism` subcommand -- disassembles XQVM bytecode.
+//! `xquad dism` subcommand -- disassembles XQVM bytecode.
 
 use std::io::{self, Read, Write};
 use std::path::PathBuf;

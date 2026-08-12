@@ -83,7 +83,7 @@ macro_rules! opcodes {
              1, {reg: $crate::Register}),
             (0x0B, Stow,    "STOW",     "Pop the top of the stack into an int register.",
              -1_i8, {reg: $crate::Register}),
-            (0x0C, Drop,    "DROP",     "Reset a register to Int(0).",
+            (0x0C, Drop,    "DROP",     "Reset a register to Unset, releasing any value it held.",
              0, {reg: $crate::Register}),
             // 0x0D is reserved (unassigned gap).
             (0x0E, Input,   "INPUT",    "Pop a calldata slot index and load that slot into a register.",
@@ -128,7 +128,7 @@ macro_rules! opcodes {
              -1_i8, {}),
             (0x22, Mul,     "MUL",      "Pop b and a; push a * b.",
              -1_i8, {}),
-            (0x23, Div,     "DIV",      "Pop b and a; push a / b (truncating integer division).",
+            (0x23, Div,     "DIV",      "Pop b and a; push a / b (floor division, rounds toward negative infinity).",
              -1_i8, {}),
             (0x24, Modulo,  "MOD",      "Pop b and a; push a % b.",
              -1_i8, {}),
@@ -205,7 +205,7 @@ macro_rules! opcodes {
             // ---------------------------------------------------------------
             // Vec Allocators
             // ---------------------------------------------------------------
-            (0x4A, Vec,     "VEC",      "Create an empty vec (element type inferred on first push) in a register.",
+            (0x4A, Vec,     "VEC",      "Create an empty `vec<int>` in a register, identical to VECI.",
              0, {reg: $crate::Register}),
             (0x4B, VecI,    "VECI",     "Create an empty `vec<int>` in a register.",
              0, {reg: $crate::Register}),
@@ -234,11 +234,11 @@ macro_rules! opcodes {
             // ---------------------------------------------------------------
             // XQMX Coefficient Access
             // ---------------------------------------------------------------
-            (0x60, GetLine, "GETLINE",  "Pop i; push `linear[i]` from the register's model (0 if absent).",
+            (0x60, GetLine, "GETLINE",  "Pop i; push `linear[i]` from the register's model (0 if absent), or a sample's assignment at i; `xquad verify` requires a model.",
              0, {reg: $crate::Register}),
-            (0x61, SetLine, "SETLINE",  "Pop value and i; set `linear[i]` in the register's model.",
+            (0x61, SetLine, "SETLINE",  "Pop value and i; set `linear[i]` in the register's model, or a sample's assignment at i; `xquad verify` requires a model.",
              -2_i8, {reg: $crate::Register}),
-            (0x62, AddLine, "ADDLINE",  "Pop delta and i; add delta to `linear[i]` in the register's model.",
+            (0x62, AddLine, "ADDLINE",  "Pop delta and i; add delta to `linear[i]` in the register's model, or a sample's assignment at i; `xquad verify` requires a model.",
              -2_i8, {reg: $crate::Register}),
             (0x63, GetQuad, "GETQUAD",  "Pop j and i; push `quadratic[i, j]` from the register's model (0 if absent).",
              -1_i8, {reg: $crate::Register}),
@@ -249,7 +249,7 @@ macro_rules! opcodes {
             // ---------------------------------------------------------------
             // XQMX Grid
             // ---------------------------------------------------------------
-            (0x66, Resize,  "RESIZE",   "Pop cols and rows; set the grid dimensions of the register's model.",
+            (0x66, Resize,  "RESIZE",   "Pop cols and rows; set the grid dimensions of the register's model or sample.",
              -2_i8, {reg: $crate::Register}),
             (0x67, RowFind, "ROWFIND",  "Pop value and row; push the first column where the value matches, or -1.",
              -1_i8, {reg: $crate::Register}),
