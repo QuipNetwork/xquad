@@ -73,6 +73,7 @@ make build-docs            # mdbook build
 make regen-docs            # regenerate generated opcode and example book pages
 make check-docs-generated  # assert generated docs match regenerated output
 make check-docs-drift      # guard book prose, SUMMARY.md coverage, and page links
+make check-docs-mermaid    # assert book diagrams rendered (needs make build-docs first)
 make check-docs-readme     # guard published package READMEs against the 100-line limit
 make serve-docs            # mdbook serve --open
 

@@ -23,6 +23,13 @@ taplo-cli=0.10.0 taplo
 cargo-deny=0.19.4
 cargo-nextest=0.9.130
 mdbook=0.5.2
+# mdbook-mermaid 0.17.0 is the latest release on crates.io and targets
+# mdBook 0.5.0, two patches behind the 0.5.2 pinned above. No version pair
+# silences the resulting "built against a different version" warning
+# without downgrading mdBook, so the skew is accepted: the warning itself
+# is cosmetic, and scripts/check-mermaid-render.sh is what actually guards
+# that diagrams render. The skew is not entirely free, though -- see the
+# header of docs/book/theme/mermaid-init.js for the one place it bites.
 mdbook-mermaid=0.17.0
 git-cliff=2.13.1
 wasm-pack=0.15.0

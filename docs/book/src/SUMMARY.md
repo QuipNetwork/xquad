@@ -106,3 +106,4 @@
 - [Glossary](appendix/glossary.md)
 - [Stability](appendix/stability.md)
 - [Spec Index](appendix/spec-index.md)
+- [Contributing to These Docs](appendix/contributing.md)
