@@ -164,7 +164,7 @@ def emit(targets: list[Target], *, repo_root: Path, check: bool) -> int:
 
             for target, diff in stale_targets:
                 rel_path = target.path.relative_to(repo_root)
-                sys.stderr.write(f"{rel_path} is stale; run `make docs-regen`.\n\n")
+                sys.stderr.write(f"{rel_path} is stale; run `make regen-docs`.\n\n")
                 sys.stderr.write(diff)
                 if not diff.endswith("\n"):
                     sys.stderr.write("\n")

@@ -40,7 +40,7 @@ select = [
 "xqsa/tests/test_*.py" = [ "E402" ] # imports after pytest.importorskip
 
 [tool.ruff.lint.isort]
-known-first-party = [ "xqvm_py", "xqcp", "xqsa", "xqffi", "xquad", "_docsgen" ]
+known-first-party = [ "xqvm_py", "xqcp", "xqsa", "xqffi", "xquad", "_docsgen", "_hwprobe" ]
 
 # ---------------------------------------------------------------------------
 # Pytest — consolidated discovery root so `pytest` from repo root picks up

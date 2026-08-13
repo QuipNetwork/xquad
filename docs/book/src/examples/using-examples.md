@@ -32,7 +32,7 @@ programs are and [Compiling](../modelling/compiling.md) for what
 (`dir`, `title`, `blurb`), and drives both the gallery grouping and
 `scripts/gen-example-docs.py`'s validation that every listed directory
 has a `runner.py` and a `README.md`. This page itself is exempt: it is
-named in the manifest's `preserved_pages`, so `make docs-regen` leaves
+named in the manifest's `preserved_pages`, so `make regen-docs` leaves
 it alone instead of overwriting it from a source `README.md` that does
 not exist.
 

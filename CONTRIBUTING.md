@@ -210,7 +210,7 @@ Any MR that changes VM semantics must touch **all four** of these layers in the 
 3. `xqvm_py/{executor,opcodes,xqmx,state,vector,tracer,errors}.py` — the Python reference implementation
 4. `conformance/vectors/**` or `conformance/opcodes.yaml` — cross-impl parity coverage
 
-CI enforces this via `lint:atomic-spec-mr` (`scripts/check-atomic-spec-mr.sh`). MRs touching 0 or all 4 layers pass; partial changes fail.
+CI enforces this via `verify:policy` (`scripts/check-atomic-spec-mr.sh`). MRs touching 0 or all 4 layers pass; partial changes fail.
 
 **Exemptions:** For deliberately one-sided changes (e.g. aligning one impl to existing behaviour), add a `Atomic-Spec-Exempt: <reason>` trailer to a commit message:
 

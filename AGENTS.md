@@ -69,17 +69,17 @@ make conformance      # conformance-rs + conformance-py
 make example-smoke    # run examples on both interpreters, check valid == 1
 
 # Documentation
-make docs             # mdbook build
-make docs-regen       # regenerate generated opcode and example book pages
-make docs-check       # assert generated docs match regenerated output
-make docs-drift       # guard book prose, SUMMARY.md coverage, and page links
-make docs-readme      # guard published package READMEs against the 100-line limit
-make docs-serve       # mdbook serve --open
+make build-docs            # mdbook build
+make regen-docs            # regenerate generated opcode and example book pages
+make check-docs-generated  # assert generated docs match regenerated output
+make check-docs-drift      # guard book prose, SUMMARY.md coverage, and page links
+make check-docs-readme     # guard published package READMEs against the 100-line limit
+make serve-docs            # mdbook serve --open
 
 # Changelog (CHANGELOG.md is gitignored; cliff.toml + git history is source of truth)
 make changelog                              # generate CHANGELOG.md (preview unreleased)
 make changelog-release VERSION=v0.2.0       # preview a tag's release notes
-make changelog-render                       # render-only validation (lint smoke)
+make render-changelog                       # render-only validation (lint smoke)
 ```
 
 ## Shared Conventions
@@ -148,7 +148,7 @@ Fixes #456
 
 ### Post-Edit Linting
 
-After modifying files, run `make fmt` to format everything, or the per-file equivalents from the commands section: `cargo fmt` for Rust, `uv run ruff check --fix <file>` + `uv run ruff format <file>` for Python, `taplo fmt` for TOML.
+After modifying files, run `make fmt` to format everything, or the per-file equivalents from the commands section: `cargo fmt` for Rust, `uvx ruff@<pinned version> check --fix <file>` + `uvx ruff@<pinned version> format <file>` for Python (pin lives in the Makefile's `RUFF_VERSION`), `taplo fmt` for TOML.
 
 ### Constraints
 
@@ -305,7 +305,7 @@ Behavioural parity between `xqvm_py` (Python reference) and the Rust `xqvm` crat
 
 ### Atomic Spec-MR Rule
 
-Any MR that changes VM semantics must touch **all four** layers in the same MR: (1) `spec/xqvm/*.md`, (2) `xqvm/src/**/*.rs`, (3) `xqvm_py/{executor,opcodes,xqmx,state,vector,tracer,errors}.py`, (4) `conformance/vectors/**` or `conformance/opcodes.yaml`. CI enforces this via `lint:atomic-spec-mr` (`scripts/check-atomic-spec-mr.sh`). MRs touching 0 or all 4 layers pass; partial changes (1-3 layers) fail.
+Any MR that changes VM semantics must touch **all four** layers in the same MR: (1) `spec/xqvm/*.md`, (2) `xqvm/src/**/*.rs`, (3) `xqvm_py/{executor,opcodes,xqmx,state,vector,tracer,errors}.py`, (4) `conformance/vectors/**` or `conformance/opcodes.yaml`. CI enforces this via `verify:policy` (`scripts/check-atomic-spec-mr.sh`). MRs touching 0 or all 4 layers pass; partial changes (1-3 layers) fail.
 
 For deliberately one-sided changes (e.g. aligning one impl to existing behaviour), add an `Atomic-Spec-Exempt: <reason>` trailer to a commit message. The guard scans every commit in the MR range and bypasses when it finds at least one trailer. See `docs/guide/development-workflow.md` for the full rationale and exempt cases.
 
@@ -319,13 +319,55 @@ For deliberately one-sided changes (e.g. aligning one impl to existing behaviour
 
 ### CI Pipeline
 
-| Stage | What it covers |
-| --- | --- |
-| lint | clippy, rustdoc, cargo-deny, ruff, format checks, opcode parity, generated-docs freshness, docs drift guard, package README length guard, atomic spec-MR guard, changelog render |
-| test | unit, integration, doc tests (Rust); pytest (Python) |
-| conformance | Rust + Python conformance vectors, example smoke tests |
-| docs | mdbook build |
-| release | packaging, publishing, GitLab Release notes via git-cliff |
+Five phases, each answering one question about the change. `verify` and
+`test` read as synonyms, so the boundary is stated explicitly rather than
+left to be inferred per job -- an unwritten boundary is exactly how the
+old `lint` stage decayed into four unrelated concerns (source formatting,
+Rust compilation, cross-implementation parity, release packaging) that
+happened to share a stage barrier and nothing else:
+
+- **`verify`** asks whether something matches what it is required to
+  match -- a licence against policy, one VM implementation's output
+  against the other's.
+- **`test`** asks whether something does what it should when actually
+  executed. Not a static-vs-dynamic split (`verify:parity` runs the VM);
+  it is consistency between artefacts versus correctness of one artefact.
+
+| Phase | Question it answers | What it covers |
+| --- | --- | --- |
+| `verify` | Does the workspace match what it's required to match? | clippy, rustdoc, cargo-deny, ruff, opcode parity, Rust + Python conformance vectors, example smoke tests, atomic spec-MR guard, commit-message guard, changelog render |
+| `test` | Does the workspace do what it should when executed? | unit, integration, doc tests (Rust); pytest (Python); Quip signing-layer tests; WASM no_std tests; Substrate pallet fixture |
+| `hardware` | Does it work on real hardware? | CUDA, D-Wave QPU, and Metal solver tests on real hardware (protected refs only) |
+| `docs` | Is the documentation correct and buildable? | generated-docs freshness, docs drift guard, package README length guard, mdbook build, GitLab Pages publish |
+| `release` | Is the artefact publishable, and (on a tag) published? | dry-run packaging checks on every push/MR; crates.io + PyPI publishing and GitLab Release notes via git-cliff on a pushed tag |
+
+**Gating topology.** `verify:*` and `test:*` jobs all carry `needs: []`
+and start together at t=0 -- peers, not a chain; a `verify` failure does
+not hold `test` back. Every `hardware:*` job then `needs:` the full
+verify+test set, so nothing touches real hardware before the code is
+known to compile and pass its own test suite -- a GPU, a metered D-Wave
+QPU token, and a macOS runner are all scarce and/or billed, and none of
+them should be spent on code that does not even build. `docs:*` and
+`release:*` jobs in turn `needs:` verify+test+hardware, so the
+documentation site and the release path both wait on hardware being
+proven, not just on the workspace compiling. The accepted tradeoff: an
+offline GPU runner or an expired D-Wave token stalls the documentation
+site, even though nothing in the docs content depends on hardware
+passing -- we would rather stall the docs than publish a book describing
+an opcode or solver behaviour the hardware suite just proved broken. The
+exact graph and per-edge reasoning (including why `hardware:*` needs are
+marked `optional: true`) live in `.gitlab/ci/setup.yml`'s "Dependency
+gating" section.
+
+**Naming.** A job's name prefix is its phase (`verify:rust` runs in the
+`verify` stage, `docs:build` in `docs`) -- that is the CI-side taxonomy.
+The Makefile stays action-first (`<action>-<subject>`, e.g. `lint-rust`,
+`build-docs`) -- that is the local-workflow taxonomy -- so most job names
+do not map onto their target mechanically: `verify:rust` runs `make -k
+lint-rust`, `docs:build` runs `make -k build-docs`. CI always invokes
+these with `-k` so every prerequisite in a merged job is attempted even
+after one fails; a plain local `make lint-rust` fails fast on the first,
+like any other non-`-k` target.
 
 Jobs are authored in per-stage files under `.gitlab/ci/` and composed via `include:` in the root `.gitlab-ci.yml`.
 

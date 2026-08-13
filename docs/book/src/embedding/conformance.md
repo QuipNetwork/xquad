@@ -73,8 +73,10 @@ interpreter behind it.
 
 Every vector runs as two separate tests, one per runtime, generated at build
 time so a regression in one implementation cannot be masked by the other
-passing. CI runs those two test suites as independent jobs. A vector that
-passes on both VMs means: for that specific program and that specific
+passing. CI runs those two test suites within the `verify:parity` job's
+`make -k check-parity`, which keeps running every target after one fails so a
+Rust-side failure cannot suppress a Python-side one (or vice versa). A vector
+that passes on both VMs means: for that specific program and that specific
 calldata, both implementations agree on every output value and the final
 stack. It says nothing about programs the vector does not cover.
 

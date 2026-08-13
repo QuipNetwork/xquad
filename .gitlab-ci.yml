@@ -13,9 +13,12 @@ workflow:
 # Root pipeline — composition only.
 #
 # Jobs are authored in per-stage files under .gitlab/ci/ and pulled in
-# via `include:` so each pipeline concern (lint, test, conformance,
-# docs, python) can be reasoned about on its own and edited without
-# touching the root.
+# via `include:` so each pipeline phase (verify, test, hardware, docs,
+# release) can be reasoned about on its own and edited without touching
+# the root. `.gitlab/ci/setup.yml` is included first — it holds
+# the shared script fragments and job templates every other file's jobs
+# extend or reference (see that file's header for the anchors-vs-extends
+# rationale).
 #
 # Caching strategy (see QUI-460 for context):
 #
@@ -36,12 +39,46 @@ workflow:
 #   GitLab's `fallback_keys:` is exact-match, not prefix-match, so a
 #   static fallback string like `main-cargo` would never match main's
 #   hash-based key and is omitted rather than misleading.
+#
+#   CACHE WRITERS: verify:rust, test:rust and test:wasm (the `.rust`
+#   template, .gitlab/ci/setup.yml) are the only jobs that inherit this
+#   default cache unmodified and are the pushers for both entries -- all
+#   three run unconditionally on every pipeline and `make deps` always
+#   installs the full scripts/cargo-tools.lock set. `.rust-tools` (also in
+#   setup.yml) intentionally reuses this same `.cargo/bin/` key but only
+#   ever installs a named subset already covered by the three jobs above,
+#   so its consumers (verify:policy, docs:build) are `policy: pull` --
+#   see that template's comment before adding a fourth pull-only consumer
+#   of either entry.
 
 default:
     image: rust:latest
     # Cancel in-flight pipelines on push; saves runner minutes when
     # developers push rapidly on a WIP branch.
     interruptible: true
+    # Retry on infrastructure failures only -- a runner dying mid-job, a
+    # job stuck past its timeout, GitLab's own API misbehaving, or the
+    # scheduler failing to place the job. All four are the CI system
+    # failing the job, not the job failing on its own.
+    #
+    # `script_failure` is DELIBERATELY EXCLUDED. This is not theoretical:
+    # a pipeline on this branch failed when GitHub returned HTTP 503 while
+    # scripts/install-cargo-tools.sh was bootstrapping cargo-binstall via
+    # curl -- GitLab classes that as `script_failure` because the shell
+    # command (curl) exited non-zero, even though the actual cause was a
+    # transient upstream outage. The finney runner failures tracked on
+    # QUI-1003 fall in the same class. A blanket retry on `script_failure`
+    # would silently retry-and-mask real breakage (a failing test, a
+    # broken build) alongside these transient ones, so it stays out on
+    # purpose -- do not add it to make the curl-flake case above go away;
+    # fix that at the script level (e.g. retry the curl itself) instead.
+    retry:
+        max: 2
+        when:
+            - runner_system_failure
+            - stuck_or_timeout_failure
+            - api_failure
+            - scheduler_failure
     cache:
         - key:
               files:
@@ -81,18 +118,16 @@ variables:
     UV_LINK_MODE: "copy"
 
 stages:
-    - lint
+    - verify
     - test
-    - conformance
+    - hardware
     - docs
-    - pages
     - release
 
 include:
-    - local: .gitlab/ci/lint.yml
+    - local: .gitlab/ci/setup.yml
+    - local: .gitlab/ci/verify.yml
     - local: .gitlab/ci/test.yml
-    - local: .gitlab/ci/python.yml
     - local: .gitlab/ci/hardware.yml
-    - local: .gitlab/ci/conformance.yml
     - local: .gitlab/ci/docs.yml
     - local: .gitlab/ci/release.yml

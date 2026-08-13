@@ -2,10 +2,12 @@
 # xquad commit-msg hook.
 #
 # Validates that commit messages follow Conventional Commits and include
-# a DCO sign-off. Rules enforced (from AGENTS.md):
+# a DCO sign-off. Rules enforced (from AGENTS.md) live in
+# scripts/commit-grammar.sh, shared with the CI-side range validator
+# (scripts/check-commit-messages.sh) so the two cannot drift:
 #
 #   - Subject: <type>[(scope)][!]: <description>
-#   - Types: feat fix docs style refactor perf test build ci chore revert
+#   - Types: see scripts/commit-grammar.sh's TYPES
 #   - Subject max 72 characters, lowercase description start, no trailing period
 #   - Signed-off-by trailer present
 #
@@ -19,61 +21,18 @@ set -euo pipefail
 
 MSG_FILE="$1"
 
-# Strip comment lines (git's default # prefix) and leading/trailing blanks.
-subject=$(sed '/^#/d' "$MSG_FILE" | sed '/./,$!d' | head -n1)
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../scripts/commit-grammar.sh
+source "${HOOK_DIR}/../scripts/commit-grammar.sh"
 
-if [ -z "$subject" ]; then
+subject="$(commit_subject < "${MSG_FILE}")"
+
+if [[ -z "${subject}" ]]; then
     echo "commit-msg: empty commit message." >&2
     exit 1
 fi
 
-# --- Subject format: type(scope)!: description ---
-
-TYPES="feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert"
-PATTERN="^($TYPES)(\([a-zA-Z0-9_-]+\))?\!?: .+"
-
-if ! echo "$subject" | grep -Eq "$PATTERN"; then
-    echo "commit-msg: subject does not match Conventional Commits format." >&2
-    echo "" >&2
-    echo "  Expected: <type>[(<scope>)][!]: <description>" >&2
-    echo "  Types:    feat fix docs style refactor perf test build ci chore revert" >&2
-    echo "" >&2
-    echo "  Got: $subject" >&2
-    exit 1
-fi
-
-# --- Subject length: max 72 characters ---
-
-if [ ${#subject} -gt 72 ]; then
-    echo "commit-msg: subject exceeds 72 characters (${#subject})." >&2
-    echo "  $subject" >&2
-    exit 1
-fi
-
-# --- Description starts lowercase ---
-
-desc=$(echo "$subject" | sed -E "s/^($TYPES)(\([a-zA-Z0-9_-]+\))?\!?: //")
-first_char=$(echo "$desc" | cut -c1)
-
-if echo "$first_char" | grep -q '[A-Z]'; then
-    echo "commit-msg: description must start lowercase." >&2
-    echo "  Got: $subject" >&2
-    exit 1
-fi
-
-# --- No trailing period ---
-
-if echo "$subject" | grep -q '\.$'; then
-    echo "commit-msg: subject must not end with a period." >&2
-    echo "  Got: $subject" >&2
-    exit 1
-fi
-
-# --- DCO sign-off ---
-
-if ! grep -qi '^Signed-off-by:' "$MSG_FILE"; then
-    echo "commit-msg: missing Signed-off-by line (use git commit -s)." >&2
-    exit 1
-fi
+check_commit_subject "${subject}" || exit 1
+check_signed_off < "${MSG_FILE}" || exit 1
 
 exit 0

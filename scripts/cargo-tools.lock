@@ -9,9 +9,9 @@
 # overrides the produced executable name when it differs from the
 # crate name (e.g. `taplo-cli` ships the `taplo` binary).
 #
-# Consumed by `scripts/install-cargo-tools.sh` (invoked from
-# `Makefile` targets `deps` and `deps-docs`) and by the
-# `.cargo/bin/` cache key in `.gitlab-ci.yml`. Bump a version and
+# Consumed by `scripts/install-cargo-tools.sh` (invoked from the
+# `Makefile` `deps` target) and by the `.cargo/bin/` cache key in
+# `.gitlab-ci.yml`. Bump a version and
 # CI rebuilds its cache on the next pipeline; leave alone and CI
 # reuses the cached binary.
 #

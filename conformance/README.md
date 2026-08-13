@@ -7,8 +7,9 @@ by [`spec/xqvm/SPEC.md`](../spec/xqvm/SPEC.md).
 
 The harness is a Rust test crate (`xquad-conformance`). Each vector
 becomes two `#[test]` functions -- one per runtime -- generated at
-`cargo build` time by [`build.rs`](build.rs). CI runs them as two
-independent GitLab jobs so a Python-side regression cannot mask a
+`cargo build` time by [`build.rs`](build.rs). CI runs both through the
+`verify:parity` job's `make -k check-parity`, which keeps running
+every target after one fails so a Python-side regression cannot mask a
 Rust-side pass (or vice versa).
 
 ## Layout

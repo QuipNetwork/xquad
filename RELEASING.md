@@ -52,7 +52,7 @@ Environments**, restricted to protected tags `v*`.
 Before cutting a tag:
 
 1. **Watch the dry-run jobs.** Every MR pipeline runs
-   `release:dry-run:crates` and `release:dry-run:pypi` in the `lint`
+   `release:dry-run:crates` and `release:dry-run:pypi` in the `release`
    stage. If either is red on `main`, do not tag — the real release
    will fail the same way, just with partial artefacts already
    uploaded.

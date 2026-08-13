@@ -2,7 +2,7 @@
   AUTO-GENERATED FILE. DO NOT EDIT.
   This file is regenerated from `examples/manifest.yaml and examples/*/README.md` by
   `scripts/gen-example-docs.py`.
-  Edit the source README or manifest, then run `make docs-regen`.
+  Edit the source README or manifest, then run `make regen-docs`.
 -->
 
 # Graph Coloring

@@ -1,0 +1,378 @@
+# Shared CI building blocks -- fragments and templates consumed by every
+# other file under .gitlab/ci/. Included FIRST in the root .gitlab-ci.yml's
+# `include:` list: every other file references `.fragments` and the
+# templates below by name, so they must already be in scope.
+#
+# Why this file exists: YAML anchors (`&name` / `*name` / `<<:`) do not
+# cross `include:` boundaries -- each included file is parsed as its own
+# YAML document, so an anchor defined in lint.yml is invisible to test.yml
+# even though both end up in the same merged pipeline. That is why, before
+# this file, `.install-uv` existed as four separate copies with three
+# different bodies: nobody could point at a single shared definition. Both
+# `extends:` and the `!reference` tag are GitLab CI's own post-processing
+# step, applied after every included file has already been parsed and
+# merged into one job namespace -- so, unlike anchors, they do cross
+# `include:`. `!reference [job, key, ...]` splices in another job's key
+# verbatim; `extends:` merges one job's keys onto another's, with a
+# `variables:`-style hash key deep-merged and everything else (`script`,
+# `before_script`, `cache`, `rules`, ...) replaced wholesale by the more
+# specific side, not appended. That "replace, not append" rule is exactly
+# why composing script fragments here uses `!reference` -- extending a
+# template and then trying to add more `before_script` lines on top would
+# silently discard the template's lines instead of running after them.
+#
+# verify vs test: the two words that name the first two pipeline phases
+# read as synonyms, so the distinction is written down once, here, rather
+# than left to be inferred per job. `verify` asks whether something matches
+# what it is required to match -- a licence against policy, one VM
+# implementation's output against the other's. `test` asks whether
+# something does what it should when actually executed. This is not a
+# static-vs-dynamic split (`verify:parity`, once it exists, runs the VM);
+# it is consistency between artefacts versus correctness of one artefact.
+# The old `lint` stage held four unrelated concerns because nothing forced
+# a new job into naming which question it was answering -- an unwritten
+# boundary is how that stage decayed, and restating it in prose here is
+# what stops the replacement from decaying the same way.
+#
+# The `--only` mechanism (`.rust-tools` below, `cargo-tools-only`):
+# `scripts/install-cargo-tools.sh --only <name>[,<name>...]` installs a
+# named subset of the pinned tools in scripts/cargo-tools.lock instead of
+# the full set `make deps` installs. It fails, listing every unmatched
+# name, if any requested tool isn't found in the lock file -- so a typo in
+# a job's `CARGO_TOOLS` list cannot silently install nothing and pass. This
+# is what lets a job that needs only e.g. `git-cliff` or `mdbook` skip
+# installing (and caching) the rest of the toolchain.
+#
+# Job timeouts (audit finding CI-20): every job in verify.yml, test.yml,
+# docs.yml, hardware.yml, and the two release.yml dry-run jobs carries an
+# explicit `timeout:`. Without one the project default applies uniformly to
+# a 12-second job and a 10-minute one, so a hang is only caught an hour
+# later.
+#
+# These are sized for a COLD CACHE, which on this runner fleet is a normal
+# outcome rather than an edge case. The runners have no shared cache server
+# -- a job's log reads "No URL provided, cache will not be downloaded from
+# shared cache server. Instead a local version of cache will be extracted."
+# Caches are therefore local to whichever runner wrote them, and a job only
+# gets a hit when it happens to land on that same machine. Every duration
+# this repo has measured is a warm-or-partly-warm sample; the cold path is
+# a different regime entirely, not a tail of the same distribution.
+#
+# That distinction is not theoretical. An earlier revision of this block
+# sized every timeout at 3x the slowest observed run, which put
+# test:substrate at 10m. It then missed its cache, rebuilt the polkadot-sdk
+# git dependency from scratch, and was killed at 600s by that very timeout.
+# The job was not hung; it was doing the work a cold run requires.
+#
+# So the rule here is: a timeout exists to kill a job that will never
+# finish, not to police one that is merely slow. A genuinely hung job runs
+# forever, so generous limits catch it just as reliably as tight ones and
+# cost nothing when things are healthy. Compile-heavy jobs get room for a
+# full cold build of what they touch; test:substrate gets the most
+# because a cold run clones the polkadot-sdk fork and compiles the
+# fixture's 386-package FRAME dependency tree (frame-support,
+# frame-system, sp-runtime, plus sp-core and sp-io for the tests) from
+# scratch. There is no node, no wasm runtime and no consensus code in
+# that build -- it is a pallet fixture, not a chain.
+#
+# The three hardware:* jobs still have no run data -- they run only on
+# protected refs and have never executed. Their values are deliberate
+# guesses with cold-start headroom (driver and kernel warmup for cuda, a
+# real network round-trip to a D-Wave QPU for qpu, local Apple Silicon
+# execution for metal). Revisit once real timings exist.
+#
+# Scope note: `release.yml` keeps its own three anchors (`.setup-python-
+# publish`, `.on-release-tag`, `.on-pr-or-push`) rather than moving onto
+# these templates. Folding that fifth `uv` variant in, and the rest of the
+# release path's rework, is QUI-1002 -- out of scope here.
+
+# Hidden job holding named script sequences, composed into the templates
+# below (and, where a job's shape doesn't match any template, referenced
+# directly by that job) via `!reference`. Not a real job -- GitLab skips
+# any top-level key starting with `.` when building the pipeline.
+.fragments:
+    cargo-path:
+        - export PATH="${CARGO_HOME}/bin:${PATH}"
+    # Path plus the full pinned dev-tool set (scripts/cargo-tools.lock).
+    cargo-tools:
+        - !reference [.fragments, cargo-path]
+        - make deps
+    # Path plus a named subset of the pinned tools -- CARGO_TOOLS is a
+    # comma-separated list the consuming job must set, e.g.
+    # `CARGO_TOOLS: mdbook,mdbook-mermaid`.
+    cargo-tools-only:
+        - !reference [.fragments, cargo-path]
+        - bash scripts/install-cargo-tools.sh --only "${CARGO_TOOLS}"
+    uv:
+        - curl -LsSf https://astral.sh/uv/install.sh | sh
+        - export PATH="${HOME}/.local/bin:${PATH}"
+        - export UV_CACHE_DIR="${CI_PROJECT_DIR}/.uv-cache"
+    # uv on PATH plus a full workspace sync -- installs xqvm_py/xqcp/xqsa/
+    # xqffi/xquad editable into .venv/ and builds xqffi's cdylib through
+    # maturin (xqffi is a uv workspace member).
+    uv-sync:
+        - !reference [.fragments, uv]
+        - uv sync
+    apk:
+        - apk add --no-cache ${APK_PACKAGES}
+
+# ---------------------------------------------------------------------------
+# Templates
+# ---------------------------------------------------------------------------
+
+# Full Rust toolchain (`make deps`). Cache is left at the root `default:`
+# two-entry cargo cache (registry/git/target keyed on Cargo.lock, .cargo/
+# bin/ keyed on scripts/cargo-tools.lock) -- consumers here compile the
+# workspace, so both entries are live.
+#
+# CACHE WRITERS: this template's consumers (verify:rust, test:rust,
+# test:wasm) are the pipeline's only pushers for BOTH root default entries.
+# `make deps` always installs the FULL scripts/cargo-tools.lock set, not a
+# subset, and all three jobs are unconditional -- no `rules:` skips them on
+# any pipeline shape -- so the `.cargo/bin/` entry is fully repopulated here
+# every run even though `.rust-tools` below only ever installs a named
+# subset of it. Do not make any of these three `policy: pull`; that would
+# leave both root entries with no pusher left at all.
+.rust:
+    before_script:
+        - !reference [.fragments, cargo-tools]
+
+# Rust toolchain, but only the named subset of cargo-tools.lock's tools a
+# job actually runs (see the `--only` note above). Cache narrows to just
+# `.cargo/bin/` -- these jobs never touch `target/` or `.cargo/registry/`,
+# so restoring/saving the full cache would be pure waste.
+#
+# `policy: pull`: every tool a `.rust-tools` consumer installs is a proper
+# subset of what `.rust`'s `make deps` already installs above, and `.rust`'s
+# consumers run unconditionally on every pipeline -- see the writer note on
+# `.rust`. That makes both current consumers of THIS template (verify:policy:
+# taplo,cargo-deny,git-cliff; docs:build: mdbook,mdbook-mermaid) pure
+# readers: whatever they need here is already guaranteed present, or about
+# to be re-pushed, by verify:rust / test:rust / test:wasm. Pulling instead
+# of pushing loses nothing.
+#
+# The policy sits on the template rather than per-job on purpose: "install a
+# subset already covered by `.rust`'s full install" is the whole reason this
+# template exists, so a future job that extends it for the same reason
+# inherits the correct (pull) policy for free. If a future `.rust-tools`
+# consumer ever needs a tool `.rust`'s `make deps` does NOT already install,
+# `.rust-tools` stops being the right fit for it and this policy needs
+# revisiting -- do not add such a job here without also checking this note.
+.rust-tools:
+    before_script:
+        - !reference [.fragments, cargo-tools-only]
+    cache:
+        - key:
+              files:
+                  - scripts/cargo-tools.lock
+          paths:
+              - .cargo/bin/
+          policy: pull
+
+# uv plus a full workspace sync. Consumers need the built xqffi extension,
+# not just a linter -- e.g. running the Python test suite or shelling out
+# to `python -m xqvm_py` for cross-implementation parity.
+#
+# `uv sync` builds xqffi's cdylib through maturin (xqffi is a uv workspace
+# member), so every consumer here also pays a Rust compile -- the cargo
+# cache entries below are just as live as they are for `.rust`. Before
+# QUI-1001 Phase C2, this template's cache *replaced* the default cargo
+# cache with only the uv entry, so that compile ran from scratch on every
+# pipeline; it is now the default two entries plus a third for uv, so a
+# consumer job restores all three.
+#
+# The uv entry deliberately carries no `fallback_keys:`. A prior
+# `fallback_keys: [main-uv]` here could never match -- the root cache's
+# keys are hash-only (see .gitlab-ci.yml's `default:` comment), so no
+# `main-*` key has ever existed to fall back to -- and its comment claimed
+# to share a pattern the root config deliberately omits as non-functional.
+# Dead config plus a misleading comment (audit finding CI-10).
+#
+# CACHE WRITERS: all three current consumers (verify:parity, test:python,
+# test:quip) genuinely write here, so none of them becomes `policy: pull`.
+# verify:parity and test:python both pull in the full `deps-py` sequence
+# (uv sync + an explicit `maturin develop` + the workspace `.pth` write) via
+# their Makefile prerequisites, which overlaps between the two but is not a
+# no-op for either -- each performs the real resolve/compile independently,
+# and either alone would be a sufficient pusher if the other job were ever
+# removed. test:quip additionally does its own `uv run --extra quip` sync,
+# which pulls in the quip_signer wheel neither of the other two installs --
+# it is the sole writer for that part of the cache's contents. Leave all
+# three at the default pull-push policy.
+.python:
+    before_script:
+        - !reference [.fragments, uv-sync]
+    cache:
+        - key:
+              files:
+                  - Cargo.lock
+          paths:
+              - .cargo/registry/
+              - .cargo/git/
+              - target/
+        - key:
+              files:
+                  - scripts/cargo-tools.lock
+          paths:
+              - .cargo/bin/
+        - key:
+              files:
+                  - uv.lock
+                  - pyproject.toml
+          paths:
+              - .uv-cache/
+              - .venv/
+
+# uv on PATH, workspace NOT synced. For jobs that need only a Python
+# interpreter plus a small, separately-pinned set of packages (`uvx
+# <tool>@<version>`, or `uv run --no-project --with <dep>`), not the full
+# maturin-built xqffi cdylib. The `uvx` key prefix keeps this cache from
+# colliding with `.python`'s archive under the same uv.lock/pyproject.toml
+# hash -- a synced payload and a sync-less payload are not interchangeable,
+# so sharing one key would mean whichever job runs first "wins" and the
+# other always cold-starts.
+#
+# CACHE WRITERS: both current consumers (verify:python, docs:generated)
+# write DIFFERENT content into this same `.uv-cache/` bucket and neither is
+# a subset of the other, so both must stay pushers. verify:python's `uvx
+# ruff@...` (via lint-py / fmt-check-py) caches ruff's own isolated tool
+# venv; docs:generated's `uv run --no-project --isolated --with
+# pyyaml==...` (the Makefile's DOCSGEN -- `--isolated` only isolates the
+# venv from project/workspace discovery, it does not bypass the package
+# cache) caches PyYAML instead. Making either one `policy: pull` would mean
+# that package is never cached at all, not just cached less often.
+.python-tools:
+    before_script:
+        - !reference [.fragments, uv]
+    cache:
+        - key:
+              prefix: uvx
+              files:
+                  - uv.lock
+                  - pyproject.toml
+          paths:
+              - .uv-cache/
+
+# No cargo, no uv -- just apk and a shell. `cache: []` for jobs that
+# compile nothing and only run a bash script; downloading the (irrelevant)
+# default cargo cache into an alpine container is pure waste.
+.alpine:
+    image: alpine:3
+    cache: []
+
+# Hardware-backed solver jobs (hardware:cuda / hardware:qpu /
+# hardware:metal). Shares the protected-ref rule common to all three --
+# see hardware.yml's header for why -- and gets uv onto PATH; each job
+# runs its own `uv sync --extra <solver>` afterward, so this template
+# stops at the plain `uv` fragment (no sync).
+#
+# Before QUI-1001 Phase C2, none of the three jobs had a cache entry at
+# all -- they set UV_CACHE_DIR but nothing covered that path, so each
+# pipeline wrote a uv cache and immediately threw it away, while still
+# paying to restore/save the (irrelevant) default cargo cache.
+#
+# The cache key PREFIX is `hw-$CI_JOB_NAME`, not a shared key:
+# hardware:metal runs on a macOS runner while hardware:cuda /
+# hardware:qpu run on Linux, and
+# `.uv-cache/` holds built wheels -- including the maturin-built xqffi
+# cdylib. A single shared key would let a Darwin archive poison the Linux
+# jobs (or vice versa). Per-job-name prefixing keeps each job's cache in
+# its own bucket even though all three hash the same uv.lock/pyproject.toml.
+#
+# Only `.uv-cache/` is cached here, deliberately never `.venv/`: each job
+# runs `uv sync --extra <solver>` with a *different* extra, so a cached
+# venv from one job's sync would be the wrong environment for another's --
+# don't "simplify" this back to matching `.python`'s two paths.
+#
+# CACHE WRITERS: the `hw-$CI_JOB_NAME` prefix means hardware:cuda,
+# hardware:qpu and hardware:metal each own an entirely separate cache slot
+# -- there is no other job sharing any one of these three keys, so each job
+# is necessarily the sole writer of its own and none of them can become
+# `policy: pull` without that job's cache going permanently unpopulated.
+.hardware:
+    rules:
+        - if: $CI_COMMIT_REF_PROTECTED == "true"
+    before_script:
+        - !reference [.fragments, uv]
+    cache:
+        - key:
+              prefix: "hw-$CI_JOB_NAME"
+              files:
+                  - uv.lock
+                  - pyproject.toml
+          paths:
+              - .uv-cache/
+
+# ---------------------------------------------------------------------------
+# Dependency gating
+# ---------------------------------------------------------------------------
+
+# The five phases are a deliberate gating topology, not five stages that
+# merely happen to run one after another:
+#
+#   verify:*, test:*  -- all nine jobs carry `needs: []` and start at t=0.
+#                         verify and test are peers, not a chain -- test
+#                         does NOT wait for verify to pass first.
+#   hardware:*        -- each of the three jobs needs every verify:* and
+#                         test:* job. Real hardware -- a GPU, a metered
+#                         D-Wave QPU token, a macOS box -- is scarce and/or
+#                         billed, so nothing touches it before the code is
+#                         known to compile and pass its own test suite.
+#   docs:*, release:* -- gated behind verify + test + hardware. Docs and
+#                         the release dry-runs start together, rather than
+#                         docs waiting on release or vice versa; the
+#                         tag-only publish chain in release.yml keeps its
+#                         own internal ordering and is not part of this
+#                         gate.
+#
+# Gating docs behind hardware means an offline GPU runner or an expired
+# D-Wave token stalls the documentation site, even though nothing in the
+# docs content depends on hardware passing. That is an accepted tradeoff,
+# not an oversight: hardware correctness gates publishing because we would
+# rather stall the docs than publish a book describing an opcode or solver
+# behaviour the hardware suite just proved broken.
+#
+# hardware:* jobs are created only on protected refs (the `rules:` above)
+# -- a merge-request or unprotected-branch pipeline never creates them.
+# GitLab refuses to create a pipeline where a job `needs:` a job that is
+# absent from it, so every edge pointing at a hardware:* job (from docs:*,
+# release:dry-run:*) marks it `optional: true`. The same reasoning applies
+# to any other rules-gated job another job needs -- audited case by case,
+# not just for hardware: docs:publish's edge to docs:build is NOT
+# optional (docs:build is unconditional), and neither leg of the release
+# path (the two dry-runs, or the tag-only publish chain) needs an edge
+# into the other, since dry-runs never run on tag pipelines and the
+# publish chain never runs on MR/branch pipelines.
+#
+# The two lists below -- the nine-entry verify+test gate and the twelve-
+# entry verify+test+hardware gate -- are shared via `!reference`, not a
+# YAML anchor (anchors don't cross `include:`, see this file's top-of-file
+# comment), so each gate is written once here instead of being retyped
+# across hardware.yml, docs.yml, and release.yml.
+.needs-gates:
+    verify-and-test:
+        - verify:policy
+        - verify:rust
+        - verify:python
+        - verify:parity
+        - test:rust
+        - test:python
+        - test:quip
+        - test:wasm
+        - test:substrate
+    verify-test-and-hardware:
+        - verify:policy
+        - verify:rust
+        - verify:python
+        - verify:parity
+        - test:rust
+        - test:python
+        - test:quip
+        - test:wasm
+        - test:substrate
+        - job: hardware:cuda
+          optional: true
+        - job: hardware:qpu
+          optional: true
+        - job: hardware:metal
+          optional: true
