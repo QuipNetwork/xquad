@@ -1,0 +1,167 @@
+/*
+ * Quip brand overrides that do not fit in a CSS custom property.
+ *
+ * Almost all of the theming lives in docs/book/theme/css/variables.css,
+ * which mdBook loads first and which the two brand ramps drive entirely.
+ * This file is loaded last, via `additional-css` in book.toml, and is
+ * deliberately small: it holds only the rules that mdBook hardcodes in
+ * css/chrome.css and css/general.css rather than exposing as a variable.
+ *
+ * Keep it that way. A rule that could be a variable belongs in
+ * variables.css, where it applies to both themes without a selector.
+ */
+
+/* -- Brand typefaces -------------------------------------------------- */
+
+/*
+ * The four faces are served from quip.network/fonts/, which sends
+ * `Access-Control-Allow-Origin` for an allowlist of Quip origins. The book
+ * is published to docs.quip.network, which is on that list.
+ *
+ * Two consequences worth knowing before debugging a missing face:
+ *
+ * 1. The URLs must be absolute. quip.network's own stylesheet uses `/fonts/`,
+ *    which is same-origin for it but would resolve to docs.quip.network/fonts/
+ *    here, where nothing is served.
+ * 2. `localhost` is not on the allowlist, so a plain local build silently
+ *    falls back to the stacks below rather than erroring. To preview the real
+ *    faces, copy the built site to a scratch directory, download the woff2
+ *    files into it and repoint these `src` URLs at the local copies.
+ *
+ * The declarations otherwise mirror quip.network's own, including the shared
+ * `font-weight: 100 900` variable ranges and `font-display: swap`. Italic is
+ * a `font-style` on the same ABC Gaisyr family rather than a separate family,
+ * so `<em>` inside a heading resolves to it without another rule. That face
+ * ships as woff2 only -- there is no .woff fallback published for it.
+ */
+
+@font-face {
+    font-family: "ABC Favorit";
+    src:
+        url("https://quip.network/fonts/ABCFavoritVariable.woff2") format("woff2-variations"),
+        url("https://quip.network/fonts/ABCFavoritVariable.woff") format("woff");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "ABC Favorit Mono";
+    src:
+        url("https://quip.network/fonts/ABCFavoritMonoVariable.woff2") format("woff2-variations"),
+        url("https://quip.network/fonts/ABCFavoritMonoVariable.woff") format("woff");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "ABC Gaisyr";
+    src:
+        url("https://quip.network/fonts/ABCGaisyrVariable.woff2") format("woff2-variations"),
+        url("https://quip.network/fonts/ABCGaisyrVariable.woff") format("woff");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "ABC Gaisyr";
+    src: url("https://quip.network/fonts/ABCGaisyrVariableItalic.woff2") format("woff2-variations");
+    font-weight: 100 900;
+    font-style: italic;
+    font-display: swap;
+}
+
+/*
+ * mdBook hardcodes `font-family: "Open Sans", sans-serif` on `html` in
+ * css/general.css rather than exposing it as a custom property, so the body
+ * face can only be set by a later stylesheet. This file is loaded last, via
+ * `additional-css`. The mono role is a property instead and is set on
+ * `--mono-font` in css/variables.css.
+ */
+html {
+    font-family: "ABC Favorit", "Open Sans", sans-serif;
+}
+
+/*
+ * ABC Gaisyr is the display face. mdBook sets no family on headings at all,
+ * so they inherit from `html` and this is the only rule that moves them.
+ * `.menu-title` is an `h1`, so the masthead is covered by the same selector.
+ */
+h1, h2, h3, h4, h5, h6 {
+    font-family: "ABC Gaisyr", Georgia, serif;
+}
+
+/*
+ * mdBook's css/chrome.css sets `font-weight: 200` on the book title. Open Sans
+ * ships no face below 300, so that request used to round up; ABC Gaisyr is a
+ * variable font spanning 100 to 900 and honours it literally, which renders
+ * the masthead too thin against the menu bar grey. Pin it rather than leave
+ * the weight depending on which faces the fallback font happens to ship.
+ *
+ * This is the only sub-300 weight mdBook declares; everything else it sets is
+ * 600, 700 or bold, which both families cover.
+ *
+ * The colour is pinned for a second reason. chrome.css paints the whole menu
+ * bar with `--icons`, which the masthead then inherits: 2.10:1 against the
+ * bar in Quip Light and 2.23:1 in Quip Dark, both under the 4.5:1 that AA
+ * asks of text. `--icons-hover` is the same grey ramp one step further from
+ * the background and already carries the right value in each palette --
+ * #525252 on light, #A9A9A9 on dark -- so taking the colour from that token
+ * clears AA in both themes at 6.98:1 and 7.41:1 without adding a value.
+ *
+ * Declared here rather than by moving `--icons` itself, which would drag the
+ * four icon buttons along with it and collapse their hover state. Those
+ * buttons are still on the low-contrast value; raising them is a separate
+ * change, since it needs a new `--icons-hover` pair to hover towards.
+ */
+.menu-title {
+    font-weight: 400;
+    color: var(--icons-hover);
+}
+
+/* -- Quip mark in the menu bar --------------------------------------- */
+
+/*
+ * Inlined by docs/book/theme/index.hbs immediately before the book title.
+ * The menu bar is a flex row whose title carries `flex: 1`, so the mark
+ * must opt out of growing or it steals the centring.
+ */
+.quip-mark {
+    flex: none;
+    align-self: center;
+    margin-inline-start: 0.8rem;
+    color: var(--fg);
+}
+
+/*
+ * The brand mark's path carries its own `fill="black"`, which as a
+ * presentation attribute beats the `fill="currentColor"` on the enclosing
+ * svg -- so without this rule the mark renders solid black and vanishes
+ * against the Quip Dark background. A CSS declaration outranks a
+ * presentation attribute, so tint the path directly.
+ */
+.quip-mark path {
+    fill: currentColor;
+}
+
+/* -- Mermaid diagrams ------------------------------------------------ */
+
+/*
+ * mdBook styles every `pre` as a code block. A mermaid diagram is a `pre`
+ * that gets its text content replaced by an inline SVG, so it inherits a
+ * code-block frame it should not have. Colours inside the SVG come from
+ * docs/book/theme/mermaid-init.js, not from here.
+ */
+pre.mermaid {
+    background: transparent;
+    padding: 0;
+    text-align: center;
+    overflow-x: auto;
+}
+
+pre.mermaid > svg {
+    max-width: 100%;
+    height: auto;
+}

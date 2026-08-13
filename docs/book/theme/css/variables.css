@@ -1,0 +1,240 @@
+/*
+ * Quip brand theme -- replaces mdBook 0.5.2's built-in css/variables.css
+ * wholesale.
+ *
+ * Only two theme palettes are defined here: `.light` (Quip Light) and
+ * `.coal` (Quip Dark). Those are the only two the trimmed theme picker in
+ * `index.hbs` can reach, so the upstream `.rust`, `.navy` and `.ayu` blocks
+ * are deleted rather than carried over.
+ *
+ * The `@media (prefers-color-scheme: dark)` block below targets
+ * `html:not(.js)`, matching upstream mdBook's own selector, rather than a
+ * bare `:root`. That selector only matches before `book.js` has run (it
+ * adds a `.js` class to `<html>` on load), so it exists purely to avoid a
+ * light-theme flash for dark-OS visitors before the real theme class
+ * applies. A bare `:root` would keep matching after JS assigns `.light`/
+ * `.coal`, permanently overriding an explicit "Quip Light" selection
+ * whenever the OS prefers dark -- so the upstream selector is kept as-is.
+ *
+ * On an mdBook upgrade, re-run `mdbook init --theme` in a throwaway
+ * directory and re-diff this file against the new default
+ * `css/variables.css` to pick up any newly introduced custom properties.
+ */
+
+/* Globals */
+
+:root {
+    --sidebar-target-width: 300px;
+    --sidebar-width: min(var(--sidebar-target-width), 80vw);
+    --sidebar-resize-indicator-width: 8px;
+    --sidebar-resize-indicator-space: 2px;
+    --page-padding: 20px;
+    --content-max-width: 820px;
+    --menu-bar-height: 50px;
+    /*
+     * ABC Favorit Mono is the brand's code face. The @font-face that backs it
+     * is declared in docs/book/theme/quip.css; this property is the only hook
+     * mdBook gives for the mono role, and css/general.css applies it to `code`
+     * with `!important`. The upstream stack is kept behind it as the fallback.
+     */
+    --mono-font: "ABC Favorit Mono", "Source Code Pro", Consolas, "Ubuntu Mono", Menlo, "DejaVu Sans Mono", monospace, monospace;
+    --code-font-size: 0.875em; /* please adjust the ace font size accordingly in editor.js */
+    --searchbar-margin-block-start: 5px;
+}
+
+/* Themes */
+
+.light {
+    --bg: #F2F2F2;
+    --fg: #1A1A1A;
+
+    --sidebar-bg: #FFFFFF;
+    --sidebar-fg: #525252;
+    --sidebar-non-existant: #A9A9A9;
+    --sidebar-active: #0a6b7e;
+    --sidebar-spacer: #DCDCDC;
+
+    --scrollbar: #A9A9A9;
+
+    --icons: #A9A9A9;
+    --icons-hover: #525252;
+
+    --links: #0a6b7e;
+
+    --inline-code-color: #b83643;
+
+    --theme-popup-bg: #FFFFFF;
+    --theme-popup-border: #DCDCDC;
+    --theme-hover: #F2F2F2;
+
+    --quote-bg: #F3FEFF;
+    --quote-border: #4CE0FF;
+
+    --warning-border: #FF6C78;
+
+    --table-border-color: #DCDCDC;
+    --table-header-bg: #E7E7E7;
+    --table-alternate-bg: #FFFFFF;
+
+    --searchbar-border-color: #DCDCDC;
+    --searchbar-bg: #FFFFFF;
+    --searchbar-fg: #1A1A1A;
+    --searchbar-shadow-color: #A9A9A9;
+    --searchresults-header-fg: #525252;
+    --searchresults-border-color: #DCDCDC;
+    --searchresults-li-bg: #FFFFFF;
+    --search-mark-bg: #FFDE53;
+
+    --color-scheme: light;
+
+    /*
+     * The code-block copy icon is a data-URI image tinted with a filter
+     * chain, so unlike everything else here these two cannot be plain
+     * colours. Each chain maps black onto the stated colour exactly. A
+     * grey target needs only an `invert`, at the target's luminance as a
+     * percentage. An accent needs the whole
+     * invert/sepia/saturate/hue-rotate/brightness/contrast chain, fitted
+     * numerically -- if one of these colours changes, refit rather than
+     * hand-tuning.
+     */
+    /* Same as `--icons` (#A9A9A9) */
+    --copy-button-filter: invert(66.3%);
+    /* Same as `--sidebar-active` (#0a6b7e) */
+    --copy-button-filter-hover: invert(32%) sepia(12%) saturate(4275%) hue-rotate(148deg) brightness(97%) contrast(92%);
+
+    --footnote-highlight: #C2F8FD;
+
+    --overlay-bg: rgba(26, 26, 26, 0.4);
+
+    --blockquote-note-color: #0a6b7e;
+    --blockquote-tip-color: #2f7d1f;
+    --blockquote-important-color: #4f6291;
+    --blockquote-warning-color: #8a6a00;
+    --blockquote-caution-color: #b83643;
+
+    --sidebar-header-border-color: #4CE0FF;
+}
+
+.coal {
+    --bg: #1A1A1A;
+    --fg: #F2F2F2;
+
+    --sidebar-bg: #282828;
+    --sidebar-fg: #A9A9A9;
+    --sidebar-non-existant: #525252;
+    --sidebar-active: #4CE0FF;
+    --sidebar-spacer: #333333;
+
+    --scrollbar: #525252;
+
+    --icons: #525252;
+    --icons-hover: #A9A9A9;
+
+    --links: #4CE0FF;
+
+    --inline-code-color: #FFDE53;
+
+    --theme-popup-bg: #282828;
+    --theme-popup-border: #333333;
+    --theme-hover: #333333;
+
+    --quote-bg: #282828;
+    --quote-border: #4CE0FF;
+
+    --warning-border: #FF6C78;
+
+    --table-border-color: #333333;
+    --table-header-bg: #282828;
+    --table-alternate-bg: #1F1F1F;
+
+    --searchbar-border-color: #333333;
+    --searchbar-bg: #282828;
+    --searchbar-fg: #F2F2F2;
+    --searchbar-shadow-color: #4CE0FF;
+    --searchresults-header-fg: #A9A9A9;
+    --searchresults-border-color: #333333;
+    --searchresults-li-bg: #1F1F1F;
+    --search-mark-bg: #8a6a00;
+
+    --color-scheme: dark;
+
+    /* Same as `--icons` (#525252); see the note in `.light` above. */
+    --copy-button-filter: invert(32.2%);
+    /* Same as `--sidebar-active` (#4CE0FF) */
+    --copy-button-filter-hover: invert(58%) sepia(24%) saturate(1997%) hue-rotate(188deg) brightness(112%) contrast(170%);
+
+    --footnote-highlight: #0b4652;
+
+    --overlay-bg: rgba(26, 26, 26, 0.6);
+
+    --blockquote-note-color: #4CE0FF;
+    --blockquote-tip-color: #67E347;
+    --blockquote-important-color: #A5C3D4;
+    --blockquote-warning-color: #FFDE53;
+    --blockquote-caution-color: #FF6C78;
+
+    --sidebar-header-border-color: #4CE0FF;
+}
+
+@media (prefers-color-scheme: dark) {
+    html:not(.js) {
+        --bg: #1A1A1A;
+        --fg: #F2F2F2;
+
+        --sidebar-bg: #282828;
+        --sidebar-fg: #A9A9A9;
+        --sidebar-non-existant: #525252;
+        --sidebar-active: #4CE0FF;
+        --sidebar-spacer: #333333;
+
+        --scrollbar: #525252;
+
+        --icons: #525252;
+        --icons-hover: #A9A9A9;
+
+        --links: #4CE0FF;
+
+        --inline-code-color: #FFDE53;
+
+        --theme-popup-bg: #282828;
+        --theme-popup-border: #333333;
+        --theme-hover: #333333;
+
+        --quote-bg: #282828;
+        --quote-border: #4CE0FF;
+
+        --warning-border: #FF6C78;
+
+        --table-border-color: #333333;
+        --table-header-bg: #282828;
+        --table-alternate-bg: #1F1F1F;
+
+        --searchbar-border-color: #333333;
+        --searchbar-bg: #282828;
+        --searchbar-fg: #F2F2F2;
+        --searchbar-shadow-color: #4CE0FF;
+        --searchresults-header-fg: #A9A9A9;
+        --searchresults-border-color: #333333;
+        --searchresults-li-bg: #1F1F1F;
+        --search-mark-bg: #8a6a00;
+
+        --color-scheme: dark;
+
+        /* Same as `--icons` (#525252); see the note in `.light` above. */
+        --copy-button-filter: invert(32.2%);
+        /* Same as `--sidebar-active` (#4CE0FF) */
+        --copy-button-filter-hover: invert(58%) sepia(24%) saturate(1997%) hue-rotate(188deg) brightness(112%) contrast(170%);
+
+        --footnote-highlight: #0b4652;
+
+        --overlay-bg: rgba(26, 26, 26, 0.6);
+
+        --blockquote-note-color: #4CE0FF;
+        --blockquote-tip-color: #67E347;
+        --blockquote-important-color: #A5C3D4;
+        --blockquote-warning-color: #FFDE53;
+        --blockquote-caution-color: #FF6C78;
+
+        --sidebar-header-border-color: #4CE0FF;
+    }
+}

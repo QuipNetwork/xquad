@@ -156,6 +156,39 @@ https://github.com/dtolnay/unicode-ident
 --------------------------------------------------------------------------------
 
 ================================================================================
+MPL-2.0 LICENSED COMPONENTS
+================================================================================
+
+The following components are licensed under the Mozilla Public License 2.0.
+MPL-2.0 is a file-level copyleft license and is explicitly compatible with
+the GNU licenses, including AGPL-3.0-or-later.
+
+Unlike every other entry in this file, these are not dependencies resolved
+at build time. Three files derived from the documentation toolchain are
+copied into this repository under docs/book/theme/ and carry local
+modifications:
+
+    index.hbs           mdBook page template, theme picker trimmed
+    css/variables.css   mdBook theme colors, replaced with the brand palette
+    mermaid-init.js     mdbook-mermaid initializer, retargeted and rethemed
+
+Each file names its upstream source and the local changes in a comment at
+the top. They must be re-diffed against upstream whenever the pinned
+mdbook or mdbook-mermaid version in scripts/cargo-tools.lock changes.
+
+--------------------------------------------------------------------------------
+mdBook 0.5.2 (MPL-2.0)
+Copyright (c) The mdBook Authors
+https://github.com/rust-lang/mdBook
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+mdbook-mermaid 0.17.0 (MPL-2.0)
+Copyright (c) Jan-Erik Rediger and contributors
+https://github.com/badboy/mdbook-mermaid
+--------------------------------------------------------------------------------
+
+================================================================================
 LICENSE COMPATIBILITY
 ================================================================================
 

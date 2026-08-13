@@ -38,8 +38,13 @@ certs/
 
 ### mdBook ###
 docs/book/build/
-mermaid.min.js
-mermaid-init.js
+# Written next to book.toml by `mdbook-mermaid install`, which
+# `make build-docs` runs. Anchored on purpose: a slashless pattern matches
+# at any depth, which would also swallow the tracked initializer source at
+# docs/book/theme/mermaid-init.js that book.toml points `additional-js` at.
+# Only mermaid.min.js is used; the generated mermaid-init.js is unreferenced.
+/docs/book/mermaid.min.js
+/docs/book/mermaid-init.js
 
 ### GitLab Pages ###
 # Assembled by the `pages` job from the docs/book/build/ artifact; also the

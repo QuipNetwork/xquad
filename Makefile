@@ -15,7 +15,7 @@
         example-smoke \
         build-docs regen-docs regen-docs-opcodes regen-docs-examples \
         check-docs-generated check-docs-opcodes check-docs-examples \
-        check-docs-drift check-docs-readme serve-docs \
+        check-docs-drift check-docs-mermaid check-docs-readme serve-docs \
         changelog render-changelog changelog-release
 
 all: fmt lint test
@@ -464,9 +464,17 @@ example-smoke: deps-py
 
 # -- Documentation ----------------------------------------------------------
 
+# `mdbook-mermaid install` writes mermaid.min.js and a mermaid-init.js next
+# to book.toml. We want the first and not the second: its initializer is
+# written against mdBook 0.5.0, whose theme buttons had bare ids, so against
+# our pinned 0.5.2 it throws on every page and diagrams never re-render on a
+# theme switch. book.toml therefore lists the tracked initializer, which also
+# carries the brand palette, and the generated one is simply never
+# referenced. See the header of docs/book/theme/mermaid-init.js.
 build-docs:
-	mdbook-mermaid install .
-	mdbook build
+	mdbook-mermaid install docs/book
+	mdbook build docs/book
+	sh scripts/check-mermaid-render.sh
 
 # Both generators (scripts/gen-bytecode-docs.py, scripts/gen-example-docs.py)
 # import only scripts/_docsgen.py and PyYAML -- no workspace package, so
@@ -518,9 +526,18 @@ check-docs-drift:
 check-docs-readme:
 	bash scripts/check-readme-length.sh
 
+# Assert that book diagrams actually rendered, rather than trusting the
+# mdbook-mermaid version-skew warning's absence. Needs mdbook and a built
+# docs/book/build, so it stays out of check-docs-handwritten (alpine, no
+# mdbook) and is not a preflight-docs leaf. build-docs runs it inline, which
+# is where CI gets its coverage; this target is for re-checking a book that
+# is already built.
+check-docs-mermaid:
+	sh scripts/check-mermaid-render.sh
+
 serve-docs:
-	mdbook-mermaid install .
-	mdbook serve --open
+	mdbook-mermaid install docs/book
+	mdbook serve docs/book --open
 
 # -- Changelog --------------------------------------------------------------
 

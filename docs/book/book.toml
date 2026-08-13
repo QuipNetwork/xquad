@@ -1,0 +1,46 @@
+[book]
+title    = "XQuad Documentation"
+authors  = [ "Postquant Labs Incorporated" ]
+language = "en"
+src      = "src"
+
+[build]
+build-dir      = "build"
+create-missing = false
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[output.html]
+git-repository-url = "https://gitlab.com/quip.network/xquad"
+mathjax-support    = true
+# These paths are relative to the book root (this file's directory), and
+# mdBook writes each one into the built site at the same relative path. That
+# is why this file lives here rather than at the repository root: from there,
+# `docs/book/theme/quip.css` published the repository's own directory layout
+# into the site as `/xquad/docs/book/theme/quip-<hash>.css`.
+#
+# `mermaid.min.js` is vendored by `mdbook-mermaid install`, which also writes
+# a `mermaid-init.js` beside it. We reference our own initializer instead and
+# leave that generated one unused -- see the note above `build-docs` in the
+# Makefile for why. Pointing straight at the tracked file rather than copying
+# it into place also keeps `make serve-docs` honest: an edit to the
+# initializer reaches the served page, because the file mdBook ships is the
+# file being edited.
+additional-js  = [ "mermaid.min.js", "theme/mermaid-init.js" ]
+additional-css = [ "theme/quip.css" ]
+# There is no per-page way to suppress the "Edit this file" button, so
+# `edit-url-template` is all 86 pages or none, and 16 of them are generated
+# and must not be hand-edited. Dropped in favour of the appendix
+# Contributing page, which routes contributors to the right source.
+#
+# The picker offers only the two themes below. The offered list itself is
+# not configurable here -- it is markup in theme/index.hbs.
+default-theme        = "light"
+preferred-dark-theme = "coal"
+# The book is published under a subdirectory of the docs host. Without
+# site-url the generated 404 page resolves its assets relative to whatever
+# path the visitor missed, so it renders unstyled and without navigation.
+# The theme directory carries the pre-launch noindex gate (QUI-988).
+site-url = "/xquad/"
+theme    = "theme"
