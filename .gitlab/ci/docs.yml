@@ -1,48 +1,83 @@
-# Documentation pipeline -- checks generated docs and book drift in lint,
-# builds the mdBook site in the docs stage, then publishes it to GitLab Pages
-# at https://docs.quip.network/xquad/ (QUI-988).
+# Documentation pipeline -- checks generated-docs freshness and handwritten
+# book drift, builds the mdBook site, then publishes it to GitLab Pages at
+# https://docs.quip.network/xquad/ (QUI-988).
+#
+# All four jobs `needs:` every verify:*, test:*, and hardware:* job (see
+# setup.yml's "Dependency gating" section) -- docs publish only once the
+# workspace is known to compile, behave, and work on real hardware.
+#
+# `.rust` / `.rust-tools` / `.alpine` / `.python-tools` (templates) and
+# `.fragments` / `.needs-gates` (shared script sequences and needs lists)
+# live in .gitlab/ci/setup.yml, included first by the root .gitlab-ci.yml.
 
-.install-deps: &install-deps
-    - export PATH="${CARGO_HOME}/bin:${PATH}"
-    - make deps-docs
-
-.install-uv: &install-uv
-    - curl -LsSf https://astral.sh/uv/install.sh | sh
-    - export PATH="${HOME}/.local/bin:${PATH}"
-    - uv sync
-
-lint:docs-generated:
-    stage: lint
-    cache: []
-    before_script:
-        - *install-uv
+# `make check-docs-generated` (see the Makefile's DOCSGEN comment) runs the
+# two generators through `uv run --no-project --isolated`, not a workspace
+# sync -- both import only scripts/_docsgen.py and PyYAML. This job
+# therefore needs uv on PATH but not a synced workspace, so it shares
+# `.python-tools`'s cache instead of paying a cold resolve (and a maturin
+# build of xqffi's cdylib) every pipeline just to diff some YAML.
+docs:generated:
+    stage: docs
+    extends: .python-tools
+    needs:
+        - !reference [.needs-gates, verify-test-and-hardware]
+    # 10m: compiles nothing -- a cold run only fetches uv and PyYAML
+    # before diffing the generated pages. See setup.yml's "Job timeouts"
+    # section.
+    timeout: 10m
     script:
-        - make docs-check
+        - make -k check-docs-generated
 
-lint:docs-drift:
-    stage: lint
-    image: alpine:3
-    cache: []
+# Handwritten-docs checks -- book prose/SUMMARY drift and published
+# package README length -- merged into one job running
+# `make -k check-docs-handwritten` (check-docs-drift check-docs-readme).
+# Both are alpine-only, need no uv and no mdbook -- unlike
+# docs:generated above, which needs uv to import
+# scripts/_docsgen.py. `cache: []` (via `.alpine`) stays deliberate
+# here, not an oversight: these jobs compile nothing, so downloading
+# the (irrelevant) default cargo cache would be pure waste.
+#
+# `make` is in APK_PACKAGES because alpine ships neither bash nor make
+# in its base image. The two checks used to be invoked as `bash
+# scripts/...` directly, so make was not needed; routing them through
+# the Makefile means the job now depends on it. Dropping it fails at
+# `make: not found` with exit 127 before either check runs.
+docs:handwritten:
+    stage: docs
+    extends: .alpine
+    needs:
+        - !reference [.needs-gates, verify-test-and-hardware]
+    variables:
+        APK_PACKAGES: "bash grep make"
+    # 10m: an alpine container running a bash script, so the only cold
+    # cost is the apk fetch. Sized like docs:generated rather than tighter
+    # because two samples of this job already swung 8.6x (10s / 86s). See
+    # setup.yml's "Job timeouts" section.
+    timeout: 10m
     before_script:
-        - apk add --no-cache bash grep
+        - !reference [.fragments, apk]
     script:
-        - bash scripts/check-docs-drift.sh
+        - make -k check-docs-handwritten
 
-lint:docs-readme:
-    stage: lint
-    image: alpine:3
-    cache: []
-    before_script:
-        - apk add --no-cache bash grep
-    script:
-        - bash scripts/check-readme-length.sh
-
+# mdbook + mdbook-mermaid only -- no cargo compile -- so this installs just
+# those two tools (see the `--only` note in setup.yml) rather than the full
+# dev-tool set `make deps` would pull in, and its cache narrows to
+# `.rust-tools`'s `.cargo/bin/` entry instead of carrying the full `target/`
+# cache in both directions for a job that never touches it. Unticketed, and
+# a bigger per-pipeline saving than the hardware uv-cache fix in Phase C2.
 docs:build:
     stage: docs
-    before_script:
-        - *install-deps
+    extends: .rust-tools
+    needs:
+        - !reference [.needs-gates, verify-test-and-hardware]
+    variables:
+        CARGO_TOOLS: mdbook,mdbook-mermaid
+    # 15m: cold-cache room for the mdbook and mdbook-mermaid installs on
+    # top of the book build itself. See setup.yml's "Job timeouts"
+    # section.
+    timeout: 15m
     script:
-        - make docs
+        - make -k build-docs
     artifacts:
         paths:
             - docs/book/build/
@@ -50,14 +85,28 @@ docs:build:
 # Publish the book. Reuses the docs:build artifact rather than rebuilding, so
 # this job needs no Rust toolchain and no cargo cache.
 #
-# The job must be named exactly `pages` for GitLab to treat it as a Pages
-# deployment. It only runs on direct pushes to main, so merge request and tag
-# pipelines build the book without publishing it.
-pages:
-    stage: pages
-    image: alpine:3
-    cache: []
+# `pages: true` is what tells GitLab this job is a Pages deployment -- GA on
+# gitlab.com since 17.9. Before that property existed, GitLab detected a
+# Pages job by name alone (it had to be called exactly `pages`), which is
+# why the job kept that name through the rest of this phase regroup even
+# though every other job here follows the `docs:*` prefix-equals-stage
+# convention. It only runs on direct pushes to main, so merge request and
+# tag pipelines build the book without publishing it.
+#
+# Five inline shell lines instead of a `make` target: every other job in
+# this repo's CI calls `make -k <target>` so the CI definition and the
+# local workflow stay identical, but a Pages deploy has no local meaning
+# to converge on -- there is no local GitLab Pages environment to publish
+# into. Routing this through the Makefile would create a CI-only target
+# that exists solely to be a thin wrapper around this script, which is the
+# behaviour the "CI always calls make" rule exists to avoid, not honour.
+# This job is the deliberate exception.
+docs:publish:
+    stage: docs
+    extends: .alpine
+    pages: true
     needs:
+        - !reference [.needs-gates, verify-test-and-hardware]
         - job: docs:build
           artifacts: true
     environment:

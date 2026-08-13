@@ -15,6 +15,13 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+# `hardware: true` on an example entry marks it as part of the subset
+# scripts/example-smoke.py replays against real hardware backends
+# (cuda-gpu, dwave-qpu, metal-gpu). Kept small -- a binary problem
+# (maxcut), a permutation (tsp), and a constrained problem (knapsack)
+# -- to bound GPU time and the monthly D-Wave QPU quota; every example
+# still runs on the CPU annealer on both interpreters regardless of
+# this flag. Omit the key (or set it to `false`) for every other entry.
 preserved_pages:
   - using-examples.md
 
@@ -26,6 +33,7 @@ groups:
       - dir: maxcut
         title: Max-Cut
         blurb: Find a 2-colour partition of a weighted graph that maximises the cut weight.
+        hardware: true
       - dir: graph_coloring
         title: Graph Coloring
         blurb: Assign colours to graph nodes so adjacent nodes do not share a colour.
@@ -38,6 +46,7 @@ groups:
       - dir: tsp
         title: Travelling Salesman Problem
         blurb: Find the shortest Hamiltonian tour through a random symmetric distance matrix.
+        hardware: true
   - id: selection-and-packing
     title: Selection and packing
     intro: Examples that select subsets, cover demands, pack bins, and balance integer weights.
@@ -45,6 +54,7 @@ groups:
       - dir: knapsack
         title: Knapsack
         blurb: Select items that maximise value while respecting a capacity constraint.
+        hardware: true
       - dir: bin_packing
         title: Bin Packing
         blurb: Pack items into the minimum number of fixed-capacity bins.

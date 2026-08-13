@@ -4,7 +4,7 @@
   `scripts/gen-bytecode-docs.py`.
   Edit the YAML (and the opcodes! x-macro in
   xqvm/src/bytecode/types/table.rs, which is checked against the YAML at
-  compile time), then run `make docs-regen`.
+  compile time), then run `make regen-docs`.
 
   Do not edit this book page directly. For teaching prose about each
   instruction category, edit `docs/book/src/xqvm/instructions/*.md`.

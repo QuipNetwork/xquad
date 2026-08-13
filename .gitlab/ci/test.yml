@@ -1,31 +1,69 @@
-# Rust test suite — unit, integration, and doc tests driven by
-# cargo-nextest via the `make test-*` targets. Keeping these as separate
-# jobs lets GitLab's retry/re-run apply at the right granularity.
+# Test phase -- does the workspace do what it should when actually
+# executed? Rust unit/integration/doc tests, the Python workspace test
+# suite, the Quip signing-layer tests, the WASM no_std correctness tests,
+# and the Substrate FRAME pallet fixture -- see setup.yml's verify-vs-test
+# header for what makes these `test` jobs rather than `verify` jobs.
+#
+# All five jobs carry `needs: []` and start at t=0 alongside every
+# `verify:*` job -- verify and test are peers, not a chain. See
+# setup.yml's "Dependency gating" section for the full topology and why
+# hardware:* waits on all nine of them.
+#
+# Templates and shared script fragments (`.rust`, `.python`, `.fragments`,
+# ...) live in .gitlab/ci/setup.yml, included first by the root
+# .gitlab-ci.yml.
 
-.install-deps: &install-deps
-    - export PATH="${CARGO_HOME}/bin:${PATH}"
-    - make deps
-
-test:unit:
+# Merged into one job running `make -k test-rust` (test-unit-rs
+# test-integ-rs test-doc). Unlike the Rust lint merge, this wins
+# outright rather than trading wall clock for job-seconds: all three
+# targets build with `--profile ci-test` into the same target dir, so
+# the second and third invocations reuse the first's dependency build
+# instead of each starting a `cargo build` from scratch, which is what
+# the old three-job layout paid for on every pipeline.
+test:rust:
     stage: test
-    before_script:
-        - *install-deps
+    extends: .rust
+    needs: []
+    # 25m: cold-cache room for a full `ci-test` profile build of the
+    # workspace before any of the three test tiers start. See setup.yml's
+    # "Job timeouts" section.
+    timeout: 25m
     script:
-        - make test-unit-rs
+        - make -k test-rust
 
-test:integration:
+test:python:
     stage: test
-    before_script:
-        - *install-deps
+    extends: .python
+    needs: []
+    # 20m: cold-cache room for the uv resolve and the maturin build of
+    # xqffi's cdylib that `uv sync` performs before pytest starts. See
+    # setup.yml's "Job timeouts" section.
+    timeout: 20m
     script:
-        - make test-integ-rs
+        - make -k test-py
 
-test:doc:
+# Quip Network signing-layer tests. These are pure-Python SCALE / keystore /
+# submission-state-machine tests that need only the `quip_signer` wheel from the
+# `[quip]` extra, not a live chain. The base `test:python` job runs `uv sync`
+# without the extra, so `test_quip_signing.py`'s `importorskip("quip_signer")`
+# skips the whole module there and a malformed extrinsic or keystore regression
+# would not turn CI red. `make test-quip-sign` installs the extra
+# (`uv run --extra quip`) so those tests execute.
+#
+# NOTE: this runs only the `test-quip-sign` leaf, NOT the full `make test-quip`
+# aggregate. The aggregate also runs the live-devnet e2e suite (`test-quip-e2e`),
+# which needs a running Quip devnet that CI has no access to. That e2e sweep is
+# an MR-template Optional Check developers run by hand against a devnet.
+test:quip:
     stage: test
-    before_script:
-        - *install-deps
+    extends: .python
+    needs: []
+    # 20m: the same cold-cache shape as test:python -- uv resolve plus the
+    # maturin xqffi build -- with the `[quip]` extra synced on top. See
+    # setup.yml's "Job timeouts" section.
+    timeout: 20m
     script:
-        - make test-doc
+        - make -k test-quip-sign
 
 # Run xqvm-wasm no_std correctness tests. Two gates:
 #   1. cargo build -p xqvm --target wasm32v1-none --no-default-features --
@@ -33,33 +71,52 @@ test:doc:
 #      no JS ABI, no panic runtime).
 #   2. wasm-pack test --node (wasm32-unknown-unknown) -- wasm-bindgen-test
 #      suite executes in a real WASM environment via Node.js.
-# Installs Node.js from the Debian apt repo (rust:latest image omits it) and
-# logs the resolved version so runner image changes are visible in job output.
-# wasm-pack and both WASM targets are installed via make deps-wasm.
+# No before_script override: the whole wasm toolchain (Node.js, wasm-pack,
+# both targets) is a `make deps-wasm` prerequisite of `make test-wasm`, so
+# this job inherits `.rust` unmodified. Node used to be apt-get installed
+# inline here, which meant the job and the Makefile target disagreed about
+# what deps-wasm covers; deps-wasm now detects Node rather than assuming a
+# Debian host, so the same target works on a contributor's macOS box.
 test:wasm:
     stage: test
-    before_script:
-        - apt-get update -q && apt-get install -yq nodejs
-        - node --version
-        - *install-deps
-        - make deps-wasm
+    extends: .rust
+    needs: []
+    # 25m: cold-cache room for the pinned tool installs (`make deps` plus
+    # wasm-pack), both rustup wasm targets, and two wasm builds of xqvm.
+    # See setup.yml's "Job timeouts" section.
+    timeout: 25m
     script:
-        - make test-wasm
+        - make -k test-wasm
 
 # Run the Substrate FRAME pallet fixture tests. The fixture lives in a
 # standalone workspace (fixtures/pallet-xqvm) that pins the
 # QuipNetwork/polkadot-sdk git dep; this job owns its own cargo cache
-# key so the large polkadot-sdk build does not pollute the main
-# workspace cache.
-test:substrate-fixture:
+# key, keyed on the fixture's own Cargo.lock rather than the main
+# workspace's, so the large polkadot-sdk build does not pollute (or get
+# invalidated by) the main workspace cache.
+#
+# Before QUI-1001 Phase C2 this cache had only the `target/` path below,
+# so it had no `.cargo/registry/` or `.cargo/git/` entry and re-cloned the
+# polkadot-sdk git dependency on every run. Both paths now sit under the
+# same key as the fixture's `target/` -- the fixture's own Cargo.lock is
+# what actually governs when those downloads need to change.
+test:substrate:
     stage: test
+    needs: []
+    # 40m: the largest in the pipeline, because a cold run clones the
+    # polkadot-sdk git dependency and compiles the fixture's 386-package
+    # FRAME tree from scratch -- exactly the run the old 10m sizing killed
+    # at 600s. See setup.yml's "Job timeouts" section.
+    timeout: 40m
     cache:
         - key:
               files:
                   - fixtures/pallet-xqvm/Cargo.lock
           paths:
+              - .cargo/registry/
+              - .cargo/git/
               - fixtures/pallet-xqvm/target/
     before_script:
-        - export PATH="${CARGO_HOME}/bin:${PATH}"
+        - !reference [.fragments, cargo-path]
     script:
-        - make test-substrate-fixture
+        - make -k test-substrate-fixture

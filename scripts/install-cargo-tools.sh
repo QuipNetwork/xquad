@@ -13,15 +13,20 @@
 # PATH, so CI cache hits skip straight through.
 #
 # Usage:
-#   scripts/install-cargo-tools.sh [--upgrade] [--only NAME]
+#   scripts/install-cargo-tools.sh [--upgrade] [--only NAME[,NAME...]]
 #
 # With --upgrade, every entry in scripts/cargo-tools.lock is
 # reinstalled regardless of current state (useful after a lock-file
 # bump).
 #
-# With --only NAME, install just that single tool from the lock file
-# (e.g. `--only git-cliff`). Used by lightweight CI jobs that need
-# one tool rather than the whole toolchain.
+# With --only NAME[,NAME...], install just those tools from the lock
+# file (e.g. `--only git-cliff` or `--only taplo,cargo-deny`). Each
+# NAME matches either the crate name or the tool's effective binary
+# name (the `[binary]` override column, e.g. `taplo` for `taplo-cli`).
+# Used by lightweight CI jobs that need a named subset rather than the
+# whole toolchain. Every requested name must match an entry in the
+# lock file; a typo anywhere in the list fails the whole invocation
+# rather than silently installing only the names that did match.
 
 set -euo pipefail
 
@@ -85,28 +90,67 @@ install_one() {
     cargo binstall --no-confirm --locked "${name}@${version}"
 }
 
+# Split --only into its requested names and a parallel "matched" flag
+# array (bash 3.2 on macOS has no associative arrays, so this stays
+# plain indexed arrays rather than `declare -A`). Tracking a flag per
+# requested name — not just a single global counter — is what makes a
+# partial match (e.g. `--only cargo-deny,git-clif`) fail loudly instead
+# of installing cargo-deny and exiting 0 with git-clif silently unmet.
+only_names=()
+matched_flags=()
+if [[ -n "${ONLY}" ]]; then
+    IFS=',' read -ra only_names <<< "${ONLY}"
+    for i in "${!only_names[@]}"; do
+        matched_flags[i]=0
+    done
+fi
+
 # Walk the lock file, skipping empty lines and comments. When --only
-# is set, install just the matching entry and error if it isn't
-# present (catches typos in CI yaml against the lock file).
-matched=0
+# is set, install just the entries whose crate name or effective
+# binary name matches one of the requested names.
 while IFS= read -r raw; do
     line="${raw%%#*}"
     line="${line#"${line%%[![:space:]]*}"}"
     line="${line%"${line##*[![:space:]]}"}"
     [[ -z "${line}" ]] && continue
-    if [[ -n "${ONLY}" ]]; then
-        # The first whitespace-separated field is `name=version`; match
-        # against `name` only.
-        spec="${line%% *}"
-        [[ "${spec%=*}" == "${ONLY}" ]] || continue
-        matched=1
+    if [[ "${#only_names[@]}" -gt 0 ]]; then
+        # shellcheck disable=SC2086 # intentional word-split on the spec.
+        set -- ${line}
+        spec="$1"
+        bin_override="${2:-}"
+        crate="${spec%=*}"
+        binary="${bin_override:-${crate}}"
+        # Match against either name: every entry today has crate ==
+        # binary except taplo-cli (binary `taplo`), and callers reach
+        # for the binary name they actually want on PATH.
+        install_this=0
+        for i in "${!only_names[@]}"; do
+            if [[ "${only_names[i]}" == "${crate}" || "${only_names[i]}" == "${binary}" ]]; then
+                matched_flags[i]=1
+                install_this=1
+            fi
+        done
+        [[ "${install_this}" -eq 1 ]] || continue
     fi
     install_one "${line}"
 done < "${LOCK}"
 
-if [[ -n "${ONLY}" && "${matched}" -eq 0 ]]; then
-    echo "error: --only ${ONLY}: no matching entry in $(basename "${LOCK}")" >&2
-    exit 2
+if [[ "${#only_names[@]}" -gt 0 ]]; then
+    unmatched=()
+    for i in "${!only_names[@]}"; do
+        [[ "${matched_flags[i]}" -eq 0 ]] && unmatched+=("${only_names[i]}")
+    done
+    if [[ "${#unmatched[@]}" -gt 0 ]]; then
+        # Comma-join in a subshell: a prefix assignment (`IFS=',' echo
+        # ...`) does not affect `${unmatched[*]}` expansion in the same
+        # command, since word expansion of that command's own arguments
+        # already happened. Setting IFS as a statement inside `$( )`
+        # scopes it to the subshell only, so the script's own IFS is
+        # untouched afterward.
+        unmatched_str="$(IFS=','; echo "${unmatched[*]}")"
+        echo "error: --only: no matching entry in $(basename "${LOCK}") for: ${unmatched_str}" >&2
+        exit 2
+    fi
 fi
 
 echo ">> cargo tools ready"

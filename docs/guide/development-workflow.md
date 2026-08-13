@@ -63,7 +63,7 @@ following in the same MR:**
 ### Enforcement
 
 A CI guard -- [`scripts/check-atomic-spec-mr.sh`](../scripts/check-atomic-spec-mr.sh)
--- runs as `lint:atomic-spec-mr` on every merge request. It classifies
+-- runs as part of `verify:policy` on every merge request. It classifies
 changed files into the four layers and fails the pipeline if an MR
 touches **1-3 layers but not all four**. Touching **0 layers** (pure
 docs / CI / tooling MRs) or **all 4** passes.

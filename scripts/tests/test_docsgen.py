@@ -44,7 +44,7 @@ def test_banner_renders_standard_interlock():
         "scripts/gen.py",
         "source.yaml",
         """
-        Run `make docs-regen`.
+        Run `make regen-docs`.
         Then commit the result.
         """,
     )
@@ -52,7 +52,7 @@ def test_banner_renders_standard_interlock():
     assert rendered.startswith(BANNER_PREFIX)
     assert "`source.yaml`" in rendered
     assert "`scripts/gen.py`" in rendered
-    assert "  Run `make docs-regen`.\n  Then commit the result." in rendered
+    assert "  Run `make regen-docs`.\n  Then commit the result." in rendered
 
 
 def test_emit_write_creates_parent_and_reports_path(tmp_path, capsys):
@@ -76,8 +76,8 @@ def test_emit_check_reports_every_stale_target(tmp_path, capsys):
     captured = capsys.readouterr()
     assert result == 1
     assert captured.out == "fresh.md: up to date\n"
-    assert "stale.md is stale; run `make docs-regen`." in captured.err
-    assert "missing.md is stale; run `make docs-regen`." in captured.err
+    assert "stale.md is stale; run `make regen-docs`." in captured.err
+    assert "missing.md is stale; run `make regen-docs`." in captured.err
     assert "--- stale.md (committed)" in captured.err
     assert "--- missing.md (committed)" in captured.err
 

@@ -100,7 +100,22 @@ sort_commits   = "newest"
 # `style`, `test`, `ci`, `build` are deliberately dropped: they're
 # bookkeeping and rarely user-visible. Anything truly user-facing
 # under those types should be promoted to feat/fix/refactor instead.
+#
+# The merge-skip entry must stay first. Merge commits are dropped
+# today only incidentally, because `filter_commits = true` drops
+# whatever no parser matches -- but the catch-all `BREAKING CHANGE`
+# parser below would pull a merge commit straight into the changelog
+# if an MR description happened to contain that string. Matches both
+# the historical "Merge branch ..." form and this repo's newer
+# "merge: ..." form.
+#
+# `exclude_merge_commits = true` was tried instead and rejected: it is
+# accepted by git-cliff 2.13.1 (the pinned version) and then silently
+# ignored -- verified empirically by toggling the key with a parser in
+# place that would match a merge commit and observing identical
+# output either way. Do not reach for it again.
 commit_parsers = [
+    { message = "^[Mm]erge", skip = true },
     { message = "^feat", group = "Added" },
     { message = "^fix", group = "Fixed" },
     { message = "^perf", group = "Performance" },

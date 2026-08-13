@@ -1,0 +1,209 @@
+# Verify phase -- does the workspace match what it is required to match?
+# Rust lint/policy checks (formatting, clippy, rustdoc, cargo-deny, the
+# changelog smoke render, the atomic spec-MR guard, the commit-message
+# guard), the Python lint (ruff), and cross-implementation parity (opcode
+# table, conformance vectors, example smoke) all live here -- see
+# setup.yml's verify-vs-test header for what makes these `verify` jobs
+# rather than `test` jobs.
+#
+# Reuses the workspace's `make` targets so the CI definition and the
+# local workflow stay identical. Changing a lint rule means updating the
+# Makefile once, not here.
+#
+# All four jobs carry `needs: []` and start at t=0 alongside every
+# `test:*` job -- verify and test are peers, not a chain. See setup.yml's
+# "Dependency gating" section for the full topology and why hardware:*
+# waits on all nine of them.
+#
+# Templates and shared script fragments (`.rust`, `.rust-tools`,
+# `.python`, `.python-tools`, `.fragments`, ...) live in
+# .gitlab/ci/setup.yml, included first by the root .gitlab-ci.yml.
+
+# Rust workspace lints -- formatting, clippy, and rustdoc -- merged into
+# one job (`make -k lint-rust`: fmt-check-rs lint-clippy lint-doc). They
+# share a cargo cache restore and a `make deps` pass, which is what this
+# merge actually buys: clippy and rustdoc do NOT share build artefacts
+# (each runs its own compile pass over the workspace), so this is a
+# job-seconds win from paying setup once, not a compile-time win.
+#
+# Say the wall-clock tradeoff plainly rather than presenting a uniform
+# improvement: lint:rustdoc alone measured ~164s on main, running in
+# parallel with lint:clippy under the old three-job layout. Serialised
+# into one job here, expect roughly 220-240s -- about a minute worse on
+# this phase, traded against two saved cache restores and two saved
+# `make deps` passes.
+#
+# fmt-check-toml does NOT come along. It moved out of this job's
+# predecessor into the policy phase back in
+# `build(make): move the toml check into the policy phase` -- taplo is
+# formatting for a compiles-nothing policy phase, not a Rust-compilation
+# concern, and pairing it with clippy/rustdoc would strap a two-second
+# check to the slowest job in the pipeline.
+verify:rust:
+    stage: verify
+    extends: .rust
+    needs: []
+    # 20m: cold-cache room for a full clippy pass plus a full rustdoc
+    # build of the workspace. See setup.yml's "Job timeouts" section for
+    # the sizing method every `timeout:` in this pipeline follows.
+    timeout: 20m
+    script:
+        - make -k lint-rust
+
+# Policy checks -- advisory + license scanning (cargo-deny), the
+# cliff.toml smoke render (git-cliff, catches broken templates or
+# parser regexes before a tagged release tries and fails to generate
+# release notes), the atomic spec-MR guard, and the commit-message
+# guard -- merged into one job running `make -k lint-policy`
+# (fmt-check-toml lint-deny-rs render-changelog check-atomic-spec
+# check-commit-messages). All four ask "does the repo still agree with
+# its own policy", not "does the workspace compile / behave" -- see
+# setup.yml's verify-vs-test header.
+#
+# `check-commit-messages` goes live here for the first time --
+# scripts/check-commit-messages.sh existed already but nothing in CI
+# called it. `.githooks/commit-msg` enforces the same grammar today,
+# but it is opt-in (make install-hooks) and bypassable (git commit
+# --no-verify), so this job is what makes the rule non-bypassable.
+# Wired in via the lint-policy Makefile aggregate (see that target's
+# comment) rather than invoked directly from this job's script, to
+# keep every policy check reachable from a local `make -k lint-policy`
+# and not just from this YAML.
+#
+# `GIT_DEPTH: 0` is required by two of the four checks: git-cliff walks
+# full history to render changelog sections (this mirrors
+# `release:changelog`'s override), and the two range-based guards
+# (atomic-spec-mr, commit-messages) need the merge-base between this
+# ref and main to exist as a real commit in the fetched history -- a
+# shallow clone can silently truncate that walk.
+#
+# Runs on `.rust-tools` with CARGO_TOOLS: taplo,cargo-deny,git-cliff
+# rather than `.rust` or `.alpine`: all three are cargo-installed tools
+# (scripts/cargo-tools.lock), so the job needs cargo on PATH, but none
+# of the five checks compile the workspace -- `cargo deny check` works
+# from Cargo.lock plus its own bundled advisory DB, so losing the
+# registry/target cache in exchange for the `.cargo/bin/`-only cache
+# should be fine. `.rust-tools` installs just the named tools, so this
+# stays a ~35s job with no compile step, same design intent as before
+# this merge.
+#
+# taplo is in the list because lint-policy's first prerequisite is
+# fmt-check-toml. That is easy to miss when reading this job as "the
+# three merged lint jobs plus the new commit-message guard", because
+# taplo arrived here separately: the repo's TOML spans Cargo,
+# pyproject, deny and cliff configs, so it has no single-language home
+# and lives with the one phase that compiles nothing. Omitting it does
+# not fail fast -- the `.cargo/bin/` cache is shared across jobs and
+# keyed only on cargo-tools.lock, so a `make deps` job may leave taplo
+# there and mask the gap until a cold cache exposes it.
+#
+# Image changes from lint:atomic-spec-mr's `alpine:3` to the workspace
+# default `rust:latest` (Debian trixie) -- confirmed both
+# scripts/check-atomic-spec-mr.sh and scripts/check-commit-messages.sh
+# run correctly there: both are plain bash, and rust:latest ships bash
+# 5.2 and git 2.47 at /usr/bin via its buildpack-deps base, so no `apk
+# add` equivalent is needed.
+#
+# One rule set for all four checks: lint:atomic-spec-mr used to be
+# gated to `$CI_PIPELINE_SOURCE == "merge_request_event"` only, on the
+# grounds that "the guard is about MR shape, not about branch-level
+# pushes" -- cargo-deny and the changelog render, by contrast, always
+# ran unconditionally. Merging removes that per-job rule, so the
+# atomic-spec and commit-message guards now also run on branch-push and
+# tag pipelines, not just MR pipelines.
+#
+# That matters because both range-based guards fall back to `git
+# merge-base origin/main HEAD` whenever $CI_MERGE_REQUEST_DIFF_BASE_SHA
+# is unset -- i.e. on every pipeline that is not an MR pipeline. Worked
+# through case by case:
+#   * MR pipelines: $CI_MERGE_REQUEST_DIFF_BASE_SHA is set, so the
+#     fallback is never taken. Unaffected by this change.
+#   * A push to main: $CI_COMMIT_REF_NAME is `main`, so GitLab's own
+#     checkout fetches `origin/main` as exactly the commit under test.
+#     `merge-base(origin/main, HEAD)` is then HEAD itself, so both
+#     scripts see an empty commit range and exit 0 ("no commits in
+#     range" / "no VM-semantics layer touched") rather than erroring.
+#     Safe by construction, and this is the leg the MR's own pipeline
+#     cannot exercise (an MR pipeline never runs as a main push), so it
+#     is reasoned through here rather than proven by a green check.
+#   * A branch push before an MR exists: GitLab's default fetch only
+#     retrieves the ref under test, not `main`, so `origin/main` is not
+#     guaranteed to resolve -- whether it happens to be present depends
+#     on whether the runner's workspace was left with a stale ref from
+#     an earlier job, which is not something to depend on. The explicit
+#     `git fetch origin main` below closes that gap deterministically:
+#     it is a no-op in both cases above (origin/main already correct
+#     or already unneeded) and only does real work in this third case.
+verify:policy:
+    stage: verify
+    extends: .rust-tools
+    needs: []
+    variables:
+        CARGO_TOOLS: taplo,cargo-deny,git-cliff
+        GIT_DEPTH: 0
+    # 15m: compiles nothing, but a cold run still installs three pinned
+    # tools and clones the full history (GIT_DEPTH: 0) before any check
+    # runs. See setup.yml's "Job timeouts" section.
+    timeout: 15m
+    before_script:
+        - !reference [.fragments, cargo-tools-only]
+        - git fetch origin main --quiet
+    script:
+        - make -k lint-policy
+
+# `make lint-py` / `make fmt-check-py` run ruff only, through a separately
+# pinned `uvx` install (see the Makefile's RUFF_VERSION) -- neither needs
+# the workspace synced, so this stays off `.python` and its maturin build
+# of xqffi's cdylib.
+verify:python:
+    stage: verify
+    extends: .python-tools
+    needs: []
+    # 10m: no compile anywhere in the job -- a cold run only fetches uv
+    # and the pinned ruff. See setup.yml's "Job timeouts" section.
+    timeout: 10m
+    script:
+        - make -k lint-py
+        - make -k fmt-check-py
+
+# Cross-implementation parity -- do the two implementations agree? Opcode
+# table parity, the shared xquad-conformance vector suite (both
+# runtimes), and end-to-end example-smoke, merged into one job running
+# `make -k check-parity` (opcode-parity conformance example-smoke).
+#
+# `.python` (uv sync + the three-entry cargo/tools/uv cache) lives in
+# .gitlab/ci/setup.yml. This job needs both a Rust and a Python
+# toolchain: opcode-parity-rs exercises the compile-time YAML <->
+# opcodes! macro check via `cargo build -p xqvm` (xqvm/build.rs);
+# opcode-parity-py and the Python-side conformance/example runs shell
+# out to `uv run python -m xqvm_py …`, so the venv (editable xqvm_py +
+# maturin-built xqffi) has to be active. `.python` gives both: cargo is
+# already on PATH from the base rust:latest image, and `uv sync`
+# builds xqffi's cdylib through maturin.
+#
+# Before this merge each of the four jobs paid its own `make deps`
+# (full cargo-tools.lock install) and three of the four also paid a
+# full `uv sync` -- three of the heaviest bootstraps in the pipeline,
+# repeated. None of opcode-parity, conformance-rs/py, or example-smoke
+# actually needs a cargo-tools.lock binary (clippy, taplo, cargo-deny,
+# ...), so `.python`'s plain uv-sync before_script is enough; the old
+# `!reference [.fragments, cargo-tools]` step was doing work nothing
+# here consumed.
+#
+# `-k` preserves the property the four separate jobs gave for free: a
+# failure in one runtime cannot mask a failure in the other. Without
+# it, e.g. a failing opcode-parity-rs would stop `make` before
+# opcode-parity-py, conformance-rs, or conformance-py ever ran, and a
+# real Python-side regression could ship unnoticed behind the Rust-side
+# failure.
+verify:parity:
+    stage: verify
+    extends: .python
+    needs: []
+    # 25m: cold-cache room for the uv resolve and maturin xqffi build,
+    # then opcode parity, the conformance vectors on both implementations
+    # and the example smoke run on top. See setup.yml's "Job timeouts"
+    # section.
+    timeout: 25m
+    script:
+        - make -k check-parity

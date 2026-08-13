@@ -277,7 +277,7 @@ release:publish-pypi:
 # `GIT_DEPTH: 0` overrides GitLab's default shallow clone -- git-cliff
 # walks the full commit history back through tag boundaries to render
 # release sections, so a shallow clone produces silently truncated
-# notes. The same override is set on `lint:changelog`.
+# notes. The same override is set on `verify:policy`.
 release:changelog:
     stage: release
     # Runs after publish-pypi so the GitLab Release page goes up only
@@ -334,9 +334,23 @@ release:notes:
 # just-bumped xqvm hasn't been pushed yet during a dry-run). The
 # tag-time `release:validate` job covers all three crates -- xqvm
 # fully, xqasm/xqcli with `--no-verify` -- before any publish runs.
+#
+# `needs:` gates this behind the same verify+test+hardware set as the
+# docs:* jobs (see setup.yml's "Dependency gating" section), so the dry
+# run starts alongside docs rather than after it. This is a stage-only
+# regroup -- the `<<: *on-pr-or-push` rules are untouched, so this job
+# still never runs on a tag pipeline (that's what `release:validate`
+# covers), and the tag-only publish chain further down this file keeps
+# its own internal `needs:` ordering unchanged.
 release:dry-run:crates:
-    stage: lint
+    stage: release
     <<: *on-pr-or-push
+    needs:
+        - !reference [.needs-gates, verify-test-and-hardware]
+    # 20m: cold-cache room for the full verify build `cargo publish
+    # --dry-run` performs on the packaged xqvm crate. See setup.yml's
+    # "Job timeouts" section.
+    timeout: 20m
     script:
         - cargo --version
         - cargo publish --locked --dry-run -p xqvm
@@ -344,8 +358,14 @@ release:dry-run:crates:
 # maturin build + twine check validate that wheels + sdists would
 # upload cleanly. No token needed; no network upload.
 release:dry-run:pypi:
-    stage: lint
+    stage: release
     <<: *on-pr-or-push
+    needs:
+        - !reference [.needs-gates, verify-test-and-hardware]
+    # 20m: cold-cache room for the cargo-zigbuild cross-compile and the
+    # maturin wheel/sdist builds that twine then checks. See setup.yml's
+    # "Job timeouts" section.
+    timeout: 20m
     before_script:
         - *setup-python-publish
     script:

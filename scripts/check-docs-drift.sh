@@ -69,7 +69,7 @@ RULE_PATTERNS=()
 # `"${ALLOW[@]}"` on an empty array as an unbound variable: the guard then
 # aborted inside `validate_allowlist` and `main`'s `|| failed=1` swallowed it,
 # so the script exited 0 without printing "passed" and without validating
-# anything. macOS ships bash 3.2, which is what `make docs-drift` runs against
+# anything. macOS ships bash 3.2, which is what `make check-docs-drift` runs against
 # locally, so every expansion below uses the `${ALLOW[@]+...}` form.
 ALLOW=()
 
@@ -118,7 +118,7 @@ add_rule "jump-table" '[Jj]ump[[:space:]-][Tt]able|jump_table\['
 #
 # Generated pages are skipped: `examples/bin_packing/README.md` is the source of
 # truth for the block that reaches `docs/book/src/examples/bin_packing.md`, and
-# `make docs-check` already fails if the two disagree. Declaring both would be
+# `make check-docs-generated` already fails if the two disagree. Declaring both would be
 # the same fact twice.
 DEFECTS=()
 
@@ -558,7 +558,7 @@ check_defect_blocks() {
 
     while IFS= read -r file; do
         # Generated pages carry a copy of whatever their source authored, and
-        # `make docs-check` is what holds the two together.
+        # `make check-docs-generated` is what holds the two together.
         if grep -Fq 'AUTO-GENERATED FILE. DO NOT EDIT.' "${file}"; then
             continue
         fi

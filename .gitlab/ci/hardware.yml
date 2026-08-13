@@ -6,14 +6,23 @@
 # tests in `test:python`.
 #
 # They run only on PROTECTED REFS (main, protected v* tags, protected
-# release/* branches) -- see `.hardware-rules`. Two reasons converge on this:
-#   * test:qpu needs DWAVE_API_TOKEN, a *protected* variable that only exists
-#     on protected refs; running it elsewhere would hard-fail on a missing
-#     token, and the token must never reach unreviewed feature-branch CI.
+# release/* branches) -- see the `.hardware` template in setup.yml. Two
+# reasons converge on this:
+#   * hardware:qpu needs DWAVE_API_TOKEN, a *protected* variable that only
+#     exists on protected refs; running it elsewhere would hard-fail on a
+#     missing token, and the token must never reach unreviewed feature-branch
+#     CI.
 #   * Keeping all three together (vs. running cuda/metal everywhere) avoids a
 #     split policy and keeps feature MRs fast and runner-independent.
 # On protected refs the jobs are obligatory: they auto-run and block, so a
 # regressed backend or misconfigured runner fails the pipeline -- no skip.
+#
+# Each job also `needs:` every verify:* and test:* job (see setup.yml's
+# "Dependency gating" section) -- real hardware is scarce and/or billed, so
+# nothing touches it before the code is known to compile and pass its own
+# test suite. All three run whenever they are created, which is why that
+# gate list has no `optional: true` entries: verify/test are unconditional,
+# so they are always present in any pipeline that also creates hardware:*.
 #
 # To gate a release MR (source release/vX.Y.Z) pre-merge, protect the
 # `release/*` branch pattern; otherwise these verify on main + the v* tag.
@@ -21,9 +30,9 @@
 # Runner routing (group runners under quip.network). Several Linux x86_64
 # runners share identical [linux, x86_64, amd64] tags, so a GPU job needs a
 # more specific selector or it can land on a runner with no GPU:
-#   [linux, x86_64, cuda] -> a GPU runner (lovelace/finney, tagged `cuda`) -> test:cuda
-#   [linux, x86_64]       -> any Linux runner (cloud QPU, no GPU)          -> test:qpu
-#   [macos, arm64]        -> tesla-arm (Apple Silicon)                     -> test:metal
+#   [linux, x86_64, cuda] -> a GPU runner (lovelace/finney, tagged `cuda`) -> hardware:cuda
+#   [linux, x86_64]       -> any Linux runner (cloud QPU, no GPU)          -> hardware:qpu
+#   [macos, arm64]        -> tesla-arm (Apple Silicon)                     -> hardware:metal
 #                            (Metal is not reachable from Docker)
 #
 # Prerequisites before these pass (tracked in QUI-654):
@@ -31,32 +40,32 @@
 #     NVIDIA Container Toolkit installed + `gpus = "all"` in the runner's
 #     config.toml, which mounts libcuda.so into the image. Without it, the
 #     cuda tests fail in cupy (no CUDA-capable device).
-#   * DWAVE_API_TOKEN added as a masked, protected CI/CD variable for test:qpu.
+#   * DWAVE_API_TOKEN added as a masked, protected CI/CD variable for
+#     hardware:qpu.
 
-# Run on protected refs only (main, protected tags, protected release
-# branches). Obligatory there -- auto-run, block on failure.
-.hardware-rules: &hardware-rules
-    rules:
-        - if: $CI_COMMIT_REF_PROTECTED == "true"
+# The `.hardware` template (protected-ref rule + plain uv install, no
+# sync -- each job below runs its own `uv sync --extra <group>` to pull the
+# solver-specific optional deps declared in xqsa/pyproject.toml) and the
+# `.needs-gates` fragment (the shared verify+test `needs:` list below) live
+# in .gitlab/ci/setup.yml, included first by the root .gitlab-ci.yml.
 
-# uv bootstrap shared by all hardware jobs. Mirrors `.install-uv` in
-# python.yml (anchors don't cross `include:` files). `--extra <group>` pulls
-# the solver-specific optional deps declared in xqsa/pyproject.toml.
-.install-uv: &install-uv
-    - curl -LsSf https://astral.sh/uv/install.sh | sh
-    - export PATH="${HOME}/.local/bin:${PATH}"
-    - export UV_CACHE_DIR="${CI_PROJECT_DIR}/.uv-cache"
-
-test:cuda:
-    stage: test
+hardware:cuda:
+    stage: hardware
     # `cuda` pins this to a GPU runner (lovelace/finney). The platform tags
     # alone match every Linux x86_64 runner in the group (lovelace, finney,
     # watch), so a CUDA job could land on a box with no GPU; the `cuda` tag is
     # the GPU-specific selector the group otherwise lacks.
     tags: [linux, x86_64, cuda]
-    <<: *hardware-rules
+    extends: .hardware
+    needs:
+        - !reference [.needs-gates, verify-and-test]
+    # 30m: no run data (never executed -- protected refs only). Deliberate
+    # guess with cold-start headroom for first-run driver and kernel
+    # warmup on top of the GPU solve itself. See setup.yml's "Job
+    # timeouts" section.
+    timeout: 30m
     before_script:
-        - *install-uv
+        - !reference [.fragments, uv]
         - uv sync --extra cuda
         # Non-fatal diagnostics (|| true): print what the *container* sees so
         # a driver/runtime mismatch is visible in the log without gating the
@@ -73,23 +82,37 @@ test:cuda:
         # otherwise.
         - uv run pytest xqsa/tests/ -m cuda -v
 
-test:qpu:
-    stage: test
+hardware:qpu:
+    stage: hardware
     tags: [linux, x86_64]
-    <<: *hardware-rules
+    extends: .hardware
+    needs:
+        - !reference [.needs-gates, verify-and-test]
+    # 30m: no run data (never executed -- protected refs only). Deliberate
+    # guess with cold-start headroom for a real network round-trip to a
+    # D-Wave QPU, which can queue on the hardware itself. See setup.yml's
+    # "Job timeouts" section.
+    timeout: 30m
     before_script:
-        - *install-uv
+        - !reference [.fragments, uv]
         - uv sync --extra dwave
     script:
         # DWAVE_API_TOKEN comes from a masked, protected CI/CD variable.
         - uv run pytest xqsa/tests/ -m qpu -v
 
-test:metal:
-    stage: test
+hardware:metal:
+    stage: hardware
     tags: [macos, arm64]
-    <<: *hardware-rules
+    extends: .hardware
+    needs:
+        - !reference [.needs-gates, verify-and-test]
+    # 20m: no run data (never executed -- protected refs only). Deliberate
+    # guess, lower than the other two because there is no network
+    # queueing -- just local Apple Silicon Metal execution. See
+    # setup.yml's "Job timeouts" section.
+    timeout: 20m
     before_script:
-        - *install-uv
+        - !reference [.fragments, uv]
         - uv sync --extra metal
     script:
         - uv run pytest xqsa/tests/ -m metal -v

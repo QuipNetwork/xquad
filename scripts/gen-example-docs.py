@@ -83,6 +83,7 @@ class ExampleEntry:
     directory: str
     title: str
     blurb: str
+    hardware: bool = False
 
 
 @dataclass(frozen=True)
@@ -153,10 +154,14 @@ def load_manifest() -> ExampleManifest:
             directory = require_key(example, example_path, "dir", str)
             title = require_key(example, example_path, "title", str)
             blurb = require_key(example, example_path, "blurb", str)
+            hardware = example.get("hardware", False)
+            if not isinstance(hardware, bool):
+                errors.append(f"{example_path}: optional key `hardware` must be bool, got {type(hardware).__name__}")
+                hardware = False
             if directory in seen_dirs:
                 errors.append(f"{example_path}: duplicate example dir `{directory}`")
             seen_dirs.add(directory)
-            entries.append(ExampleEntry(directory=directory, title=title, blurb=blurb))
+            entries.append(ExampleEntry(directory=directory, title=title, blurb=blurb, hardware=hardware))
 
         groups.append(
             ExampleGroup(
@@ -319,7 +324,7 @@ def transform_readme(entry: ExampleEntry) -> str:
         banner(
             "scripts/gen-example-docs.py",
             "examples/manifest.yaml and examples/*/README.md",
-            "Edit the source README or manifest, then run `make docs-regen`.",
+            "Edit the source README or manifest, then run `make regen-docs`.",
         ),
         "",
         f"# {entry.title}",
@@ -345,7 +350,7 @@ def render_gallery(groups: list[ExampleGroup]) -> str:
         banner(
             "scripts/gen-example-docs.py",
             "examples/manifest.yaml",
-            "Edit the manifest, then run `make docs-regen`.",
+            "Edit the manifest, then run `make regen-docs`.",
         ),
         "",
         "# Examples",
@@ -378,7 +383,7 @@ def render_repo_index(groups: list[ExampleGroup]) -> str:
         banner(
             "scripts/gen-example-docs.py",
             "examples/manifest.yaml",
-            "Edit the manifest, then run `make docs-regen`.",
+            "Edit the manifest, then run `make regen-docs`.",
         ),
         "",
         "# XQuad Examples",
@@ -472,7 +477,7 @@ def handle_orphan_pages(targets: list[Target], preserved_pages: set[str], *, che
                 "`preserved_pages` in examples/manifest.yaml or move it out of docs/book/src/examples"
             )
         if check:
-            sys.stderr.write(f"{rel_path} is stale; run `make docs-regen`.\n\n")
+            sys.stderr.write(f"{rel_path} is stale; run `make regen-docs`.\n\n")
             status = 1
         else:
             path.unlink()

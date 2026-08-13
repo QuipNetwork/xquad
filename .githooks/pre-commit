@@ -2,12 +2,25 @@
 # xquad pre-commit hook.
 #
 # Runs fast format + lint checks on staged files only:
-#   - *.py   — `uv run ruff check` + `uv run ruff format --check`
+#   - *.py   — `uvx ruff check` + `uvx ruff format --check`, at the
+#              version pinned by the Makefile's RUFF_VERSION
 #   - *.toml — `taplo fmt --check`
+#   - *.rs   -- `make fmt-check-rs` (repo-wide, not per-file -- see below)
 #
 # Does not run pytest / cargo test / cargo clippy — those live in CI
 # and the `make all` target. The purpose of this hook is to stop
 # formatting-only CI failures before they leave the workstation.
+#
+# The *.rs check runs repo-wide (`make fmt-check-rs`, i.e. `cargo fmt
+# --all -- --check`) rather than on just the staged files, unlike the
+# *.py / *.toml checks above. `cargo fmt` has no per-file mode that
+# understands crate boundaries the way `rustfmt --check --edition 2024
+# <files>` would require hardcoding; calling the same Makefile target CI
+# calls keeps the two commands identical and lets the edition come from
+# each crate's Cargo.toml instead of being pinned a second time here.
+# Consequence: staging one formatted-badly line anywhere in the
+# workspace fails the hook even if the rest of the repo is clean, same
+# as it would in CI.
 #
 # Install once per clone with:
 #
@@ -24,6 +37,19 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
+# Read the pinned ruff version out of the Makefile (RUFF_VERSION := X.Y.Z)
+# rather than hardcoding it here a second time. The Makefile's fmt-py /
+# fmt-check-py / lint-py targets run the same pinned ruff via `uvx`, for
+# the same reason this hook does: an isolated ruff install skips `uv
+# sync`, which -- because xqffi is a uv workspace member -- would
+# otherwise trigger a full maturin build of xqffi's cdylib just to check
+# staged Python files.
+RUFF_VERSION="$(sed -n 's/^RUFF_VERSION[[:space:]]*:=[[:space:]]*//p' "$REPO_ROOT/Makefile" | head -n1)"
+if [ -z "$RUFF_VERSION" ]; then
+    echo "pre-commit: could not read RUFF_VERSION from Makefile" >&2
+    exit 1
+fi
+
 # Collect staged files, limited to those that exist in the worktree
 # (avoids rename-only / delete-only cases).
 #
@@ -31,12 +57,14 @@ cd "$REPO_ROOT"
 # with a null-delimited loop for portability.
 py_files=()
 toml_files=()
+rs_files=()
 while IFS= read -r -d '' f; do
     [ -n "$f" ] || continue
     [ -f "$f" ] || continue
     case "$f" in
         *.py)   py_files+=("$f") ;;
         *.toml) toml_files+=("$f") ;;
+        *.rs)   rs_files+=("$f") ;;
     esac
 done < <(git diff --cached --name-only --diff-filter=ACMR -z)
 
@@ -44,11 +72,11 @@ failed=0
 
 if [ ${#py_files[@]} -gt 0 ]; then
     echo "pre-commit: ruff check  (${#py_files[@]} file(s))"
-    if ! uv run --quiet ruff check "${py_files[@]}"; then
+    if ! uvx -q "ruff@${RUFF_VERSION}" check "${py_files[@]}"; then
         failed=1
     fi
     echo "pre-commit: ruff format --check  (${#py_files[@]} file(s))"
-    if ! uv run --quiet ruff format --check "${py_files[@]}"; then
+    if ! uvx -q "ruff@${RUFF_VERSION}" format --check "${py_files[@]}"; then
         failed=1
     fi
 fi
@@ -58,6 +86,14 @@ if [ ${#toml_files[@]} -gt 0 ]; then
     # taplo emits INFO lines for every file it touches; quiet those and
     # let ERROR lines through. Exit code drives pass/fail.
     if ! taplo fmt --check "${toml_files[@]}" 2> >(grep -v '^ INFO' >&2); then
+        failed=1
+    fi
+fi
+
+if [ ${#rs_files[@]} -gt 0 ]; then
+    # Repo-wide, not per-file -- see the header comment for why.
+    echo "pre-commit: make fmt-check-rs  (${#rs_files[@]} file(s) staged, checking whole workspace)"
+    if ! make fmt-check-rs; then
         failed=1
     fi
 fi

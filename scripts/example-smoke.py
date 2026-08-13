@@ -29,21 +29,44 @@ valid) optima.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
 
+from _docsgen import load_yaml
+from _hwprobe import available_hardware_solvers
 from xqsa import DEFAULT_SOLVER
 
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
+MANIFEST_PATH = EXAMPLES_DIR / "manifest.yaml"
 SEED = 42
 
-# Representative subset exercised against hardware backends: a binary
-# (maxcut), a permutation (tsp), and a constrained problem (knapsack).
-# Kept small to bound GPU time and the monthly D-Wave QPU quota; the full
-# suite still runs on the CPU annealer on both interpreters.
-HARDWARE_EXAMPLES = ("maxcut", "tsp", "knapsack")
+
+def _hardware_examples() -> tuple[str, ...]:
+    """Load the `hardware: true` example directories from the manifest.
+
+    Kept deliberately small (a binary problem, a permutation, a constrained
+    problem) to bound GPU time and the monthly D-Wave QPU quota; every
+    example still runs on the CPU annealer on both interpreters regardless
+    of this flag. This is an independent, minimal read of
+    examples/manifest.yaml rather than a call into
+    scripts/gen-example-docs.py's stricter schema validation -- that
+    script's hyphenated filename blocks import (see scripts/_hwprobe.py for
+    the same constraint on example-smoke.py itself).
+    """
+    data = load_yaml(MANIFEST_PATH)
+    return tuple(
+        example["dir"]
+        for group in data.get("groups", [])
+        for example in group.get("examples", [])
+        if example.get("hardware", False)
+    )
+
+
+# Representative subset exercised against hardware backends, sourced from
+# the `hardware: true` examples in examples/manifest.yaml so this list and
+# the manifest cannot drift.
+HARDWARE_EXAMPLES = _hardware_examples()
 
 
 def run_example(runner: Path, interpreter: str, solver: str = DEFAULT_SOLVER) -> dict:
@@ -57,63 +80,6 @@ def run_example(runner: Path, interpreter: str, solver: str = DEFAULT_SOLVER) ->
         print(result.stderr[-500:], file=sys.stderr)
         sys.exit(1)
     return json.loads(result.stdout)
-
-
-def _cuda_available() -> bool:
-    """True when cupy is installed and a CUDA device is present."""
-    try:
-        import cupy
-
-        return bool(cupy.cuda.runtime.getDeviceCount() > 0)
-    except Exception:
-        return False
-
-
-def _metal_available() -> bool:
-    """True when running on macOS with a usable Metal device."""
-    try:
-        import Metal
-
-        return Metal.MTLCreateSystemDefaultDevice() is not None
-    except Exception:
-        return False
-
-
-def _qpu_available() -> bool:
-    """True when dwave-system is installed and a Leap token is configured.
-
-    Both are required: the token alone (without the ``[dwave]`` extra) would
-    let the run start and then crash in the solver, so it must be a skip.
-    """
-    if os.environ.get("DWAVE_API_TOKEN") is None:
-        return False
-    try:
-        import dwave.system  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
-
-
-def available_hardware_solvers() -> list[str]:
-    """Resolve which hardware solver backends can run here.
-
-    Logs each backend that is skipped and why, so an absent GPU/QPU reads
-    as a deliberate skip rather than silent non-coverage.
-    """
-    probes = (("cuda-gpu", _cuda_available), ("dwave-qpu", _qpu_available), ("metal-gpu", _metal_available))
-    reasons = {
-        "cuda-gpu": "no cupy / CUDA device",
-        "dwave-qpu": "no dwave-system extra / DWAVE_API_TOKEN not set",
-        "metal-gpu": "no Metal device",
-    }
-    available: list[str] = []
-    for solver, probe in probes:
-        if probe():
-            available.append(solver)
-        else:
-            print(f"  skip {solver}: {reasons[solver]}")
-    return available
 
 
 def main() -> int:

@@ -2,7 +2,7 @@
   AUTO-GENERATED FILE. DO NOT EDIT.
   This file is regenerated from `examples/manifest.yaml` by
   `scripts/gen-example-docs.py`.
-  Edit the manifest, then run `make docs-regen`.
+  Edit the manifest, then run `make regen-docs`.
 -->
 
 # Examples
