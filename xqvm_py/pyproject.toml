@@ -20,18 +20,23 @@ xqffi.workspace = true
 path = "__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = [ "." ]
+only-include = [ "." ]
+sources = { "." = "xqvm_py" }
+dev-mode-dirs = [ ".." ]
 exclude = [
     "tests/**",
-    "xqcp/**",
-    "xqsa/**",
     "pyproject.toml",
+    "README.md",
+    "PKG-INFO",
+    ".gitignore",
+    # Agent instructions, never package content. CLAUDE.md is gitignored today
+    # so it cannot reach the wheel, but the exclude survives a .gitignore edit.
+    "AGENTS.md",
     "CLAUDE.md",
 ]
 
 [tool.hatch.metadata]
-# The package directory IS the project root; the default flat-layout
-# layout assumption (project-root/package-name/) does not apply. The
-# `packages = ["."]` line above tells hatchling to take this directory
-# as the wheel source.
+# The package directory is the project root. `sources` rewrites the wheel
+# prefix to the package name; `dev-mode-dirs` puts the repo root on
+# sys.path for editable installs.
 allow-direct-references = true

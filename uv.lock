@@ -1643,6 +1643,9 @@ dwave = [
 metal = [
     { name = "xqsa", extra = ["metal"] },
 ]
+quip = [
+    { name = "xqsa", extra = ["quip"] },
+]
 
 [package.metadata]
 requires-dist = [
@@ -1652,9 +1655,10 @@ requires-dist = [
     { name = "xqsa", extras = ["cuda"], marker = "extra == 'cuda'", editable = "xqsa" },
     { name = "xqsa", extras = ["dwave"], marker = "extra == 'dwave'", editable = "xqsa" },
     { name = "xqsa", extras = ["metal"], marker = "extra == 'metal'", editable = "xqsa" },
+    { name = "xqsa", extras = ["quip"], marker = "extra == 'quip'", editable = "xqsa" },
     { name = "xqvm-py", editable = "xqvm_py" },
 ]
-provides-extras = ["cuda", "dwave", "metal"]
+provides-extras = ["cuda", "dwave", "metal", "quip"]
 
 [[package]]
 name = "xqvm-py"

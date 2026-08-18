@@ -21,27 +21,21 @@ pip install xquad        # Python umbrella: the full pipeline
 ## Verify the Install
 
 `xquad --version` prints the installed CLI's version, confirming the
-`xqcli` binary is on `PATH` and runs.
+`xqcli` binary is on `PATH` and runs. Importing the umbrella package
+confirms the Python half:
 
 ```sh
 $ python -c "import xquad; print('ok')"
 ok
 ```
 
-The Rust binary installs cleanly. The Python side can still fail: `pip
-install xquad` reports success, and `import xquad` still raises
-`ModuleNotFoundError`. Re-running `pip install xquad` does not change
-the outcome. If that happens, skip straight to [Get the
-Examples](#get-the-examples) below: its `git clone` plus `make deps-py`
-path gives a working `import xquad` regardless of what the published
-wheel does.
-
 <!-- xquad:defect QUI-1020 -->
-> **Known issue.** The published wheels for `xquad`, `xqcp`, `xqsa` and `xqvm_py` carry no
-> importable package directory, so the install reports success while `import xquad` fails;
-> the Rust CLI is unaffected. Use the `git clone` plus `make deps-py` path in [Get the
-> Examples](#get-the-examples) below for a working install today. Report problems at the
-> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+> **Known issue.** The wheels currently on PyPI for `xquad`, `xqcp`, `xqsa` and
+> `xqvm_py` carry no importable package directory, so the install reports success
+> while `import xquad` fails; the Rust CLI is unaffected. The packaging is fixed in
+> the repository and ships in 0.3.2. Until that release is live, use the `git clone`
+> plus `make deps-py` path in [Get the Examples](#get-the-examples) below. Report
+> problems at the [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
 
 ## Get the Examples
 
@@ -81,17 +75,9 @@ extras, and `xquad/pyproject.toml` forwards to the ones it re-exports:
 - `quip` -- `substrate-interface>=1.7.4,<2` plus `quip-signer>=0.2.2`,
   for the Quip network solver, which needs a `QUIP_RPC_URL` and a
   configured signer; see [Quip Network](../solving/quip-network.md) for
-  what that solver does. This extra exists only on `xqsa`:
-  `xquad/pyproject.toml` has no matching entry, so `pip install
-  xquad[quip]` does not install it; `pip install xqsa[quip]` does.
+  what that solver does.
 
 `xqcp`, `xqffi`, and `xqvm_py` define no optional dependencies at all.
-
-<!-- xquad:defect QUI-1020 -->
-> **Known issue.** `xquad` declares `cuda`, `dwave` and `metal` extras but no `quip`
-> extra, so `pip install xquad[quip]` fails while every sibling extra installs
-> successfully. Install directly from `xqsa` instead: `pip install xqsa[quip]`. Report
-> problems at the [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
 
 The only extra this page can fully specify is `[dwave]`: it needs a D-Wave
 Leap account and a `DWAVE_API_TOKEN`, and `dwave ping` confirms both. A
@@ -99,9 +85,17 @@ local GPU (`[cuda]` or `[metal]`) is another option; see [Local
 Solvers](../solving/local.md#driver-prerequisites) for those two extras
 and their driver checks.
 
-`pip install xquad[cuda]`, `xquad[metal]`, and `xquad[dwave]` each forward
-to the matching `xqsa` extra, and extras are composable:
-`pip install "xquad[cuda,dwave]"`.
+`pip install xquad[cuda]`, `xquad[metal]`, `xquad[dwave]`, and
+`xquad[quip]` each forward to the matching `xqsa` extra, and extras are
+composable: `pip install "xquad[cuda,dwave]"`.
+
+<!-- xquad:defect QUI-1020 -->
+> **Known issue.** The `xquad` wheel currently on PyPI declares `cuda`, `dwave` and
+> `metal` but no `quip`, so `pip install xquad[quip]` fails against the published
+> release while every sibling extra installs. The forwarding is fixed in the
+> repository and ships in 0.3.2. Install directly from `xqsa` until then:
+> `pip install xqsa[quip]`. Report problems at the
+> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
 
 A missing extra does not break the base install: `import xqsa` never
 fails just because an optional extra is absent. Only constructing the

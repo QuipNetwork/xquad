@@ -17,13 +17,23 @@ dependencies = [
 xqvm_py.workspace = true
 
 [tool.hatch.build.targets.wheel]
-packages = [ "." ]
+only-include = [ "." ]
+sources = { "." = "xqcp" }
+dev-mode-dirs = [ ".." ]
 exclude = [
     "tests/**",
     "pyproject.toml",
+    "README.md",
+    "PKG-INFO",
+    ".gitignore",
+    # Agent instructions, never package content. CLAUDE.md is gitignored today
+    # so it cannot reach the wheel, but the exclude survives a .gitignore edit.
+    "AGENTS.md",
+    "CLAUDE.md",
 ]
 
 [tool.hatch.metadata]
-# The package directory IS the project root; flat layout mirrors
-# xqvm_py (see its pyproject.toml for the rationale).
+# The package directory is the project root. `sources` rewrites the wheel
+# prefix to the package name; `dev-mode-dirs` puts the repo root on
+# sys.path for editable installs.
 allow-direct-references = true
