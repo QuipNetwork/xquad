@@ -10,7 +10,10 @@ requires-python = ">=3.13"
 license = { text = "AGPL-3.0-or-later" }
 dynamic = [ "version" ]
 dependencies = [
-    "xqffi",
+    # Pinned exact. The five published distributions share one workspace
+    # version and are uploaded as a set, so a mixed-version install is never
+    # a supported combination; see RELEASING.md for the bump touchpoints.
+    "xqffi==0.3.2",
 ]
 
 [tool.uv.sources]

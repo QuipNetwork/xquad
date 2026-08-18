@@ -27,8 +27,8 @@ pipeline::
 
     problem = cp.Problem("TSP")
     bytecode = asm.assemble_source(...)
-    v = vm.Vm()
-    v.run(bytecode)
+    v = vm.VM()
+    v.run_bytecode(bytecode)
     samples = sa.SolverDWaveCPU().solve(problem.model())
 
 Each subnamespace is a direct re-export of the corresponding peer

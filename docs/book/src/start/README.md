@@ -29,14 +29,6 @@ $ python -c "import xquad; print('ok')"
 ok
 ```
 
-<!-- xquad:defect QUI-1020 -->
-> **Known issue.** The wheels currently on PyPI for `xquad`, `xqcp`, `xqsa` and
-> `xqvm_py` carry no importable package directory, so the install reports success
-> while `import xquad` fails; the Rust CLI is unaffected. The packaging is fixed in
-> the repository and ships in 0.3.2. Until that release is live, use the `git clone`
-> plus `make deps-py` path in [Get the Examples](#get-the-examples) below. Report
-> problems at the [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
-
 ## Get the Examples
 
 Every `uv run python examples/...` command in this book, including on
@@ -88,14 +80,6 @@ and their driver checks.
 `pip install xquad[cuda]`, `xquad[metal]`, `xquad[dwave]`, and
 `xquad[quip]` each forward to the matching `xqsa` extra, and extras are
 composable: `pip install "xquad[cuda,dwave]"`.
-
-<!-- xquad:defect QUI-1020 -->
-> **Known issue.** The `xquad` wheel currently on PyPI declares `cuda`, `dwave` and
-> `metal` but no `quip`, so `pip install xquad[quip]` fails against the published
-> release while every sibling extra installs. The forwarding is fixed in the
-> repository and ships in 0.3.2. Install directly from `xqsa` until then:
-> `pip install xqsa[quip]`. Report problems at the
-> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
 
 A missing extra does not break the base install: `import xqsa` never
 fails just because an optional extra is absent. Only constructing the

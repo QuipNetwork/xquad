@@ -16,7 +16,16 @@
 # `deprecate` are changelog groups there, so a commit of either type
 # must be able to pass this grammar or git-cliff would never see it
 # (it would already have been rejected as an invalid subject).
-TYPES="feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|security|deprecate"
+#
+# `release` is here for a different reason. The project squashes every
+# merge request and the squash commit's subject is the MR title
+# (`squash_commit_template = %{title}`), so an MR titled
+# `release: vX.Y.Z` -- the convention RELEASING.md asks for -- reaches
+# this grammar as an authored commit, but only on the merge-train ref
+# where that squash commit first exists. cliff.toml skips the type the
+# way it skips `chore`: a "release: vX.Y.Z" line in the notes for
+# vX.Y.Z says nothing the page does not already say.
+TYPES="feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|security|deprecate|release"
 PATTERN="^(${TYPES})(\([a-zA-Z0-9_-]+\))?\!?: .+"
 
 # Matches a GitLab-generated merge commit subject, in either the
