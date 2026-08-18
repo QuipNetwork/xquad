@@ -101,6 +101,11 @@ sort_commits   = "newest"
 # bookkeeping and rarely user-visible. Anything truly user-facing
 # under those types should be promoted to feat/fix/refactor instead.
 #
+# `release` is dropped for a narrower reason: it exists only as the
+# subject of a release MR's squash commit, and that commit lands in
+# the very range the notes for that version are rendered from. A
+# "release: vX.Y.Z" entry on the vX.Y.Z page is a tautology.
+#
 # The merge-skip entry must stay first. Merge commits are dropped
 # today only incidentally, because `filter_commits = true` drops
 # whatever no parser matches -- but the catch-all `BREAKING CHANGE`
@@ -129,8 +134,9 @@ commit_parsers = [
     { message = "^deprecate", group = "Deprecated" },
     # Catch-all -- breaking changes from any other type still surface.
     { body = ".*BREAKING CHANGE.*", group = "Changed" },
-    # Drop chore/style/test/ci/build silently.
+    # Drop chore/style/test/ci/build/release silently.
     { message = "^chore", skip = true },
+    { message = "^release", skip = true },
     { message = "^style", skip = true },
     { message = "^test", skip = true },
     { message = "^ci", skip = true },

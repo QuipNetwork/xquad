@@ -105,14 +105,35 @@ Before cutting a tag:
 #    API to find this branch name.
 git checkout -b release/vX.Y.Z main
 
-# 2. Bump versions in every manifest.
-#    Touchpoints: Cargo.toml workspace.package.version, each crate's
-#    Cargo.toml, each pyproject.toml [project] version.
+# 2. Bump versions in every manifest, then regenerate the lockfiles.
+#    Version sites:
+#      - Cargo.toml [workspace.dependencies] -- the `version` alongside
+#        `path` on xqvm and xqasm. `cargo publish --locked` fails without
+#        it; the root has no workspace.package.version to bump.
+#      - each crate's Cargo.toml: xqvm, xqasm, xqcli, xqffi, conformance.
+#      - each pyproject.toml [project] version: xqcp, xqsa, xquad.
+#      - xqvm_py/__init__.py __version__ -- xqvm_py and xqffi declare
+#        `dynamic = ["version"]`, so their pyproject carries no version
+#        line and hatch reads this file instead.
+#      - the `==X.Y.Z` peer pins in xqcp, xqsa, xqvm_py and xquad
+#        pyproject.toml, including xquad's optional-dependencies.
+#    Then regenerate: `cargo check` (Cargo.lock), `uv lock` (uv.lock), and
+#    `cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml`
+#    (standalone workspace with its own lock; no job builds it with
+#    --locked, so a stale xqvm entry there drifts silently for releases).
 git commit -s -am "chore: bump workspace to X.Y.Z"
 
 # 3. Push and open an MR using the "release" template.
 git push -u origin release/vX.Y.Z
 ```
+
+Title the MR `release: vX.Y.Z`. The project squashes on merge with
+`squash_commit_template = %{title}`, so the title becomes a commit
+subject and `verify:policy` checks it against the commit grammar --
+`release` is a type in `scripts/commit-grammar.sh` for exactly this
+reason, and git-cliff drops it. The check first sees that subject on
+the merge-train ref, so a non-conforming title passes every pipeline on
+the MR itself and fails only once the train has started.
 
 Open the MR targeting `main`. Both @kleczkowski and @meganathanmanish
 must approve. After approval, merge using any strategy — squash and
@@ -194,10 +215,20 @@ and rerun the pipeline.
    python3.13 -m venv /tmp/xquad-smoke
    source /tmp/xquad-smoke/bin/activate
    pip install "xquad==X.Y.Z"
-   python -c "import xquad; from xquad import vm, asm; v = vm.Vm(); print('ok')"
+   python -c "import xquad; from xquad import vm, asm; v = vm.VM(); print('ok')"
    ```
 
-3. **Notify the pallet team** if this was a major bump they're
+3. **Yank superseded broken releases.** If this release exists to
+   replace an unusable one -- v0.3.1's Python wheels carried no
+   importable package directory (QUI-1020) -- yank the old version once
+   the smoke test above passes: the *Releases* tab under
+   `pypi.org/manage/project/<name>/`, and `cargo yank --version X.Y.Z
+   <crate>` for crates.io. A yank keeps a resolver from selecting the
+   broken version for a fresh install. It does **not** move anyone who
+   already installed it, and it does not affect an existing environment
+   that already satisfies a requirement -- the exact peer pins in each
+   `pyproject.toml` are what force those forward.
+4. **Notify the pallet team** if this was a major bump they're
    blocked on.
 
 ## Trouble-shooting

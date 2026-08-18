@@ -59,8 +59,6 @@ The base install includes CPU simulated annealing only. To use GPU or quantum ha
 
 Extras are composable: `pip install xquad[cuda,dwave]`. See [`xqsa/README.md`](xqsa/README.md#install) for driver prerequisites and per-solver quick-starts.
 
-The Python packages currently on PyPI ship without an importable package directory, so `import xquad` fails after a successful `pip install`, and the `xquad[quip]` extra above is not yet declared on the published `xquad`. Both are fixed in this repository and ship in 0.3.2; until then, install from a checkout (`git clone` then `make deps-py`), and use `pip install xqsa[quip]` for the Quip solver.
-
 For a guided walkthrough that installs XQuad, verifies it, and runs a
 complete problem end to end, see
 [Install XQuad](docs/book/src/start/README.md) in the book.
