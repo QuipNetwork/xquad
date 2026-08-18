@@ -55,8 +55,11 @@ The base install includes CPU simulated annealing only. To use GPU or quantum ha
 | NVIDIA CUDA GPU (`cuda-gpu`) | `pip install xquad[cuda]` | CUDA 12.x driver + NVIDIA GPU |
 | Apple Metal GPU (`metal-gpu`) | `pip install xquad[metal]` | Apple Silicon Mac with a Metal device |
 | D-Wave Advantage QPU (`dwave-qpu`) | `pip install xquad[dwave]` | D-Wave Leap account + API token |
+| Quip Network solver (`quip`) | `pip install xquad[quip]` | `QUIP_RPC_URL` + a configured signer |
 
 Extras are composable: `pip install xquad[cuda,dwave]`. See [`xqsa/README.md`](xqsa/README.md#install) for driver prerequisites and per-solver quick-starts.
+
+The Python packages currently on PyPI ship without an importable package directory, so `import xquad` fails after a successful `pip install`, and the `xquad[quip]` extra above is not yet declared on the published `xquad`. Both are fixed in this repository and ship in 0.3.2; until then, install from a checkout (`git clone` then `make deps-py`), and use `pip install xqsa[quip]` for the Quip solver.
 
 For a guided walkthrough that installs XQuad, verifies it, and runs a
 complete problem end to end, see
@@ -210,7 +213,7 @@ make xquad
 
 This syncs the Python workspace (`xqvm_py`, `xqcp`, `xqsa`, `xqffi`,
 `xquad`) into `.venv/`, builds the `xqffi` pyo3 extension via maturin,
-writes a workspace `.pth` so scripts anywhere in the repo can
+puts the repo root on `sys.path` so scripts anywhere in the repo can
 `import xqcp` / `xqsa` / `xqvm_py` / `xqffi` / `xquad` naturally, and
 installs the `xquad` CLI binary under `~/.cargo/bin/`.
 

@@ -188,8 +188,9 @@ release:validate:
         - cargo publish --dry-run --locked -p xqvm
         - bash scripts/validate-crate-publish.sh xqasm --no-verify
         - bash scripts/validate-crate-publish.sh xqcli --no-verify
-        # See scripts/python-dists.sh for the package list and the
-        # build/check sequence (shared with release:dry-run:pypi).
+        # See scripts/python-packages.sh for the package list and
+        # scripts/python-dists.sh for the build/check sequence (shared
+        # with release:dry-run:pypi).
         - bash scripts/python-dists.sh check
 
 # Publish the three Rust crates to crates.io in topological dependency
@@ -259,8 +260,8 @@ release:publish-pypi:
     before_script:
         - *setup-python-publish
     script:
-        # See scripts/python-dists.sh for the package list and the
-        # build/upload sequence.
+        # See scripts/python-packages.sh for the package list and
+        # scripts/python-dists.sh for the build/upload sequence.
         - bash scripts/python-dists.sh publish
 
 # Generate GitLab Release notes from the conventional-commit history
@@ -369,6 +370,7 @@ release:dry-run:pypi:
     before_script:
         - *setup-python-publish
     script:
-        # See scripts/python-dists.sh for the package list and the
-        # build/check sequence (shared with release:validate).
+        # See scripts/python-packages.sh for the package list and
+        # scripts/python-dists.sh for the build/check sequence (shared
+        # with release:validate).
         - bash scripts/python-dists.sh check

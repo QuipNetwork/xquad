@@ -56,7 +56,7 @@ cargo nextest run --workspace -E 'test(my_test_name)'
 cargo test --workspace my_test_name
 
 # Python
-make deps-py          # uv sync + maturin develop + workspace .pth
+make deps-py          # uv sync + maturin develop (editable installs)
 make fmt-py           # ruff format across all Python packages
 make fmt-check-py     # ruff format --check
 make lint-py          # ruff check across all Python packages
@@ -272,7 +272,7 @@ Control flow, stack/register I/O, arithmetic (including `SQR`, `ABS`, `INC`, `DE
 
 - **Dependencies:** manage via each package's `pyproject.toml`. The repo-root `pyproject.toml` hosts the `uv` workspace declaration and dev-tool pins (maturin, pytest, pyyaml, ruff); the xqvm_py / xqcp / xqsa / xqffi members carry their own. Never modify the dev-dep pins without explicit user approval.
 - **Virtual environment:** always use the workspace `.venv/` managed by `uv sync` / `uv run`. Never install packages globally or create ad-hoc venvs. Invoke scripts and tests via `uv run` so the maturin-built `xqffi` extension is picked up without a manual activation step.
-- **Setup:** `make deps-py` runs `uv sync` + `maturin develop` + installs workspace `.pth`. Re-run after pulls that touch Rust sources or workspace deps.
+- **Setup:** `make deps-py` runs `uv sync` + `maturin develop`. Each package's editable install carries `dev-mode-dirs = [".."]`, which puts the repo root on `sys.path`. Re-run after pulls that touch Rust sources or workspace deps.
 
 ### Package Map
 

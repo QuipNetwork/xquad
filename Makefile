@@ -133,8 +133,9 @@ preflight: preflight-rs preflight-py preflight-parity preflight-docs preflight-p
 # Bootstrap everything a contributor needs to use the XQuad toolchain
 # locally:
 #   - Python workspace (xqvm_py, xqcp, xqsa, xqffi) synced into .venv/
-#     with the maturin-built xqffi extension and the workspace .pth
-#     so any script in the repo can `import xqcp` etc.
+#     with the maturin-built xqffi extension; each package's editable
+#     install puts the repo root on sys.path, so any script in the
+#     repo can `import xqcp` etc.
 #   - Rust CLI installed as the `xquad` binary under ~/.cargo/bin/ so
 #     `xquad run …`, `xquad dism …`, etc. work from any shell.
 #
@@ -212,17 +213,15 @@ deps-wasm:
 # current Rust sources — essential for local runs of
 # `make example-smoke`, `make test-py`, etc.
 #
-# The final step writes `xq-rs-workspace.pth` into the venv's
-# site-packages, adding the repo root to sys.path. This closes a
-# flat-layout editable-install quirk: hatchling puts each package's
-# own directory on sys.path (e.g. /repo/xqcp) rather than the parent
-# (/repo), so scripts run from sibling directories (examples/,
-# scripts/) can't `import xqcp` unless they first inject the repo
-# root themselves. With the .pth in place they just work.
+# Each package's pyproject.toml sets `dev-mode-dirs = [".."]`, so its
+# editable install puts the repo root on sys.path rather than just
+# the package directory (a flat-layout quirk: without it, only
+# /repo/xqcp would be importable, not /repo). That's what lets
+# scripts run from sibling directories (examples/, scripts/) `import
+# xqcp` etc.
 deps-py:
 	uv sync
 	uv run --active maturin develop --manifest-path xqffi/Cargo.toml
-	@.venv/bin/python -c "from pathlib import Path; import site; Path(site.getsitepackages()[0], 'xq-rs-workspace.pth').write_text(str(Path('.').resolve()))"
 
 # Point git at the repo-tracked .githooks/ directory so the pre-commit
 # hook runs on every commit. Run once per clone; bypass ad hoc with
@@ -446,9 +445,9 @@ conformance-py: deps-py
 
 # Open a Python REPL with the xqffi extension fresh and the
 # workspace packages (xqvm_py, xqcp, xqsa) importable. Depends on
-# deps-py so the .so / .pth stay current; `uv run --no-sync`
-# skips the implicit sync that would otherwise revert maturin's
-# fresh extension build to a cached wheel.
+# deps-py so the .so and per-package .pth files stay current;
+# `uv run --no-sync` skips the implicit sync that would otherwise
+# revert maturin's fresh extension build to a cached wheel.
 repl: deps-py
 	uv run --no-sync python
 

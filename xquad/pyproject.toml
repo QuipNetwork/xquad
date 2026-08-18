@@ -20,6 +20,7 @@ dependencies = [
 cuda  = [ "xqsa[cuda]" ]
 dwave = [ "xqsa[dwave]" ]
 metal = [ "xqsa[metal]" ]
+quip  = [ "xqsa[quip]" ]
 
 [tool.uv.sources]
 xqffi.workspace   = true
@@ -28,13 +29,23 @@ xqsa.workspace    = true
 xqvm_py.workspace = true
 
 [tool.hatch.build.targets.wheel]
-packages = [ "." ]
+only-include = [ "." ]
+sources = { "." = "xquad" }
+dev-mode-dirs = [ ".." ]
 exclude = [
     "tests/**",
     "pyproject.toml",
+    "README.md",
+    "PKG-INFO",
+    ".gitignore",
+    # Agent instructions, never package content. CLAUDE.md is gitignored today
+    # so it cannot reach the wheel, but the exclude survives a .gitignore edit.
+    "AGENTS.md",
+    "CLAUDE.md",
 ]
 
 [tool.hatch.metadata]
-# Flat layout: the package directory IS the project root, matching the
-# rest of the workspace (xqvm_py / xqcp / xqsa).
+# The package directory is the project root. `sources` rewrites the wheel
+# prefix to the package name; `dev-mode-dirs` puts the repo root on
+# sys.path for editable installs.
 allow-direct-references = true

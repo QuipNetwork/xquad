@@ -191,8 +191,8 @@
 # CACHE WRITERS: all three current consumers (verify:parity, test:python,
 # test:quip) genuinely write here, so none of them becomes `policy: pull`.
 # verify:parity and test:python both pull in the full `deps-py` sequence
-# (uv sync + an explicit `maturin develop` + the workspace `.pth` write) via
-# their Makefile prerequisites, which overlaps between the two but is not a
+# (uv sync + an explicit `maturin develop`) via their Makefile
+# prerequisites, which overlaps between the two but is not a
 # no-op for either -- each performs the real resolve/compile independently,
 # and either alone would be a sufficient pusher if the other job were ever
 # removed. test:quip additionally does its own `uv run --extra quip` sync,
