@@ -9,9 +9,173 @@
 # setup.yml's "Dependency gating" section for the full topology and why
 # hardware:* waits on all nine of them.
 #
+# Three of the five run on every pipeline. `test:wasm` and `test:substrate`
+# are path-gated -- see the "Path gating" section immediately below.
+#
 # Templates and shared script fragments (`.rust`, `.python`, `.fragments`,
 # ...) live in .gitlab/ci/setup.yml, included first by the root
 # .gitlab-ci.yml.
+
+# ---------------------------------------------------------------------------
+# Path gating
+# ---------------------------------------------------------------------------
+#
+# `test:wasm` and `test:substrate` are the only two jobs in this file that
+# do not run on every pipeline. Each is gated on `rules: changes:` against
+# one of the path lists below.
+#
+# WHY THESE TWO AND ONLY THESE TWO. They are the most expensive jobs here
+# (25m and 40m of cold-cache headroom, against 20-25m for everything else)
+# and the two with the narrowest input footprint: each builds one crate
+# (`xqvm`) into one fixture and nothing else. Every other job in this file
+# is a whole-workspace check whose verdict a change anywhere in the tree can
+# flip, so there is no honest path list to write for them. They are also the
+# least often relevant: of the 60 non-merge commits on main preceding this
+# change, 14 touched `xqvm/` or `fixtures/pallet-xqvm/` at all (17 of the
+# last 60 counted per merged branch), so the gate is expected to skip on
+# roughly three pipelines in four.
+#
+# WHAT THE GATE BUYS IS MERGE-REQUEST LATENCY, NOT COVERAGE. A path list is
+# a claim about a build graph, and a claim can be wrong. Keeping both jobs
+# unconditional wherever a release can come from means a wrong list costs a
+# late signal on a protected ref, not a shipped regression.
+#
+# The four clauses, in order, first match wins:
+#
+#   1. `$CI_COMMIT_TAG` -- tag pipelines run both jobs. Not redundant with
+#      clause 2 even though the project protects `v*`: a non-`v*` tag is
+#      unprotected. A tag pipeline has no push event, so `changes:` would
+#      evaluate to always-true and admit it anyway; stating the clause makes
+#      that intentional rather than accidental.
+#   2. `$CI_COMMIT_REF_PROTECTED == "true"` -- every protected ref runs both
+#      jobs unconditionally. This deliberately does NOT use the literal
+#      "main" the rest of the repo writes (docs.yml, release.yml), and it is
+#      the line most likely to be "fixed" by a future reader. It matches the
+#      `.hardware` template's own condition (setup.yml) on purpose, which
+#      gives a checkable invariant: WHEREVER hardware:* CAN BE CREATED, BOTH
+#      FIXTURE JOBS ARE UNCONDITIONAL. hardware.yml contemplates protecting
+#      the `release/*` pattern to gate a release MR pre-merge; under a
+#      literal "main" such a pipeline would fall through to the `changes:`
+#      clauses and could skip both fixture jobs while still creating all
+#      three hardware:* jobs, whose `optional:` edges would then silently
+#      drop. Matching `.hardware` closes that hole in lockstep, without
+#      anyone having to remember this file when they tick the box.
+#   3. merge-request pipelines -- `changes:` with NO `compare_to`. GitLab's
+#      native base for an MR pipeline is the merge base with the target
+#      branch, which is exactly the diff under review; hard-coding
+#      `refs/heads/main` here would be wrong for any MR targeting anything
+#      else.
+#   4. branch pipelines -- `changes:` WITH `compare_to: refs/heads/main`.
+#      The `compare_to` is load-bearing, not decoration: a branch pipeline's
+#      default base is the PREVIOUS COMMIT OF THE PUSH, so without it a
+#      second push touching only a README would skip a job whose inputs the
+#      FIRST push already changed. It also supplies a real base on a
+#      branch's first pipeline, where `changes:` would otherwise be
+#      always-true.
+#
+# There is no trailing catch-all, and that is safe rather than lucky: the
+# root `workflow:rules` admits exactly three pipeline shapes (tag, merge
+# request, branch with no open MR) and the four clauses cover all three. A
+# web- or schedule-triggered run on a branch still sets `$CI_COMMIT_BRANCH`
+# and lands on clause 4. An explicit `- when: never` would be redundant.
+#
+# `changes:` is evaluated by GitLab SERVER-SIDE at pipeline creation, by
+# Gitaly against the project repository, before any runner clones anything.
+# `GIT_DEPTH` is therefore irrelevant here and neither job needs a
+# `GIT_DEPTH: 0` override. (Contrast `verify:policy`, which does need one --
+# its SCRIPTS run `git merge-base` inside the job's own checkout. Do not
+# copy that pattern here.)
+#
+# Glob syntax is Ruby `File.fnmatch` with `FNM_PATHNAME | FNM_DOTMATCH |
+# FNM_EXTGLOB`, where `**/` matches zero or more directories -- so
+# `xqvm/**/*` does match `xqvm/Cargo.toml`. `paths:` is an OR.
+#
+# THE LISTS ARE FILE-LOCAL YAML ANCHORS, NOT `!reference`. Each list is
+# needed twice per job (clause 3 and clause 4), so inlining would mean four
+# copies of a twelve-line list in one file, with a drift mode nothing would
+# catch: two lists that disagree produce a job that exists on MR pipelines
+# but not on branch pipelines. `!reference` is the wrong tool -- its array
+# splicing is defined for the `script` keywords and for building `rules`
+# arrays; a `- !reference [...]` item inside `changes: paths:` nests an
+# array inside an array instead of flattening, and the whole-value form is
+# undocumented. An anchor is resolved by the YAML parser before GitLab sees
+# the document, so no GitLab-side semantics are involved at all. Anchors do
+# not cross `include:` (see setup.yml's header), which is fine because both
+# consumers live in this file; release.yml carries file-local anchors for
+# the same reason. The lists stay here rather than moving to setup.yml: a
+# path list is job-specific data, not a shared building block.
+#
+# SECOND-ORDER COST, ACCEPTED DELIBERATELY. `test:substrate` is the SOLE
+# writer of its own cache key, and this runner fleet has no shared cache
+# server (see setup.yml's "Job timeouts" section), so that cache is local to
+# whichever runner last wrote it. Gating the job means the key is refreshed
+# far less often, which makes the cold 40m path the COMMON case for the MRs
+# that do touch the fixture rather than the tail of the distribution. The
+# 40m timeout already covers it. This eats part of the saving and is not a
+# regression to chase. `test:wasm` is not exposed this way -- it shares the
+# root default cache with the still-unconditional verify:rust / test:rust.
+#
+# The two lists share several entries and are still written out in full:
+# YAML cannot concatenate sequences, and each list should read as a
+# standalone answer to "what can change this job's verdict".
+#
+# Both lists close with the three files that DEFINE these jobs (root cache,
+# workflow:rules and shared variables; the `.rust` template and the script
+# fragments; the jobs themselves). Those go beyond the fixture's build
+# inputs on purpose: without them an edit to a gated job, or to the Makefile
+# target it runs, could merge without ever running the job it edits.
+.gate-paths:
+    wasm: &wasm-paths
+        - Cargo.toml
+        # `fixtures/xqvm-wasm` is a root workspace member with no lock of
+        # its own, so the root lock governs its build.
+        - Cargo.lock
+        # Workspace-wide cargo config. Today it holds only macOS linker
+        # flags that no Linux CI job reads; kept as cheap insurance, since
+        # any future setting here would apply and the file changes
+        # approximately never.
+        - .cargo/config.toml
+        - Makefile
+        # NOT redundant with `xqvm/**/*`. `xqvm/opcodes.yaml` is a SYMLINK
+        # to this file (xqvm/build.rs reads the symlinked path so the
+        # workspace build and the packaged-tarball build resolve
+        # identically). Editing the opcode table changes the target, and git
+        # reports that change at `conformance/opcodes.yaml` -- the symlink
+        # node itself never changes, so `xqvm/**/*` would not catch it. Do
+        # not delete this entry as noise.
+        - conformance/opcodes.yaml
+        # wasm-only: `test:wasm` extends `.rust` and so runs `make deps`,
+        # and wasm-pack is one of the pinned tools, so a bump there must
+        # re-run this job. `test:substrate` has no `extends:` and sources
+        # only the `cargo-path` fragment.
+        - scripts/cargo-tools.lock
+        - scripts/install-cargo-tools.sh
+        - xqvm/**/*
+        - fixtures/xqvm-wasm/**/*
+        - .gitlab-ci.yml
+        - .gitlab/ci/setup.yml
+        - .gitlab/ci/test.yml
+    substrate: &substrate-paths
+        # The root manifest is load-bearing despite the fixture being a
+        # standalone workspace with its own lock: the fixture depends on
+        # `xqvm` by path, and `xqvm/Cargo.toml` inherits `thiserror`,
+        # `miette`, `repository` and its whole `[lints]` table from the root
+        # manifest, which cargo resolves by walking up even when the build
+        # is driven from the fixture's own manifest.
+        - Cargo.toml
+        # The root Cargo.lock is deliberately ABSENT: the fixture has its
+        # own lock and the root manifest `exclude`s the fixture, so a
+        # `cargo update` of the main workspace cannot move this build.
+        - .cargo/config.toml
+        - Makefile
+        # Symlink target -- see the wasm list above for why this entry is
+        # required and is not covered by `xqvm/**/*`.
+        - conformance/opcodes.yaml
+        - xqvm/**/*
+        - fixtures/pallet-xqvm/**/*
+        - .gitlab-ci.yml
+        - .gitlab/ci/setup.yml
+        - .gitlab/ci/test.yml
 
 # Merged into one job running `make -k test-rust` (test-unit-rs
 # test-integ-rs test-doc). Unlike the Rust lint merge, this wins
@@ -81,6 +245,19 @@ test:wasm:
     stage: test
     extends: .rust
     needs: []
+    # Path-gated -- see the "Path gating" section at the top of this file
+    # for the clause-by-clause reasoning and the list's per-entry
+    # justification. Every `needs:` edge into this job is `optional: true`.
+    rules:
+        - if: $CI_COMMIT_TAG
+        - if: $CI_COMMIT_REF_PROTECTED == "true"
+        - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+          changes:
+              paths: *wasm-paths
+        - if: $CI_COMMIT_BRANCH
+          changes:
+              paths: *wasm-paths
+              compare_to: refs/heads/main
     # 25m: cold-cache room for the pinned tool installs (`make deps` plus
     # wasm-pack), both rustup wasm targets, and two wasm builds of xqvm.
     # See setup.yml's "Job timeouts" section.
@@ -103,6 +280,20 @@ test:wasm:
 test:substrate:
     stage: test
     needs: []
+    # Path-gated -- see the "Path gating" section at the top of this file,
+    # including the note on why gating this job in particular makes its
+    # runner-local cache colder. Every `needs:` edge into this job is
+    # `optional: true`.
+    rules:
+        - if: $CI_COMMIT_TAG
+        - if: $CI_COMMIT_REF_PROTECTED == "true"
+        - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+          changes:
+              paths: *substrate-paths
+        - if: $CI_COMMIT_BRANCH
+          changes:
+              paths: *substrate-paths
+              compare_to: refs/heads/main
     # 40m: the largest in the pipeline, because a cold run clones the
     # polkadot-sdk git dependency and compiles the fixture's 386-package
     # FRAME tree from scratch -- exactly the run the old 10m sizing killed

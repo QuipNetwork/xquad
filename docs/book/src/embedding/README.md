@@ -45,7 +45,9 @@ This is exercised, not just claimed: `fixtures/xqvm-wasm` is a freestanding
 `wasm32-unknown-unknown` test crate depending on `xqvm` with
 `default-features = false`, and CI's `test:wasm` job runs `cargo build -p
 xqvm --target wasm32v1-none --no-default-features` followed by
-`wasm-pack test --node` against it on every pipeline.
+`wasm-pack test --node` against it. The job is path-gated: it runs on
+merge requests and feature branches whenever the diff can reach `xqvm` or
+the fixture, and unconditionally on protected refs and release tags.
 
 ## Running In-Process, Without `.xqasm`
 

@@ -12,9 +12,13 @@ because it pulls in a heavy polkadot-sdk git dependency.
 Treat this chapter as a reference integration and a fixture to build on,
 not as a supported deployment path with its own release cycle.
 
-CI still runs it on every pipeline. `test:substrate` in
+CI still runs it, and blocks on it. `test:substrate` in
 [`.gitlab/ci/test.yml`](https://gitlab.com/quip.network/xquad/-/blob/main/.gitlab/ci/test.yml)
-carries no `rules:`, `only:`, or `allow_failure:`, and `make
+is path-gated: on a merge request or a feature branch it runs only when
+the diff touches `xqvm`, the fixture, or the files that define the job
+itself, and it runs unconditionally on protected refs and release tags.
+It carries no `allow_failure:`, so it blocks the pipeline whenever it is
+created. `make
 test-substrate-fixture` runs `cargo test --manifest-path
 fixtures/pallet-xqvm/Cargo.toml`, exercising six pallet tests plus two
 runtime-integrity checks FRAME generates from `construct_runtime!`. Every

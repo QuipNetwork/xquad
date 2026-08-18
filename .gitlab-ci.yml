@@ -42,14 +42,17 @@ workflow:
 #
 #   CACHE WRITERS: verify:rust, test:rust and test:wasm (the `.rust`
 #   template, .gitlab/ci/setup.yml) are the only jobs that inherit this
-#   default cache unmodified and are the pushers for both entries -- all
-#   three run unconditionally on every pipeline and `make deps` always
-#   installs the full scripts/cargo-tools.lock set. `.rust-tools` (also in
-#   setup.yml) intentionally reuses this same `.cargo/bin/` key but only
-#   ever installs a named subset already covered by the three jobs above,
-#   so its consumers (verify:policy, docs:build) are `policy: pull` --
-#   see that template's comment before adding a fourth pull-only consumer
-#   of either entry.
+#   default cache unmodified and are the pushers for both entries, since
+#   `make deps` always installs the full scripts/cargo-tools.lock set.
+#   The guarantee that both entries have a pusher on every pipeline rests
+#   on verify:rust and test:rust alone: test:wasm is path-gated (see
+#   .gitlab/ci/test.yml's "Path gating" section), so it writes both
+#   entries when it is created but is never the reason one stays
+#   populated. `.rust-tools` (also in setup.yml) intentionally reuses this
+#   same `.cargo/bin/` key but only ever installs a named subset already
+#   covered by the jobs above, so its consumers (verify:policy,
+#   docs:build) are `policy: pull` -- see that template's comment before
+#   adding a fourth pull-only consumer of either entry.
 
 default:
     image: rust:latest

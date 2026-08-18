@@ -349,16 +349,34 @@ verify+test set, so nothing touches real hardware before the code is
 known to compile and pass its own test suite -- a GPU, a metered D-Wave
 QPU token, and a macOS runner are all scarce and/or billed, and none of
 them should be spent on code that does not even build. `docs:*` and
-`release:*` jobs in turn `needs:` verify+test+hardware, so the
-documentation site and the release path both wait on hardware being
-proven, not just on the workspace compiling. The accepted tradeoff: an
-offline GPU runner or an expired D-Wave token stalls the documentation
-site, even though nothing in the docs content depends on hardware
-passing -- we would rather stall the docs than publish a book describing
-an opcode or solver behaviour the hardware suite just proved broken. The
-exact graph and per-edge reasoning (including why `hardware:*` needs are
-marked `optional: true`) live in `.gitlab/ci/setup.yml`'s "Dependency
-gating" section.
+`release:dry-run:*` jobs in turn `needs:` verify+test+hardware, and the
+tag-only publish chain waits on the same set through the stage barrier
+rather than an edge -- so the documentation site and the release path
+both wait on hardware being proven, not just on the workspace
+compiling. The accepted tradeoff: an offline GPU runner or an expired
+D-Wave token stalls the documentation site, even though nothing in the
+docs content depends on hardware passing -- we would rather stall the
+docs than publish a book describing an opcode or solver behaviour the
+hardware suite just proved broken. The exact graph and per-edge
+reasoning (including why `hardware:*` needs are marked `optional: true`)
+live in `.gitlab/ci/setup.yml`'s "Dependency gating" section.
+
+**Path gating.** Two jobs do not run on every pipeline. `test:wasm` and
+`test:substrate` are gated on `rules: changes:`, because each builds one
+crate (`xqvm`) into one fixture and so has a narrow, writable input
+footprint, while every other job in the pipeline is a whole-workspace
+check whose verdict a change anywhere can flip. They are the two most
+expensive jobs in the pipeline and the least often relevant, so gating
+them is most of the merge-request latency available to save. Both stay
+unconditional on protected refs and on tags: the gate buys latency, not
+coverage, and a path list is a claim about a build graph that can be
+wrong -- keeping the protected refs unconditional means a wrong list
+costs a late signal on `main` rather than a shipped regression. Because
+either job can be absent, every `needs:` edge into them is
+`optional: true`; GitLab refuses to create a pipeline whose job needs an
+absent job. The path lists, the per-clause reasoning, and the per-entry
+justification live in `.gitlab/ci/test.yml`'s "Path gating" section.
+Local `make preflight-rs` runs both targets unconditionally.
 
 **Naming.** A job's name prefix is its phase (`verify:rust` runs in the
 `verify` stage, `docs:build` in `docs`) -- that is the CI-side taxonomy.
