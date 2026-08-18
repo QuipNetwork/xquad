@@ -1,8 +1,9 @@
 .PHONY: all xquad repl \
         preflight preflight-rs preflight-py preflight-parity preflight-docs \
-        preflight-policy \
+        preflight-policy preflight-release \
         lint-rust lint-python lint-policy check-atomic-spec check-commit-messages \
         test-rust test-python check-parity check-docs-handwritten \
+        check-crate-publish check-python-dists check-release \
         deps deps-miri deps-py deps-wasm \
         install-hooks \
         lint lint-clippy lint-doc lint-deny-rs lint-py \
@@ -92,6 +93,44 @@ check-parity: opcode-parity conformance example-smoke
 # requirements.
 check-docs-handwritten: check-docs-drift check-docs-readme
 
+# "Is the release artefact publishable": crate dry-run packaging plus the
+# Python distribution build/check/smoke-install, the same two questions
+# CI's release:validate job answers on every pipeline. Deliberately an
+# aggregate of prerequisites rather than a scripts/check-release.sh
+# wrapper: CI invokes this with `make -k`, and a `set -euo pipefail`
+# wrapper defeats `-k` exactly the way a hand-rolled script would --
+# the first failing command would end the run, so a broken crate
+# manifest would hide a broken wheel and the next pipeline would find
+# it instead of this one. Same argument as lint-policy above.
+#
+# check-crate-publish packages every workspace member and resolves each
+# against the locally packaged siblings rather than against crates.io.
+# That is what makes it work on a release MR where the bumped xqvm
+# version is not yet published: a plain per-crate dry-run would fail
+# resolving xqasm's path+version dependency on xqvm. It replaces
+# scripts/validate-crate-publish.sh, deleted in this change.
+#
+# --workspace covers exactly xqvm, xqasm and xqcli. The workspace has
+# six members (Cargo.toml `members`); the other three carry
+# publish = false and are skipped: xqffi (pyo3 cdylib, shipped as a
+# PyPI wheel), conformance (cross-implementation test harness) and
+# fixtures/xqvm-wasm (no_std build fixture). Enumerated in full because
+# this comment is the justification for using --workspace here at all,
+# and a reader auditing it against `members` should not find a member
+# it does not account for.
+check-crate-publish:
+	cargo publish --dry-run --locked --workspace
+
+# Needs maturin, twine and uv on PATH -- the same kind of prerequisite
+# note the hardware tiers below give for a CUDA device, a D-Wave QPU
+# token or a Metal-capable Mac. Builds the five distributions, runs
+# twine check, and smoke-installs each into a throwaway venv via
+# scripts/smoke-wheels.sh (wired into python-dists.sh's verify phase).
+check-python-dists:
+	bash scripts/python-dists.sh check
+
+check-release: check-crate-publish check-python-dists
+
 # -- Preflight --------------------------------------------------------------
 
 # Run locally exactly what CI enforces, grouped by language so a single-
@@ -111,9 +150,12 @@ check-docs-handwritten: check-docs-drift check-docs-readme
 # them unconditionally, so it still covers the case where the MR
 # pipeline decided the diff could not reach them. Still excluded on
 # purpose: test-miri (not a CI gate, needs nightly; lives under Optional
-# Checks in the MR template) and the hardware / SolverQuip tiers
+# Checks in the MR template), the hardware / SolverQuip tiers
 # (test-quip*, test-cuda, test-qpu, test-metal), which need a real
-# device, token or devnet and are driven by hand or a dedicated runner.
+# device, token or devnet and are driven by hand or a dedicated runner,
+# and preflight-release (below), which needs maturin/twine/uv and builds
+# five distributions into a throwaway venv on top of a full-verify
+# workspace packaging dry-run.
 preflight-rs: lint-rust lint-deny-rs test-rust test-wasm test-substrate-fixture
 
 preflight-py: fmt-check-toml lint-python test-py
@@ -128,6 +170,15 @@ preflight-docs: check-docs-generated check-docs-handwritten
 # unreachable from any preflight target -- which is what the
 # "mirrors CI" claim above was quietly false about.
 preflight-policy: lint-policy
+
+# Stays OUT of the plain preflight aggregate below, on purpose, matching
+# test-miri and the hardware tiers: check-release builds five
+# distributions and installs them into a throwaway venv, on top of the
+# workspace-wide cargo publish dry-run, so hanging it off preflight-rs
+# or the default `make preflight` would be an unwelcome surprise for a
+# contributor who just wants the fast local loop. Run it explicitly
+# before a release MR.
+preflight-release: check-release
 
 preflight: preflight-rs preflight-py preflight-parity preflight-docs preflight-policy
 
@@ -562,7 +613,7 @@ render-changelog:
 	git-cliff --config cliff.toml --output /dev/null
 
 # Generate the changelog / release notes for a tagged release.
-# Invoked from `release:changelog` in .gitlab/ci/release.yml with
+# Invoked from `release:notes` in .gitlab/ci/release.yml with
 # VERSION set to the pushed tag, STRIP=all (the GitLab Release page
 # supplies its own framing so the cliff.toml header/footer would
 # duplicate it), and OUTPUT=release-notes.md. Locally, the same target

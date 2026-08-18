@@ -72,9 +72,9 @@ verify:rust:
 # keep every policy check reachable from a local `make -k lint-policy`
 # and not just from this YAML.
 #
-# `GIT_DEPTH: 0` is required by two of the four checks: git-cliff walks
+# `GIT_DEPTH: 0` is required by three of the four checks: git-cliff walks
 # full history to render changelog sections (this mirrors
-# `release:changelog`'s override), and the two range-based guards
+# `release:notes`'s override), and the two range-based guards
 # (atomic-spec-mr, commit-messages) need the merge-base between this
 # ref and main to exist as a real commit in the fetched history -- a
 # shallow clone can silently truncate that walk.

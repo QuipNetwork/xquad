@@ -4,9 +4,9 @@
 #
 # Build and validate (or build and publish) the xquad Python
 # distributions. Single source of truth for the build/check/upload
-# commands so the three CI jobs that touch them (release:dry-run:pypi,
-# release:validate, release:publish-pypi) don't drift. The package list
-# itself lives in scripts/python-packages.sh, shared with
+# commands so the two CI jobs that touch them (release:validate,
+# release:pypi) don't drift. The package list itself lives in
+# scripts/python-packages.sh, shared with
 # scripts/smoke-wheels.sh -- adding or renaming a package is a one-line
 # edit there.
 #
@@ -25,14 +25,14 @@
 #
 # Modes:
 #   check    -- build + verify. No network upload, no token needed. Used
-#               by release:dry-run:pypi (MR/push) and release:validate
-#               (tag).
+#               by release:validate, which runs on every pipeline
+#               including tags.
 #   publish  -- build + verify + publish. One PyPI API token is minted
 #               per package (PyPI's mint-token endpoint is single-use per
 #               GitLab JWT, so a monorepo needs one JWT per package --
 #               see release.yml's id_tokens block). Requires
 #               PYPI_ID_TOKEN_<PKG> in env for each PKG. Used by
-#               release:publish-pypi (tag only).
+#               release:pypi (tag only).
 #
 # Run from the workspace root.
 

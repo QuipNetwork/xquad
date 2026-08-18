@@ -117,7 +117,8 @@ variables:
     # which aborts the whole `uv sync` / `uv tool install`. `copy`
     # takes uv's plain-copy path instead: marginally slower, and it
     # does not use the syscall that fails. Set pipeline-wide because
-    # every uv job is exposed, not just the release dry-runs.
+    # every uv job is exposed, not just release:validate and
+    # release:pypi.
     UV_LINK_MODE: "copy"
 
 stages:

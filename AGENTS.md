@@ -31,11 +31,12 @@ make xquad            # bootstrap local dev: Python venv + install xquad CLI
 make install-hooks    # point git at .githooks/ pre-commit hook
 
 # Preflight (run locally exactly what CI enforces; N/A a language you didn't touch)
-make preflight        # preflight-rs + preflight-py + preflight-parity + preflight-docs
-make preflight-rs     # fmt, taplo, clippy, rustdoc, deny, unit/integration/doc tests
-make preflight-py     # taplo, ruff format + lint, pytest
-make preflight-parity # opcode parity, conformance, example smoke
-make preflight-docs   # generated-doc freshness + docs drift + README length guards
+make preflight         # preflight-rs + preflight-py + preflight-parity + preflight-docs + preflight-policy
+make preflight-rs      # fmt, taplo, clippy, rustdoc, deny, unit/integration/doc tests
+make preflight-py      # taplo, ruff format + lint, pytest
+make preflight-parity  # opcode parity, conformance, example smoke
+make preflight-docs    # generated-doc freshness + docs drift + README length guards
+make preflight-release # crate packaging dry-run + five Python dists (needs maturin/twine/uv; not in `preflight`)
 
 # Rust
 make fmt              # cargo fmt + taplo fmt + ruff format
@@ -340,7 +341,7 @@ happened to share a stage barrier and nothing else:
 | `test` | Does the workspace do what it should when executed? | unit, integration, doc tests (Rust); pytest (Python); Quip signing-layer tests; WASM no_std tests; Substrate pallet fixture |
 | `hardware` | Does it work on real hardware? | CUDA, D-Wave QPU, and Metal solver tests on real hardware (protected refs only) |
 | `docs` | Is the documentation correct and buildable? | generated-docs freshness, docs drift guard, package README length guard, mdbook build, GitLab Pages publish |
-| `release` | Is the artefact publishable, and (on a tag) published? | dry-run packaging checks on every push/MR; crates.io + PyPI publishing and GitLab Release notes via git-cliff on a pushed tag |
+| `release` | Is the artefact publishable, and (on a tag) published? | `release:validate` packaging checks on every pipeline including tags; crates.io + PyPI publishing and GitLab Release notes via git-cliff on a pushed tag |
 
 **Gating topology.** `verify:*` and `test:*` jobs all carry `needs: []`
 and start together at t=0 -- peers, not a chain; a `verify` failure does
@@ -349,17 +350,22 @@ verify+test set, so nothing touches real hardware before the code is
 known to compile and pass its own test suite -- a GPU, a metered D-Wave
 QPU token, and a macOS runner are all scarce and/or billed, and none of
 them should be spent on code that does not even build. `docs:*` and
-`release:dry-run:*` jobs in turn `needs:` verify+test+hardware, and the
-tag-only publish chain waits on the same set through the stage barrier
-rather than an edge -- so the documentation site and the release path
-both wait on hardware being proven, not just on the workspace
-compiling. The accepted tradeoff: an offline GPU runner or an expired
-D-Wave token stalls the documentation site, even though nothing in the
-docs content depends on hardware passing -- we would rather stall the
-docs than publish a book describing an opcode or solver behaviour the
-hardware suite just proved broken. The exact graph and per-edge
-reasoning (including why `hardware:*` needs are marked `optional: true`)
-live in `.gitlab/ci/setup.yml`'s "Dependency gating" section.
+`release:validate` jobs in turn `needs:` verify+test+hardware, and the
+tag-only publish chain (`release:crates` -> `release:pypi` ->
+`release:notes`) is gated transitively through `release:validate`'s
+`needs:` edge rather than through the stage barrier -- so the
+documentation site and the release path both wait on hardware being
+proven, not just on the workspace compiling. The accepted tradeoff: an
+offline GPU runner or an expired D-Wave token stalls the documentation
+site, even though nothing in the docs content depends on hardware
+passing -- we would rather stall the docs than publish a book
+describing an opcode or solver behaviour the hardware suite just
+proved broken. On a tag the same gate now sits ahead of the publish
+chain too, so the same expired token stalls a release and not just the
+docs -- `test:substrate`'s cold-cache build is the largest single wait
+on that path. The exact graph and per-edge reasoning (including why
+`hardware:*` needs are marked `optional: true`) live in
+`.gitlab/ci/setup.yml`'s "Dependency gating" section.
 
 **Path gating.** Two jobs do not run on every pipeline. `test:wasm` and
 `test:substrate` are gated on `rules: changes:`, because each builds one
@@ -392,7 +398,7 @@ Jobs are authored in per-stage files under `.gitlab/ci/` and composed via `inclu
 
 ### Changelog
 
-`CHANGELOG.md` is **not** committed to the source tree. The source of truth is `cliff.toml` plus the conventional-commit log; the file is regenerated on demand via `make changelog` and published as the GitLab Release description on tag (`release:changelog` -> `release:notes` in `.gitlab/ci/release.yml`).
+`CHANGELOG.md` is **not** committed to the source tree. The source of truth is `cliff.toml` plus the conventional-commit log; the file is regenerated on demand via `make changelog` and published as the GitLab Release description on tag (`release:notes` in `.gitlab/ci/release.yml`).
 
 Caveats:
 

@@ -87,11 +87,15 @@ docs:build:
 #
 # `pages: true` is what tells GitLab this job is a Pages deployment -- GA on
 # gitlab.com since 17.9. Before that property existed, GitLab detected a
-# Pages job by name alone (it had to be called exactly `pages`), which is
-# why the job kept that name through the rest of this phase regroup even
-# though every other job here follows the `docs:*` prefix-equals-stage
-# convention. It only runs on direct pushes to main, so merge request and
-# tag pipelines build the book without publishing it.
+# Pages job by name alone: it had to be called exactly `pages`, which would
+# have made this the one job in the pipeline unable to follow the
+# `docs:*` prefix-equals-stage convention. Declaring the deployment
+# explicitly frees the name, which is what let the phase regroup rename it
+# to `docs:publish` along with everything else. Do not rename it back, and
+# do not drop `pages: true` -- without the property the deployment stops
+# happening silently, since a job named `docs:publish` is not one GitLab
+# recognises by name. It only runs on direct pushes to main, so merge
+# request and tag pipelines build the book without publishing it.
 #
 # Five inline shell lines instead of a `make` target: every other job in
 # this repo's CI calls `make -k <target>` so the CI definition and the
