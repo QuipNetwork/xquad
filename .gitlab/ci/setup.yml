@@ -128,11 +128,17 @@
 # CACHE WRITERS: this template's consumers (verify:rust, test:rust,
 # test:wasm) are the pipeline's only pushers for BOTH root default entries.
 # `make deps` always installs the FULL scripts/cargo-tools.lock set, not a
-# subset, and all three jobs are unconditional -- no `rules:` skips them on
-# any pipeline shape -- so the `.cargo/bin/` entry is fully repopulated here
-# every run even though `.rust-tools` below only ever installs a named
-# subset of it. Do not make any of these three `policy: pull`; that would
-# leave both root entries with no pusher left at all.
+# subset, so the `.cargo/bin/` entry is fully repopulated here even though
+# `.rust-tools` below only ever installs a named subset of it.
+#
+# The guarantee rests on verify:rust and test:rust alone. Those two are
+# unconditional -- no `rules:` skips them on any pipeline shape -- so both
+# root entries have a pusher on every pipeline. test:wasm is path-gated
+# (see test.yml's "Path gating" section): when it is created it writes the
+# same two entries, but it is a bonus writer and must never be cited as the
+# reason an entry stays populated. Do not make verify:rust or test:rust
+# `policy: pull`; that would leave both root entries with no guaranteed
+# pusher at all.
 .rust:
     before_script:
         - !reference [.fragments, cargo-tools]
@@ -143,13 +149,14 @@
 # so restoring/saving the full cache would be pure waste.
 #
 # `policy: pull`: every tool a `.rust-tools` consumer installs is a proper
-# subset of what `.rust`'s `make deps` already installs above, and `.rust`'s
-# consumers run unconditionally on every pipeline -- see the writer note on
-# `.rust`. That makes both current consumers of THIS template (verify:policy:
-# taplo,cargo-deny,git-cliff; docs:build: mdbook,mdbook-mermaid) pure
-# readers: whatever they need here is already guaranteed present, or about
-# to be re-pushed, by verify:rust / test:rust / test:wasm. Pulling instead
-# of pushing loses nothing.
+# subset of what `.rust`'s `make deps` already installs above, and two of
+# `.rust`'s three consumers -- verify:rust and test:rust -- run
+# unconditionally on every pipeline (test:wasm is path-gated; see the writer
+# note on `.rust`). That makes both current consumers of THIS template
+# (verify:policy: taplo,cargo-deny,git-cliff; docs:build:
+# mdbook,mdbook-mermaid) pure readers: whatever they need here is already
+# guaranteed present, or about to be re-pushed, by verify:rust / test:rust.
+# Pulling instead of pushing loses nothing.
 #
 # The policy sits on the template rather than per-job on purpose: "install a
 # subset already covered by `.rust`'s full install" is the whole reason this
@@ -312,7 +319,10 @@
 #
 #   verify:*, test:*  -- all nine jobs carry `needs: []` and start at t=0.
 #                         verify and test are peers, not a chain -- test
-#                         does NOT wait for verify to pass first.
+#                         does NOT wait for verify to pass first. Seven of
+#                         the nine are created on every pipeline; test:wasm
+#                         and test:substrate are path-gated and may be
+#                         absent -- see test.yml's "Path gating" section.
 #   hardware:*        -- each of the three jobs needs every verify:* and
 #                         test:* job. Real hardware -- a GPU, a metered
 #                         D-Wave QPU token, a macOS box -- is scarce and/or
@@ -344,6 +354,31 @@
 # into the other, since dry-runs never run on tag pipelines and the
 # publish chain never runs on MR/branch pipelines.
 #
+# The same reasoning covers the two path-gated fixture jobs (test:wasm,
+# test:substrate -- see test.yml's "Path gating" section), and the audit
+# lands differently in each of the two lists below:
+#
+#   * In `verify-test-and-hardware` it is MANDATORY. That list is used by
+#     docs:* and the two release dry-runs, all of which run on merge-request
+#     pipelines -- exactly where the path gate skips. Bare strings there
+#     would make MR pipeline creation fail outright.
+#   * In `verify-and-test` it is DEFENSIVE, and it is the entry most likely
+#     to be "simplified" back to a bare string. That list is referenced only
+#     by the three hardware:* jobs, which run only on protected refs, and
+#     the path gate makes both fixture jobs unconditional on every protected
+#     ref -- so the edge cannot dangle today. It stays optional so that a
+#     future edit narrowing the gate's escape hatch (for instance back to a
+#     literal "main") degrades into a skipped job rather than into
+#     "protecting release/* makes pipeline creation fail", four files away
+#     from the checkbox that caused it.
+#
+# Coverage is not weakened by either optional edge. On protected refs and
+# tags both fixture jobs always exist, so docs:publish still has a real
+# edge into them, and the tag-only publish chain -- which carries no
+# `needs:` at all -- still waits on them through the release stage
+# barrier. On MR and pre-MR branch pipelines the dropped edges affect
+# only docs:* and release:dry-run:*, neither of which publishes anything.
+#
 # The two lists below -- the nine-entry verify+test gate and the twelve-
 # entry verify+test+hardware gate -- are shared via `!reference`, not a
 # YAML anchor (anchors don't cross `include:`, see this file's top-of-file
@@ -358,8 +393,10 @@
         - test:rust
         - test:python
         - test:quip
-        - test:wasm
-        - test:substrate
+        - job: test:wasm
+          optional: true
+        - job: test:substrate
+          optional: true
     verify-test-and-hardware:
         - verify:policy
         - verify:rust
@@ -368,8 +405,10 @@
         - test:rust
         - test:python
         - test:quip
-        - test:wasm
-        - test:substrate
+        - job: test:wasm
+          optional: true
+        - job: test:substrate
+          optional: true
         - job: hardware:cuda
           optional: true
         - job: hardware:qpu

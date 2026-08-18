@@ -106,11 +106,14 @@ check-docs-handwritten: check-docs-drift check-docs-readme
 # gates with no phase aggregate of their own (each is a single dedicated
 # CI job), so preflight-rs lists them as leaves alongside lint-rust and
 # test-rust -- omitting both here was a prior gap, not a deliberate
-# exclusion. Still excluded on purpose: test-miri (not a CI gate, needs
-# nightly; lives under Optional Checks in the MR template) and the
-# hardware / SolverQuip tiers (test-quip*, test-cuda, test-qpu,
-# test-metal), which need a real device, token or devnet and are driven
-# by hand or a dedicated runner.
+# exclusion. Both CI jobs are path-gated (.gitlab/ci/test.yml's "Path
+# gating" section) while these targets are not: a local preflight runs
+# them unconditionally, so it still covers the case where the MR
+# pipeline decided the diff could not reach them. Still excluded on
+# purpose: test-miri (not a CI gate, needs nightly; lives under Optional
+# Checks in the MR template) and the hardware / SolverQuip tiers
+# (test-quip*, test-cuda, test-qpu, test-metal), which need a real
+# device, token or devnet and are driven by hand or a dedicated runner.
 preflight-rs: lint-rust lint-deny-rs test-rust test-wasm test-substrate-fixture
 
 preflight-py: fmt-check-toml lint-python test-py

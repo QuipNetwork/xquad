@@ -20,12 +20,22 @@
 # Each job also `needs:` every verify:* and test:* job (see setup.yml's
 # "Dependency gating" section) -- real hardware is scarce and/or billed, so
 # nothing touches it before the code is known to compile and pass its own
-# test suite. All three run whenever they are created, which is why that
-# gate list has no `optional: true` entries: verify/test are unconditional,
-# so they are always present in any pipeline that also creates hardware:*.
+# test suite. Two entries in that gate list, test:wasm and test:substrate,
+# are marked `optional: true` because both are path-gated (test.yml's "Path
+# gating" section). That costs nothing here: the path gate makes both
+# unconditional on every PROTECTED ref, which is exactly where these jobs
+# are created, so on any pipeline that also creates hardware:* both are
+# present and both edges are real. The optional marking is there so a
+# future narrowing of the gate degrades into a skipped job rather than into
+# a pipeline that cannot be created at all.
 #
 # To gate a release MR (source release/vX.Y.Z) pre-merge, protect the
 # `release/*` branch pattern; otherwise these verify on main + the v* tag.
+# The path gate's escape hatch is written as `$CI_COMMIT_REF_PROTECTED ==
+# "true"` -- matching the `.hardware` rule rather than naming main -- for
+# precisely this case: ticking that box makes both fixture jobs
+# unconditional on release/* in lockstep with hardware:* appearing there,
+# with no second edit in test.yml to remember.
 #
 # Runner routing (group runners under quip.network). Several Linux x86_64
 # runners share identical [linux, x86_64, amd64] tags, so a GPU job needs a
