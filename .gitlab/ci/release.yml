@@ -1,14 +1,37 @@
-# Release pipeline — publishes the xquad toolchain to crates.io and
+# Release pipeline -- publishes the xquad toolchain to crates.io and
 # PyPI on every tag of the form `v<digit>...`.
 #
-# Required protected CI variables (set once in project settings →
-# CI/CD → Variables; masked + protected):
+# Five jobs, chained by `needs:`:
+#
+#   release:validate  runs on every pipeline (no `rules:` at all), and
+#                      validates crate packaging plus the five Python
+#                      distributions before anything is published.
+#   release:crates     tag only -- publishes xqvm, xqasm, xqcli to
+#                      crates.io in dependency order.
+#   release:pypi       tag only -- publishes the five PyPI
+#                      distributions, umbrella package last.
+#   release:notes      tag only -- renders git-cliff notes and creates
+#                      the GitLab Release page.
+#   release:auto-tag   push to main -- tags `vX.Y.Z` when a
+#                      `release/vX.Y.Z` MR merges.
+#
+# Chain: release:validate -> release:crates -> release:pypi ->
+# release:notes. release:auto-tag is standalone -- `needs: []`, so it
+# starts at t=0 and waits on nothing, including release:validate in its
+# own stage. It fires on the push that merges a release MR, and the tag
+# it pushes is what triggers the other four jobs on a fresh, tag
+# pipeline, where release:validate gates the publishing. See that job's
+# `needs: []` comment for why the tag is deliberately not gated on the
+# merge-commit pipeline.
+#
+# Required protected CI variables (set once in project settings ->
+# CI/CD -> Variables; masked + protected):
 #
 #   CARGO_REGISTRY_TOKEN  crates.io API token for ops@postquant.xyz
 #                         scoped to xqvm + xqasm + xqcli (publish-new
 #                         + publish-update).
 #
-# PyPI publishing uses Trusted Publishing (OIDC) — no long-lived
+# PyPI publishing uses Trusted Publishing (OIDC) -- no long-lived
 # token in CI. Each of the 5 PyPI projects (xqffi, xqvm_py, xqcp,
 # xqsa, xquad) must have a GitLab Trusted Publisher configured at
 # pypi.org/manage/project/<name>/settings/publishing/ pointing at:
@@ -19,23 +42,27 @@
 #   env       = release
 #
 # The matching `release` environment must exist in
-# Settings → CI/CD → Environments, restricted to protected tags `v*`.
+# Settings -> CI/CD -> Environments, restricted to protected tags `v*`.
+# Only release:pypi carries `environment: release` below -- it is the
+# only job this environment (and its five id_tokens) applies to;
+# release:validate runs on every ref and must not acquire it.
 #
 # Release MR flow (QUI-580):
 #
 #   1. Open a branch named `release/vX.Y.Z` with the version bump.
 #   2. Create an MR using the "release" template; both @kleczkowski
 #      and @meganathanmanish must approve (2 approvals required).
-#   3. Merge → `release:auto-tag` fires on main, looks up the merged
+#   3. Merge -> `release:auto-tag` fires on main, looks up the merged
 #      MR via the GitLab API, and pushes tag `vX.Y.Z` via glab.
 #   4. The tag push triggers the rest of this pipeline as normal.
-#      `release:notes` creates the GitLab Release page with git-cliff
-#      notes via glab once artefacts are published.
+#      release:validate runs again on the tag, then release:crates,
+#      then release:pypi, then release:notes creates the GitLab
+#      Release page with git-cliff notes once artefacts are live.
 #
 #   Prerequisite: GITLAB_API_TOKEN (project access token, api scope)
-#   must be set in Settings → CI/CD → Variables (masked).
+#   must be set in Settings -> CI/CD -> Variables (masked).
 #   Protected tag pattern `v*` must exist in
-#   Settings → Repository → Protected tags.
+#   Settings -> Repository -> Protected tags.
 #
 # See RELEASING.md for the full tag-cut checklist.
 
@@ -43,165 +70,98 @@
 # Shared rules
 # ---------------------------------------------------------------------------
 
-# Run only on pushed tags like v0.1.0, v0.0.1-rc1, v1.2.3, …
+# Run only on pushed tags like v0.1.0, v0.0.1-rc1, v1.2.3, ...
+#
+# Kept local to this file rather than promoted to setup.yml: it has
+# exactly one consuming file (this one), and YAML anchors work within a
+# single document, so there is no cross-file reason to move it. Not an
+# oversight.
 .on-release-tag: &on-release-tag
     rules:
         - if: $CI_COMMIT_TAG =~ /^v\d/
 
-# Run on every MR and push; never on the release tag (that's what the
-# actual release jobs are for). These dry-runs prove the release path
-# works without publishing.
-.on-pr-or-push: &on-pr-or-push
-    rules:
-        - if: $CI_COMMIT_TAG =~ /^v\d/
-          when: never
-        - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-        - if: $CI_COMMIT_BRANCH
-          when: on_success
-
-# uv + maturin + twine for the Python publish jobs. We stay on
-# rust:latest (the workspace default) so cargo is available for
-# maturin's cdylib build; uv provides the wheel builder for the
-# pure-Python peers.
-.setup-python-publish: &setup-python-publish
-    - apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv curl ca-certificates
-    - curl -LsSf https://astral.sh/uv/install.sh | sh
-    - export PATH="${HOME}/.local/bin:${PATH}"
-    - uv --version
-    # ziglang rides along in maturin's uv-tool venv (--with) so the
-    # `python3` first on PATH (the venv's) can `python3 -m ziglang` --
-    # that is how cargo-zigbuild locates zig for the aarch64 build.
-    # A plain `pip3 install ziglang` lands in the system python, which
-    # is NOT the python3 on PATH here, so cargo-zigbuild can't find it.
-    - uv tool install maturin --with-requirements /dev/null --with ziglang
-    # twine ≥6.1 added preliminary OIDC trusted-publishing support;
-    # earlier versions fall back to interactive prompt when no token
-    # env is present, which hangs the CI.
-    - uv tool install 'twine>=6.1'
-    - export PATH="${HOME}/.local/share/uv/tools/maturin/bin:${HOME}/.local/share/uv/tools/twine/bin:${PATH}"
-    - maturin --version
-    - twine --version
-    # cargo-zigbuild drives the aarch64 cross-build (zig as the linker;
-    # zig itself comes from the ziglang package installed above). Pinned
-    # in scripts/cargo-tools.lock and installed via binstall (prebuilt,
-    # cached) like the other cargo tools, instead of a bare `cargo
-    # install` that recompiles from source every run.
-    - bash scripts/install-cargo-tools.sh --only cargo-zigbuild
-    - rustup target add aarch64-unknown-linux-gnu
-
 # ---------------------------------------------------------------------------
-# Auto-tag job (main-push-triggered, release MR flow)
+# Release jobs (tag-triggered chain)
 # ---------------------------------------------------------------------------
 
-# Fires on every push to main. Queries the GitLab MR API for the
-# merged MR whose merge_commit_sha or squash_commit_sha matches
-# CI_COMMIT_SHA, then reads source_branch directly — no commit
-# message parsing. Both fields are checked because squash merges set
-# merge_commit_sha to null and record the pushed SHA in
-# squash_commit_sha instead. If the branch matches release/vX.Y.Z
-# the version is extracted and only the git tag is pushed via glab
-# api. The release page is created separately by release:notes once
-# git-cliff notes are ready. Any other push exits cleanly.
+# Validate-then-publish gate (QUI-473). No `rules:` at all -- unlike
+# every other job in this file, this one runs on every pipeline the
+# root `workflow:` admits, including MR, branch, and tag pipelines.
+# That is the structural change QUI-1002 exists to make: the same
+# setup and the same validation the publish jobs depend on is now
+# continuously exercised instead of only at release time, so a broken
+# release setup fails on a merge request instead of mid-release.
 #
-# Required CI variable (Settings → CI/CD → Variables, masked):
-#   GITLAB_API_TOKEN  — project access token with api scope (write_repository
-#                       minimum). CI_JOB_TOKEN cannot query MR metadata.
-release:auto-tag:
-    stage: release
-    image: registry.gitlab.com/gitlab-org/cli:latest
-    cache: []
-    # No artifacts from previous stages needed; prevents GitLab from
-    # downloading e.g. the docs build into this lightweight Alpine job.
-    dependencies: []
-    before_script:
-        - apk add --no-cache jq
-    rules:
-        # Only on direct pushes to main — not on tag pipelines or MR
-        # pipelines (MR pipelines run before the merge; we want after).
-        - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
-          when: on_success
-    variables:
-        GITLAB_TOKEN: "${GITLAB_API_TOKEN}"
-    script:
-        - |
-            SOURCE_BRANCH=$(glab api \
-              "projects/${CI_PROJECT_ID}/merge_requests?state=merged&target_branch=main&order_by=updated_at&sort=desc&per_page=100" \
-              | jq -r ".[] | select(.merge_commit_sha == \"${CI_COMMIT_SHA}\" or .squash_commit_sha == \"${CI_COMMIT_SHA}\") | .source_branch")
-
-            if [ -z "$SOURCE_BRANCH" ]; then
-              echo "No merged MR found for this commit — nothing to tag."
-              exit 0
-            fi
-
-            echo "Merged from branch: ${SOURCE_BRANCH}"
-
-            VERSION=$(printf '%s' "$SOURCE_BRANCH" | sed -n 's|^release/v||p')
-
-            if [ -z "$VERSION" ]; then
-              echo "Source branch is not a release branch — nothing to tag."
-              exit 0
-            fi
-
-            echo "Detected release merge: v${VERSION}"
-            if ! TAG_OUT=$(glab api "projects/${CI_PROJECT_ID}/repository/tags" \
-              --method POST \
-              -f "tag_name=v${VERSION}" \
-              -f "ref=${CI_COMMIT_SHA}" \
-              -f "message=xquad v${VERSION}" 2>&1); then
-                if echo "$TAG_OUT" | grep -qi "already exists"; then
-                    echo "Tag v${VERSION} already exists -- skipping."
-                else
-                    echo "Failed to create tag v${VERSION}: ${TAG_OUT}" >&2
-                    exit 1
-                fi
-            fi
-
-# ---------------------------------------------------------------------------
-# Release jobs (tag-triggered)
-# ---------------------------------------------------------------------------
-
-# Validate-then-publish gate (QUI-473). Runs against the tagged commit
-# on the real runner before anything touches a registry. Catches
-# packaging regressions -- missing license file, broken maturin
-# config, metadata drift in xqasm/xqcli not visible to the MR-time
-# single-crate dry-run, pyproject manifest issues -- without leaving
-# half-published artefacts behind on a partial failure.
+# Catches packaging regressions -- missing license file, broken
+# maturin config, metadata drift, pyproject manifest issues -- without
+# leaving half-published artefacts behind on a partial failure. See
+# RELEASING.md: "If release:validate fails, no registry has been
+# touched."
 #
-# Crate dry-run note (QUI-498): xqvm gets a full `cargo publish
-# --dry-run` because it has no internal workspace deps. xqasm/xqcli
-# go through `scripts/validate-crate-publish.sh` because cargo's
-# pack step still resolves their `xqvm = "X.Y.Z"` workspace dep
-# against crates.io (even with `--no-verify`, which only skips the
-# *build* verify, not the *resolve* step). At the first publish of
-# the workspace the dep doesn't exist on crates.io yet, so the
-# wrapper tolerates that specific failure mode and lets the validate
-# job pass; any other dry-run error (real metadata drift, missing
-# license file, etc.) still fails the job. From v0.1.1 onwards
-# (xqvm on crates.io), the wrapper is just a pass-through.
+# `needs:` takes the same verify+test+hardware gate as docs:* (see
+# setup.yml's "Dependency gating" section). verify:policy sits inside
+# that gate, and render-changelog is a lint-policy prerequisite
+# (Makefile), so cliff.toml is proven to render before anything
+# publishes without duplicating that render inside this job. The cost:
+# on a tag, this job -- and the whole publish chain hanging off it --
+# waits on hardware:cuda/qpu/metal and on test:substrate's cold path.
+# Taken deliberately, matching the docs:* precedent: we would rather
+# stall a release than publish artefacts built from a tree the
+# hardware suite just proved broken.
 release:validate:
     stage: release
-    <<: *on-release-tag
+    needs:
+        - !reference [.needs-gates, verify-test-and-hardware]
+    # dependencies: [] on every job in this file whose `needs:` names
+    # other jobs; release:auto-tag is the one exception, since its
+    # `needs: []` already downloads nothing. Without it, GitLab
+    # downloads every prior stage's artifacts by default; this job's
+    # predecessor, the old tag-only release:validate, was seen
+    # downloading docs/book/build/ from docs:build before running a
+    # packaging check -- verified on the v0.3.1 tag pipeline -- which is
+    # pure waste. No job in this file consumes another job's artifacts;
+    # every ordering relationship between them is expressed through
+    # `needs:` alone.
+    dependencies: []
+    # 75m: the two dry-run jobs this merges each carried 20m, each sized
+    # as cold-cache room for exactly ONE of the two legs (crate publish
+    # dry-run, Python dist build). This job runs both legs serially, and
+    # the crate leg grew from a single-crate `cargo publish --dry-run -p
+    # xqvm` to `--workspace` (three crates, all at full verify strength,
+    # in target/package/, sharing no compilation with the maturin build
+    # in the same job). 20m + 20m of pre-existing per-leg cold-cache
+    # budget does not cover a tripled crate leg, and this runner fleet
+    # has no shared cache server, so cold is a normal outcome. Per
+    # setup.yml's "Job timeouts" section, a timeout exists to kill a job
+    # that will never finish, not to police one that is merely slow, so
+    # a generous limit here costs nothing when things are healthy.
+    timeout: 75m
     before_script:
-        - *setup-python-publish
+        - !reference [.fragments, python-publish]
     script:
-        - cargo --version
-        - cargo publish --dry-run --locked -p xqvm
-        - bash scripts/validate-crate-publish.sh xqasm --no-verify
-        - bash scripts/validate-crate-publish.sh xqcli --no-verify
-        # See scripts/python-packages.sh for the package list and
-        # scripts/python-dists.sh for the build/check sequence (shared
-        # with release:dry-run:pypi).
-        - bash scripts/python-dists.sh check
+        - make -k check-release
 
 # Publish the three Rust crates to crates.io in topological dependency
-# order: xqvm (no deps) → xqasm (depends on xqvm) → xqcli (depends on
-# both). The `xqffi` crate keeps `publish = false` — it's a pyo3
+# order: xqvm (no deps) -> xqasm (depends on xqvm) -> xqcli (depends on
+# both). The `xqffi` crate keeps `publish = false` -- it's a pyo3
 # cdylib consumed via the PyPI wheel, not a crates.io dependency.
-release:publish-crates:
+#
+# Three sequential `cargo publish -p` calls, not one `cargo publish
+# --workspace`: cargo hard-fails on an already-published version and
+# has no `--skip-existing`, so a merged job publishing all three crates
+# and then dying during the wheel upload could not be safely re-run --
+# the retry would fail at the first `cargo publish` and never reach the
+# wheels. Keeping release:crates and release:pypi as separate jobs is
+# what gives retries per-registry granularity: twine has
+# `--skip-existing`, cargo does not, and that asymmetry is the whole
+# argument for the split.
+release:crates:
     stage: release
     needs:
         - release:validate
     <<: *on-release-tag
+    dependencies: []
+    timeout: 30m
     script:
         - cargo --version
         - cargo publish --locked -p xqvm --token "${CARGO_REGISTRY_TOKEN}"
@@ -212,26 +172,29 @@ release:publish-crates:
 # the umbrella meta-package and depends on the peers, so it must land
 # *after* them or `pip install xquad` cannot resolve its deps.
 #
-#   1. xqffi            (pyo3 cdylib — maturin builds:
+#   1. xqffi            (pyo3 cdylib -- maturin builds:
 #                         - abi3 wheel for linux-x86_64 (native)
 #                         - abi3 wheel for linux-aarch64 (cargo-zigbuild)
 #                         - sdist (universal source fallback))
 #   2. xqvm_py          (pure-Python reference VM)
 #   3. xqcp             (DSL)
 #   4. xqsa             (solver adapters)
-#   5. xquad            (umbrella — depends on 1-4)
+#   5. xquad            (umbrella -- depends on 1-4)
 #
 # macOS and Windows wheels are out of scope; those platforms fall back
 # to building from the sdist with a local Rust toolchain.
-release:publish-pypi:
+release:pypi:
     stage: release
     needs:
         - release:validate
-        - release:publish-crates
+        - release:crates
     <<: *on-release-tag
     # `environment: release` matches the env name registered on each
     # PyPI Trusted Publisher; PyPI rejects the OIDC exchange if the
     # job's environment doesn't match what's configured project-side.
+    # Restricted to protected tags `v*` (this file's header). This is
+    # the only job in the chain that carries it -- release:validate
+    # runs on every ref and must not.
     environment: release
     # GitLab mints one short-lived JWT per id_tokens entry; PyPI's
     # `/_/oidc/mint-token` endpoint is single-use per JWT (anti-replay
@@ -240,7 +203,7 @@ release:publish-pypi:
     # script in `scripts/python-dists.sh` exchanges each for that
     # project's API token at upload time.
     #
-    # twine ≥6.1's auto-detection (`id.detect_credential("pypi")`)
+    # twine >=6.1's auto-detection (`id.detect_credential("pypi")`)
     # only handles a single ambient JWT, which is why upload uses
     # explicit TWINE_USERNAME/TWINE_PASSWORD per package rather than
     # relying on auto-detect.
@@ -257,16 +220,32 @@ release:publish-pypi:
             aud: pypi
         PYPI_ID_TOKEN_XQUAD:
             aud: pypi
+    dependencies: []
+    timeout: 45m
     before_script:
-        - *setup-python-publish
+        - !reference [.fragments, python-publish]
     script:
         # See scripts/python-packages.sh for the package list and
         # scripts/python-dists.sh for the build/upload sequence.
         - bash scripts/python-dists.sh publish
 
 # Generate GitLab Release notes from the conventional-commit history
-# via git-cliff (cliff.toml). Runs on every release tag and uploads
-# `release-notes.md` as an artefact for `release:notes` to consume.
+# via git-cliff (cliff.toml) and create the GitLab Release page --
+# release:changelog and release:notes merged into one job.
+#
+# The two used to be split only by an image constraint: the
+# declarative `release:` keyword below needs the release-cli image,
+# while git-cliff lives elsewhere, so the two jobs existed only to hand
+# release-notes.md between them as an artifact. This job stays on
+# rust:latest (the workspace default) instead, which keeps git-cliff
+# pinned via scripts/cargo-tools.lock rather than floating on whatever
+# Alpine edge ships; release-cli is installed directly instead of
+# switching images.
+#
+# release-cli is fetched from gitlab.com's generic package registry,
+# pinned to v0.24.0 (verified reachable unauthenticated on 2026-08-18,
+# HTTP 200, and the latest published release at that time) rather than
+# `latest`, so the release path does not float.
 #
 # `STRIP=all` drops the cliff.toml header/footer so the published
 # notes contain only the tag's own section -- the GitLab release page
@@ -279,98 +258,171 @@ release:publish-pypi:
 # walks the full commit history back through tag boundaries to render
 # release sections, so a shallow clone produces silently truncated
 # notes. The same override is set on `verify:policy`.
-release:changelog:
+#
+# Uses the declarative `release:` keyword so CI_JOB_TOKEN is sufficient
+# -- no extra PAT needed, and the job is idempotent (re-running does
+# not error if the release already exists).
+release:notes:
     stage: release
-    # Runs after publish-pypi so the GitLab Release page goes up only
+    # Runs after release:pypi so the GitLab Release page goes up only
     # once artefacts are live on crates.io and PyPI (QUI-496).
     needs:
-        - release:publish-pypi
+        - release:pypi
     <<: *on-release-tag
     variables:
         GIT_DEPTH: 0
+    dependencies: []
+    # Narrowed to `.cargo/bin/` at `policy: pull`, mirroring
+    # `.rust-tools` in setup.yml. This job installs a SUBSET of
+    # scripts/cargo-tools.lock (`--only git-cliff` below) while the
+    # root default cache would have it push the `.cargo/bin/` entry
+    # under that lock file's key -- which is exactly the case
+    # `.rust-tools`'s `policy: pull` note exists to prevent. It matters
+    # more here than anywhere else: this is the LAST job on a tag
+    # pipeline, so on a cold `.cargo/bin/` restore it would publish a
+    # git-cliff-only archive and win the race against verify:rust's
+    # full-set push. It cannot extend `.rust-tools` directly -- that
+    # template's before_script installs from a CARGO_TOOLS variable and
+    # this job needs its own release-cli fetch appended -- so the cache
+    # block is repeated rather than inherited.
+    #
+    # Pre-existing rather than a regression from merging
+    # release:changelog and release:notes: release:changelog carried no
+    # `cache:` key either and inherited the same root default. (The
+    # `cache: []` in the old pair sat on release:notes, which ran the
+    # release-cli image and did nothing but create the release page.)
+    # Fixed here because merging the two is the moment the job acquired
+    # both halves -- the subset install and the tail position.
+    #
+    # `policy: pull` rather than `cache: []`: install-cargo-tools.sh
+    # short-circuits on `command -v`, so a warm pull skips the git-cliff
+    # install outright, while `cache: []` would pay for it every run.
+    cache:
+        - key:
+              files:
+                  - scripts/cargo-tools.lock
+          paths:
+              - .cargo/bin/
+          policy: pull
+    timeout: 15m
     before_script:
-        - export PATH="${CARGO_HOME}/bin:${PATH}"
+        - !reference [.fragments, cargo-path]
         # Install only git-cliff (version pinned in
         # scripts/cargo-tools.lock); the rest of the cargo toolchain
         # isn't needed to render the changelog.
         - bash scripts/install-cargo-tools.sh --only git-cliff
+        # release-cli isn't a cargo tool and isn't in cargo-tools.lock;
+        # fetch the pinned binary directly instead of switching this
+        # job to the release-cli image (see the job comment above).
+        - curl -fsSL --retry 3 --retry-all-errors -o /usr/local/bin/release-cli
+            "https://gitlab.com/api/v4/projects/gitlab-org%2Frelease-cli/packages/generic/release-cli/v0.24.0/release-cli-linux-amd64"
+        - chmod +x /usr/local/bin/release-cli
     script:
         - make changelog-release VERSION="${CI_COMMIT_TAG}" STRIP=all OUTPUT=release-notes.md
         - cat release-notes.md
-    artifacts:
-        paths:
-            - release-notes.md
-        expire_in: 30 days
-
-# Create the GitLab Release page for the tag with the git-cliff-
-# generated notes as the description. Uses the declarative `release:`
-# keyword so CI_JOB_TOKEN is sufficient — no extra PAT needed, and the
-# job is idempotent (re-running does not error if the release exists).
-release:notes:
-    stage: release
-    image: registry.gitlab.com/gitlab-org/release-cli:latest
-    cache: []
-    needs:
-        - job: release:changelog
-          artifacts: true
-    <<: *on-release-tag
-    script:
-        - echo "Creating release for ${CI_COMMIT_TAG}"
     release:
         tag_name: $CI_COMMIT_TAG
         name: "xquad ${CI_COMMIT_TAG}"
         description: ./release-notes.md
 
 # ---------------------------------------------------------------------------
-# Dry-run jobs (MR / push — validate the release path without publishing)
+# Auto-tag job (main-push-triggered, release MR flow)
 # ---------------------------------------------------------------------------
 
-# `cargo publish --dry-run` validates the packaged crate without
-# uploading: Cargo.toml metadata, license files, doc build, dependency
-# versions, etc. Running for every MR catches release-blocking
-# regressions long before the tag is cut.
+# Fires on every push to main. Queries the GitLab MR API for the
+# merged MR whose merge_commit_sha or squash_commit_sha matches
+# CI_COMMIT_SHA, then reads source_branch directly -- no commit message
+# parsing. Both fields are checked because squash merges set
+# merge_commit_sha to null and record the pushed SHA in
+# squash_commit_sha instead. If the branch matches release/vX.Y.Z the
+# version is extracted and only the git tag is pushed via glab api. The
+# release page is created separately by release:notes once git-cliff
+# notes are ready. Any other push exits cleanly. See
+# scripts/auto-tag-release.sh for the implementation.
 #
-# Only `xqvm` is dry-run with the full verify build because xqasm +
-# xqcli's workspace dependencies resolve against crates.io (where the
-# just-bumped xqvm hasn't been pushed yet during a dry-run). The
-# tag-time `release:validate` job covers all three crates -- xqvm
-# fully, xqasm/xqcli with `--no-verify` -- before any publish runs.
-#
-# `needs:` gates this behind the same verify+test+hardware set as the
-# docs:* jobs (see setup.yml's "Dependency gating" section), so the dry
-# run starts alongside docs rather than after it. This is a stage-only
-# regroup -- the `<<: *on-pr-or-push` rules are untouched, so this job
-# still never runs on a tag pipeline (that's what `release:validate`
-# covers), and the tag-only publish chain further down this file keeps
-# its own internal `needs:` ordering unchanged.
-release:dry-run:crates:
+# Required CI variable (Settings -> CI/CD -> Variables, masked):
+#   GITLAB_API_TOKEN  -- project access token with api scope (write_repository
+#                       minimum). CI_JOB_TOKEN cannot query MR metadata.
+release:auto-tag:
     stage: release
-    <<: *on-pr-or-push
-    needs:
-        - !reference [.needs-gates, verify-test-and-hardware]
-    # 20m: cold-cache room for the full verify build `cargo publish
-    # --dry-run` performs on the packaged xqvm crate. See setup.yml's
-    # "Job timeouts" section.
-    timeout: 20m
-    script:
-        - cargo --version
-        - cargo publish --locked --dry-run -p xqvm
-
-# maturin build + twine check validate that wheels + sdists would
-# upload cleanly. No token needed; no network upload.
-release:dry-run:pypi:
-    stage: release
-    <<: *on-pr-or-push
-    needs:
-        - !reference [.needs-gates, verify-test-and-hardware]
-    # 20m: cold-cache room for the cargo-zigbuild cross-compile and the
-    # maturin wheel/sdist builds that twine then checks. See setup.yml's
-    # "Job timeouts" section.
-    timeout: 20m
+    image: registry.gitlab.com/gitlab-org/cli:latest
+    cache: []
+    # `needs: []` -- start at t=0, gated by `rules:` alone. This is the
+    # only job in this file that does not wait on something, and the
+    # two reasons are worth keeping straight because they pull in
+    # opposite directions.
+    #
+    # It is what makes `interruptible: false` below mean anything.
+    # GitLab's default auto-cancel policy
+    # (`workflow:auto_cancel:on_new_commit: conservative`) spares a
+    # pipeline only once a non-interruptible job has *started*; a
+    # PENDING job is cancelled regardless of the flag. Without
+    # `needs:`, the stage barrier held this job pending behind verify,
+    # test, hardware and docs for the better part of an hour, so the
+    # flag protected nothing and a second merge to main cancelled the
+    # tag before it was ever pushed.
+    #
+    # It also means this job does NOT wait on release:validate, which
+    # runs in this same stage. That is deliberate, not an oversight.
+    # release:validate is the publish gate, and it is wired ahead of
+    # release:crates -> release:pypi -> release:notes by `needs:` on
+    # the TAG pipeline -- so nothing reaches crates.io or PyPI unless
+    # it passes against the tagged commit itself. It has also already
+    # run green on the release MR's own pipeline, which is what the two
+    # required approvals approved. Gating the tag on a third run of the
+    # same check against the merge commit buys almost nothing and costs
+    # the guarantee above: the job would sit pending through the
+    # hardware tier again, cancellable again, and would inherit
+    # `on_success` from upstream, so one flaky hardware:qpu on the
+    # merge commit would mean no tag and nothing red.
+    #
+    # The asymmetry is the whole argument. A tag pushed against a bad
+    # tree is loud and reversible -- red tag pipeline, zero registry
+    # writes, delete the tag and re-cut (RELEASING.md's pre-flight).
+    # A tag silently never pushed is neither. The tag is a trigger,
+    # not a commitment.
+    #
+    # `stage: release` is now cosmetic -- `needs:` overrides stage
+    # ordering for start time, so this job runs alongside verify:* at
+    # t=0 despite sitting in the last stage. Kept for readability: it
+    # is a release-path job and belongs with its neighbours in this
+    # file. Do not read the stage as an ordering claim.
+    #
+    # No `dependencies: []` here, unlike every other job in this file:
+    # `needs:` governs artifact download once present, and `needs: []`
+    # already means "download nothing".
+    needs: []
+    timeout: 10m
+    # See the `needs: []` note above -- the two settings only work as a
+    # pair. The root `default:` in .gitlab-ci.yml makes every job
+    # interruptible, which is wrong here: this job fires on pushes to
+    # main, so two merges to main in quick succession would cancel the
+    # first job before it tags. The script also exits 0 when it finds
+    # no release MR, so a cancelled run never goes red -- a release
+    # would simply never happen, silently.
+    interruptible: false
     before_script:
-        - *setup-python-publish
+        # bash too: registry.gitlab.com/gitlab-org/cli:latest is
+        # Alpine/busybox and ships no bash by default, while
+        # scripts/auto-tag-release.sh carries a `#!/usr/bin/env bash`
+        # shebang like every other script in scripts/ and is invoked
+        # below as `bash scripts/auto-tag-release.sh`. Without this, the
+        # job exits 127 (bash: not found) on every push to main and no
+        # release tag is ever pushed.
+        - apk add --no-cache jq bash
+    rules:
+        # Only on direct pushes to main -- not on tag pipelines or MR
+        # pipelines (MR pipelines run before the merge; we want after).
+        #
+        # Deliberately the literal "main", not
+        # $CI_COMMIT_REF_PROTECTED (the pattern test.yml's fixture jobs
+        # use for their path-gating rules, QUI-1043): this job looks
+        # the merged MR up against target_branch=main specifically, so
+        # generalising the rule to any protected ref would also fire it
+        # on a protected release/* branch, which is wrong.
+        - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
+          when: on_success
+    variables:
+        GITLAB_TOKEN: "${GITLAB_API_TOKEN}"
     script:
-        # See scripts/python-packages.sh for the package list and
-        # scripts/python-dists.sh for the build/check sequence (shared
-        # with release:validate).
-        - bash scripts/python-dists.sh check
+        - bash scripts/auto-tag-release.sh

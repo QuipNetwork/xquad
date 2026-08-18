@@ -49,14 +49,53 @@ done
 # from source (2–3 min on cold CI runners) — the exact slow path
 # `binstall` exists to avoid. The upstream script fetches a release
 # binary directly (seconds).
+#
+# The curl retries on transient errors: on 2026-08-12, on branch
+# feature/qui-1001, this fetch failed with four consecutive GitHub
+# 503s. GitLab classes a failed script command as `script_failure`,
+# which the root `retry:` in .gitlab-ci.yml deliberately excludes (see
+# that file's `default: retry:` block), so a transient upstream outage
+# failed the job outright with no retry anywhere.
+# --retry/--retry-all-errors/--retry-delay make the retry local to this
+# fetch instead. This hardens every job that installs a cargo tool via
+# this script, not only the release path.
+#
+# Downloaded to a temp file and then run, not piped straight into bash:
+# --retry-all-errors retries mid-transfer failures (a connection reset,
+# a read timeout), not just bad status codes, and curl cannot rewind
+# stdout the way it truncates a file passed to `-o`. Piped into bash, a
+# retried body would be APPENDED to the bytes bash already consumed
+# from the first, truncated attempt, and curl's final exit status would
+# still be 0 -- `set -o pipefail` would see success. bash would then
+# execute a partial command followed by a second full copy of the
+# installer, with no error anywhere. `-o` truncates the file before
+# each retry, which is the guarantee the pipe cannot give.
+# The temp file's cleanup is an explicit status capture rather than a
+# `trap ... RETURN` or `trap ... EXIT`: under `set -e`, a failing
+# command inside this function aborts the whole script immediately
+# without the function "returning", so a RETURN trap never fires; an
+# EXIT trap set here would fire later at the script's real exit, by
+# which point this function's `local tmp` has gone out of scope and
+# `set -u` turns the trap's own `${tmp}` reference into an "unbound
+# variable" error. Capturing the exit status explicitly and cleaning up
+# inline sidesteps both.
 ensure_binstall() {
     if command -v cargo-binstall >/dev/null 2>&1; then
         return
     fi
     echo ">> installing cargo-binstall (upstream prebuilt bootstrap)…"
+    local tmp status
+    tmp="$(mktemp)"
+    status=0
     curl -L --proto '=https' --tlsv1.2 -sSf \
-        https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh \
-        | bash
+        --retry 5 --retry-all-errors --retry-delay 2 \
+        -o "${tmp}" \
+        https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh || status=$?
+    if [[ "${status}" -eq 0 ]]; then
+        bash "${tmp}" || status=$?
+    fi
+    rm -f "${tmp}"
+    return "${status}"
 }
 
 # Install one tool at the pinned version. Argument is a single
