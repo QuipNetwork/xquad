@@ -135,6 +135,8 @@ pub enum Fault {
     SizeMismatch,
     /// Two vector operands disagreed on length.
     VecLengthMismatch,
+    /// An operation produced a value outside the signed 64-bit range.
+    ArithmeticOverflow,
     /// Execution ran past its step budget.
     StepLimitExceeded,
     /// An allocating instruction ran past its allocation budget.
@@ -360,6 +362,7 @@ fn fault_from_rust(error: &xqvm::Error) -> Fault {
         E::RegisterType { .. } | E::IncompatibleType(_) => Fault::TypeMismatch,
         E::UnsetRegister { .. } => Fault::UnsetRegister,
         E::DivisionByZero { .. } => Fault::DivisionByZero,
+        E::ArithmeticOverflow { .. } => Fault::ArithmeticOverflow,
         E::IndexOutOfBounds { .. } => Fault::IndexOutOfBounds,
         E::NoActiveLoop { .. } => Fault::NoActiveLoop,
         E::UnmatchedLoop { .. } => Fault::UnmatchedLoop,
@@ -393,6 +396,7 @@ fn fault_from_python(class_name: &str) -> Result<Fault, String> {
         "TypeMismatch" => Ok(Fault::TypeMismatch),
         "RegisterNotFound" => Ok(Fault::UnsetRegister),
         "DivisionByZero" => Ok(Fault::DivisionByZero),
+        "ArithmeticOverflow" => Ok(Fault::ArithmeticOverflow),
         "InvalidOpcode" => Ok(Fault::BadOpcode),
         "TargetNotFound" => Ok(Fault::BadJumpTarget),
         "StepLimitExceeded" => Ok(Fault::StepLimitExceeded),

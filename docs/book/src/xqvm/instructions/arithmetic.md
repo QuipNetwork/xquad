@@ -10,43 +10,30 @@ operand layouts and stack effects are in the
 None of these instructions touch a register; every operand comes off the
 stack and every result goes back onto it.
 
-## Wrapping Semantics
+## Overflow
 
-Every arithmetic instruction on this page uses Rust's `wrapping_*` methods
-on `i64`: `ADD`, `SUB`, `MUL`, `NEG`, `ABS`, `SQR`, `INC` and `DEC` all wrap
-silently on overflow rather than trapping:
+Every arithmetic instruction on this page is checked. `ADD`, `SUB`, `MUL`,
+`NEG`, `ABS`, `SQR`, `INC` and `DEC` raise `ArithmeticOverflow` when the
+result would leave the `i64` range, rather than wrapping to a value the
+program never asked for:
 
 ```asm
 PUSH 9223372036854775807   ; i64::MAX
 PUSH 1
-ADD                        ; wraps to i64::MIN
+ADD                        ; raises ArithmeticOverflow
 ```
 
-reading the result back with `STOW`/`OUTPUT` produces
-`-9223372036854775808`, not an error. Two more wrap the same way: `ABS` of
-`i64::MIN` stays `i64::MIN` rather than becoming positive (there is no
-positive `i64` with that magnitude to wrap to), and `i64::MIN * -1` wraps
-back to `i64::MIN` for the same reason.
+The rule is on the result, not on the machine operation underneath it.
+`ABS` and `NEG` of `i64::MIN` raise, because no positive `i64` has that
+magnitude. `i64::MIN / -1` raises for the same reason. `i64::MIN % -1`
+does *not*: the remainder is `0`, which is perfectly representable, even
+though a fixed-width machine reaches it through an overflowing division.
 
-[`spec/xqvm/SPEC.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/SPEC.md)
-specifies that overflow raises `ArithmeticOverflow` by default, and
-permits silent wrapping only as an implementation-defined choice for
-fixed-width backends, explicitly calling programs that rely on it
-non-portable. The `xquad` Rust VM takes that permitted choice: it always
-wraps and never raises `ArithmeticOverflow` for any arithmetic, shift or
-`INC`/`DEC`/`NEG`/`ABS`/`SQR` opcode, and there is no configuration flag to
-opt into trapping instead. The fact worth acting on is that the two
-reference interpreters differ: `xqvm_py` raises `ArithmeticOverflow` on
-the same program, while the Rust VM wraps. Write bytecode that keeps
-values away from the `i64` boundary rather than relying on either
-behaviour.
-
-<!-- xquad:defect QUI-998 -->
-> **Known issue.** The spec leaves overflow implementation-defined, and the two
-> reference interpreters took opposite options: the same program wraps on the
-> Rust VM and raises `ArithmeticOverflow` on the Python VM. Keep values away
-> from the `i64` boundary rather than relying on either behaviour. Report
-> problems at the [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+Values built from several operations -- a constraint expansion's
+coefficients, an `ENERGY` accumulation -- are checked at every step, so a
+computation that leaves the range on its way to an in-range answer raises
+rather than quietly recovering. Both reference interpreters implement the
+same rule, so a program that raises on one raises on the other.
 
 ## Division and Remainder
 

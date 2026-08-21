@@ -118,11 +118,14 @@ fn neg_negative() {
 }
 
 #[test]
-fn wrapping_add_overflow() {
-    let vm = run(|b| {
+fn add_past_i64_max_raises() {
+    let err = run_err(|b| {
         b.emit_push(i64::MAX).emit_push(1).emit_add().emit_halt();
     });
-    assert_eq!(vm.stack(), &[i64::MIN]);
+    assert!(
+        matches!(err, Error::ArithmeticOverflow { .. }),
+        "expected ArithmeticOverflow, got {err:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------

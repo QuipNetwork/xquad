@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 
 from .errors import XQMXModeError
+from .limits import check_i64
 
 
 class XQMXMode(Enum):
@@ -173,6 +174,7 @@ class XQMX:
         if i < 0 or i >= self.size:
             raise IndexError(f"Variable index {i} out of range [0, {self.size})")
 
+        check_i64(value, f"linear[{i}]")
         if value == 0:
             self.linear.pop(i, None)
         else:
@@ -184,7 +186,7 @@ class XQMX:
             raise IndexError(f"Variable index {i} out of range [0, {self.size})")
 
         current = self.linear.get(i, 0)
-        new_value = current + delta
+        new_value = check_i64(current + delta, f"linear[{i}]")
 
         if new_value == 0:
             self.linear.pop(i, None)
@@ -205,6 +207,7 @@ class XQMX:
         if i > j:
             i, j = j, i
 
+        check_i64(value, f"quadratic[{i},{j}]")
         if value == 0:
             self.quadratic.pop((i, j), None)
         else:
@@ -219,7 +222,7 @@ class XQMX:
             i, j = j, i
 
         current = self.quadratic.get((i, j), 0)
-        new_value = current + delta
+        new_value = check_i64(current + delta, f"quadratic[{i},{j}]")
 
         if new_value == 0:
             self.quadratic.pop((i, j), None)
@@ -398,13 +401,13 @@ def expand_onehot(model: XQMX, indices: list[int], penalty: int) -> None:
 
     # Linear terms: -penalty for each variable
     for i in indices:
-        model.add_linear(i, -penalty)
+        model.add_linear(i, check_i64(-penalty, "ONEHOT -penalty"))
 
     # Quadratic terms: +2*penalty for each pair
     n = len(indices)
     for a in range(n):
         for b in range(a + 1, n):
-            model.add_quadratic(indices[a], indices[b], 2 * penalty)
+            model.add_quadratic(indices[a], indices[b], check_i64(2 * penalty, "ONEHOT 2*penalty"))
 
 
 def expand_exclude(model: XQMX, i: int, j: int, penalty: int) -> None:
@@ -434,7 +437,7 @@ def expand_implies(model: XQMX, i: int, j: int, penalty: int) -> None:
     require_model_mode(model, "IMPLIES")
 
     model.add_linear(i, penalty)
-    model.add_quadratic(i, j, -penalty)
+    model.add_quadratic(i, j, check_i64(-penalty, "IMPLIES -penalty"))
 
 
 def compute_energy(model: XQMX, sample: XQMX) -> int:
@@ -493,17 +496,23 @@ def expand_equality(
     if n != len(coeffs):
         raise ValueError(f"EQUALITY: indices length {n} != coeffs length {len(coeffs)}")
 
-    two_b = 2 * target
+    # Each intermediate is checked, in the same order the Rust VM checks
+    # them, so a product that overflows on the way to an in-range result
+    # raises on both implementations rather than only on one.
+    two_b = check_i64(2 * target, "EQUALITY 2*target")
     for k in range(n):
         a_k = coeffs[k]
-        model.add_linear(indices[k], penalty * a_k * (a_k - two_b))
+        diff = check_i64(a_k - two_b, "EQUALITY a_k - 2*target")
+        scaled = check_i64(a_k * diff, "EQUALITY a_k*(a_k - 2*target)")
+        model.add_linear(indices[k], check_i64(penalty * scaled, "EQUALITY linear"))
 
-    two_p = 2 * penalty
+    two_p = check_i64(2 * penalty, "EQUALITY 2*penalty")
     for k in range(n):
         a_k = coeffs[k]
         for m in range(k + 1, n):
             a_m = coeffs[m]
-            model.add_quadratic(indices[k], indices[m], two_p * a_k * a_m)
+            partial = check_i64(two_p * a_k, "EQUALITY 2*penalty*a_k")
+            model.add_quadratic(indices[k], indices[m], check_i64(partial * a_m, "EQUALITY quad"))
 
 
 def expand_reduce(model: XQMX, var_a: int, var_b: int, p_aux: int) -> int:
@@ -522,10 +531,12 @@ def expand_reduce(model: XQMX, var_a: int, var_b: int, p_aux: int) -> int:
     w = model.size
     model.size += 1
 
+    minus_two_p = check_i64(-2 * p_aux, "REDUCE -2*p_aux")
+    three_p = check_i64(3 * p_aux, "REDUCE 3*p_aux")
     model.add_quadratic(var_a, var_b, p_aux)
-    model.add_quadratic(var_a, w, -2 * p_aux)
-    model.add_quadratic(var_b, w, -2 * p_aux)
-    model.add_linear(w, 3 * p_aux)
+    model.add_quadratic(var_a, w, minus_two_p)
+    model.add_quadratic(var_b, w, minus_two_p)
+    model.add_linear(w, three_p)
 
     return w
 

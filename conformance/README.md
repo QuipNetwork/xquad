@@ -111,6 +111,7 @@ bug ever motivates them.
 | `TYPE_MISMATCH` | `RegisterType`, `IncompatibleType` | `TypeMismatch` |
 | `UNSET_REGISTER` | `UnsetRegister` | `RegisterNotFound` |
 | `DIVISION_BY_ZERO` | `DivisionByZero` | `DivisionByZero` |
+| `ARITHMETIC_OVERFLOW` | `ArithmeticOverflow` | `ArithmeticOverflow` |
 | `INDEX_OUT_OF_BOUNDS` | `IndexOutOfBounds` | -- |
 | `NO_ACTIVE_LOOP` | `NoActiveLoop` | -- (see below) |
 | `UNMATCHED_LOOP` | `UnmatchedLoop` | -- (see below) |

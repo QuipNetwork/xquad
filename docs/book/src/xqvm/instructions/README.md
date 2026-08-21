@@ -30,8 +30,10 @@ teaching content instead of repeating it.
   assembler picks between the two.
 - Assignments use \\(\leftarrow\\) (register write) and \\(\to\\) (stack push).
 - **Iverson brackets** -- \\([P]\\) equals \\(1\\) if \\(P\\) is true, \\(0\\) otherwise.
-- **Wrapping** -- all integer arithmetic uses wrapping semantics on `i64`
-  (no panic on overflow; result truncated to 64 bits).
+- **Checked arithmetic** -- every integer operation is checked against the
+  `i64` range. A result that would leave it raises `ArithmeticOverflow`
+  rather than wrapping or panicking; see
+  [Arithmetic](arithmetic.md#overflow).
 
 ### Register Effect Vocabulary
 

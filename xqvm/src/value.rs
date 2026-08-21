@@ -329,13 +329,21 @@ impl XqmxGridRefMut<'_> {
 
     /// `linear[idx] += delta`. For models this uses the sparse-aware
     /// accumulator; for samples it's a direct in-place add.
-    pub(crate) fn linear_add(&mut self, idx: usize, delta: i64) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::ArithmeticOverflow`] when the sum would leave
+    /// the signed 64-bit range, leaving the target unchanged.
+    pub(crate) fn linear_add(&mut self, idx: usize, delta: i64) -> Result<(), crate::Error> {
         match self {
             Self::Model(m) => m.add_linear(idx, delta),
             Self::Sample(s) => {
                 if let Some(slot) = s.values.get_mut(idx) {
-                    *slot += delta;
+                    *slot = slot
+                        .checked_add(delta)
+                        .ok_or(crate::Error::ArithmeticOverflow { pos: None })?;
                 }
+                Ok(())
             }
         }
     }

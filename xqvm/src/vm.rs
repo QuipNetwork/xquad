@@ -1121,21 +1121,30 @@ impl Vm {
     fn exec_add(&mut self, pos: usize) -> Result<StepResult, Error> {
         let b = self.pop(pos)?;
         let a = self.pop(pos)?;
-        self.push_stack(a.wrapping_add(b), pos)?;
+        let sum = a
+            .checked_add(b)
+            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
+        self.push_stack(sum, pos)?;
         Ok(StepResult::Continue)
     }
 
     fn exec_sub(&mut self, pos: usize) -> Result<StepResult, Error> {
         let b = self.pop(pos)?;
         let a = self.pop(pos)?;
-        self.push_stack(a.wrapping_sub(b), pos)?;
+        let difference = a
+            .checked_sub(b)
+            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
+        self.push_stack(difference, pos)?;
         Ok(StepResult::Continue)
     }
 
     fn exec_mul(&mut self, pos: usize) -> Result<StepResult, Error> {
         let b = self.pop(pos)?;
         let a = self.pop(pos)?;
-        self.push_stack(a.wrapping_mul(b), pos)?;
+        let product = a
+            .checked_mul(b)
+            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
+        self.push_stack(product, pos)?;
         Ok(StepResult::Continue)
     }
 
@@ -1147,11 +1156,17 @@ impl Vm {
         }
         // Floor division (rounds toward −∞), matching Python `a // b`.
         // Truncate first, then subtract 1 when the remainder is nonzero and
-        // the operands have opposite signs.
-        let q = a.wrapping_div(b);
-        let r = a.wrapping_rem(b);
+        // the operands have opposite signs. `i64::MIN / -1` is the one pair
+        // whose quotient leaves the range; it raises rather than wrapping.
+        let q = a
+            .checked_div(b)
+            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
+        let r = a
+            .checked_rem(b)
+            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
         let floored = if r != 0 && (r ^ b) < 0 {
-            q.wrapping_sub(1)
+            q.checked_sub(1)
+                .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?
         } else {
             q
         };
@@ -1167,9 +1182,16 @@ impl Vm {
         }
         // Divisor-sign modulo, matching Python `a % b`.
         // Adjust the C-style truncating remainder to have the same sign as `b`.
-        let r = a.wrapping_rem(b);
+        //
+        // `i64::MIN % -1` is the one pair `checked_rem` rejects, because the
+        // division it performs internally overflows. The remainder itself is
+        // 0, which is representable, so the normative rule -- raise only when
+        // the *result* leaves the range -- says this yields 0 rather than
+        // faulting. DIV differs: its quotient 2^63 genuinely has no i64.
+        let r = a.checked_rem(b).unwrap_or(0);
         let m = if r != 0 && (r ^ b) < 0 {
-            r.wrapping_add(b)
+            r.checked_add(b)
+                .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?
         } else {
             r
         };
@@ -1179,19 +1201,28 @@ impl Vm {
 
     fn exec_neg(&mut self, pos: usize) -> Result<StepResult, Error> {
         let a = self.pop(pos)?;
-        self.push_stack(a.wrapping_neg(), pos)?;
+        let negated = a
+            .checked_neg()
+            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
+        self.push_stack(negated, pos)?;
         Ok(StepResult::Continue)
     }
 
     fn exec_sqr(&mut self, pos: usize) -> Result<StepResult, Error> {
         let a = self.pop(pos)?;
-        self.push_stack(a.wrapping_mul(a), pos)?;
+        let square = a
+            .checked_mul(a)
+            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
+        self.push_stack(square, pos)?;
         Ok(StepResult::Continue)
     }
 
     fn exec_abs(&mut self, pos: usize) -> Result<StepResult, Error> {
         let a = self.pop(pos)?;
-        self.push_stack(a.wrapping_abs(), pos)?;
+        let magnitude = a
+            .checked_abs()
+            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
+        self.push_stack(magnitude, pos)?;
         Ok(StepResult::Continue)
     }
 
@@ -1211,13 +1242,19 @@ impl Vm {
 
     fn exec_inc(&mut self, pos: usize) -> Result<StepResult, Error> {
         let a = self.pop(pos)?;
-        self.push_stack(a.wrapping_add(1), pos)?;
+        let incremented = a
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
+        self.push_stack(incremented, pos)?;
         Ok(StepResult::Continue)
     }
 
     fn exec_dec(&mut self, pos: usize) -> Result<StepResult, Error> {
         let a = self.pop(pos)?;
-        self.push_stack(a.wrapping_sub(1), pos)?;
+        let decremented = a
+            .checked_sub(1)
+            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
+        self.push_stack(decremented, pos)?;
         Ok(StepResult::Continue)
     }
 
@@ -1333,7 +1370,14 @@ impl Vm {
         if !(0..64).contains(&b) {
             return Err(Error::InvalidShift { pos, amount: b });
         }
-        self.push_stack(a << b, pos)?;
+        // A shift that discards significant bits leaves the i64 range, so it
+        // raises like any other overflowing operation. Shifting back recovers
+        // the operand exactly when nothing was lost.
+        let shifted = a.wrapping_shl(u32::try_from(b).unwrap_or(u32::MAX));
+        if shifted >> b != a {
+            return Err(Error::ArithmeticOverflow { pos: Some(pos) });
+        }
+        self.push_stack(shifted, pos)?;
         Ok(StepResult::Continue)
     }
 
@@ -1584,7 +1628,11 @@ impl Vm {
         let cols = self.pop(pos)?;
         let col = self.pop(pos)?;
         let row = self.pop(pos)?;
-        self.push_stack(row.wrapping_mul(cols).wrapping_add(col), pos)?;
+        let index = row
+            .checked_mul(cols)
+            .and_then(|offset| offset.checked_add(col))
+            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
+        self.push_stack(index, pos)?;
         Ok(StepResult::Continue)
     }
 
@@ -1594,9 +1642,11 @@ impl Vm {
         // Upper-triangular index for (i, j) with i <= j:
         // index = j*(j-1)/2 + i
         let idx = j
-            .wrapping_mul(j.wrapping_sub(1))
-            .wrapping_div(2)
-            .wrapping_add(i);
+            .checked_sub(1)
+            .and_then(|jm1| j.checked_mul(jm1))
+            .and_then(|product| product.checked_div(2))
+            .and_then(|half| half.checked_add(i))
+            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
         self.push_stack(idx, pos)?;
         Ok(StepResult::Continue)
     }
@@ -1684,7 +1734,7 @@ impl Vm {
                 len: size,
             });
         }
-        grid.linear_add(usize_i, delta);
+        grid.linear_add(usize_i, delta).map_err(at_pos(pos))?;
         Ok(StepResult::Continue)
     }
 
@@ -1760,7 +1810,7 @@ impl Vm {
             index: j,
             len: m.size,
         })?;
-        m.add_quad(usize_i, usize_j, delta);
+        m.add_quad(usize_i, usize_j, delta).map_err(at_pos(pos))?;
         Ok(StepResult::Continue)
     }
 
@@ -1916,12 +1966,16 @@ impl Vm {
         // H = penalty * (sum(x_i) - 1)^2
         // Linear: -penalty per variable in row
         // Quadratic: 2*penalty per pair in row
+        let neg_penalty = checked(penalty.checked_neg(), pos)?;
+        let two_penalty = checked(penalty.checked_mul(2), pos)?;
         for c in 0..m.cols {
-            m.add_linear(row_start + c, -penalty);
+            m.add_linear(row_start + c, neg_penalty)
+                .map_err(at_pos(pos))?;
         }
         for ci in 0..m.cols {
             for cj in (ci + 1)..m.cols {
-                m.add_quad(row_start + ci, row_start + cj, 2 * penalty);
+                m.add_quad(row_start + ci, row_start + cj, two_penalty)
+                    .map_err(at_pos(pos))?;
             }
         }
         Ok(StepResult::Continue)
@@ -1952,12 +2006,16 @@ impl Vm {
         // H = penalty * (sum(x_{r,col}) - 1)^2 over all rows.
         // Linear: -penalty per variable in column.
         // Quadratic: 2*penalty per pair in column.
+        let neg_penalty = checked(penalty.checked_neg(), pos)?;
+        let two_penalty = checked(penalty.checked_mul(2), pos)?;
         for ri in 0..m.rows {
-            m.add_linear(ri * m.cols + col_idx, -penalty);
+            m.add_linear(ri * m.cols + col_idx, neg_penalty)
+                .map_err(at_pos(pos))?;
         }
         for ri in 0..m.rows {
             for rj in (ri + 1)..m.rows {
-                m.add_quad(ri * m.cols + col_idx, rj * m.cols + col_idx, 2 * penalty);
+                m.add_quad(ri * m.cols + col_idx, rj * m.cols + col_idx, two_penalty)
+                    .map_err(at_pos(pos))?;
             }
         }
         Ok(StepResult::Continue)
@@ -1987,7 +2045,7 @@ impl Vm {
             index: j,
             len: m.size,
         })?;
-        m.add_quad(i_idx, j_idx, penalty);
+        m.add_quad(i_idx, j_idx, penalty).map_err(at_pos(pos))?;
         Ok(StepResult::Continue)
     }
 
@@ -2015,8 +2073,9 @@ impl Vm {
             index: j,
             len: m.size,
         })?;
-        m.add_linear(i_idx, penalty);
-        m.add_quad(i_idx, j_idx, -penalty);
+        let neg_penalty = checked(penalty.checked_neg(), pos)?;
+        m.add_linear(i_idx, penalty).map_err(at_pos(pos))?;
+        m.add_quad(i_idx, j_idx, neg_penalty).map_err(at_pos(pos))?;
         Ok(StepResult::Continue)
     }
 
@@ -2083,7 +2142,7 @@ impl Vm {
             m.size = needed;
         }
         let idx_us = indices_to_usize(&idx_vec, pos, m.size)?;
-        expand_equality(m, &idx_us, &coeff_vec, target, penalty);
+        expand_equality(m, &idx_us, &coeff_vec, target, penalty, pos)?;
         Ok(StepResult::Continue)
     }
 
@@ -2139,7 +2198,7 @@ impl Vm {
         if num_slacks == 0 {
             let unit_coeffs = vec![1i64; n];
             let idx_us = indices_to_usize(&idx_vec, pos, m.size)?;
-            expand_equality(m, &idx_us, &unit_coeffs, k, penalty);
+            expand_equality(m, &idx_us, &unit_coeffs, k, penalty, pos)?;
             return Ok(StepResult::Continue);
         }
         let slack_start = m.size;
@@ -2151,7 +2210,7 @@ impl Vm {
             all_indices.push(slack_start + i);
             all_coeffs.push(-(1i64 << i));
         }
-        expand_equality(m, &all_indices, &all_coeffs, k, penalty);
+        expand_equality(m, &all_indices, &all_coeffs, k, penalty, pos)?;
         Ok(StepResult::Continue)
     }
 
@@ -2218,7 +2277,7 @@ impl Vm {
             })?;
         if num_slacks == 0 {
             let idx_us = indices_to_usize(&idx_vec, pos, m.size)?;
-            expand_equality(m, &idx_us, &coeff_vec, k, penalty);
+            expand_equality(m, &idx_us, &coeff_vec, k, penalty, pos)?;
             return Ok(StepResult::Continue);
         }
         let slack_start = m.size;
@@ -2230,7 +2289,7 @@ impl Vm {
             all_indices.push(slack_start + i);
             all_coeffs.push(-(1i64 << i));
         }
-        expand_equality(m, &all_indices, &all_coeffs, k, penalty);
+        expand_equality(m, &all_indices, &all_coeffs, k, penalty, pos)?;
         Ok(StepResult::Continue)
     }
 
@@ -2268,7 +2327,7 @@ impl Vm {
                     index: var_b,
                     len: m.size,
                 })?;
-        let w = expand_reduce(m, ua, ub, p_aux);
+        let w = expand_reduce(m, ua, ub, p_aux, pos)?;
         // `model.size` is bounded by isize::MAX ≤ i64::MAX on every
         // supported platform; try_from never fails in practice.
         self.push_stack(i64::try_from(w).unwrap_or(i64::MAX), pos)?;
@@ -2333,16 +2392,49 @@ fn expand_equality(
     coeffs: &[i64],
     target: i64,
     penalty: i64,
-) {
-    let two_b = 2 * target;
+    pos: usize,
+) -> Result<(), Error> {
+    let two_b = checked(target.checked_mul(2), pos)?;
     for (&idx, &a_k) in indices.iter().zip(coeffs.iter()) {
-        model.add_linear(idx, penalty * a_k * (a_k - two_b));
+        let coefficient = checked(
+            a_k.checked_sub(two_b)
+                .and_then(|diff| a_k.checked_mul(diff))
+                .and_then(|scaled| penalty.checked_mul(scaled)),
+            pos,
+        )?;
+        model.add_linear(idx, coefficient).map_err(at_pos(pos))?;
     }
-    let two_p = 2 * penalty;
+    let two_p = checked(penalty.checked_mul(2), pos)?;
     for (k, (&idx_k, &a_k)) in indices.iter().zip(coeffs.iter()).enumerate() {
         for (&idx_m, &a_m) in indices.iter().zip(coeffs.iter()).skip(k + 1) {
-            model.add_quad(idx_k, idx_m, two_p * a_k * a_m);
+            let coefficient = checked(
+                two_p
+                    .checked_mul(a_k)
+                    .and_then(|partial| partial.checked_mul(a_m)),
+                pos,
+            )?;
+            model
+                .add_quad(idx_k, idx_m, coefficient)
+                .map_err(at_pos(pos))?;
         }
+    }
+    Ok(())
+}
+
+/// Wrap a checked-arithmetic result as an overflow at `pos`.
+fn checked(value: Option<i64>, pos: usize) -> Result<i64, Error> {
+    value.ok_or(Error::ArithmeticOverflow { pos: Some(pos) })
+}
+
+/// Attach an instruction position to an overflow raised by the model layer.
+///
+/// Model mutations and reductions carry no program counter of their own, so
+/// they raise with `pos: None`; the handler that called them knows the byte
+/// offset the diagnostic needs to point at.
+fn at_pos(pos: usize) -> impl Fn(Error) -> Error {
+    move |err| match err {
+        Error::ArithmeticOverflow { pos: None } => Error::ArithmeticOverflow { pos: Some(pos) },
+        other => other,
     }
 }
 
@@ -2367,14 +2459,22 @@ fn indices_to_usize(idxs: &[i64], pos: usize, model_size: usize) -> Result<Vec<u
 /// Rosenberg degree reduction: replace `x_a·x_b` with auxiliary variable w.
 ///
 /// Allocates w at `model.size`, adds 4 enforcement terms, returns w.
-fn expand_reduce(model: &mut XqmxModel, var_a: usize, var_b: usize, p_aux: i64) -> usize {
+fn expand_reduce(
+    model: &mut XqmxModel,
+    var_a: usize,
+    var_b: usize,
+    p_aux: i64,
+    pos: usize,
+) -> Result<usize, Error> {
+    let minus_two_p = checked(p_aux.checked_mul(-2), pos)?;
+    let three_p = checked(p_aux.checked_mul(3), pos)?;
     let w = model.size;
     model.size += 1;
-    model.add_quad(var_a, var_b, p_aux);
-    model.add_quad(var_a, w, -2 * p_aux);
-    model.add_quad(var_b, w, -2 * p_aux);
-    model.add_linear(w, 3 * p_aux);
-    w
+    model.add_quad(var_a, var_b, p_aux).map_err(at_pos(pos))?;
+    model.add_quad(var_a, w, minus_two_p).map_err(at_pos(pos))?;
+    model.add_quad(var_b, w, minus_two_p).map_err(at_pos(pos))?;
+    model.add_linear(w, three_p).map_err(at_pos(pos))?;
+    Ok(w)
 }
 
 #[cfg(test)]
@@ -2791,10 +2891,10 @@ mod tests {
     }
 
     #[test]
-    fn idx_triu_wraps_when_the_row_term_overflows() {
-        // j = 3 gives a triangular term of 3*(3-1)/2 = 3, which overflows
-        // when added to i = i64::MAX. Consistent with the rest of the crate,
-        // the addition wraps rather than panicking.
+    fn idx_triu_raises_when_the_row_term_overflows() {
+        // j = 3 gives a triangular term of 3*(3-1)/2 = 3, which leaves the
+        // range when added to i = i64::MAX. Index math raises like any other
+        // overflowing operation rather than producing a wrapped index.
         let mut b = InstructionBuilder::new();
         let _ = b
             .emit_push(i64::MAX)
@@ -2803,7 +2903,10 @@ mod tests {
             .emit_halt();
         let program = b.build().unwrap();
         let mut vm = Vm::new();
-        vm.run(&program).unwrap();
-        assert_eq!(vm.stack(), &[i64::MAX.wrapping_add(3)]);
+        let err = vm.run(&program).unwrap_err();
+        assert!(
+            matches!(err, Error::ArithmeticOverflow { .. }),
+            "expected ArithmeticOverflow, got {err:?}"
+        );
     }
 }

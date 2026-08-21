@@ -1,0 +1,6 @@
+; mul_overflow: a product outside the i64 range must raise.
+
+PUSH 9223372036854775807
+PUSH 2
+MUL
+HALT

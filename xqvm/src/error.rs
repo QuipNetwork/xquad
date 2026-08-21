@@ -88,6 +88,15 @@ pub enum Error {
     #[error("division by zero at byte {pos:#06x}")]
     DivisionByZero { pos: usize },
 
+    /// An operation produced a value outside the signed 64-bit range.
+    ///
+    /// `pos` is the byte offset of the faulting instruction where one is
+    /// known. Model mutations and reductions raise without a position,
+    /// because they are reached through an API that carries no program
+    /// counter; the VM supplies the position when it calls them.
+    #[error("arithmetic overflow")]
+    ArithmeticOverflow { pos: Option<usize> },
+
     /// Vec index out of bounds.
     #[error("vec index {index} out of bounds (len {len}) at byte {pos:#06x}")]
     IndexOutOfBounds { pos: usize, index: i64, len: usize },
@@ -243,6 +252,7 @@ impl Error {
             | Self::UnsetRegister { pos, .. }
             | Self::MemoryLimitExceeded { pos, .. }
             | Self::IndexOutOfBounds { pos, .. } => Some(*pos),
+            Self::ArithmeticOverflow { pos } => *pos,
             Self::RegisterType { .. }
             | Self::IncompatibleType(_)
             | Self::CallDataIndex { .. }

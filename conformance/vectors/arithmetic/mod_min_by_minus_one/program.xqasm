@@ -1,0 +1,11 @@
+; mod_min_by_minus_one: i64::MIN % -1 is mathematically 0, which is
+; representable, so it yields 0 rather than raising.
+;
+; The paired division i64::MIN / -1 does overflow -- its quotient 2^63 has
+; no i64 -- so DIV and MOD part company on exactly this operand pair.
+; See div_min_by_minus_one.
+
+PUSH -9223372036854775808
+PUSH -1
+MOD
+HALT
