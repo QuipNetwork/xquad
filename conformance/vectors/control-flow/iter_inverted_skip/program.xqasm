@@ -1,0 +1,24 @@
+; iter_inverted_skip: the skip clause is stated as start_idx >= end_idx,
+; so an inverted range is empty rather than an error. Both implementations
+; skip the body; neither faults.
+
+VECI r0
+PUSH 1
+VECPUSH r0
+PUSH 2
+VECPUSH r0
+
+PUSH 0
+STOW r1
+
+PUSH 2           ; start_idx
+PUSH 1           ; end_idx (start > end)
+ITER r0
+LOAD r1
+INC
+STOW r1
+NEXT
+
+PUSH 0
+OUTPUT r1
+HALT

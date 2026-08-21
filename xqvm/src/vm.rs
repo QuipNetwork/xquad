@@ -895,11 +895,16 @@ impl Vm {
         //   * `IndexOutOfBounds`    -- `start_idx` or `end_idx` is negative
         //                              or greater than `vec.len()`
         //
-        // If `start_idx == end_idx` the resulting slice is empty; xq-rs
-        // keeps do-while semantics, so the loop body still runs once before
-        // `NEXT` pops the frame, mirroring the existing `RANGE` behaviour.
+        // If `start_idx >= end_idx` the slice is empty and the body is
+        // skipped, per the empty-loop-skip clause in `spec/xqvm/ISA.md`. An
+        // earlier comment here justified do-while semantics as "mirroring the
+        // existing RANGE behaviour", but RANGE skips on `count <= 0`, so that
+        // reading was mistaken and the two openers had drifted apart.
         let end = self.pop(pos)?;
         let start = self.pop(pos)?;
+        if start >= end {
+            return Ok(StepResult::SkipLoop);
+        }
         // The copy is charged: a loop frame is only popped by `NEXT`, so a
         // back-edge that re-enters an `ITER` without reaching its `NEXT` piles
         // up one copy of the slice per execution.

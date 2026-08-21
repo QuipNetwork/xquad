@@ -1,0 +1,18 @@
+; range_empty_skip: RANGE with count = 0 skips its body. This is the
+; behaviour ITER is required to match; the pair is here so a future change
+; to either opener has to move both.
+
+PUSH 0
+STOW r1
+
+PUSH 0           ; start
+PUSH 0           ; count
+RANGE
+LOAD r1
+INC
+STOW r1
+NEXT
+
+PUSH 0
+OUTPUT r1
+HALT
