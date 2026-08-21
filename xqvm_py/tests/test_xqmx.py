@@ -627,3 +627,40 @@ class TestXQMXMode:
     def test_mode_count(self):
         """Should have exactly 2 modes."""
         assert len(XQMXMode) == 2
+
+
+class TestAccumulationOrder:
+    """Model terms are visited in sorted key order, not insertion order.
+
+    Wrapping addition is associative, so today every order reaches the
+    same total and the choice is invisible. Once overflow raises instead
+    of wrapping (QUI-998), order decides *whether a program errors at
+    all*: a partial sum can exceed the i64 range in one order and stay
+    inside it in the other. Sorted key order is normative because it is
+    reproducible from the model alone, independent of the program history
+    that happened to build it.
+    """
+
+    def test_iter_linear_yields_sorted_keys(self):
+        m = XQMX.binary_model(size=8)
+        for i in (5, 0, 3, 1):
+            m.set_linear(i, i + 1)
+
+        assert [i for i, _ in m.iter_linear()] == [0, 1, 3, 5]
+
+    def test_iter_quadratic_yields_sorted_keys(self):
+        m = XQMX.binary_model(size=8)
+        for i, j in ((2, 3), (0, 1), (1, 2)):
+            m.set_quadratic(i, j, 1)
+
+        assert [key for key, _ in m.iter_quadratic()] == [(0, 1), (1, 2), (2, 3)]
+
+    def test_iterators_are_independent_of_insertion_order(self):
+        forward = XQMX.binary_model(size=4)
+        reverse = XQMX.binary_model(size=4)
+        for i in (0, 1, 2, 3):
+            forward.set_linear(i, i + 1)
+        for i in (3, 2, 1, 0):
+            reverse.set_linear(i, i + 1)
+
+        assert list(forward.iter_linear()) == list(reverse.iter_linear())

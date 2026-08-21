@@ -27,6 +27,7 @@ XQMX represents quadratic models (QUBO/Ising) with:
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
@@ -224,6 +225,26 @@ class XQMX:
             self.quadratic.pop((i, j), None)
         else:
             self.quadratic[(i, j)] = new_value
+
+    def iter_linear(self) -> Iterator[tuple[int, int]]:
+        """Iterate nonzero linear terms as ``(index, coefficient)``.
+
+        Terms are visited in sorted key order, which ``spec/xqvm/SPEC.md``
+        makes normative for every reduction over a model. The underlying
+        dict preserves insertion order -- the order the program's
+        SETLINE/ADDLINE instructions happened to run -- which is not
+        reproducible from the model alone, so it cannot be the order a
+        reduction depends on.
+        """
+        return iter(sorted(self.linear.items()))
+
+    def iter_quadratic(self) -> Iterator[tuple[tuple[int, int], int]]:
+        """Iterate nonzero quadratic terms as ``((i, j), coefficient)``.
+
+        Sorted by ``(i, j)``, for the reason given on
+        :meth:`iter_linear`.
+        """
+        return iter(sorted(self.quadratic.items()))
 
     def grid_index(self, row: int, col: int) -> int:
         """Convert grid (row, col) to linear variable index."""
@@ -434,13 +455,17 @@ def compute_energy(model: XQMX, sample: XQMX) -> int:
 
     energy = 0
 
+    # Sorted key order throughout: the accumulation order is normative
+    # (spec/xqvm/SPEC.md), because it decides which partial sums a
+    # checked-arithmetic implementation sees.
+
     # Linear contribution
-    for i, coeff in model.linear.items():
+    for i, coeff in model.iter_linear():
         x_i = sample.get_linear(i)
         energy += coeff * x_i
 
     # Quadratic contribution
-    for (i, j), coeff in model.quadratic.items():
+    for (i, j), coeff in model.iter_quadratic():
         x_i = sample.get_linear(i)
         x_j = sample.get_linear(j)
         energy += coeff * x_i * x_j

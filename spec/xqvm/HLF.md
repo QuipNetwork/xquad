@@ -132,3 +132,13 @@ E = Σ_i linear_model[i] × x_sample[i]
 ```
 
 Where `x_sample[i] = sample.values[i]` (the variable assignment). Error if `model.size != sample.size`: `xqvm_py` raises `ValueError`, the Rust `xqvm` VM raises `SizeMismatch`.
+
+### Accumulation order
+
+Both sums are accumulated in **sorted key order**: linear terms by ascending `i`, quadratic terms by ascending `(i, j)` with `i <= j`. The linear sum is accumulated in full before the quadratic sum begins.
+
+This is normative, not an implementation detail. An implementation whose sparse tables preserve insertion order -- the order the program's `SETLINE`/`ADDLINE`/`SETQUAD`/`ADDQUAD` instructions happened to run -- must sort before accumulating, because insertion order is a property of the program's history rather than of the model, and two programs that build the same model by different routes must produce the same result.
+
+The order is unobservable while addition wraps, since wrapping addition is associative and commutative and every order reaches the same total. It becomes observable the moment an operation outside the `i64` range raises: a partial sum can leave the range in one order and stay inside it in the other, so the two orders would disagree about whether the program errors at all.
+
+The same rule applies to any reduction over a model's sparse tables. Reductions over an index list computed by the program (`ROWSUM`, `COLSUM`) are already ordered by that list and are unaffected.

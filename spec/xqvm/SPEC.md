@@ -81,6 +81,7 @@ Programs execute independently with no shared state. Communication occurs only t
 - **Storage:** Sparse tables for `linear` and `quadratic`
 - Constraint opcodes (ONEHOTR, ONEHOTC, EXCLUDE, IMPLIES, EQUALITY, ATLEAST, ATLEASTW, REDUCE) are only valid in model mode
 - ENERGY computes the Hamiltonian energy of a sample against a model
+- **Reductions over the sparse tables visit terms in sorted key order**, never in insertion order; see [HLF.md](HLF.md#accumulation-order)
 
 ---
 

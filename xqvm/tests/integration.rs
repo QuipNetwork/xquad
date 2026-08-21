@@ -1745,3 +1745,50 @@ fn reentrant_iter_copies_are_charged() {
         vm.memory_used()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Model accumulation order (spec/xqvm/HLF.md, "Accumulation order")
+// ---------------------------------------------------------------------------
+
+#[test]
+fn model_terms_iterate_in_sorted_key_order() {
+    // The spec makes sorted key order normative for every reduction over a
+    // model's sparse tables, because insertion order is a property of the
+    // program's history rather than of the model. BTreeMap gives that for
+    // free today; this pins it so a swap to a hash container cannot pass
+    // silently.
+    let mut model = xqvm::XqmxModel::new(Domain::Binary, 8);
+    for i in [5_usize, 0, 3, 1] {
+        model.set_linear(i, 1);
+    }
+    for (i, j) in [(2_usize, 3_usize), (0, 1), (1, 2)] {
+        model.set_quad(i, j, 1);
+    }
+
+    let linear: Vec<usize> = model.iter_linear().map(|(i, _)| i).collect();
+    let quadratic: Vec<(usize, usize)> = model.iter_quadratic().map(|(i, j, _)| (i, j)).collect();
+
+    assert_eq!(linear, vec![0, 1, 3, 5]);
+    assert_eq!(quadratic, vec![(0, 1), (1, 2), (2, 3)]);
+}
+
+#[test]
+fn energy_is_independent_of_the_order_terms_were_added() {
+    // Two programs that build the same model by different routes must
+    // produce the same energy -- the property sorted-order accumulation
+    // exists to guarantee.
+    let mut forward = xqvm::XqmxModel::new(Domain::Binary, 4);
+    let mut reverse = xqvm::XqmxModel::new(Domain::Binary, 4);
+    for i in 0..4_usize {
+        forward.set_linear(i, i64::try_from(i).expect("index fits i64") + 1);
+    }
+    for i in (0..4_usize).rev() {
+        reverse.set_linear(i, i64::try_from(i).expect("index fits i64") + 1);
+    }
+
+    let sample = [1_i64, 1, 1, 1];
+    assert_eq!(
+        forward.energy(&sample).expect("forward energy"),
+        reverse.energy(&sample).expect("reverse energy")
+    );
+}
