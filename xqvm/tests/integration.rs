@@ -1630,6 +1630,33 @@ fn equality_expansion_is_charged_before_it_expands() {
 }
 
 #[test]
+fn at_least_w_weight_sum_past_i64_max_raises() {
+    // The weight sum is program-controlled; a sum past the range must raise
+    // rather than derive the slack count from a wrapped excess.
+    let err = run_err(|b| {
+        b.emit_push(2).emit_bqmx(Register(0));
+        b.emit_vec_i(Register(1));
+        b.emit_push(0).emit_vec_push(Register(1));
+        b.emit_push(1).emit_vec_push(Register(1));
+        b.emit_vec_i(Register(2));
+        b.emit_push(i64::MAX).emit_vec_push(Register(2));
+        b.emit_push(1).emit_vec_push(Register(2));
+        b.emit_push(1)
+            .emit_push(1)
+            .emit(xqvm::Instruction::AtLeastW {
+                model: Register(0),
+                indices: Register(1),
+                coeffs: Register(2),
+            });
+        b.emit_halt();
+    });
+    assert!(
+        matches!(err, Error::ArithmeticOverflow { .. }),
+        "expected ArithmeticOverflow, got {err:?}"
+    );
+}
+
+#[test]
 fn one_hot_r_over_a_huge_grid_is_rejected() {
     // RESIZE takes its extents off the value stack, and ONEHOTR expands
     // O(cols^2) terms in a single step. Without the budget this runs until the

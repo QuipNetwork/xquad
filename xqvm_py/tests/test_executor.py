@@ -2164,6 +2164,30 @@ class TestAtleastw:
                 ]
             )
 
+    def test_weight_sum_overflow_raises(self):
+        """ATLEASTW with a weight sum past i64::MAX raises ArithmeticOverflow."""
+        with pytest.raises(ArithmeticOverflow):
+            run_program(
+                [
+                    Instruction(Opcode.PUSH1, (2,)),
+                    Instruction(Opcode.BQMX, (0,)),
+                    Instruction(Opcode.VECI, (1,)),
+                    Instruction(Opcode.PUSH1, (0,)),
+                    Instruction(Opcode.VECPUSH, (1,)),
+                    Instruction(Opcode.PUSH1, (1,)),
+                    Instruction(Opcode.VECPUSH, (1,)),
+                    Instruction(Opcode.VECI, (2,)),
+                    _push_i64(I64_MAX),
+                    Instruction(Opcode.VECPUSH, (2,)),
+                    Instruction(Opcode.PUSH1, (1,)),
+                    Instruction(Opcode.VECPUSH, (2,)),
+                    Instruction(Opcode.PUSH1, (1,)),  # k
+                    Instruction(Opcode.PUSH1, (1,)),  # penalty
+                    Instruction(Opcode.ATLEASTW, (0, 1, 2)),
+                    Instruction(Opcode.HALT),
+                ]
+            )
+
     def test_k_zero_raises(self):
         """ATLEASTW with k=0 raises ValueError."""
         with pytest.raises(ValueError, match="ATLEASTW"):

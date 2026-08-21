@@ -2289,8 +2289,16 @@ impl Vm {
                 len: n,
             });
         }
-        let weight_sum: i64 = coeff_vec.iter().sum();
-        let max_excess = weight_sum - k;
+        // Weights are program-controlled, so the sum is accumulated in index
+        // order with every partial sum checked: wrapping here would derive
+        // the slack count from a wrapped excess (spec/xqvm/HLF.md).
+        let weight_sum = coeff_vec
+            .iter()
+            .try_fold(0i64, |acc, &w| acc.checked_add(w))
+            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
+        let max_excess = weight_sum
+            .checked_sub(k)
+            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
         // See `exec_at_least` for the `leading_zeros` widening argument.
         let num_slacks = if max_excess <= 0 {
             0
