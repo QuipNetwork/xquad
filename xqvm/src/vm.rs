@@ -338,9 +338,12 @@ impl Vm {
 
     /// Set the maximum number of instructions that may execute.
     ///
-    /// The limit is exact: `0` permits no instructions at all, and running a
-    /// program under it fails immediately with
-    /// [`Error::StepLimitExceeded`](crate::Error::StepLimitExceeded).
+    /// The limit is exact: it bounds instructions executed, so `0` permits no
+    /// instructions at all and a program whose first instruction is reached
+    /// under it fails with
+    /// [`Error::StepLimitExceeded`](crate::Error::StepLimitExceeded). A
+    /// program that ends -- by `HALT` or by running off the end of the
+    /// stream -- having executed at most `limit` instructions succeeds.
     ///
     /// For an unbounded run, say so explicitly with
     /// [`set_unlimited_steps`](Self::set_unlimited_steps).
@@ -503,17 +506,18 @@ impl Vm {
         self.steps = 0;
         self.memory_used = 0;
 
-        loop {
+        // Probe for the next instruction before charging: the limit bounds
+        // instructions executed, so a program that ends -- HALT or end of
+        // stream -- having executed exactly `step_limit` instructions
+        // succeeds, and `steps()` never counts the probe. This is the Python
+        // VM's loop shape (`while pc < len`).
+        while let Some(item) = stream.next_instruction() {
             if self.steps >= self.step_limit {
                 return Err(Error::StepLimitExceeded {
                     limit: self.step_limit,
                 });
             }
             self.steps += 1;
-
-            let Some(item) = stream.next_instruction() else {
-                break;
-            };
             let (pos, _label, instr) = item.map_err(Error::from)?;
 
             let result = if T::ENABLED {
