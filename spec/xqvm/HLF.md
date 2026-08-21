@@ -98,6 +98,8 @@ Enforce `Σ(w_i × x_i) ≥ k` over a set of binary variables with arbitrary wei
 
 Same logic as `ATLEAST`, but the original variables use the provided weights from the `coeffs` register instead of unit weights. The combined coefficient vector becomes `[w_0, w_1, ..., w_{N-1}, −1, −2, −4, ..., −2^(S-1)]`, and `max_excess` is computed as `Σ(w_i) − k`.
 
+The weights are program-controlled, so `Σ(w_i)` is accumulated in index order with every partial sum checked against the i64 range, and the subtraction of `k` is checked the same way; a value outside the range raises `ArithmeticOverflow` (SPEC.md overflow rule) rather than deriving the slack count from a wrapped excess.
+
 ## `REDUCE` Derivation
 
 Replace the product `x_a × x_b` with an auxiliary variable w, adding penalty terms that enforce `w = x_a × x_b` at the energy minimum. This is the Rosenberg reduction (1975) — the standard HOBO-to-QUBO method.

@@ -1111,7 +1111,13 @@ class Executor:
             raise ValueError(f"ATLEASTW: k={k} must be > 0")
         orig_indices = [indices_vec.get(i) for i in range(n)]
         weights = [coeffs_vec.get(i) for i in range(n)]
-        max_excess = sum(weights) - k
+        # Accumulate in index order with every partial sum checked, matching
+        # the Rust VM: the slack count must derive from a range-checked
+        # excess, never a wrapped one (spec/xqvm/HLF.md).
+        weight_sum = 0
+        for w in weights:
+            weight_sum = check_i64(weight_sum + w, "ATLEASTW weight sum")
+        max_excess = check_i64(weight_sum - k, "ATLEASTW excess")
         num_slacks = max_excess.bit_length() if max_excess > 0 else 0
         self._charge_variables(num_slacks)
         self._charge_equality_expansion(n + num_slacks)

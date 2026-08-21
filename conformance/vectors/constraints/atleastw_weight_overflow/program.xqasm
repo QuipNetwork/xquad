@@ -1,0 +1,27 @@
+; atleastw_weight_overflow: the weight sum leaves the i64 range and must
+; raise rather than wrap.
+;
+; weights = [i64::MAX, 1] => the partial sum 2^63 is not representable, so
+; ATLEASTW raises ArithmeticOverflow instead of deriving the slack count
+; from a wrapped excess.
+
+PUSH 2
+BQMX r0
+
+VECI r1
+PUSH 0
+VECPUSH r1
+PUSH 1
+VECPUSH r1
+
+VECI r2
+PUSH 9223372036854775807
+VECPUSH r2
+PUSH 1
+VECPUSH r2
+
+PUSH 1           ; k
+PUSH 1           ; penalty
+ATLEASTW r0 r1 r2
+
+HALT
