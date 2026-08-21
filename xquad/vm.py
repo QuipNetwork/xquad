@@ -307,7 +307,13 @@ class VM:
     def _execute_python(self, program) -> None:
         cd = _prepare_calldata_python(self._calldata)
         executor = _PyExecutor()
-        self._py_outputs = executor.execute(program, cd, step_limit=self._step_limit, memory_limit=self._memory_limit)
+        self._py_outputs = executor.execute(
+            program,
+            cd,
+            step_limit=self._step_limit,
+            memory_limit=self._memory_limit,
+            output_slots=self._output_slots,
+        )
         self._py_stack = list(executor.state.stack)
         self._py_steps = executor.steps
         self._py_memory_used = executor.memory_used

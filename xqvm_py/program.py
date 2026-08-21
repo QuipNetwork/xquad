@@ -82,13 +82,21 @@ def make_program(instructions: list[Instruction]) -> Program:
     return Program(instructions, jump_targets=_build_jump_targets(instructions))
 
 
-def run_program(instructions: list[Instruction], input_data: dict[int, Any] | None = None):
-    """Build and execute a program, returning executor for state inspection."""
+def run_program(
+    instructions: list[Instruction],
+    input_data: dict[int, Any] | None = None,
+    output_slots: int = 0,
+):
+    """Build and execute a program, returning executor for state inspection.
+
+    `output_slots` defaults to 0, matching `xqvm::Vm::new()`: a program that
+    writes an output has to say how many slots the host reserved.
+    """
     from .executor import Executor
 
     prog = make_program(instructions)
     ex = Executor()
-    ex.execute(prog, input_data)
+    ex.execute(prog, input_data, output_slots=output_slots)
     return ex
 
 

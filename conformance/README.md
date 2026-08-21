@@ -120,7 +120,7 @@ bug ever motivates them.
 | `BAD_OPCODE` | `BadOpcode` | `InvalidOpcode` |
 | `TRUNCATED_INSTRUCTION` | `TruncatedInstruction` | -- |
 | `CALL_DATA_INDEX` | `CallDataIndex` | -- |
-| `OUTPUT_INDEX` | `OutputIndex` | -- |
+| `OUTPUT_INDEX` | `OutputIndex` | `OutputIndex` |
 | `SIZE_MISMATCH` | `SizeMismatch` | -- |
 | `VEC_LENGTH_MISMATCH` | `VecLengthMismatch` | -- |
 | `STEP_LIMIT_EXCEEDED` | `StepLimitExceeded` | `StepLimitExceeded` |

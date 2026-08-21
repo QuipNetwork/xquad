@@ -446,7 +446,7 @@ class TestStackRegisterIO:
             ]
         )
         ex = Executor()
-        output = ex.execute(prog)
+        output = ex.execute(prog, output_slots=16)
         assert output[0] == 99
 
     def test_drop_int_register(self):
@@ -2381,7 +2381,7 @@ class TestTracerIntegration:
             ]
         )
         ex = Executor(tracer=TestTracer())
-        ex.execute(prog)
+        ex.execute(prog, output_slots=16)
 
         assert ("begin", Opcode.PUSH1) in events
         assert ("begin", Opcode.HALT) in events
@@ -2410,7 +2410,7 @@ class TestTracerIntegration:
             ]
         )
         ex = Executor(tracer=TestTracer())
-        ex.execute(prog)
+        ex.execute(prog, output_slots=16)
 
         assert ("end", Opcode.PUSH1) in events
 
@@ -2440,7 +2440,7 @@ class TestTracerIntegration:
         ex = Executor(tracer=TestTracer())
 
         with pytest.raises(StackUnderflow):
-            ex.execute(prog)
+            ex.execute(prog, output_slots=16)
 
         assert "StackUnderflow" in errors
 
@@ -2467,7 +2467,7 @@ class TestTracerIntegration:
             ]
         )
         ex = Executor(tracer=TestTracer())
-        ex.execute(prog)
+        ex.execute(prog, output_slots=16)
 
         assert halted == [True]
 
@@ -2487,7 +2487,7 @@ class TestExecutorHelpers:
             ]
         )
         ex = Executor()
-        output = ex.execute(prog)
+        output = ex.execute(prog, output_slots=16)
         assert output[0] == 42
 
     def test_execute_with_input_data(self):
@@ -2502,7 +2502,7 @@ class TestExecutorHelpers:
             ]
         )
         ex = Executor()
-        output = ex.execute(prog, input_data={0: "hello"})
+        output = ex.execute(prog, input_data={0: "hello"}, output_slots=16)
         assert output[1] == "hello"
 
     def test_step_returns_continue_flag(self):
@@ -2945,7 +2945,7 @@ class TestAllocationBudget:
             ]
         )
         ex = Executor()
-        ex.execute(prog)
+        ex.execute(prog, output_slots=16)
         assert ex.memory_limit == DEFAULT_MEMORY_LIMIT == 1 << 30
         assert ex.memory_used == 800_000
 

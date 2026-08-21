@@ -123,13 +123,6 @@ since the slot count defaults to `0`. On the default `VMBackend.RUST`,
 while the decoder runs; `VMBackend.PYTHON` currently accepts it silently,
 so do not rely on the error to catch a missing `set_output_slots`.
 
-<!-- xquad:defect QUI-1023 -->
-> **Known issue.** `OUTPUT` against a slot that was never allocated raises `OutputIndex` on
-> the Rust VM and is accepted silently on the Python VM. Call `set_output_slots` before
-> `vm.run` rather than relying on either behaviour; see [Compiling](compiling.md) for the full
-> contract. Report problems at the
-> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
-
 `list(result)` works whether `vm.outputs()[0]` comes back as a plain
 `list`, on the default `VMBackend.RUST`, or as a `Vec`, on
 `VMBackend.PYTHON`. Running both against the same seed-42 knapsack

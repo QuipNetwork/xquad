@@ -398,6 +398,7 @@ class TestIOOperations:
 
     def test_set_get_output(self, empty_state):
         """Set and get output slot."""
+        empty_state.output_slots = 4
         empty_state.set_output(0, "result")
         assert empty_state.get_output(0) == "result"
 
@@ -409,6 +410,7 @@ class TestIOOperations:
         """Multiple I/O slots work independently."""
         empty_state.set_input(0, "a")
         empty_state.set_input(1, "b")
+        empty_state.output_slots = 4
         empty_state.set_output(0, "x")
         empty_state.set_output(1, "y")
 
@@ -423,6 +425,7 @@ class TestIOOperations:
         x = XQMX.binary_model(5)
 
         empty_state.set_input(0, v)
+        empty_state.output_slots = 4
         empty_state.set_output(0, x)
 
         assert empty_state.get_input(0).length == 3
@@ -484,6 +487,7 @@ class TestReset:
     def test_reset_clears_io(self, empty_state):
         """reset clears I/O slots."""
         empty_state.set_input(0, "in")
+        empty_state.output_slots = 4
         empty_state.set_output(0, "out")
         empty_state.reset()
         assert empty_state.get_input(0) is None
