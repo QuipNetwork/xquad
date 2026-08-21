@@ -504,8 +504,15 @@ opcode-parity: opcode-parity-rs opcode-parity-py
 opcode-parity-rs:
 	cargo build -p xqvm
 
-opcode-parity-py:
-	uv run python scripts/check-opcode-parity.py
+# `deps-py` + `--no-sync` for the same reason as `test-py` and
+# `example-smoke`: a bare `uv run` re-syncs the workspace and reinstalls
+# xqffi from uv's editable-wheel cache, which is not invalidated by changes
+# to Rust sources. That silently replaces the maturin-built extension with a
+# stale one for every target that runs after it in the same `make` -- which
+# is how `make preflight` could reach `example-smoke` with an xqffi older
+# than the tree it just tested.
+opcode-parity-py: deps-py
+	uv run --no-sync python scripts/check-opcode-parity.py
 
 conformance: conformance-rs conformance-py
 

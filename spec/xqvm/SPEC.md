@@ -93,7 +93,7 @@ Programs execute independently with no shared state. Communication occurs only t
 | Register slots | 256 (r0–r255) | 8-bit addressing. |
 | Target IDs | 0–65535 | `u8` via `JUMP1`/`JUMPI1`, `u16` big-endian via `JUMP2`/`JUMPI2`. Sequential assignment during pre-scan. |
 | Loop nesting | Unbounded | Limited by available memory. |
-| XQMX size | Implementation-defined | No spec limit. |
+| XQMX size | Implementation-defined | No spec limit. Implementations may impose an allocation budget; the Rust VM charges every allocating opcode against one and raises `MemoryLimitExceeded` when it is exhausted. |
 | Program length | Implementation-defined | No spec limit. |
 
 ---

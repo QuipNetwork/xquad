@@ -141,6 +141,20 @@ pub enum Error {
     #[error("step limit of {limit} exceeded")]
     StepLimitExceeded { limit: u64 },
 
+    /// An allocating instruction asked for more memory than the remaining
+    /// allocation budget allows. Distinct from [`Error::StepLimitExceeded`]
+    /// so an embedder can tell a runaway loop from an oversized allocation.
+    #[error(
+        "allocation of {requested} bytes at byte {pos:#06x} exceeds the memory limit \
+         ({used} of {limit} bytes already charged)"
+    )]
+    MemoryLimitExceeded {
+        pos: usize,
+        requested: u64,
+        used: u64,
+        limit: u64,
+    },
+
     /// Left shift amount is negative or too large.
     #[error("invalid shift amount {amount} at byte {pos:#06x}")]
     InvalidShift { pos: usize, amount: i64 },
@@ -227,6 +241,7 @@ impl Error {
             | Self::BadJumpTarget { pos, .. }
             | Self::InvalidLabel { pos, .. }
             | Self::UnsetRegister { pos, .. }
+            | Self::MemoryLimitExceeded { pos, .. }
             | Self::IndexOutOfBounds { pos, .. } => Some(*pos),
             Self::RegisterType { .. }
             | Self::IncompatibleType(_)

@@ -69,6 +69,10 @@ pub(crate) struct Args {
     #[arg(long, conflicts_with = "step_limit")]
     unlimited_steps: bool,
 
+    /// Allocation budget in bytes for models, samples and vectors.
+    #[arg(long, default_value = "1073741824")]
+    memory_limit: u64,
+
     /// Enable step-by-step execution tracing.
     #[arg(long)]
     trace: bool,
@@ -113,6 +117,7 @@ pub(crate) fn exec(args: Args) -> miette::Result<()> {
     } else {
         let _ = vm.set_step_limit(args.step_limit);
     }
+    let _ = vm.set_memory_limit(args.memory_limit);
 
     let file_name = args.file.to_string_lossy();
     if args.trace {

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from xqffi.asm import assemble_source
 from xqffi.vm import Vm, XqmxModel, XqmxSample
+from xqvm_py.executor import DEFAULT_MEMORY_LIMIT as _DEFAULT_MEMORY_LIMIT
 
 __all__ = ["Program", "RunResult", "Session"]
 
@@ -93,13 +94,14 @@ class Program:
 class Session:
     """A mutable execution session bound to a `Program`."""
 
-    __slots__ = ("_program", "_calldata", "_output_slots", "_step_limit")
+    __slots__ = ("_program", "_calldata", "_output_slots", "_step_limit", "_memory_limit")
 
     def __init__(self, program: Program, output_slots: int, step_limit: int | None) -> None:
         self._program = program
         self._calldata: list = []
         self._output_slots = output_slots
         self._step_limit = step_limit
+        self._memory_limit = _DEFAULT_MEMORY_LIMIT
 
     def set_calldata(self, data: list) -> None:
         for item in data:
@@ -116,6 +118,10 @@ class Session:
         """
         self._step_limit = limit
 
+    def set_memory_limit(self, nbytes: int) -> None:
+        """Set the allocation budget in bytes for this session (default 1 GiB)."""
+        self._memory_limit = nbytes
+
     def run(self) -> RunResult:
         vm = Vm()
         vm.set_calldata(self._calldata)
@@ -124,6 +130,7 @@ class Session:
             vm.set_unlimited_steps()
         else:
             vm.set_step_limit(self._step_limit)
+        vm.set_memory_limit(self._memory_limit)
         vm.run(self._program.bytecode())
 
         raw_outputs = list(vm.outputs())

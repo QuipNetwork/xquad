@@ -29,6 +29,7 @@ this reason.
 | Limit | Library default | Method | VM error when exceeded |
 |---|---|---|---|
 | Step count | 10,000,000 | `Vm::set_step_limit(n)` | `StepLimitExceeded` |
+| Allocation budget | 1 GiB | `Vm::set_memory_limit(bytes)` | `MemoryLimitExceeded` |
 | Calldata slots | 0 | `Vm::set_calldata(vec)` | `CallDataIndex` |
 | Output slots | 0 | `Vm::set_output_slots(n)` | `OutputIndex` |
 
@@ -39,6 +40,55 @@ CLI's own default table.
 
 Calling `set_step_limit(0)` sets the limit to `u64::MAX` (effectively
 unlimited), not to zero steps.
+
+## The allocation budget
+
+Every instruction that allocates a sample buffer, declares model variables,
+grows a vector, or expands constraint coefficients is charged against the
+budget *before* it allocates. An instruction that cannot pay fails with
+`MemoryLimitExceeded` and allocates nothing, leaving its target register
+untouched. `Vm::memory_used()` reports what a run spent.
+
+Charges are cumulative rather than a high-water mark of live memory: bytes are
+charged when they are allocated and are never refunded, so a loop that
+allocates and discards cannot spend more than the budget in total. Each `run()`
+starts from zero. There is no sentinel for "unlimited" -- pass `u64::MAX`.
+
+| Charged | Rate |
+|---------|------|
+| `BQMX`, `SQMX`, `XQMX` (declared model size) | 8 bytes per variable |
+| `BSMX`, `SSMX`, `XSMX` (sample buffer) | 8 bytes per variable |
+| `VECPUSH`, `SLACK` (vector growth) | 16 bytes per element |
+| `SETLINE`, `ADDLINE` on a model | 32 bytes per coefficient |
+| `SETQUAD`, `ADDQUAD`, `EXCLUDE`, `IMPLIES` | 48 bytes per coefficient |
+| `ONEHOTR`, `ONEHOTC`, `EQUALITY`, `ATLEAST`, `ATLEASTW` | worst-case expansion: one linear term per variable and one quadratic term per pair |
+| `REDUCE` | one auxiliary variable, three quadratic terms, one linear term |
+| `ITER` (slice copied into the loop frame) | 8 bytes per element |
+
+Models store their coefficients sparsely, so a declared model size costs
+nothing immediately; it is charged because every consumer of the model -- the
+sample needed to evaluate it, each solver backend -- has to materialise it.
+The expanding constraint opcodes are charged for their worst case, so an
+expansion whose indices collide can be charged more than it ultimately stores.
+
+`VEC`, `VECI` and `VECX` install an empty vector and allocate nothing; their
+storage is charged as `VECPUSH` and `SLACK` create it.
+
+`ITER` copies the slice it iterates into its loop frame, and a loop frame is
+released only by `NEXT`. A back-edge that re-enters an `ITER` without reaching
+its `NEXT` therefore accumulates copies, which is why the copy is charged.
+What the budget does *not* cover is the loop frame itself: such a program still
+grows the loop stack by one frame per execution, bounded only by the step
+limit.
+
+The charge schedule is defined over program-visible quantities -- variables
+declared, elements appended, coefficients written -- rather than over either
+interpreter's internal representation. The Python reference interpreter
+charges the identical rates via `Executor.execute(..., memory_limit=...)`,
+raising `xqvm_py.errors.MemoryLimitExceeded`, so both implementations reject
+the same programs at the same instruction having charged the same bytes.
+`xquad.vm.VM.set_memory_limit()` sets it on either backend and
+`VM.memory_used()` reads the result back.
 
 ## VM runtime errors
 
@@ -67,6 +117,7 @@ which disassembles the program and points at the failing instruction.
 | `SizeMismatch` | `ENERGY` sample length does not match model size |
 | `VecLengthMismatch` | Two parallel vectors used together (for example `EQUALITY`'s indices and coefficients) have different lengths |
 | `StepLimitExceeded` | Execution exceeded the configured step limit |
+| `MemoryLimitExceeded` | An allocating instruction exceeded the configured allocation budget |
 | `InvalidShift` | `SHL`/`SHR` shift amount outside `[0, 64)` |
 | `InvalidGridDimensions` | `RESIZE` with rows or cols <= 0 |
 | `InvalidDiscreteK` | `XQMX`/`XSMX` called with `k < 2` -- at `k = 1` the signed `[-k, k-1]` domain is `{-1, 0}`, which degenerates to a binary choice `BQMX` already covers |

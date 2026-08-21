@@ -99,7 +99,10 @@ Decode, execute, store, in that order:
 
 There is no separate store-then-execute split, no program lookup by hash,
 and no explicit `step_limit` parameter -- the VM runs with its own default
-step limit. Off-chain, produce the bytecode however you like; the assembler
+step limit. The same is true of the allocation budget: the fixture sets no
+`set_memory_limit`, so the VM's 1 GiB default applies, which is far too
+generous for a runtime that has to price what it admits. A production pallet
+should set and price a much smaller budget. Off-chain, produce the bytecode however you like; the assembler
 CLI is `xquad asm`.
 
 ## Weight

@@ -95,6 +95,24 @@ class ArithmeticOverflow(XQVMError):
         super().__init__(msg)
 
 
+class MemoryLimitExceeded(XQVMError):
+    """Raised when an allocating instruction exceeds the allocation budget.
+
+    Distinct from the step-limit error so an embedder can tell a runaway
+    loop from an oversized allocation. Mirrors Rust's
+    `xqvm::Error::MemoryLimitExceeded`.
+    """
+
+    def __init__(self, requested: int, used: int, limit: int):
+        self.requested = requested
+        self.used = used
+        self.limit = limit
+        super().__init__(
+            f"Memory limit exceeded: allocation of {requested} bytes exceeds the "
+            f"memory limit ({used} of {limit} bytes already charged)"
+        )
+
+
 class TargetNotFound(XQVMError):
     """Raised when a jump target does not exist."""
 
