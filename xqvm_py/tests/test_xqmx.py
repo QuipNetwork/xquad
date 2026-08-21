@@ -21,7 +21,8 @@ Tests for XQMX class and operations.
 
 import pytest
 
-from xqvm_py.errors import XQMXModeError
+from xqvm_py.errors import ArithmeticOverflow, XQMXModeError
+from xqvm_py.limits import I64_MAX, I64_MIN
 from xqvm_py.xqmx import (
     XQMX,
     XQMXDomain,
@@ -268,6 +269,22 @@ class TestGridOperations:
 
         assert col_sum(grid_model, 0) == 6
         assert col_sum(grid_model, 1) == 0
+
+    def test_row_sum_overflow_raises(self, grid_model):
+        """row_sum with a partial sum past i64::MAX raises ArithmeticOverflow."""
+        grid_model.set_linear(0, I64_MAX)
+        grid_model.set_linear(1, 1)
+
+        with pytest.raises(ArithmeticOverflow):
+            row_sum(grid_model, 0)
+
+    def test_col_sum_overflow_raises(self, grid_model):
+        """col_sum with a partial sum past i64::MIN raises ArithmeticOverflow."""
+        grid_model.set_linear(0, I64_MIN)
+        grid_model.set_linear(5, -1)
+
+        with pytest.raises(ArithmeticOverflow):
+            col_sum(grid_model, 0)
 
     def test_row_find(self, grid_model):
         """row_find finds first column with value."""

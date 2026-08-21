@@ -1336,6 +1336,46 @@ fn row_sum_and_col_sum() {
 }
 
 #[test]
+fn row_sum_past_i64_max_raises() {
+    // A 1x2 row holding [i64::MAX, 1]: the partial sum leaves the range and
+    // must raise rather than wrap.
+    let err = run_err(|b| {
+        b.emit_push(2).emit_bqmx(Register(0));
+        b.emit_push(1).emit_push(2).emit_resize(Register(0));
+        b.emit_push(0)
+            .emit_push(i64::MAX)
+            .emit_set_line(Register(0));
+        b.emit_push(1).emit_push(1).emit_set_line(Register(0));
+        b.emit_push(0).emit_row_sum(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(err, Error::ArithmeticOverflow { .. }),
+        "expected ArithmeticOverflow, got {err:?}"
+    );
+}
+
+#[test]
+fn col_sum_past_i64_min_raises() {
+    // A 2x1 column holding [i64::MIN, -1]: the partial sum leaves the range
+    // in the negative direction and must raise rather than wrap.
+    let err = run_err(|b| {
+        b.emit_push(2).emit_bqmx(Register(0));
+        b.emit_push(2).emit_push(1).emit_resize(Register(0));
+        b.emit_push(0)
+            .emit_push(i64::MIN)
+            .emit_set_line(Register(0));
+        b.emit_push(1).emit_push(-1).emit_set_line(Register(0));
+        b.emit_push(0).emit_col_sum(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(err, Error::ArithmeticOverflow { .. }),
+        "expected ArithmeticOverflow, got {err:?}"
+    );
+}
+
+#[test]
 fn row_find_and_col_find() {
     // 2x2 grid: [0]=10, [1]=20, [2]=30, [3]=10.
     // ROWFIND: pops value (top) then row -> push first col where match, or -1
