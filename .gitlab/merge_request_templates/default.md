@@ -21,6 +21,7 @@ Run locally what CI enforces. Mark a language N/A if this MR does not touch it.
 - [ ] `make test-quip` passes -- run if the MR changes SolverQuip (`xqsa/quip*.py`); needs a running Quip devnet or testnet -- see `docs/guide/solverquip-testing.md`
 
 ### Commits & Documentation
+- [ ] This MR's title follows Conventional Commits (`<type>[(scope)][!]: <description>`) -- enforced by `verify:policy`
 - [ ] Commit subject lines are 72 characters or fewer and use the imperative mood
 - [ ] Commits are signed off (`git commit -s`)
 - [ ] All public items are documented

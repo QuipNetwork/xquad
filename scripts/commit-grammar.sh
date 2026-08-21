@@ -4,11 +4,15 @@
 #
 # Shared Conventional Commits + DCO grammar.
 #
-# Sourced by both .githooks/commit-msg (local, opt-in, one staged
-# commit at a time) and scripts/check-commit-messages.sh (CI, the full
-# commit range of a merge request), so the two enforcement points
-# cannot drift into different rules. See AGENTS.md's Conventional
-# Commits section for the human-readable version of what this encodes.
+# Sourced by all three enforcement points, so they cannot drift into
+# different rules:
+#
+#   - .githooks/commit-msg          local, opt-in, one staged commit
+#   - scripts/check-commit-messages.sh  CI, an MR's full commit range
+#   - scripts/check-mr-title.sh     CI, the merge request title
+#
+# See AGENTS.md's Conventional Commits section for the human-readable
+# version of what this encodes.
 #
 # Not standalone: `source` it, don't execute it directly.
 
@@ -50,15 +54,22 @@ commit_subject() {
     sed '/^#/d' | sed '/./,$!d' | head -n1
 }
 
-# Validate one commit subject against Conventional Commits: known
-# type, optional scope, optional `!`, max 72 characters, lowercase
-# description start, no trailing period. Prints one error line per
-# violation to stderr; returns non-zero if any violation was found.
+# Validate one Conventional Commits subject: known type, optional
+# scope, optional `!`, max 72 characters, lowercase description start,
+# no trailing period. Prints one error line per violation to stderr;
+# returns non-zero if any violation was found.
+#
+# The optional second argument is the label every error line is
+# prefixed with. It defaults to `commit-msg` -- the shape both the
+# git hook and the CI range guard want -- and exists so a caller
+# validating something that is not a commit message (the merge
+# request title, say) can say so in its own diagnostics rather than
+# telling the reader to go fix a commit.
 check_commit_subject() {
-    local subject="$1" desc first_char status=0
+    local subject="$1" label="${2:-commit-msg}" desc first_char status=0
 
     if ! printf '%s\n' "${subject}" | grep -Eq "${PATTERN}"; then
-        echo "commit-msg: subject does not match Conventional Commits format." >&2
+        echo "${label}: subject does not match Conventional Commits format." >&2
         echo "" >&2
         echo "  Expected: <type>[(<scope>)][!]: <description>" >&2
         echo "  Types:    $(tr '|' ' ' <<< "${TYPES}")" >&2
@@ -68,7 +79,7 @@ check_commit_subject() {
     fi
 
     if [[ "${#subject}" -gt 72 ]]; then
-        echo "commit-msg: subject exceeds 72 characters (${#subject})." >&2
+        echo "${label}: subject exceeds 72 characters (${#subject})." >&2
         echo "  ${subject}" >&2
         status=1
     fi
@@ -76,13 +87,13 @@ check_commit_subject() {
     desc="$(printf '%s\n' "${subject}" | sed -E "s/^(${TYPES})(\([a-zA-Z0-9_-]+\))?\!?: //")"
     first_char="$(printf '%s' "${desc}" | cut -c1)"
     if printf '%s' "${first_char}" | grep -q '[A-Z]'; then
-        echo "commit-msg: description must start lowercase." >&2
+        echo "${label}: description must start lowercase." >&2
         echo "  Got: ${subject}" >&2
         status=1
     fi
 
     if printf '%s' "${subject}" | grep -q '\.$'; then
-        echo "commit-msg: subject must not end with a period." >&2
+        echo "${label}: subject must not end with a period." >&2
         echo "  Got: ${subject}" >&2
         status=1
     fi

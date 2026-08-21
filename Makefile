@@ -68,18 +68,21 @@ lint-python: fmt-check-py lint-py
 lint-policy: fmt-check-toml lint-deny-rs render-changelog check-atomic-spec check-commit-messages
 
 # Wraps scripts/check-atomic-spec-mr.sh, forwarding the optional positional
-# BASE/HEAD refs the way the script expects. With neither set, the script
+# BASE/HEAD refs the way the script expects. Both are quoted so that
+# `make ... HEAD=y` with no BASE passes an empty first argument rather
+# than shifting y into BASE_REF's position; the scripts read each with
+# `${N:-}` and fall back when it is empty. With neither set, the script
 # falls back to $CI_MERGE_REQUEST_DIFF_BASE_SHA, then
 # `git merge-base origin/main HEAD`.
 #   make check-atomic-spec BASE=<sha> HEAD=<sha>
 check-atomic-spec:
-	bash scripts/check-atomic-spec-mr.sh $(BASE) $(HEAD)
+	bash scripts/check-atomic-spec-mr.sh "$(BASE)" "$(HEAD)"
 
 # Wraps scripts/check-commit-messages.sh -- same BASE/HEAD forwarding and
 # the same fallback order as check-atomic-spec above.
 #   make check-commit-messages BASE=<sha> HEAD=<sha>
 check-commit-messages:
-	bash scripts/check-commit-messages.sh $(BASE) $(HEAD)
+	bash scripts/check-commit-messages.sh "$(BASE)" "$(HEAD)"
 
 test-rust: test-unit-rs test-integ-rs test-doc
 

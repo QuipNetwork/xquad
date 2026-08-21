@@ -20,9 +20,32 @@
 #
 # Defaults (mirrors scripts/check-atomic-spec-mr.sh):
 #   - In GitLab CI: BASE_REF = $CI_MERGE_REQUEST_DIFF_BASE_SHA,
-#     HEAD_REF = HEAD.
+#     HEAD_REF = $CI_MERGE_REQUEST_SOURCE_BRANCH_SHA, then HEAD.
 #   - Locally: BASE_REF = $(git merge-base origin/main HEAD),
 #     HEAD_REF = HEAD.
+#
+# HEAD is the wrong head ref in a merged-result pipeline. There $HEAD
+# is the source merged into the target, so BASE_REF..HEAD holds the
+# branch's own commits plus every commit the target accumulated since
+# the branch was cut. Those extra commits are already on main and the
+# merge request does not own them: it cannot edit a message on its
+# target, so the only response to a finding there is a rebase, which
+# has nothing to do with the rule being checked. They carry no
+# true-positive case, only the risk of one.
+#
+# The risk is not hypothetical. Every commit before e271004 -- the
+# commit that added this guard -- is unsigned, so a branch cut before
+# it fails on roughly 54 commits its author cannot fix. Rebasing
+# clears that today, but two things reopen it on branches that are
+# already current: tightening the shared grammar (a required ticket
+# footer, a shorter subject limit) turns commits that already passed
+# on main into violations, and a maintainer pushing straight to main
+# -- branch protection allows it -- puts one unchecked commit in every
+# open branch's range at once.
+#
+# $CI_MERGE_REQUEST_SOURCE_BRANCH_SHA is the un-squashed branch tip,
+# which cuts the range to exactly the commits the merge request
+# authored.
 #
 # Exit codes:
 #   0  -- every non-merge commit in the range passes
@@ -48,13 +71,34 @@ if [[ -z "${BASE_REF}" ]]; then
     fi
 fi
 
-HEAD_REF="${2:-HEAD}"
+HEAD_REF="${2:-}"
+if [[ -z "${HEAD_REF}" ]]; then
+    # GitLab sets this in every MR pipeline context, but the variable
+    # naming a commit and the clone having fetched it are separate
+    # facts -- a shallow fetch can satisfy the first without the
+    # second. Falling back to HEAD there keeps the old, over-wide
+    # behaviour rather than failing the job.
+    #
+    # The `^{commit}` suffix is load-bearing. A bare
+    # `git rev-parse --verify <40-hex>` succeeds on any syntactically
+    # valid object name whether or not the object was fetched, so
+    # without it an unfetched sha passes this guard and `git rev-list`
+    # then dies on an invalid revision range, taking the script with it
+    # under `set -e`. Peeling to ^{commit} is what makes the check
+    # test existence rather than spelling.
+    if [[ -n "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-}" ]] \
+        && git rev-parse --verify "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA}^{commit}" >/dev/null 2>&1; then
+        HEAD_REF="${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA}"
+    else
+        HEAD_REF="HEAD"
+    fi
+fi
 
-if ! git rev-parse --verify "${BASE_REF}" >/dev/null 2>&1; then
+if ! git rev-parse --verify "${BASE_REF}^{commit}" >/dev/null 2>&1; then
     echo "error: base ref '${BASE_REF}' does not resolve" >&2
     exit 2
 fi
-if ! git rev-parse --verify "${HEAD_REF}" >/dev/null 2>&1; then
+if ! git rev-parse --verify "${HEAD_REF}^{commit}" >/dev/null 2>&1; then
     echo "error: head ref '${HEAD_REF}' does not resolve" >&2
     exit 2
 fi

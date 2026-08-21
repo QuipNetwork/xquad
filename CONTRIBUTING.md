@@ -200,6 +200,22 @@ silently skipped for contributors who do not have one.
 - Keep changes focused and minimal.
 - Reference any related issues in the MR description.
 - Ensure all CI pipeline stages pass. Use the checklist in the template.
+- The MR **title** must follow Conventional Commits, exactly as a commit
+  subject does -- squash-on-merge makes the title the subject of the
+  squash commit that lands on `main`. CI enforces this in `verify:policy`
+  (`scripts/check-mr-title.sh`, which reuses the same grammar as the
+  `commit-msg` hook). GitLab's three draft prefixes
+  (`[Draft]`, `Draft:`, `(Draft)`) are stripped before the check, so a
+  draft MR is not failed for being a draft. Nothing else is stripped --
+  `WIP:` has not been a draft marker since GitLab 14.0 and is judged as
+  ordinary title text.
+
+  GitLab starts pipelines on push, not on title edits, so a title changed
+  after your last push is not rechecked. Retitle before pushing rather
+  than after.
+
+  To try a title before pushing:
+  `bash scripts/check-mr-title.sh 'feat(xqvm): add an opcode'`
 
 ### Atomic Spec-MR Rule
 
