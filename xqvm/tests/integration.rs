@@ -1040,6 +1040,37 @@ fn unlimited_steps_runs_to_completion() {
 }
 
 #[test]
+fn step_limit_equal_to_instruction_count_succeeds() {
+    // Three instructions and no HALT: the program ends by running off the
+    // end of the stream after executing exactly three instructions. The
+    // limit bounds instructions executed, so the end-of-stream probe is
+    // neither charged nor counted -- the Python VM's loop shape.
+    let mut b = InstructionBuilder::new();
+    b.emit_push(1).emit_push(2).emit_add();
+    let bytecode = b.build().unwrap();
+
+    let mut vm = Vm::new();
+    vm.set_step_limit(3);
+    vm.run(&bytecode)
+        .expect("a budget of exactly the instruction count must suffice");
+    assert_eq!(vm.steps(), 3, "the end-of-stream probe must not count");
+    assert_eq!(vm.stack(), &[3]);
+}
+
+#[test]
+fn step_limit_one_below_instruction_count_fails() {
+    let mut b = InstructionBuilder::new();
+    b.emit_push(1).emit_push(2).emit_add();
+    let bytecode = b.build().unwrap();
+
+    let mut vm = Vm::new();
+    vm.set_step_limit(2);
+    let err = vm.run(&bytecode).expect_err("two steps is one too few");
+    assert!(matches!(err, Error::StepLimitExceeded { .. }));
+    assert_eq!(vm.steps(), 2, "both budgeted instructions ran");
+}
+
+#[test]
 fn invalid_shift_negative() {
     let err = run_err(|b| {
         b.emit_push(1).emit_push(-1).emit_shl().emit_halt();
