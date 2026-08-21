@@ -1,0 +1,35 @@
+; energy_partial_overflow: a partial sum leaves the i64 range even though
+; the exact total is representable.
+;
+; linear = {0: i64::MAX, 1: 5, 2: -10}, sample = [1, 1, 1].
+; Sorted key order: h = i64::MAX, then i64::MAX + 5 overflows before the
+; -10 term could bring the total back to i64::MAX - 5. Every partial sum
+; is checked (HLF.md "Accumulation order"), so ENERGY must raise rather
+; than return the exact total.
+
+PUSH 3
+BQMX r0
+PUSH 0
+PUSH 9223372036854775807
+SETLINE r0
+PUSH 1
+PUSH 5
+SETLINE r0
+PUSH 2
+PUSH -10
+SETLINE r0
+
+PUSH 3
+BSMX r1
+PUSH 0
+PUSH 1
+SETLINE r1
+PUSH 1
+PUSH 1
+SETLINE r1
+PUSH 2
+PUSH 1
+SETLINE r1
+
+ENERGY r0 r1
+HALT
