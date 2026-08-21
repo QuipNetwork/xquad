@@ -472,16 +472,22 @@ def compute_energy(model: XQMX, sample: XQMX) -> int:
     # (spec/xqvm/SPEC.md), because it decides which partial sums a
     # checked-arithmetic implementation sees.
 
-    # Linear contribution
+    # Linear contribution. Every term product and every partial sum is
+    # checked, matching XqmxModel::energy on the Rust VM: with unbounded
+    # ints, only per-step checks make the same intermediates fault.
     for i, coeff in model.iter_linear():
         x_i = sample.get_linear(i)
-        energy += coeff * x_i
+        term = check_i64(coeff * x_i, "ENERGY linear term")
+        energy = check_i64(energy + term, "ENERGY")
 
-    # Quadratic contribution
+    # Quadratic contribution, checked the same way: the coefficient is
+    # multiplied by x_i first, then by x_j, mirroring the Rust order.
     for (i, j), coeff in model.iter_quadratic():
         x_i = sample.get_linear(i)
         x_j = sample.get_linear(j)
-        energy += coeff * x_i * x_j
+        term = check_i64(coeff * x_i, "ENERGY quadratic term")
+        term = check_i64(term * x_j, "ENERGY quadratic term")
+        energy = check_i64(energy + term, "ENERGY")
 
     return energy
 

@@ -590,6 +590,34 @@ class TestComputeEnergy:
         # Energy = 1*1 + 2*1 + 3*1*1 = 6
         assert energy == 6
 
+    def test_energy_partial_sum_overflow_raises(self):
+        """A partial sum past the i64 range raises even if the total fits."""
+        model = XQMX.binary_model(size=3)
+        model.set_linear(0, I64_MAX)
+        model.set_linear(1, 5)
+        model.set_linear(2, -10)
+
+        sample = XQMX.binary_sample(size=3)
+        sample.set_linear(0, 1)
+        sample.set_linear(1, 1)
+        sample.set_linear(2, 1)
+
+        # Sorted order: I64_MAX, then +5 overflows before -10 could bring
+        # the exact total (I64_MAX - 5) back into range.
+        with pytest.raises(ArithmeticOverflow):
+            compute_energy(model, sample)
+
+    def test_energy_term_product_overflow_raises(self):
+        """A term product past the i64 range raises before the sum begins."""
+        model = XQMX.spin_model(size=1)
+        model.set_linear(0, I64_MIN)
+
+        sample = XQMX.spin_sample(size=1)
+        sample.set_linear(0, -1)
+
+        with pytest.raises(ArithmeticOverflow):
+            compute_energy(model, sample)
+
     def test_energy_size_mismatch_raises(self):
         """Size mismatch raises ValueError."""
         model = XQMX.binary_model(size=5)
