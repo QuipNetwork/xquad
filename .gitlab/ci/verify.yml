@@ -58,7 +58,7 @@ verify:rust:
 # release notes), the atomic spec-MR guard, and the commit-message
 # guard -- merged into one job running `make -k lint-policy`
 # (fmt-check-toml lint-deny-rs render-changelog check-atomic-spec
-# check-commit-messages). All four ask "does the repo still agree with
+# check-commit-messages). All five ask "does the repo still agree with
 # its own policy", not "does the workspace compile / behave" -- see
 # setup.yml's verify-vs-test header.
 #
@@ -72,7 +72,35 @@ verify:rust:
 # keep every policy check reachable from a local `make -k lint-policy`
 # and not just from this YAML.
 #
-# `GIT_DEPTH: 0` is required by three of the four checks: git-cliff walks
+# `scripts/check-mr-title.sh` is the one check in this job that breaks
+# that rule, deliberately. It asks the same policy question as the
+# rest -- does the repo agree with its own conventional-commit
+# grammar -- but its input is $CI_MERGE_REQUEST_TITLE, pipeline
+# metadata with no local equivalent, so a `make` target for it could
+# never do anything locally except print a skip line. That would make
+# `lint-policy` look more locally-reproducible than it is, which is
+# the property the aggregate exists to protect. So it is called
+# directly from the script block instead, and stays out of
+# lint-policy.
+#
+# The check exists because the merge train used to do this work for
+# free. squash_option is `always` and `squash_commit_template` is
+# %{title}, so every merge puts the MR title on main as an authored
+# commit subject; the train ref already contained that squash commit,
+# so check-commit-messages saw the title as a commit and applied the
+# grammar. Disabling the train removed the only pipeline that ever saw
+# it: the MR pipeline runs before the squash commit exists, and the
+# post-merge main pipeline resolves `merge-base(origin/main, HEAD)` to
+# HEAD and finds an empty range. A bad title now reaches main, where
+# cliff.toml's `filter_unconventional = true` drops it from the
+# release notes silently rather than loudly.
+#
+# It needs no rule of its own despite this job running on every
+# pipeline: off an MR pipeline $CI_MERGE_REQUEST_TITLE is unset, and
+# the script prints a skip line and exits 0. Same degrade-quietly
+# shape as the two range guards on an empty commit range.
+#
+# `GIT_DEPTH: 0` is required by three of the five checks: git-cliff walks
 # full history to render changelog sections (this mirrors
 # `release:notes`'s override), and the two range-based guards
 # (atomic-spec-mr, commit-messages) need the merge-base between this
@@ -106,7 +134,7 @@ verify:rust:
 # 5.2 and git 2.47 at /usr/bin via its buildpack-deps base, so no `apk
 # add` equivalent is needed.
 #
-# One rule set for all four checks: lint:atomic-spec-mr used to be
+# One rule set for all five checks: lint:atomic-spec-mr used to be
 # gated to `$CI_PIPELINE_SOURCE == "merge_request_event"` only, on the
 # grounds that "the guard is about MR shape, not about branch-level
 # pushes" -- cargo-deny and the changelog render, by contrast, always
@@ -151,7 +179,17 @@ verify:policy:
         - !reference [.fragments, cargo-tools-only]
         - git fetch origin main --quiet
     script:
-        - make -k lint-policy
+        # Two commands, not one, because check-mr-title is not a
+        # lint-policy prerequisite (see the note above). Neither
+        # failure may hide the other -- that is the same property `-k`
+        # buys inside the make run -- so each records its own status
+        # rather than aborting the script, and the last line fails the
+        # job if either did. Without this, a lint-policy failure would
+        # end the script and a bad title would not surface until the
+        # next push.
+        - make -k lint-policy || POLICY_FAILED=1
+        - bash scripts/check-mr-title.sh || TITLE_FAILED=1
+        - test -z "${POLICY_FAILED-}${TITLE_FAILED-}"
 
 # `make lint-py` / `make fmt-check-py` run ruff only, through a separately
 # pinned `uvx` install (see the Makefile's RUFF_VERSION) -- neither needs

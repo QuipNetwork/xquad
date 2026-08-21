@@ -150,9 +150,19 @@ Title the MR `release: vX.Y.Z`. The project squashes on merge with
 `squash_commit_template = %{title}`, so the title becomes a commit
 subject and `verify:policy` checks it against the commit grammar --
 `release` is a type in `scripts/commit-grammar.sh` for exactly this
-reason, and git-cliff drops it. The check first sees that subject on
-the merge-train ref, so a non-conforming title passes every pipeline on
-the MR itself and fails only once the train has started.
+reason, and git-cliff drops it.
+
+`verify:policy` checks the title on the merge request's own pipelines,
+via `scripts/check-mr-title.sh`, so a non-conforming title fails while
+correcting it is still cheap. It used to fail only once a merge train
+had started, because the squash commit carrying the title existed only
+on the train ref; disabling the train left the title unchecked
+everywhere until the explicit check replaced that coverage.
+
+One limitation to know about when retitling a release MR: GitLab starts
+pipelines on push, not on title edits. A title changed after the last
+push is not rechecked, so retitle before your final push rather than
+after.
 
 Open the MR targeting `main`. Both @kleczkowski and @meganathanmanish
 must approve. After approval, merge using any strategy — squash and

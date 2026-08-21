@@ -24,9 +24,25 @@
 #
 # Defaults:
 #   - In GitLab CI: BASE_REF = $CI_MERGE_REQUEST_DIFF_BASE_SHA,
-#     HEAD_REF = HEAD.
+#     HEAD_REF = $CI_MERGE_REQUEST_SOURCE_BRANCH_SHA, then HEAD.
 #   - Locally: BASE_REF = $(git merge-base origin/main HEAD),
 #     HEAD_REF = HEAD.
+#
+# HEAD is the wrong head ref in a merged-result pipeline, where $HEAD is
+# the source merged into the target. BASE_REF..HEAD then spans the files
+# the target gained since the merge-base as well as the ones the merge
+# request touched, which fails a docs-only MR the moment main gains an
+# unrelated xqvm/src commit -- a finding whose only remedy is a rebase,
+# which has nothing to do with the four-layer rule. It also widens the
+# exemption scan below, so an Atomic-Spec-Exempt trailer on any main
+# commit would bypass the guard for every open merge request.
+#
+# This is the same resolution scripts/check-commit-messages.sh does, for
+# the same reason. Note it is a different question from the two-dot
+# versus three-dot choice at the diff below: that comment argues for
+# `..` so target-drift is not masked in stacked MRs, and it assumes a
+# HEAD_REF that is the branch tip. Preferring the source branch sha is
+# what makes that assumption true.
 #
 # Escape hatch:
 #   If a commit message in the MR range carries a git-style trailer
@@ -56,13 +72,21 @@ if [[ -z "${BASE_REF}" ]]; then
     fi
 fi
 
-HEAD_REF="${2:-HEAD}"
+HEAD_REF="${2:-}"
+if [[ -z "${HEAD_REF}" ]]; then
+    if [[ -n "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-}" ]] \
+        && git rev-parse --verify "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA}^{commit}" >/dev/null 2>&1; then
+        HEAD_REF="${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA}"
+    else
+        HEAD_REF="HEAD"
+    fi
+fi
 
-if ! git rev-parse --verify "${BASE_REF}" >/dev/null 2>&1; then
+if ! git rev-parse --verify "${BASE_REF}^{commit}" >/dev/null 2>&1; then
     echo "error: base ref '${BASE_REF}' does not resolve" >&2
     exit 2
 fi
-if ! git rev-parse --verify "${HEAD_REF}" >/dev/null 2>&1; then
+if ! git rev-parse --verify "${HEAD_REF}^{commit}" >/dev/null 2>&1; then
     echo "error: head ref '${HEAD_REF}' does not resolve" >&2
     exit 2
 fi
@@ -90,8 +114,26 @@ fi
 # individual commit messages. Re-scan the un-squashed branch tip when
 # CI_MERGE_REQUEST_SOURCE_BRANCH_SHA is available (set by GitLab in all MR
 # and merge-train pipeline contexts).
+#
+# Normally redundant since HEAD_REF now resolves to that same sha, so the
+# scan above already covered it. It still earns its place for a caller
+# that passes HEAD_REF explicitly as $2 while the variable is set, and it
+# costs one rev-parse when it does not fire. Kept rather than deleted
+# because removing it would change behaviour for that caller.
+#
+# The `^{commit}` suffix on every rev-parse in this script is
+# load-bearing. `git rev-parse --verify` answers "does this parse to one
+# object name", not "does that object exist": a full 40-hex sha needs no
+# object lookup to parse, so the bare form returns it whether or not the
+# clone fetched it. Every sha this script validates -- both CI variables
+# and this one -- is full 40-hex, so the bare form was blind to exactly
+# the input class it receives. Peeling to ^{commit} forces git to read
+# the object's type, which makes existence a precondition. Without it a
+# missing sha here silently skips the bypass (set -e is suspended inside
+# an `if` condition, so _has_exempt just returns non-zero) and an MR with
+# a legitimate Atomic-Spec-Exempt trailer is blocked.
 if [[ -n "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-}" ]] \
-    && git rev-parse --verify "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA}" >/dev/null 2>&1 \
+    && git rev-parse --verify "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA}^{commit}" >/dev/null 2>&1 \
     && _has_exempt "${BASE_REF}" "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA}"; then
     echo "guard: Atomic-Spec-Exempt trailer present in branch commit (squash train) — bypassed"
     exit 0
