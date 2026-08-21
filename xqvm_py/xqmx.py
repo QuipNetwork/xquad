@@ -309,8 +309,12 @@ def row_sum(xqmx: XQMX, row: int) -> int:
 
     Used primarily with SAMPLE mode to count active variables in a row.
     """
-    indices = row_indices(xqmx, row)
-    return sum(xqmx.get_linear(i) for i in indices)
+    total = 0
+    # Checked per partial sum, matching the Rust VM: reductions over
+    # coefficients are subject to the SPEC.md overflow rule.
+    for i in row_indices(xqmx, row):
+        total = check_i64(total + xqmx.get_linear(i), "ROWSUM")
+    return total
 
 
 def col_sum(xqmx: XQMX, col: int) -> int:
@@ -319,8 +323,11 @@ def col_sum(xqmx: XQMX, col: int) -> int:
 
     Used primarily with SAMPLE mode to count active variables in a column.
     """
-    indices = col_indices(xqmx, col)
-    return sum(xqmx.get_linear(i) for i in indices)
+    total = 0
+    # Checked per partial sum; see row_sum.
+    for i in col_indices(xqmx, col):
+        total = check_i64(total + xqmx.get_linear(i), "COLSUM")
+    return total
 
 
 def row_find(xqmx: XQMX, row: int, value: int) -> int:

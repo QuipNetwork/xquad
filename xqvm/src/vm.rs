@@ -1918,8 +1918,19 @@ impl Vm {
             len: grid.rows(),
         })?;
         let cols = grid.cols();
-        let row_start = usize_row * cols;
-        let sum: i64 = (0..cols).map(|c| grid.linear(row_start + c)).sum();
+        let oob = || Error::IndexOutOfBounds {
+            pos,
+            index: row,
+            len: grid.rows(),
+        };
+        let row_start = usize_row.checked_mul(cols).ok_or_else(oob)?;
+        // A reduction over coefficients is checked per partial sum
+        // (spec/xqvm/SPEC.md overflow rule): wrapping here was observable.
+        let sum = (0..cols).try_fold(0i64, |acc, c| {
+            let idx = row_start.checked_add(c).ok_or_else(oob)?;
+            acc.checked_add(grid.linear(idx))
+                .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })
+        })?;
         self.push_stack(sum, pos)?;
         Ok(StepResult::Continue)
     }
@@ -1941,7 +1952,19 @@ impl Vm {
         })?;
         let rows = grid.rows();
         let cols = grid.cols();
-        let sum: i64 = (0..rows).map(|r| grid.linear(r * cols + usize_col)).sum();
+        // Checked like ROWSUM: partial sums are normative, and a huge column
+        // index must not wrap the index computation either.
+        let sum = (0..rows).try_fold(0i64, |acc, r| {
+            let idx = (r * cols)
+                .checked_add(usize_col)
+                .ok_or(Error::IndexOutOfBounds {
+                    pos,
+                    index: col,
+                    len: cols,
+                })?;
+            acc.checked_add(grid.linear(idx))
+                .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })
+        })?;
         self.push_stack(sum, pos)?;
         Ok(StepResult::Continue)
     }
