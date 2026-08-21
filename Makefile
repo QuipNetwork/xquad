@@ -118,7 +118,31 @@ check-docs-handwritten: check-docs-drift check-docs-readme
 # this comment is the justification for using --workspace here at all,
 # and a reader auditing it against `members` should not find a member
 # it does not account for.
+# Built in a scratch target dir AND under a scratch CARGO_HOME, both
+# removed first, so the check depends on the checkout alone.
+#
+# CI caches all of target/, .cargo/registry/ and .cargo/git/ keyed on
+# Cargo.lock, and every branch in a stack shares one Cargo.lock, so those
+# caches are shared between commits that do not share sources. The
+# workspace version is the same `-dev` string on all of them, which leaves
+# cargo no way to tell one commit's staged xqvm from another's: for a
+# given package id it neither re-extracts the .crate over an existing
+# source directory of that name, nor rebuilds an rlib it already has. A
+# sibling job's xqvm is linked instead of this commit's and the verify
+# step fails on a method the tree plainly has.
+#
+# Both halves of that state have to go, because the dry-run writes to
+# both. Verifying xqcli resolves xqvm and xqasm through the temporary
+# local registry rather than by path, and cargo extracts those .crate
+# files into $CARGO_HOME/registry/src/ -- the shared, cached one. Scoping
+# only CARGO_TARGET_DIR left that extraction pointed at the cache and the
+# stale-source failure survived; scoping CARGO_HOME as well is what makes
+# the check hermetic. The cost is a cold index and dependency fetch on
+# every run of this target, which is the price of the guarantee.
 check-crate-publish:
+	rm -rf target/publish-check
+	CARGO_HOME=$(CURDIR)/target/publish-check/cargo-home \
+	CARGO_TARGET_DIR=target/publish-check \
 	cargo publish --dry-run --locked --workspace
 
 # Needs maturin, twine and uv on PATH -- the same kind of prerequisite

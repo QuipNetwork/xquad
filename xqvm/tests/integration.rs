@@ -991,6 +991,50 @@ fn step_limit_exceeded() {
 }
 
 #[test]
+fn zero_step_limit_executes_nothing() {
+    // The limit is exact. `0` used to mean `u64::MAX`, which made the safest
+    // looking value the most dangerous one -- an embedder taking a step limit
+    // from untrusted input would run unbounded. See QUI-1053.
+    let mut b = InstructionBuilder::new();
+    let top = b.label();
+    b.place(top).unwrap().emit_nop().emit_jump(top);
+    let bytecode = b.build().unwrap();
+
+    let mut vm = Vm::new();
+    vm.set_step_limit(0);
+    let err = vm
+        .run(&bytecode)
+        .expect_err("a zero step limit must execute nothing");
+    assert!(matches!(err, Error::StepLimitExceeded { .. }));
+    assert_eq!(vm.steps(), 0, "no instruction may have run");
+}
+
+#[test]
+fn unlimited_steps_runs_to_completion() {
+    // Opting out of the bound is still possible, but it has to be said aloud.
+    let mut b = InstructionBuilder::new();
+    for _ in 0..100 {
+        b.emit_nop();
+    }
+    b.emit_halt();
+    let bytecode = b.build().unwrap();
+
+    let mut bounded = Vm::new();
+    bounded.set_step_limit(10);
+    assert!(matches!(
+        bounded.run(&bytecode).expect_err("10 steps is not enough"),
+        Error::StepLimitExceeded { .. }
+    ));
+
+    let mut unbounded = Vm::new();
+    unbounded.set_unlimited_steps();
+    unbounded
+        .run(&bytecode)
+        .expect("runs to HALT with no bound");
+    assert_eq!(unbounded.steps(), 101);
+}
+
+#[test]
 fn invalid_shift_negative() {
     let err = run_err(|b| {
         b.emit_push(1).emit_push(-1).emit_shl().emit_halt();

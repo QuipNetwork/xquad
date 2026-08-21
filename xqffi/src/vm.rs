@@ -231,8 +231,16 @@ impl PyVm {
     }
 
     /// Set the instruction-step limit (safety cap against runaway loops).
+    ///
+    /// Exact: `0` permits no instructions. Use `set_unlimited_steps()` for an
+    /// unbounded run.
     fn set_step_limit(&mut self, limit: u64) {
         let _ = self.inner.set_step_limit(limit);
+    }
+
+    /// Remove the step limit, allowing the program to run to completion.
+    fn set_unlimited_steps(&mut self) {
+        let _ = self.inner.set_unlimited_steps();
     }
 
     /// Execute `bytecode` (raw wire-format bytes) on this VM.

@@ -188,7 +188,7 @@ class VM:
         self._backend = backend
         self._calldata: list = []
         self._output_slots: int = 0
-        self._step_limit: int = 0
+        self._step_limit: int | None = None
 
         if backend == VMBackend.RUST:
             self._rust_vm = _RustVm()
@@ -207,7 +207,11 @@ class VM:
     def set_output_slots(self, n: int) -> None:
         self._output_slots = n
 
-    def set_step_limit(self, limit: int) -> None:
+    def set_step_limit(self, limit: int | None) -> None:
+        """Cap the instructions a run may execute.
+
+        The limit is exact: `0` permits none at all. `None` is unlimited.
+        """
         self._step_limit = limit
 
     # -- execution -----------------------------------------------------------
@@ -247,7 +251,7 @@ class VM:
     def reset(self) -> None:
         self._calldata = []
         self._output_slots = 0
-        self._step_limit = 0
+        self._step_limit = None
         if self._backend == VMBackend.RUST:
             self._rust_vm.reset()
         else:
@@ -262,7 +266,9 @@ class VM:
         cd = _prepare_calldata_rust(self._calldata)
         self._rust_vm.set_calldata(cd)
         self._rust_vm.set_output_slots(self._output_slots)
-        if self._step_limit:
+        if self._step_limit is None:
+            self._rust_vm.set_unlimited_steps()
+        else:
             self._rust_vm.set_step_limit(self._step_limit)
         self._rust_vm.run(bytecode)
 

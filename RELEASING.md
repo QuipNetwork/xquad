@@ -68,7 +68,9 @@ Before cutting a tag:
    non-breaking bumps (`0.1.x → 0.1.y`) a ping is courtesy.
 3. **Verify workspace version is bumped.** Every crate's
    `Cargo.toml` and every Python package's `pyproject.toml` must
-   agree on the version being tagged.
+   agree on the version being tagged. Between releases main carries
+   the next version with a `-dev` suffix, so this step is normally a
+   matter of dropping that suffix rather than choosing a new number.
 4. **Preview release notes** with `make changelog-release VERSION=vX.Y.Z`.
    The output `CHANGELOG.md` is gitignored; it lets you sanity-check
    what the GitLab Release page will say before tagging. If a
@@ -122,6 +124,23 @@ git checkout -b release/vX.Y.Z main
 #    (standalone workspace with its own lock; no job builds it with
 #    --locked, so a stale xqvm entry there drifts silently for releases).
 git commit -s -am "chore: bump workspace to X.Y.Z"
+
+#    Main carries `X.Y.Z-dev` (Rust) / `X.Y.Z.devN` (Python) between
+#    releases, so this step usually just drops the suffix. The suffix is
+#    load-bearing, not decorative: `release:validate` runs
+#    `cargo publish --dry-run --workspace` on every pipeline, and if the
+#    workspace version names an already-published release then a sibling
+#    crate's `version = "X.Y.Z"` dependency can be satisfied from
+#    crates.io instead of the local source. A branch that adds an API to
+#    xqvm and calls it from xqcli then fails to verify, and a branch that
+#    does not silently verifies against the published crate rather than
+#    its own. An unpublished version makes the local source the only
+#    candidate. After tagging, open a follow-up that bumps main to the
+#    next `-dev` version.
+#
+#    The two ecosystems spell prereleases differently and always have:
+#    Cargo wants SemVer (`0.4.0-dev`, `0.3.0-rc1`), Python wants PEP 440
+#    (`0.4.0.dev0`, `0.3.0rc1`). One version number, two spellings.
 
 # 3. Push and open an MR using the "release" template.
 git push -u origin release/vX.Y.Z

@@ -110,8 +110,17 @@ class TestSession:
         s.set_step_limit(3)
         with pytest.raises(RuntimeError, match="StepLimitExceeded"):
             s.run()
-        s.set_step_limit(0)
+        s.set_step_limit(None)
         assert dict(s.run().outputs) == {0: 3}
+
+    def test_zero_step_limit_executes_nothing(self):
+        # The limit is exact; `None`, not `0`, is how you ask for no bound.
+        p = Program.from_source(ADD_CALLDATA_SRC)
+        s = p.session(output_slots=1)
+        s.set_calldata([1, 2])
+        s.set_step_limit(0)
+        with pytest.raises(RuntimeError, match="StepLimitExceeded"):
+            s.run()
 
     def test_stack_and_steps_exposed(self):
         p = Program.from_source(ADD_CALLDATA_SRC)
