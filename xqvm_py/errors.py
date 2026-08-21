@@ -113,6 +113,14 @@ class MemoryLimitExceeded(XQVMError):
         )
 
 
+class StepLimitExceeded(XQVMError):
+    """Raised when execution runs past its step budget."""
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        super().__init__(f"Step limit exceeded: execution exceeded {limit} steps")
+
+
 class TargetNotFound(XQVMError):
     """Raised when a jump target does not exist."""
 

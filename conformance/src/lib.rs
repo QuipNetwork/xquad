@@ -22,7 +22,10 @@
 //!
 //! - `program.xqasm` — assembly source (canonical, human-readable).
 //! - `inputs.json` — `{"calldata": [i64, ...]}`.
-//! - `expected.json` — `{"outputs": [i64|null, ...], "final_stack": [i64, ...]}`.
+//! - `expected.json` — either `{"outputs": [i64|null, ...], "final_stack":
+//!   [i64, ...]}` for a program that runs to completion, or `{"error":
+//!   "<FAULT>"}` for one that must fault. See `conformance/README.md` for
+//!   the fault vocabulary and how each implementation maps onto it.
 //!
 //! The harness assembles `program.xqasm` in-process for every run.
 //! Encoding correctness is owned by the `xqasm` crate's own test suite,
@@ -45,10 +48,24 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
+/// Shape of the Python runner's stdout. A run either reports results or
+/// reports the fault that stopped it; `error` carries the raising
+/// exception's class name, which the harness maps onto a [`Fault`].
 #[derive(Deserialize)]
 struct PyOut {
-    outputs: Vec<Option<serde_json::Value>>,
+    outputs: Option<Vec<Option<serde_json::Value>>>,
+    #[serde(default)]
     final_stack: Vec<serde_json::Value>,
+    error: Option<PyError>,
+}
+
+#[derive(Deserialize)]
+struct PyError {
+    /// Python exception class name, e.g. `DivisionByZero`.
+    r#type: String,
+    /// Human-readable message, surfaced only in mismatch diagnostics.
+    #[serde(default)]
+    message: String,
 }
 
 /// Parsed form of `inputs.json`.
@@ -60,30 +77,156 @@ pub struct Inputs {
     /// Number of output slots; defaults to 16 to match `xquad run`.
     #[serde(default = "default_output_slots")]
     pub output_slots: usize,
+    /// Step budget for the run. `None` leaves each implementation on its
+    /// own default, which is what every vector that is not specifically
+    /// exercising the budget wants.
+    #[serde(default)]
+    pub step_limit: Option<u64>,
 }
 
 const fn default_output_slots() -> usize {
     16
 }
 
-/// Parsed form of `expected.json`. Outputs use `null` for unset slots so
-/// the JSON representation is stable across runs.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct Expected {
-    /// Expected output slots; `None` means the slot must be unset.
-    pub outputs: Vec<Option<i64>>,
-    /// Expected residual stack contents after HALT.
+/// Implementation-neutral identity of a VM fault.
+///
+/// Neither implementation's spelling can serve as the identity: the Rust
+/// VM raises enum variants and the Python VM raises exception classes,
+/// and the two vocabularies do not line up one-to-one. These names are
+/// the third vocabulary both sides map onto, and they are what a vector
+/// writes in `expected.json`. The full mapping is documented in
+/// `conformance/README.md`.
+///
+/// Byte position is deliberately not part of the identity: comparing the
+/// variant alone keeps vectors from turning brittle against unrelated
+/// codegen changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Fault {
+    /// A pop was attempted on an empty stack.
+    StackUnderflow,
+    /// The value stack exceeded its depth limit.
+    StackOverflow,
+    /// An operand had the wrong value kind.
+    TypeMismatch,
+    /// A register was read while unset.
+    UnsetRegister,
+    /// Division or modulo by zero.
+    DivisionByZero,
+    /// An index fell outside the addressed container.
+    IndexOutOfBounds,
+    /// A loop instruction executed with no active loop.
+    NoActiveLoop,
+    /// A `RANGE`/`ITER` had no matching `NEXT`.
+    UnmatchedLoop,
+    /// A jump named a target outside the program.
+    BadJumpTarget,
+    /// A jump named a label the program does not define.
+    InvalidLabel,
+    /// An unknown opcode byte was decoded.
+    BadOpcode,
+    /// An instruction's operands ran past the end of the program.
+    TruncatedInstruction,
+    /// An `INPUT` addressed a calldata slot that does not exist.
+    CallDataIndex,
+    /// An `OUTPUT` addressed an output slot that does not exist.
+    OutputIndex,
+    /// A model and a sample disagreed on variable count.
+    SizeMismatch,
+    /// Two vector operands disagreed on length.
+    VecLengthMismatch,
+    /// Execution ran past its step budget.
+    StepLimitExceeded,
+    /// An allocating instruction ran past its allocation budget.
+    MemoryLimitExceeded,
+    /// A shift amount fell outside the representable range.
+    InvalidShift,
+    /// Grid dimensions were not positive, or did not fit the model.
+    InvalidGridDimensions,
+    /// An `XQMX`/`XSMX` allocation used `k < 2`.
+    InvalidDiscreteK,
+    /// An operation was invalid for the model's current mode.
+    XqmxMode,
+    /// A tracer refused a step.
+    TraceFailed,
+}
+
+/// Parsed form of `expected.json`.
+///
+/// A vector asserts either an outcome (`outputs` plus `final_stack`) or a
+/// fault (`error`), never both and never neither. Outputs use `null` for
+/// unset slots so the JSON representation is stable across runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum Expected {
+    /// The program must run to completion with these results.
+    Success {
+        /// Expected output slots; `None` means the slot must be unset.
+        outputs: Vec<Option<i64>>,
+        /// Expected residual stack contents after HALT.
+        final_stack: Vec<i64>,
+    },
+    /// The program must fault with this identity.
+    Failure {
+        /// The fault both implementations are required to raise.
+        error: Fault,
+    },
+}
+
+/// Raw shape of `expected.json` before the success/failure split is
+/// validated. Deserialising through this lets a vector that asserts both
+/// (or neither) fail as an authoring mistake rather than silently
+/// preferring one half.
+#[derive(Deserialize)]
+struct RawExpected {
+    outputs: Option<Vec<Option<i64>>>,
     #[serde(default)]
-    pub final_stack: Vec<i64>,
+    final_stack: Vec<i64>,
+    error: Option<Fault>,
+}
+
+impl<'de> Deserialize<'de> for Expected {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+
+        let raw = RawExpected::deserialize(deserializer)?;
+        match (raw.outputs, raw.error) {
+            (Some(_), Some(_)) => Err(D::Error::custom(
+                "expected.json asserts both an outcome and a fault: \
+                 supply either `outputs`/`final_stack` or `error`, not both",
+            )),
+            (Some(outputs), None) => Ok(Self::Success {
+                outputs,
+                final_stack: raw.final_stack,
+            }),
+            (None, Some(error)) => Ok(Self::Failure { error }),
+            (None, None) => Err(D::Error::custom(
+                "expected.json asserts nothing: supply `outputs` for a \
+                 successful run or `error` for a fault",
+            )),
+        }
+    }
 }
 
 /// Execution result in a form directly comparable to [`Expected`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Outcome {
-    /// Output slot contents observed after execution.
-    pub outputs: Vec<Option<i64>>,
-    /// Residual stack contents after HALT.
-    pub final_stack: Vec<i64>,
+#[serde(untagged)]
+pub enum Outcome {
+    /// The program ran to completion.
+    Success {
+        /// Output slot contents observed after execution.
+        outputs: Vec<Option<i64>>,
+        /// Residual stack contents after HALT.
+        final_stack: Vec<i64>,
+    },
+    /// The program faulted.
+    Failure {
+        /// Identity of the fault the implementation raised.
+        error: Fault,
+    },
 }
 
 /// Loaded conformance vector with all on-disk artifacts materialised.
@@ -149,13 +292,13 @@ pub fn run_rust(vector: &Vector) -> Result<Outcome, String> {
         .map(RegVal::Int)
         .collect();
 
-    let outcome = run_rust_program(&program, &calldata, vector.inputs.output_slots)?;
+    let outcome = run_rust_program(&program, &calldata, &vector.inputs);
 
     // Bytecode round-trip: encode → decode → execute and verify parity.
     let bytecode = program.encode();
     let decoded =
         xqvm::Program::decode(&bytecode).map_err(|e| format!("bytecode decode failed: {e:?}"))?;
-    let bc_outcome = run_rust_program(&decoded, &calldata, vector.inputs.output_slots)?;
+    let bc_outcome = run_rust_program(&decoded, &calldata, &vector.inputs);
     if outcome != bc_outcome {
         return Err(format!(
             "Rust bytecode parity mismatch:\n  source:   {outcome:?}\n  bytecode: {bc_outcome:?}"
@@ -168,17 +311,23 @@ pub fn run_rust(vector: &Vector) -> Result<Outcome, String> {
 fn run_rust_program(
     program: &xqvm::Program,
     calldata: &[xqvm::RegVal],
-    output_slots: usize,
-) -> Result<Outcome, String> {
+    inputs: &Inputs,
+) -> Outcome {
     use xqvm::{RegVal, Vm};
 
     let mut vm = Vm::new();
     let _ = vm
         .set_calldata(calldata.to_vec())
-        .set_output_slots(output_slots);
+        .set_output_slots(inputs.output_slots);
+    if let Some(limit) = inputs.step_limit {
+        let _ = vm.set_step_limit(limit);
+    }
 
-    vm.run(program)
-        .map_err(|e| format!("vm.run failed: {e:?}"))?;
+    if let Err(e) = vm.run(program) {
+        return Outcome::Failure {
+            error: fault_from_rust(&e),
+        };
+    }
 
     let mut outputs: Vec<Option<i64>> = vm
         .outputs()
@@ -191,10 +340,70 @@ fn run_rust_program(
         .collect();
     trim_trailing_unset(&mut outputs);
     let final_stack = vm.stack().to_vec();
-    Ok(Outcome {
+    Outcome::Success {
         outputs,
         final_stack,
-    })
+    }
+}
+
+/// Map a Rust VM error onto its implementation-neutral identity.
+///
+/// The match is exhaustive by construction: adding a variant to
+/// [`xqvm::Error`] without extending [`Fault`] and this arm fails to
+/// compile, rather than silently degrading to an "unknown" fault.
+fn fault_from_rust(error: &xqvm::Error) -> Fault {
+    use xqvm::Error as E;
+
+    match *error {
+        E::StackUnderflow { .. } => Fault::StackUnderflow,
+        E::StackOverflow { .. } => Fault::StackOverflow,
+        E::RegisterType { .. } | E::IncompatibleType(_) => Fault::TypeMismatch,
+        E::UnsetRegister { .. } => Fault::UnsetRegister,
+        E::DivisionByZero { .. } => Fault::DivisionByZero,
+        E::IndexOutOfBounds { .. } => Fault::IndexOutOfBounds,
+        E::NoActiveLoop { .. } => Fault::NoActiveLoop,
+        E::UnmatchedLoop { .. } => Fault::UnmatchedLoop,
+        E::BadJumpTarget { .. } => Fault::BadJumpTarget,
+        E::InvalidLabel { .. } => Fault::InvalidLabel,
+        E::BadOpcode { .. } => Fault::BadOpcode,
+        E::TruncatedInstruction { .. } => Fault::TruncatedInstruction,
+        E::CallDataIndex { .. } => Fault::CallDataIndex,
+        E::OutputIndex { .. } => Fault::OutputIndex,
+        E::SizeMismatch { .. } => Fault::SizeMismatch,
+        E::VecLengthMismatch { .. } => Fault::VecLengthMismatch,
+        E::StepLimitExceeded { .. } => Fault::StepLimitExceeded,
+        E::MemoryLimitExceeded { .. } => Fault::MemoryLimitExceeded,
+        E::InvalidShift { .. } => Fault::InvalidShift,
+        E::InvalidGridDimensions { .. } => Fault::InvalidGridDimensions,
+        E::InvalidDiscreteK { .. } => Fault::InvalidDiscreteK,
+        E::TraceFailed { .. } => Fault::TraceFailed,
+    }
+}
+
+/// Map a Python exception class name onto its implementation-neutral
+/// identity.
+///
+/// # Errors
+/// Returns the unmapped class name so an unrecognised exception fails
+/// loudly as a harness gap rather than as a vector mismatch.
+fn fault_from_python(class_name: &str) -> Result<Fault, String> {
+    match class_name {
+        "StackUnderflow" => Ok(Fault::StackUnderflow),
+        "StackOverflow" => Ok(Fault::StackOverflow),
+        "TypeMismatch" => Ok(Fault::TypeMismatch),
+        "RegisterNotFound" => Ok(Fault::UnsetRegister),
+        "DivisionByZero" => Ok(Fault::DivisionByZero),
+        "InvalidOpcode" => Ok(Fault::BadOpcode),
+        "TargetNotFound" => Ok(Fault::BadJumpTarget),
+        "StepLimitExceeded" => Ok(Fault::StepLimitExceeded),
+        "MemoryLimitExceeded" => Ok(Fault::MemoryLimitExceeded),
+        "XQMXModeError" => Ok(Fault::XqmxMode),
+        other => Err(format!(
+            "python raised {other}, which the conformance harness does not \
+             map to a fault identity; extend fault_from_python in \
+             conformance/src/lib.rs and the table in conformance/README.md"
+        )),
+    }
 }
 
 /// Drop trailing `None` entries so outputs report a sparse map rather than
@@ -257,7 +466,8 @@ fn run_python_file(
     vector: &Vector,
     program_path: &std::path::Path,
 ) -> Result<Outcome, String> {
-    let output = Command::new(runner)
+    let mut command = Command::new(runner);
+    let _ = command
         .args([
             "run",
             "--no-sync",
@@ -268,28 +478,41 @@ fn run_python_file(
             "--inputs",
         ])
         .arg(vector.dir.join("inputs.json"))
-        .args(["--outputs", &vector.inputs.output_slots.to_string()])
+        .args(["--outputs", &vector.inputs.output_slots.to_string()]);
+    if let Some(limit) = vector.inputs.step_limit {
+        let _ = command.args(["--step-limit", &limit.to_string()]);
+    }
+    let output = command
         .arg(program_path)
         .current_dir(repo_root)
         .output()
         .map_err(|e| format!("failed to spawn `{runner} run python -m xqvm_py`: {e}"))?;
 
-    if !output.status.success() {
-        return Err(format!(
-            "`{runner} run python -m xqvm_py` exited {}: stderr: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
     let stdout = std::str::from_utf8(&output.stdout)
         .map_err(|e| format!("python stdout was not UTF-8: {e}"))?;
 
-    let parsed: PyOut = serde_json::from_str(stdout.trim())
-        .map_err(|e| format!("failed to parse python stdout as JSON: {e}\n{stdout}"))?;
+    // A faulting program is a legitimate result, not a runner failure, so
+    // the exit status alone cannot decide. The CLI reports both shapes as
+    // JSON on stdout; only unparseable stdout means the run itself broke.
+    let parsed: PyOut = serde_json::from_str(stdout.trim()).map_err(|e| {
+        format!(
+            "`{runner} run python -m xqvm_py` exited {} and its stdout did not parse as JSON: {e}\n\
+             stdout: {stdout}\n stderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })?;
 
-    let mut outputs: Vec<Option<i64>> = parsed
-        .outputs
+    if let Some(error) = parsed.error {
+        let fault = fault_from_python(&error.r#type)
+            .map_err(|e| format!("{e}\n  python message: {}", error.message))?;
+        return Ok(Outcome::Failure { error: fault });
+    }
+
+    let outputs = parsed.outputs.ok_or_else(|| {
+        format!("python stdout reported neither outputs nor an error\nstdout: {stdout}")
+    })?;
+    let mut outputs: Vec<Option<i64>> = outputs
         .into_iter()
         .map(|v| v.and_then(|val| val.as_i64()))
         .collect();
@@ -300,7 +523,7 @@ fn run_python_file(
         .filter_map(|v| v.as_i64())
         .collect();
 
-    Ok(Outcome {
+    Ok(Outcome::Success {
         outputs,
         final_stack,
     })
@@ -320,28 +543,187 @@ fn fold_regval_to_i64(rv: &xqvm::RegVal) -> i64 {
 /// multi-line diff on mismatch.
 ///
 /// # Errors
-/// Returns a human-readable diff when either the output slot vector or
-/// the residual stack disagrees.
+/// Returns a human-readable diff when the run's shape (success versus
+/// fault), its fault identity, its output slots, or its residual stack
+/// disagrees with the vector.
 pub fn check(actual: &Outcome, expected: &Expected) -> Result<(), String> {
-    if actual.outputs == expected.outputs && actual.final_stack == expected.final_stack {
-        return Ok(());
-    }
     let mut msg = String::from("conformance mismatch:\n");
-    if actual.outputs != expected.outputs {
-        let _ = writeln!(
-            msg,
-            "  outputs:\n    expected: {:?}\n    actual:   {:?}",
-            expected.outputs, actual.outputs
-        );
-    }
-    if actual.final_stack != expected.final_stack {
-        let _ = writeln!(
-            msg,
-            "  final_stack:\n    expected: {:?}\n    actual:   {:?}",
-            expected.final_stack, actual.final_stack
-        );
+    match (actual, expected) {
+        (
+            Outcome::Success {
+                outputs,
+                final_stack,
+            },
+            Expected::Success {
+                outputs: exp_outputs,
+                final_stack: exp_stack,
+            },
+        ) => {
+            if outputs == exp_outputs && final_stack == exp_stack {
+                return Ok(());
+            }
+            if outputs != exp_outputs {
+                let _ = writeln!(
+                    msg,
+                    "  outputs:\n    expected: {exp_outputs:?}\n    actual:   {outputs:?}"
+                );
+            }
+            if final_stack != exp_stack {
+                let _ = writeln!(
+                    msg,
+                    "  final_stack:\n    expected: {exp_stack:?}\n    actual:   {final_stack:?}"
+                );
+            }
+        }
+        (Outcome::Failure { error }, Expected::Failure { error: exp_error }) => {
+            if error == exp_error {
+                return Ok(());
+            }
+            let _ = writeln!(
+                msg,
+                "  fault:\n    expected: {}\n    actual:   {}",
+                fault_name(*exp_error),
+                fault_name(*error)
+            );
+        }
+        (Outcome::Failure { error }, Expected::Success { .. }) => {
+            let _ = writeln!(
+                msg,
+                "  expected the program to run to completion, but it faulted with {}",
+                fault_name(*error)
+            );
+        }
+        (
+            Outcome::Success {
+                outputs,
+                final_stack,
+            },
+            Expected::Failure { error },
+        ) => {
+            let _ = writeln!(
+                msg,
+                "  expected the program to fault with {}, but it ran to completion\n    \
+                 outputs: {outputs:?}\n    final_stack: {final_stack:?}",
+                fault_name(*error)
+            );
+        }
     }
     Err(msg)
+}
+
+/// Render a fault under the name a vector writes in `expected.json`.
+fn fault_name(fault: Fault) -> String {
+    serde_json::to_string(&fault).unwrap_or_else(|_| "<unserialisable fault>".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Expected, Fault, Outcome, check};
+
+    #[test]
+    fn expected_parses_a_success_vector() {
+        let parsed: Expected =
+            serde_json::from_str(r#"{"outputs": [7], "final_stack": []}"#).expect("parse");
+        assert_eq!(
+            parsed,
+            Expected::Success {
+                outputs: vec![Some(7)],
+                final_stack: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn expected_parses_an_error_vector() {
+        let parsed: Expected =
+            serde_json::from_str(r#"{"error": "DIVISION_BY_ZERO"}"#).expect("parse");
+        assert_eq!(
+            parsed,
+            Expected::Failure {
+                error: Fault::DivisionByZero
+            }
+        );
+    }
+
+    #[test]
+    fn expected_rejects_a_vector_asserting_both_success_and_failure() {
+        let err = serde_json::from_str::<Expected>(
+            r#"{"outputs": [7], "final_stack": [], "error": "DIVISION_BY_ZERO"}"#,
+        )
+        .expect_err("a vector cannot assert both an outcome and a fault");
+        assert!(
+            err.to_string().contains("both"),
+            "error should name the conflict, got: {err}"
+        );
+    }
+
+    #[test]
+    fn expected_rejects_a_vector_asserting_neither() {
+        let err = serde_json::from_str::<Expected>("{}")
+            .expect_err("a vector must assert an outcome or a fault");
+        assert!(
+            err.to_string().contains("outputs"),
+            "error should name the missing field, got: {err}"
+        );
+    }
+
+    #[test]
+    fn expected_rejects_an_unknown_fault_name() {
+        let _ = serde_json::from_str::<Expected>(r#"{"error": "NOT_A_REAL_FAULT"}"#)
+            .expect_err("unknown fault names are vector-authoring mistakes");
+    }
+
+    #[test]
+    fn check_reports_a_fault_where_success_was_expected() {
+        let actual = Outcome::Failure {
+            error: Fault::DivisionByZero,
+        };
+        let expected = Expected::Success {
+            outputs: vec![Some(1)],
+            final_stack: vec![],
+        };
+        let err = check(&actual, &expected).expect_err("mismatch");
+        assert!(err.contains("DIVISION_BY_ZERO"), "got: {err}");
+    }
+
+    #[test]
+    fn check_reports_success_where_a_fault_was_expected() {
+        let actual = Outcome::Success {
+            outputs: vec![Some(1)],
+            final_stack: vec![],
+        };
+        let expected = Expected::Failure {
+            error: Fault::StepLimitExceeded,
+        };
+        let err = check(&actual, &expected).expect_err("mismatch");
+        assert!(err.contains("STEP_LIMIT_EXCEEDED"), "got: {err}");
+    }
+
+    #[test]
+    fn check_accepts_a_matching_fault() {
+        let actual = Outcome::Failure {
+            error: Fault::DivisionByZero,
+        };
+        let expected = Expected::Failure {
+            error: Fault::DivisionByZero,
+        };
+        check(&actual, &expected).expect("matching faults compare equal");
+    }
+
+    #[test]
+    fn check_rejects_the_wrong_fault() {
+        let actual = Outcome::Failure {
+            error: Fault::StackUnderflow,
+        };
+        let expected = Expected::Failure {
+            error: Fault::DivisionByZero,
+        };
+        let err = check(&actual, &expected).expect_err("mismatch");
+        assert!(
+            err.contains("DIVISION_BY_ZERO") && err.contains("STACK_UNDERFLOW"),
+            "got: {err}"
+        );
+    }
 }
 
 /// Selector for which runtime a caller wants to exercise.

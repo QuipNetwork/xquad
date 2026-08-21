@@ -31,6 +31,7 @@ from .errors import (
     DivisionByZero,
     InvalidOpcode,
     MemoryLimitExceeded,
+    StepLimitExceeded,
     TargetNotFound,
     TypeMismatch,
 )
@@ -278,8 +279,8 @@ class Executor:
         Args:
             program: The program to execute
             input_data: Optional input data keyed by slot number
-            step_limit: Maximum steps before raising RuntimeError. `None` is
-                unlimited; the limit is otherwise exact, so `0` permits no
+            step_limit: Maximum steps before raising StepLimitExceeded. `None`
+                is unlimited; the limit is otherwise exact, so `0` permits no
                 instructions at all. Matches `xqvm::Vm::set_step_limit`.
             memory_limit: Allocation budget in bytes, charged against every
                 allocating instruction before it allocates. Unlike step_limit
@@ -305,7 +306,7 @@ class Executor:
 
         while not self.state.halted and self.state.pc < len(program):
             if step_limit is not None and self.state.steps >= step_limit:
-                raise RuntimeError(f"StepLimitExceeded: execution exceeded {step_limit} steps")
+                raise StepLimitExceeded(step_limit)
             self.state.steps += 1
             self.step()
 

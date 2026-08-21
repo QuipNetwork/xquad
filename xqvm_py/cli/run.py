@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from xqvm_py import Executor, Program, program_from_bytecode, program_from_xqasm
+from xqvm_py.errors import XQVMError
 
 
 def _load_program(path: Path, *, text: bool) -> Program:
@@ -108,6 +109,15 @@ def main(argv: list[str] | None = None) -> int:
         default=16,
         help="Number of output slots reserved (outputs beyond this index are null).",
     )
+    run.add_argument(
+        "--step-limit",
+        type=int,
+        default=None,
+        help=(
+            "Maximum steps before the run is stopped. The limit is exact, so 0 "
+            "executes nothing; omit the flag to run unbounded."
+        ),
+    )
 
     args = parser.parse_args(argv)
 
@@ -118,7 +128,20 @@ def main(argv: list[str] | None = None) -> int:
     input_data = _build_input_data(args)
 
     executor = Executor()
-    output_map = executor.execute(program, input_data=input_data)
+    try:
+        output_map = executor.execute(program, input_data=input_data, step_limit=args.step_limit)
+    except XQVMError as exc:
+        # A faulting program is a result, not a crash: report the fault's
+        # identity as JSON so callers (the conformance harness above all)
+        # can compare it against the other implementation instead of
+        # scraping a traceback off stderr.
+        json.dump(
+            {"error": {"type": type(exc).__name__, "message": str(exc)}},
+            sys.stdout,
+            separators=(",", ":"),
+        )
+        sys.stdout.write("\n")
+        return 2
 
     # Unset slots are reported as null (None) to match the spec's sparse-map
     # semantics: output slots never written by the program are absent.
