@@ -113,6 +113,20 @@ class MemoryLimitExceeded(XQVMError):
         )
 
 
+class InvalidGridDimensions(XQVMError):
+    """Raised when grid dimensions are absent or non-positive.
+
+    Mirrors Rust's `xqvm::Error::InvalidGridDimensions`, which is what
+    `spec/xqvm/ISA.md` names for RESIZE with a non-positive extent and for
+    the grid constraints when no grid is set.
+    """
+
+    def __init__(self, rows: int, cols: int):
+        self.rows = rows
+        self.cols = cols
+        super().__init__(f"Invalid grid dimensions: {rows}x{cols}")
+
+
 class StepLimitExceeded(XQVMError):
     """Raised when execution runs past its step budget."""
 

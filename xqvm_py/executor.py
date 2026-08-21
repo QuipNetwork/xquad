@@ -29,6 +29,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from .errors import (
     DivisionByZero,
+    InvalidGridDimensions,
     InvalidOpcode,
     MemoryLimitExceeded,
     StepLimitExceeded,
@@ -996,7 +997,7 @@ class Executor:
         penalty, row = self.state.pop_n(2)
 
         if model.rows == 0 or model.cols == 0:
-            raise ValueError("ONEHOTR requires grid dimensions to be set")
+            raise InvalidGridDimensions(model.rows, model.cols)
 
         # The expansion writes one linear term per column and one quadratic
         # term per pair of columns, so ONEHOTR costs O(cols^2) entries in one
@@ -1012,7 +1013,7 @@ class Executor:
         penalty, col = self.state.pop_n(2)
 
         if model.rows == 0 or model.cols == 0:
-            raise ValueError("ONEHOTC requires grid dimensions to be set")
+            raise InvalidGridDimensions(model.rows, model.cols)
 
         # O(rows^2) entries in one step; see ONEHOTR.
         self._charge_equality_expansion(model.rows)

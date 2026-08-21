@@ -1969,6 +1969,18 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        // A model with no grid has no row to constrain. Writing nothing and
+        // returning Continue leaves the constraint silently absent from the
+        // model, which then solves cleanly and answers wrongly -- so this
+        // raises, matching xqvm_py and `spec/xqvm/ISA.md`'s "Grid dimensions
+        // must be set".
+        if m.rows == 0 || m.cols == 0 {
+            return Err(Error::InvalidGridDimensions {
+                pos,
+                rows: i64::try_from(m.rows).unwrap_or(i64::MAX),
+                cols: i64::try_from(m.cols).unwrap_or(i64::MAX),
+            });
+        }
         let usize_row = usize::try_from(row).map_err(|_| Error::IndexOutOfBounds {
             pos,
             index: row,
@@ -2010,6 +2022,14 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        // No grid means no column to constrain; see `exec_one_hot_r`.
+        if m.rows == 0 || m.cols == 0 {
+            return Err(Error::InvalidGridDimensions {
+                pos,
+                rows: i64::try_from(m.rows).unwrap_or(i64::MAX),
+                cols: i64::try_from(m.cols).unwrap_or(i64::MAX),
+            });
+        }
         let col_idx = usize::try_from(col).map_err(|_| Error::IndexOutOfBounds {
             pos,
             index: col,

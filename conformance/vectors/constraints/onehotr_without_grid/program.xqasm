@@ -1,0 +1,13 @@
+; onehotr_without_grid: ONEHOTR on a model with no grid must raise.
+;
+; Forgetting RESIZE is the expensive mistake in this instruction family:
+; without the check the constraint is silently absent and the model solves
+; cleanly to a wrong answer.
+
+PUSH 4
+BQMX r0
+
+PUSH 0           ; row
+PUSH 1           ; penalty
+ONEHOTR r0
+HALT

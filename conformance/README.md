@@ -126,7 +126,7 @@ bug ever motivates them.
 | `STEP_LIMIT_EXCEEDED` | `StepLimitExceeded` | `StepLimitExceeded` |
 | `MEMORY_LIMIT_EXCEEDED` | `MemoryLimitExceeded` | `MemoryLimitExceeded` |
 | `INVALID_SHIFT` | `InvalidShift` | -- |
-| `INVALID_GRID_DIMENSIONS` | `InvalidGridDimensions` | -- |
+| `INVALID_GRID_DIMENSIONS` | `InvalidGridDimensions` | `InvalidGridDimensions` |
 | `INVALID_DISCRETE_K` | `InvalidDiscreteK` | -- |
 | `XQMX_MODE` | -- | `XQMXModeError` |
 | `TRACE_FAILED` | `TraceFailed` | -- |
