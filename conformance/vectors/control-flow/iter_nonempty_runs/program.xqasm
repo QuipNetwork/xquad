@@ -1,0 +1,23 @@
+; iter_nonempty_runs: the ordinary path still runs once per element, so
+; the skip cannot be implemented by skipping everything.
+
+VECI r0
+PUSH 7
+VECPUSH r0
+PUSH 8
+VECPUSH r0
+
+PUSH 0
+STOW r1
+
+PUSH 0
+PUSH 2
+ITER r0
+LOAD r1
+INC
+STOW r1
+NEXT
+
+PUSH 0
+OUTPUT r1
+HALT

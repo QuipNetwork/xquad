@@ -517,6 +517,11 @@ class Executor:
         reg = instr.operands[0]
         vec = self._get_register_as_vec(reg)
         end_idx, start_idx = self.state.pop_n(2)
+        # An empty slice skips the body, matching RANGE with count <= 0 and
+        # the empty-loop-skip clause in spec/xqvm/ISA.md.
+        if start_idx >= end_idx:
+            self._skip_to_matching_next()
+            return
         # The frame copies the slice, and a frame is only popped by NEXT, so a
         # back-edge that re-enters an ITER piles up one copy per execution.
         self._charge_variables(end_idx - start_idx)

@@ -133,7 +133,6 @@ defect "QUI-1023" "docs/book/src/modelling/outputs-and-decoding.md" 1
 defect "QUI-1024" "docs/book/src/xqvm/instructions/allocators.md" 1
 defect "QUI-1024" "docs/book/src/appendix/glossary.md" 1
 defect "QUI-1024" "docs/book/src/xqvm/limits-and-errors.md" 1
-defect "QUI-1025" "docs/book/src/xqvm/loops.md" 1
 defect "QUI-1026" "docs/book/src/running/verification.md" 2
 defect "QUI-1026" "docs/book/src/xqvm/verifier.md" 1
 defect "QUI-1027" "docs/book/src/modelling/expressions.md" 1

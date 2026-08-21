@@ -590,18 +590,20 @@ fn iter_rejects_end_past_len() {
 }
 
 #[test]
-fn iter_rejects_inverted_range() {
-    let err = run_err(|b| {
+fn iter_skips_an_inverted_range() {
+    // The empty-loop-skip clause in spec/xqvm/ISA.md is stated as
+    // `start_idx >= end_idx`, so an inverted range is empty rather than
+    // erroneous: the body is skipped and execution resumes after NEXT.
+    let vm = run(|b| {
         b.emit_vec_i(Register(0));
         b.emit_push(1).emit_vec_push(Register(0));
         b.emit_push(2).emit_vec_push(Register(0));
+        b.emit_push(0).emit_stow(Register(1));
         b.emit_push(2).emit_push(1).emit_iter(Register(0));
+        b.emit_load(Register(1)).emit_inc().emit_stow(Register(1));
         b.emit_next().emit_halt();
     });
-    assert!(
-        matches!(err, Error::IndexOutOfBounds { index: 1, .. }),
-        "expected IndexOutOfBounds rejecting inverted range, got {err:?}"
-    );
+    assert_eq!(*vm.register(1), RegVal::Int(0), "body must not run");
 }
 
 #[test]

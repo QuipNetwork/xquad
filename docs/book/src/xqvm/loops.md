@@ -65,23 +65,13 @@ ITER r1            ; iterate r1[1..4] -> values 20, 30, 40
 NEXT
 ```
 
-`ITER` errors with `IndexOutOfBounds` if either index is negative, exceeds
-`vec.len()`, or if `start_idx > end_idx`.
+`ITER` errors with `IndexOutOfBounds` if either index is negative or exceeds
+`vec.len()`.
 
-An empty slice (`start_idx == end_idx`) is legal, and it does **not** behave
-like `RANGE` with a count of zero. `ITER` still pushes a frame, so the body
-runs once before `NEXT` pops it, and an `LVAL` in that body faults with
-`IndexOutOfBounds` because there is no element to read. `spec/xqvm/ISA.md`
-specifies a skip here; the Rust VM keeps do-while semantics instead, and this
-book documents the VM.
-
-<!-- xquad:defect QUI-1025 -->
-> **Known issue.** The spec requires an empty `ITER` to skip its body, but both
-> the Rust VM and `xqvm_py` run it once instead; `RANGE` with a count of zero
-> does skip, so the two loop openers behave differently from each other. Guard
-> an `ITER` over a possibly-empty slice, or use `RANGE` where a zero count must
-> skip. Report problems at the
-> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+An empty slice skips the body, exactly like `RANGE` with a count of zero: no
+frame is pushed and execution resumes after the matching `NEXT`. The condition
+is `start_idx >= end_idx`, so an inverted range is empty rather than an error,
+and a slice that is never taken is not bounds-checked.
 
 ## LVAL -- Reading the Loop Value
 

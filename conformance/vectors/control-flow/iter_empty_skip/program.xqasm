@@ -1,0 +1,26 @@
+; iter_empty_skip: an ITER over an empty slice must skip its body, the
+; same way RANGE with count <= 0 does. Counter stays 0.
+;
+; Paired with range_empty_skip below, which is the same shape under the
+; other loop opener.
+
+VECI r0
+PUSH 1
+VECPUSH r0
+PUSH 2
+VECPUSH r0
+
+PUSH 0
+STOW r1
+
+PUSH 1           ; start_idx
+PUSH 1           ; end_idx (start >= end -> empty)
+ITER r0
+LOAD r1
+INC
+STOW r1
+NEXT
+
+PUSH 0
+OUTPUT r1
+HALT
