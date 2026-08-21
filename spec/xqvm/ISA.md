@@ -219,7 +219,7 @@ Utilities for mapping 2-D coordinates to flat array indices.
 | Code | Mnemonic | Stack effect | Interpretation |
 |------|----------|--------------|----------------|
 | `0x5A` | `IDXGRID` | `[..., row, col, cols] → [..., row*cols+col]` | Row-major flat index. Pop `cols`, then `col`, then `row`. Push `row * cols + col`. |
-| `0x5B` | `IDXTRIU` | `[..., i, j] → [..., j*(j-1)/2+i]` | Upper-triangular index for the pair `(i, j)`. Pop `j`, then `i`. If `i > j`, swap them. Push `j * (j - 1) / 2 + i`. |
+| `0x5B` | `IDXTRIU` | `[..., i, j] → [..., j*(j-1)/2+i]` | Upper-triangular index for the pair `(i, j)`. Pop `j`, then `i`. If `i > j`, swap them, so `(i, j)` and `(j, i)` address the same cell. Push `j * (j - 1) / 2 + i`. The division is exact: `j * (j - 1)` is a product of consecutive integers, hence non-negative and even for every operand, so truncating and flooring division agree and no rounding rule needs stating. |
 
 ---
 

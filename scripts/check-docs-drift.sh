@@ -126,8 +126,6 @@ defect() {
     DEFECTS+=("${1}|${2}|${3}")
 }
 
-defect "QUI-1021" "docs/book/src/xqvm/instructions/index-math.md" 1
-defect "QUI-1021" "docs/book/src/modelling/expressions.md" 1
 defect "QUI-1022" "docs/book/src/xqvm/instructions/constraints.md" 1
 defect "QUI-1022" "docs/book/src/cookbook/permutations.md" 1
 defect "QUI-1023" "docs/book/src/modelling/compiling.md" 1

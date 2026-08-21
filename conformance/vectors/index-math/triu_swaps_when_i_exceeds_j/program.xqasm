@@ -1,0 +1,8 @@
+; triu_swaps_when_i_exceeds_j: ISA.md requires the operands to be
+; swapped when i > j, so this must agree with triu_already_ordered.
+; i = 5, j = 2 => swap => 5*4/2 + 2 = 12
+
+PUSH 5
+PUSH 2
+IDXTRIU
+HALT

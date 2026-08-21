@@ -53,12 +53,6 @@ same value, the same guarantee
 [`SETQUAD`/`GETQUAD`](coefficient-access.md) give by normalising the pair
 internally.
 
-<!-- xquad:defect QUI-1021 -->
-> **Known issue.** The spec and the Python reference VM (`xqvm_py`) perform the `i`/`j` swap
-> described above; the Rust VM does not, so the two implementations return different results
-> whenever `i > j`. Pass indices already ordered so that `i <= j`. Report problems at the
-> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
-
 ```asm
 PUSH 1        ; i = 1
 PUSH 3        ; j = 3
