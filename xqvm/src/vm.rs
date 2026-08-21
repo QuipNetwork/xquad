@@ -1593,7 +1593,10 @@ impl Vm {
         let i = self.pop(pos)?;
         // Upper-triangular index for (i, j) with i <= j:
         // index = j*(j-1)/2 + i
-        let idx = j.wrapping_mul(j.wrapping_sub(1)) / 2 + i;
+        let idx = j
+            .wrapping_mul(j.wrapping_sub(1))
+            .wrapping_div(2)
+            .wrapping_add(i);
         self.push_stack(idx, pos)?;
         Ok(StepResult::Continue)
     }
@@ -2785,5 +2788,22 @@ mod tests {
             matches!(err, Error::UnmatchedLoop { .. }),
             "expected UnmatchedLoop, got {err:?}"
         );
+    }
+
+    #[test]
+    fn idx_triu_wraps_when_the_row_term_overflows() {
+        // j = 3 gives a triangular term of 3*(3-1)/2 = 3, which overflows
+        // when added to i = i64::MAX. Consistent with the rest of the crate,
+        // the addition wraps rather than panicking.
+        let mut b = InstructionBuilder::new();
+        let _ = b
+            .emit_push(i64::MAX)
+            .emit_push(3)
+            .emit_idx_triu()
+            .emit_halt();
+        let program = b.build().unwrap();
+        let mut vm = Vm::new();
+        vm.run(&program).unwrap();
+        assert_eq!(vm.stack(), &[i64::MAX.wrapping_add(3)]);
     }
 }

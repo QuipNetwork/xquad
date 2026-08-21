@@ -103,7 +103,7 @@ impl XqmxModel {
     /// Add `delta` to the linear coefficient for variable `i`.
     pub fn add_linear(&mut self, i: usize, delta: i64) {
         let v = self.linear.entry(i).or_insert(0);
-        *v += delta;
+        *v = v.wrapping_add(delta);
         if *v == 0 {
             let _ = self.linear.remove(&i);
         }
@@ -130,7 +130,7 @@ impl XqmxModel {
     pub fn add_quad(&mut self, i: usize, j: usize, delta: i64) {
         let key = if i <= j { (i, j) } else { (j, i) };
         let v = self.quadratic.entry(key).or_insert(0);
-        *v += delta;
+        *v = v.wrapping_add(delta);
         if *v == 0 {
             let _ = self.quadratic.remove(&key);
         }
@@ -255,5 +255,50 @@ impl XqmxSample {
             rows: 0,
             cols: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Domain, XqmxModel};
+
+    #[test]
+    fn add_linear_wraps_past_i64_max() {
+        let mut m = XqmxModel::new(Domain::Binary, 2);
+        m.set_linear(0, i64::MAX);
+
+        m.add_linear(0, 1);
+
+        assert_eq!(m.get_linear(0), i64::MIN);
+    }
+
+    #[test]
+    fn add_linear_wraps_past_i64_min() {
+        let mut m = XqmxModel::new(Domain::Binary, 2);
+        m.set_linear(0, i64::MIN);
+
+        m.add_linear(0, -1);
+
+        assert_eq!(m.get_linear(0), i64::MAX);
+    }
+
+    #[test]
+    fn add_quad_wraps_past_i64_max() {
+        let mut m = XqmxModel::new(Domain::Binary, 2);
+        m.set_quad(0, 1, i64::MAX);
+
+        m.add_quad(0, 1, 1);
+
+        assert_eq!(m.get_quad(0, 1), i64::MIN);
+    }
+
+    #[test]
+    fn add_quad_wraps_past_i64_min() {
+        let mut m = XqmxModel::new(Domain::Binary, 2);
+        m.set_quad(0, 1, i64::MIN);
+
+        m.add_quad(0, 1, -1);
+
+        assert_eq!(m.get_quad(0, 1), i64::MAX);
     }
 }
