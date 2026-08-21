@@ -113,6 +113,20 @@ class MemoryLimitExceeded(XQVMError):
         )
 
 
+class OutputIndex(XQVMError):
+    """Raised when OUTPUT addresses a slot beyond the allocated count.
+
+    Mirrors Rust's `xqvm::Error::OutputIndex`. The slot count is fixed
+    before the run; writing past it is a program error, not a request to
+    grow the output map.
+    """
+
+    def __init__(self, index: int, length: int):
+        self.index = index
+        self.length = length
+        super().__init__(f"Output index {index} out of range (len {length})")
+
+
 class InvalidGridDimensions(XQVMError):
     """Raised when grid dimensions are absent or non-positive.
 

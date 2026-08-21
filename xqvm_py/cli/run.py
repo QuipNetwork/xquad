@@ -129,7 +129,12 @@ def main(argv: list[str] | None = None) -> int:
 
     executor = Executor()
     try:
-        output_map = executor.execute(program, input_data=input_data, step_limit=args.step_limit)
+        output_map = executor.execute(
+            program,
+            input_data=input_data,
+            step_limit=args.step_limit,
+            output_slots=args.outputs,
+        )
     except XQVMError as exc:
         # A faulting program is a result, not a crash: report the fault's
         # identity as JSON so callers (the conformance harness above all)

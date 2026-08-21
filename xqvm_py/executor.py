@@ -273,6 +273,7 @@ class Executor:
         input_data: dict[int, Any] | None = None,
         step_limit: int | None = None,
         memory_limit: int = DEFAULT_MEMORY_LIMIT,
+        output_slots: int = 0,
     ) -> dict[int, Any]:
         """
         Execute a program to completion.
@@ -286,6 +287,9 @@ class Executor:
             memory_limit: Allocation budget in bytes, charged against every
                 allocating instruction before it allocates. Unlike step_limit
                 there is no "unlimited" sentinel -- pass a large value.
+            output_slots: Number of output slots reserved for OUTPUT. Writing
+                past them raises OutputIndex, matching
+                `xqvm::Vm::set_output_slots`.
 
         Returns:
             Output data keyed by slot number
@@ -294,6 +298,7 @@ class Executor:
             XQVMError: On execution errors
         """
         self.state.reset()
+        self.state.output_slots = output_slots
         self.program = program
         self._memory_limit = memory_limit
         self._memory_used = 0

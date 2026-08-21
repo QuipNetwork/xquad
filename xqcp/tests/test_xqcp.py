@@ -287,7 +287,7 @@ class TestTSPPipeline:
         # --- Run encoder ---
         enc_prog = program_from_xqasm(programs.encoder)
         enc_ex = Executor()
-        enc_ex.execute(enc_prog, {0: n, 1: dist_vec})
+        enc_ex.execute(enc_prog, {0: n, 1: dist_vec}, output_slots=16)
         model = enc_ex.state.output[0]
 
         assert isinstance(model, XQMX)
@@ -310,7 +310,7 @@ class TestTSPPipeline:
         # --- Run verifier ---
         ver_prog = program_from_xqasm(programs.verifier)
         ver_ex = Executor()
-        ver_ex.execute(ver_prog, {0: model, 1: sample, 2: n})
+        ver_ex.execute(ver_prog, {0: model, 1: sample, 2: n}, output_slots=16)
         energy = ver_ex.state.output[0]
         valid = ver_ex.state.output[1]
 
@@ -320,7 +320,7 @@ class TestTSPPipeline:
         # --- Run decoder ---
         dec_prog = program_from_xqasm(programs.decoder)
         dec_ex = Executor()
-        dec_ex.execute(dec_prog, {0: sample, 1: n})
+        dec_ex.execute(dec_prog, {0: sample, 1: n}, output_slots=16)
         tour = dec_ex.state.output[0]
 
         assert isinstance(tour, Vec)
@@ -377,7 +377,7 @@ class TestTSPPipeline:
 
         def run(prog, inputs):
             ex = Executor()
-            ex.execute(prog, inputs)
+            ex.execute(prog, inputs, output_slots=16)
             return ex.state
 
         # --- Run both encoders ---
@@ -531,7 +531,7 @@ class TestMaxCutPipeline:
 
         def run(prog, inputs):
             ex = Executor()
-            ex.execute(prog, inputs)
+            ex.execute(prog, inputs, output_slots=16)
             return ex.state
 
         # Encoder
@@ -592,7 +592,7 @@ class TestMaxCutPipeline:
 
         def run(prog, inputs):
             ex = Executor()
-            ex.execute(prog, inputs)
+            ex.execute(prog, inputs, output_slots=16)
             return ex.state
 
         # --- Compare encoders ---

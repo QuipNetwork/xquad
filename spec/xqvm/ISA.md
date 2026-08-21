@@ -49,7 +49,7 @@ The `0xF_` range is reserved for control flow utilities. The two currently assig
 | `0x0B` | `STOW` | `reg` | `[..., v] → [...]` | `write` — `reg ← int(v)` | Pop `v`. Write `reg ← v` as an integer. |
 | `0x0C` | `DROP` | `reg` | `[...] → [...]` | `write` — `reg ← unset` | Clear the register, releasing any value it held. The register becomes unset. No error if already unset. |
 | `0x0E` | `INPUT` | `reg` | `[..., s] → [...]` | `write` — `reg ← input[s]` | Pop `s` (slot index). Copy `input[s]` into `reg`. Any value type is transferable (int, vec, or xqmx). Returns `None` if slot is not set. |
-| `0x0F` | `OUTPUT` | `reg` | `[..., s] → [...]` | `read` — `reg` value copied to `output[s]` | Pop `s` (slot index). Copy `reg`'s value into `output[s]`. Any value type is transferable. Error: `RegisterNotFound` if `reg` is unset. |
+| `0x0F` | `OUTPUT` | `reg` | `[..., s] → [...]` | `read` — `reg` value copied to `output[s]` | Pop `s` (slot index). Copy `reg`'s value into `output[s]`. Any value type is transferable. The host fixes the slot count before the run; `s` outside `[0, slots)` is a program error and raises `OutputIndex` rather than growing the output map. Errors: `RegisterNotFound` if `reg` is unset; `OutputIndex` if `s` is out of range. |
 
 ---
 

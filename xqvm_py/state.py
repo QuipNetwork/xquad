@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .errors import LoopError, RegisterNotFound, StackOverflow, StackUnderflow
+from .errors import LoopError, OutputIndex, RegisterNotFound, StackOverflow, StackUnderflow
 from .limits import I64_MAX, I64_MIN, check_i64
 from .vector import Vec
 from .xqmx import XQMX
@@ -152,6 +152,10 @@ class MachineState:
     jc: JumpControl = field(default_factory=JumpControl)
     input: dict[int, Any] = field(default_factory=dict)
     output: dict[int, Any] = field(default_factory=dict)
+    #: Number of allocated output slots. Zero by default, matching
+    #: `xqvm::Vm::new()`, so a program that writes an output without the host
+    #: reserving slots is rejected on both implementations.
+    output_slots: int = 0
     halted: bool = False
     steps: int = 0
 
@@ -223,7 +227,13 @@ class MachineState:
         self.input[slot] = value
 
     def set_output(self, slot: int, value: Any) -> None:
-        """Set an output slot value."""
+        """Set an output slot value.
+
+        The slot count is fixed before the run, so a slot outside it is a
+        program error rather than a request to grow the map.
+        """
+        if slot < 0 or slot >= self.output_slots:
+            raise OutputIndex(slot, self.output_slots)
         self.output[slot] = value
 
     def get_output(self, slot: int) -> Any:

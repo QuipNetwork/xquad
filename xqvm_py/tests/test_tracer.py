@@ -43,7 +43,7 @@ class TestEventCollection:
             ]
         )
         ex = Executor(tracer=tracer)
-        ex.execute(prog)
+        ex.execute(prog, output_slots=16)
         # 3 step events + 1 halt event (TARGET-like NOPs excluded, HALT triggers on_halt)
         step_events = [e for e in tracer.events if "opcode" in e]
         halt_events = [e for e in tracer.events if "halt" in e]
@@ -59,7 +59,7 @@ class TestEventCollection:
             ]
         )
         ex = Executor(tracer=tracer)
-        ex.execute(prog)
+        ex.execute(prog, output_slots=16)
         assert tracer.events[0]["opcode"] == "PUSH1"
         assert tracer.events[0]["operands"] == (42,)
 
@@ -73,7 +73,7 @@ class TestEventCollection:
             ]
         )
         ex = Executor(tracer=tracer)
-        ex.execute(prog)
+        ex.execute(prog, output_slots=16)
         # After first PUSH: stack was [] -> [10]
         assert tracer.events[0]["stack_before"] == []
         assert tracer.events[0]["stack_after"] == [10]
@@ -91,7 +91,7 @@ class TestEventCollection:
             ]
         )
         ex = Executor(tracer=tracer)
-        ex.execute(prog)
+        ex.execute(prog, output_slots=16)
         # STOW event should show r5 changed
         stow_event = tracer.events[1]
         assert 5 in stow_event["changed"]
@@ -108,7 +108,7 @@ class TestEventCollection:
             ]
         )
         ex = Executor(tracer=tracer)
-        ex.execute(prog)
+        ex.execute(prog, output_slots=16)
         # ADD doesn't touch registers
         add_event = tracer.events[2]
         assert add_event["changed"] == set()
@@ -130,7 +130,7 @@ class TestHaltEvent:
             ]
         )
         ex = Executor(tracer=tracer)
-        ex.execute(prog)
+        ex.execute(prog, output_slots=16)
         halt = [e for e in tracer.events if "halt" in e]
         assert len(halt) == 1
         assert halt[0]["final_stack"] == []
@@ -148,7 +148,7 @@ class TestHaltEvent:
             ]
         )
         ex = Executor(tracer=tracer)
-        ex.execute(prog)
+        ex.execute(prog, output_slots=16)
         halt = [e for e in tracer.events if "halt" in e][0]
         assert halt["output_slots"] == 1
 
@@ -169,7 +169,7 @@ class TestErrorEvent:
         )
         ex = Executor(tracer=tracer)
         with pytest.raises(Exception):
-            ex.execute(prog)
+            ex.execute(prog, output_slots=16)
         error_events = [e for e in tracer.events if "error" in e]
         assert len(error_events) == 1
         assert "underflow" in error_events[0]["error"].lower()
@@ -261,7 +261,7 @@ class TestFormatting:
             ]
         )
         ex = Executor(tracer=tracer)
-        ex.execute(prog)
+        ex.execute(prog, output_slots=16)
         text = tracer.format_trace()
         assert "PUSH1" in text
         assert "halt" in text
@@ -286,7 +286,7 @@ class TestTracerIntegration:
             ]
         )
         ex = Executor(tracer=tracer)
-        ex.execute(prog)
+        ex.execute(prog, output_slots=16)
         opcodes = [e["opcode"] for e in tracer.events if "opcode" in e]
         # PUSH, PUSH, RANGE, then 3 iterations of (LVAL, NEXT), minus final NEXT exits
         assert "RANGE" in opcodes
