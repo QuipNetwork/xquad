@@ -1,0 +1,9 @@
+; step_limit_exceeded: an unbounded loop must stop at the step budget on
+; both implementations.
+;
+; Exercises: the step budget's error path. The program never reaches HALT
+; on its own, so the vector passes only if the budget is enforced.
+
+TARGET .0
+NOP
+JUMP .0

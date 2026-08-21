@@ -53,6 +53,16 @@ VECTORS = _discover_vectors()
 
 @pytest.mark.parametrize("label,vector_dir", VECTORS, ids=[v[0] for v in VECTORS])
 def test_step_count_parity(label: str, vector_dir: Path) -> None:
+    with (vector_dir / "expected.json").open(encoding="utf-8") as f:
+        expected = json.load(f)
+
+    if "error" in expected:
+        # A vector that asserts a fault has no completed run to compare step
+        # counts for, and an unbounded one (step_limit_exceeded) would never
+        # return here, since this test deliberately runs without a budget.
+        # Fault parity is the conformance suite's job.
+        pytest.skip(f"{label} asserts a fault ({expected['error']}), not a step count")
+
     source = (vector_dir / "program.xqasm").read_text(encoding="utf-8")
 
     with (vector_dir / "inputs.json").open(encoding="utf-8") as f:

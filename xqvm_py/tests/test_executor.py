@@ -2948,3 +2948,40 @@ class TestAllocationBudget:
         ex.execute(prog)
         assert ex.memory_limit == DEFAULT_MEMORY_LIMIT == 1 << 30
         assert ex.memory_used == 800_000
+
+
+class TestStepLimit:
+    """Tests for the executor's step budget."""
+
+    def test_step_limit_raises_an_xqvm_error(self):
+        """Exhausting the budget raises StepLimitExceeded, not a bare RuntimeError.
+
+        The conformance harness identifies faults by exception class, so a
+        budget overrun has to be part of the XQVMError hierarchy like every
+        other VM fault.
+        """
+        from xqvm_py.errors import StepLimitExceeded
+
+        ex = Executor()
+        program = make_program(
+            [
+                Instruction(Opcode.NOP),
+                Instruction(Opcode.NOP),
+                Instruction(Opcode.NOP),
+                Instruction(Opcode.HALT),
+            ]
+        )
+        with pytest.raises(StepLimitExceeded) as excinfo:
+            ex.execute(program, step_limit=2)
+        assert excinfo.value.limit == 2
+
+    def test_step_limit_not_reached_runs_to_completion(self):
+        ex = Executor()
+        program = make_program(
+            [
+                Instruction(Opcode.NOP),
+                Instruction(Opcode.HALT),
+            ]
+        )
+        ex.execute(program, step_limit=10)
+        assert ex.state.halted is True
