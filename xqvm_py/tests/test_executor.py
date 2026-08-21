@@ -25,13 +25,14 @@ from xqvm_py.errors import (
     ArithmeticOverflow,
     DivisionByZero,
     LoopError,
+    MemoryLimitExceeded,
     RegisterNotFound,
     StackUnderflow,
     TargetNotFound,
     TypeMismatch,
     XQMXModeError,
 )
-from xqvm_py.executor import Executor
+from xqvm_py.executor import DEFAULT_MEMORY_LIMIT, Executor
 from xqvm_py.opcodes import Opcode
 from xqvm_py.program import Instruction, make_program, run_program
 from xqvm_py.state import I64_MAX, I64_MIN, MachineState
@@ -2755,3 +2756,195 @@ class TestInputBoundaryCheck:
             input_data={0: Vec.from_list([1, 2, 3])},
         )
         assert isinstance(ex.state.get_register(5), Vec)
+
+
+class TestAllocationBudget:
+    """Tests for the allocation budget (QUI-1009).
+
+    The charge rates mirror `xqvm/src/vm.rs` exactly, so these expectations
+    are the same numbers the Rust integration tests assert.
+    """
+
+    @staticmethod
+    def _run(instructions, memory_limit):
+        ex = Executor()
+        ex.execute(make_program(instructions), memory_limit=memory_limit)
+        return ex
+
+    def test_bsmx_beyond_the_budget_allocates_nothing(self):
+        """The reported case: a three-instruction program asks for a 1 GiB sample."""
+        prog = make_program(
+            [
+                Instruction(Opcode.PUSH4, (8, 0, 0, 0)),  # 1 << 27
+                Instruction(Opcode.BSMX, (0,)),
+                Instruction(Opcode.HALT),
+            ]
+        )
+        ex = Executor()
+        with pytest.raises(MemoryLimitExceeded) as excinfo:
+            ex.execute(prog, memory_limit=1 << 20)
+        assert excinfo.value.requested == (1 << 27) * 8
+        assert excinfo.value.limit == 1 << 20
+        assert not ex.state.has_register(0), "a rejected allocator must not write its register"
+        assert ex.memory_used == 0, "a rejected charge must not be kept"
+
+    @pytest.mark.parametrize(
+        "instructions",
+        [
+            pytest.param([Instruction(Opcode.PUSH1, (100,)), Instruction(Opcode.BSMX, (0,))], id="BSMX"),
+            pytest.param([Instruction(Opcode.PUSH1, (100,)), Instruction(Opcode.SSMX, (0,))], id="SSMX"),
+            pytest.param(
+                [
+                    Instruction(Opcode.PUSH1, (100,)),
+                    Instruction(Opcode.PUSH1, (2,)),
+                    Instruction(Opcode.XSMX, (0,)),
+                ],
+                id="XSMX",
+            ),
+        ],
+    )
+    def test_sample_allocators_charge_eight_bytes_per_variable(self, instructions):
+        ex = self._run([*instructions, Instruction(Opcode.HALT)], 1 << 20)
+        assert ex.memory_used == 800
+
+    def test_model_allocators_charge_their_declared_size(self):
+        """A model is sparse, but its declared size is an obligation consumers must meet."""
+        prog = make_program(
+            [
+                Instruction(Opcode.PUSH4, (64, 0, 0, 0)),  # 1 << 30
+                Instruction(Opcode.BQMX, (0,)),
+                Instruction(Opcode.HALT),
+            ]
+        )
+        with pytest.raises(MemoryLimitExceeded):
+            Executor().execute(prog, memory_limit=1 << 20)
+
+    def test_discrete_k_is_rejected_before_the_budget_is_charged(self):
+        """Error precedence: an invalid domain wins over the allocation charge."""
+        prog = make_program(
+            [
+                Instruction(Opcode.PUSH4, (64, 0, 0, 0)),
+                Instruction(Opcode.PUSH1, (1,)),
+                Instruction(Opcode.XSMX, (0,)),
+                Instruction(Opcode.HALT),
+            ]
+        )
+        with pytest.raises(ValueError, match="DISCRETE domain requires"):
+            Executor().execute(prog, memory_limit=8)
+
+    def test_vec_push_is_charged_on_growth(self):
+        """Four elements fit in a 64-byte budget at 16 bytes each; the fifth does not."""
+        instructions = [Instruction(Opcode.VECI, (0,))]
+        for i in range(5):
+            instructions.append(Instruction(Opcode.PUSH1, (i,)))
+            instructions.append(Instruction(Opcode.VECPUSH, (0,)))
+        instructions.append(Instruction(Opcode.HALT))
+
+        ex = Executor()
+        with pytest.raises(MemoryLimitExceeded):
+            ex.execute(make_program(instructions), memory_limit=64)
+        assert ex.state.get_register(0).length == 4, "the four charged pushes should have landed"
+
+    def test_equality_expansion_is_charged_before_it_expands(self):
+        """EQUALITY writes one quadratic term per pair, charged up front."""
+        n = 200
+        instructions = [
+            Instruction(Opcode.PUSH2, (0, n)),
+            Instruction(Opcode.BQMX, (0,)),
+            Instruction(Opcode.VECI, (1,)),
+            Instruction(Opcode.VECI, (2,)),
+        ]
+        for i in range(n):
+            instructions.append(Instruction(Opcode.PUSH2, (i >> 8, i & 0xFF)))
+            instructions.append(Instruction(Opcode.VECPUSH, (1,)))
+            instructions.append(Instruction(Opcode.PUSH1, (1,)))
+            instructions.append(Instruction(Opcode.VECPUSH, (2,)))
+        instructions.append(Instruction(Opcode.PUSH1, (1,)))
+        instructions.append(Instruction(Opcode.PUSH1, (1,)))
+        instructions.append(Instruction(Opcode.EQUALITY, (0, 1, 2)))
+        instructions.append(Instruction(Opcode.HALT))
+
+        ex = Executor()
+        with pytest.raises(MemoryLimitExceeded):
+            ex.execute(make_program(instructions), memory_limit=1 << 14)
+        assert ex.state.get_register(0).quadratic == {}, "a rejected expansion must not write coefficients"
+
+    def test_one_hot_r_over_a_huge_grid_is_rejected(self):
+        """RESIZE takes its extents off the stack; ONEHOTR then expands O(cols^2)."""
+        prog = make_program(
+            [
+                Instruction(Opcode.PUSH1, (4,)),
+                Instruction(Opcode.BQMX, (0,)),
+                Instruction(Opcode.PUSH1, (1,)),  # rows
+                Instruction(Opcode.PUSH4, (0, 16, 0, 0)),  # cols = 1 << 20
+                Instruction(Opcode.RESIZE, (0,)),
+                Instruction(Opcode.PUSH1, (0,)),  # row
+                Instruction(Opcode.PUSH1, (1,)),  # penalty
+                Instruction(Opcode.ONEHOTR, (0,)),
+                Instruction(Opcode.HALT),
+            ]
+        )
+        with pytest.raises(MemoryLimitExceeded):
+            Executor().execute(prog, memory_limit=1 << 20)
+
+    def test_the_budget_is_cumulative_across_reallocations(self):
+        """Overwriting the same register still spends budget; charges are never refunded."""
+        instructions = [
+            Instruction(Opcode.PUSH1, (0,)),
+            Instruction(Opcode.PUSH1, (10,)),
+            Instruction(Opcode.RANGE),
+            Instruction(Opcode.PUSH1, (50,)),
+            Instruction(Opcode.BSMX, (0,)),
+            Instruction(Opcode.NEXT),
+            Instruction(Opcode.HALT),
+        ]
+        ex = Executor()
+        with pytest.raises(MemoryLimitExceeded):
+            ex.execute(make_program(instructions), memory_limit=1000)
+        assert ex.memory_used == 800, "two 400-byte samples should have been charged before the third failed"
+
+    def test_reentrant_iter_copies_are_charged(self):
+        """A frame is only popped by NEXT, so a back-edge piles up slice copies."""
+        instructions = [Instruction(Opcode.VECI, (0,))]
+        for i in range(64):
+            instructions.append(Instruction(Opcode.PUSH1, (i,)))
+            instructions.append(Instruction(Opcode.VECPUSH, (0,)))
+        instructions.append(Instruction(Opcode.TARGET))
+        instructions.append(Instruction(Opcode.PUSH1, (0,)))
+        instructions.append(Instruction(Opcode.PUSH1, (64,)))
+        instructions.append(Instruction(Opcode.ITER, (0,)))
+        instructions.append(Instruction(Opcode.JUMP1, (0,)))
+        instructions.append(Instruction(Opcode.HALT))
+
+        ex = Executor()
+        with pytest.raises(MemoryLimitExceeded):
+            ex.execute(make_program(instructions), memory_limit=4096)
+        assert ex.memory_used > 1024, "the charge should cover more than the 64 vec pushes"
+
+    def test_each_execute_starts_with_a_fresh_budget(self):
+        prog = make_program(
+            [
+                Instruction(Opcode.PUSH1, (100,)),
+                Instruction(Opcode.BSMX, (0,)),
+                Instruction(Opcode.HALT),
+            ]
+        )
+        ex = Executor()
+        ex.execute(prog, memory_limit=1000)
+        assert ex.memory_used == 800
+        ex.execute(prog, memory_limit=1000)
+        assert ex.memory_used == 800, "a run must not inherit the previous run's charge"
+
+    def test_the_default_budget_admits_ordinary_programs(self):
+        """A 100,000-variable sample is 800 KB: comfortably inside the 1 GiB default."""
+        prog = make_program(
+            [
+                Instruction(Opcode.PUSH4, (0, 1, 134, 160)),  # 100_000
+                Instruction(Opcode.BSMX, (0,)),
+                Instruction(Opcode.HALT),
+            ]
+        )
+        ex = Executor()
+        ex.execute(prog)
+        assert ex.memory_limit == DEFAULT_MEMORY_LIMIT == 1 << 30
+        assert ex.memory_used == 800_000

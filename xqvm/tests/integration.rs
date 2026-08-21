@@ -1467,3 +1467,281 @@ fn stack_overflow_at_8192() {
     });
     assert!(matches!(err, Error::StackOverflow { .. }));
 }
+
+// ---------------------------------------------------------------------------
+// Allocation budget
+// ---------------------------------------------------------------------------
+
+/// Build bytecode and run it on a VM with the given allocation budget.
+/// Returns the VM and the run result so both state and error can be asserted.
+fn run_with_memory_limit(
+    limit: u64,
+    build: impl FnOnce(&mut InstructionBuilder),
+) -> (Vm, Result<(), Error>) {
+    let mut b = InstructionBuilder::new();
+    build(&mut b);
+    let bytecode = b.build().expect("builder build");
+    let mut vm = Vm::new();
+    vm.set_memory_limit(limit);
+    let result = vm.run(&bytecode);
+    (vm, result)
+}
+
+#[test]
+fn bsmx_beyond_the_budget_allocates_nothing() {
+    // The reported case: a three-instruction program asks for a 1 GiB sample.
+    let (vm, result) = run_with_memory_limit(1 << 20, |b| {
+        b.emit_push(1 << 27).emit_bsmx(Register(0)).emit_halt();
+    });
+    let err = result.expect_err("expected the budget to reject the allocation");
+    assert!(
+        matches!(err, Error::MemoryLimitExceeded { .. }),
+        "expected MemoryLimitExceeded, got {err:?}"
+    );
+    assert_eq!(
+        vm.register(0),
+        &RegVal::Unset,
+        "a rejected allocator must not write its register"
+    );
+    assert_eq!(vm.memory_used(), 0, "a rejected charge must not be kept");
+}
+
+#[test]
+fn sample_allocators_charge_eight_bytes_per_variable() {
+    for (name, build) in [
+        (
+            "BSMX",
+            Box::new(|b: &mut InstructionBuilder| {
+                b.emit_push(100).emit_bsmx(Register(0)).emit_halt();
+            }) as Box<dyn FnOnce(&mut InstructionBuilder)>,
+        ),
+        (
+            "SSMX",
+            Box::new(|b: &mut InstructionBuilder| {
+                b.emit_push(100).emit_ssmx(Register(0)).emit_halt();
+            }),
+        ),
+        (
+            "XSMX",
+            Box::new(|b: &mut InstructionBuilder| {
+                b.emit_push(100)
+                    .emit_push(2)
+                    .emit_xsmx(Register(0))
+                    .emit_halt();
+            }),
+        ),
+    ] {
+        let (vm, result) = run_with_memory_limit(1 << 20, build);
+        result.unwrap_or_else(|e| panic!("{name} within budget should run: {e}"));
+        assert_eq!(vm.memory_used(), 800, "{name} should charge 100 * 8 bytes");
+    }
+}
+
+#[test]
+fn model_allocators_charge_their_declared_size() {
+    // A model stores coefficients sparsely, but its declared size is an
+    // obligation every consumer has to materialise, so it is charged.
+    let (_vm, result) = run_with_memory_limit(1 << 20, |b| {
+        b.emit_push(1 << 30).emit_bqmx(Register(0)).emit_halt();
+    });
+    assert!(matches!(
+        result.expect_err("expected the budget to reject the declaration"),
+        Error::MemoryLimitExceeded { .. }
+    ));
+}
+
+#[test]
+fn discrete_k_is_rejected_before_the_budget_is_charged() {
+    // Error precedence: an invalid domain is a program error regardless of
+    // the budget, so it must win over the allocation charge.
+    let (_vm, result) = run_with_memory_limit(8, |b| {
+        b.emit_push(1 << 30)
+            .emit_push(1)
+            .emit_xsmx(Register(0))
+            .emit_halt();
+    });
+    assert!(matches!(
+        result.expect_err("expected an error"),
+        Error::InvalidDiscreteK { .. }
+    ));
+}
+
+#[test]
+fn vec_push_is_charged_on_growth() {
+    // Four elements fit in a 64-byte budget at 16 bytes each; the fifth does not.
+    let (vm, result) = run_with_memory_limit(64, |b| {
+        b.emit_vec_i(Register(0));
+        for i in 0..5 {
+            b.emit_push(i).emit_vec_push(Register(0));
+        }
+        b.emit_halt();
+    });
+    assert!(matches!(
+        result.expect_err("expected the fifth push to exhaust the budget"),
+        Error::MemoryLimitExceeded { .. }
+    ));
+    if let RegVal::VecInt(v) = vm.register(0) {
+        assert_eq!(v.len(), 4, "the four charged pushes should have landed");
+    } else {
+        panic!("r0 should be a vec<int>");
+    }
+}
+
+#[test]
+fn equality_expansion_is_charged_before_it_expands() {
+    // EQUALITY writes one quadratic term per pair of indices: 200 indices cost
+    // 19,900 terms, built by a program of 400 pushes. Charged up front, so the
+    // model is left untouched when the budget cannot cover it.
+    let n = 200i64;
+    let (vm, result) = run_with_memory_limit(1 << 14, |b| {
+        b.emit_push(n).emit_bqmx(Register(0));
+        b.emit_vec_i(Register(1)).emit_vec_i(Register(2));
+        for i in 0..n {
+            b.emit_push(i).emit_vec_push(Register(1));
+            b.emit_push(1).emit_vec_push(Register(2));
+        }
+        b.emit_push(1)
+            .emit_push(1)
+            .emit(xqvm::Instruction::Equality {
+                model: Register(0),
+                indices: Register(1),
+                coeffs: Register(2),
+            });
+        b.emit_halt();
+    });
+    assert!(matches!(
+        result.expect_err("expected the expansion to exceed the budget"),
+        Error::MemoryLimitExceeded { .. }
+    ));
+    if let RegVal::Model(m) = vm.register(0) {
+        assert_eq!(
+            m.quadratic_len(),
+            0,
+            "a rejected expansion must not write coefficients"
+        );
+    } else {
+        panic!("r0 should be a model");
+    }
+}
+
+#[test]
+fn one_hot_r_over_a_huge_grid_is_rejected() {
+    // RESIZE takes its extents off the value stack, and ONEHOTR expands
+    // O(cols^2) terms in a single step. Without the budget this runs until the
+    // host dies; with it the instruction is rejected before expanding.
+    let (_vm, result) = run_with_memory_limit(1 << 20, |b| {
+        b.emit_push(4).emit_bqmx(Register(0));
+        b.emit_push(1).emit_push(1 << 20).emit_resize(Register(0));
+        b.emit_push(0).emit_push(1).emit_one_hot_r(Register(0));
+        b.emit_halt();
+    });
+    assert!(matches!(
+        result.expect_err("expected the expansion to exceed the budget"),
+        Error::MemoryLimitExceeded { .. }
+    ));
+}
+
+#[test]
+fn the_budget_is_cumulative_across_reallocations() {
+    // Repeatedly overwriting the same register still spends budget: bytes are
+    // charged when allocated and never refunded, so an allocate-and-discard
+    // loop cannot outlive the bound.
+    let (vm, result) = run_with_memory_limit(1000, |b| {
+        b.emit_push(0).emit_push(10).emit_range();
+        b.emit_push(50).emit_bsmx(Register(0));
+        b.emit_next().emit_halt();
+    });
+    assert!(matches!(
+        result.expect_err("expected the loop to exhaust the budget"),
+        Error::MemoryLimitExceeded { .. }
+    ));
+    assert_eq!(
+        vm.memory_used(),
+        800,
+        "two 400-byte samples should have been charged before the third failed"
+    );
+}
+
+#[test]
+fn memory_limit_error_is_distinguishable_from_the_step_limit() {
+    let mut b = InstructionBuilder::new();
+    b.emit_push(1 << 27).emit_bsmx(Register(0)).emit_halt();
+    let bytecode = b.build().expect("builder build");
+
+    let mut vm = Vm::new();
+    vm.set_step_limit(10);
+    vm.set_memory_limit(1 << 20);
+    let err = vm.run(&bytecode).expect_err("expected an error");
+    match err {
+        Error::MemoryLimitExceeded {
+            pos,
+            requested,
+            used,
+            limit,
+        } => {
+            // PUSH 1<<27 encodes as a five-byte PUSH4, so BSMX starts at 5.
+            assert_eq!(pos, 5, "should point at the BSMX instruction");
+            assert_eq!(requested, (1 << 27) * 8);
+            assert_eq!(used, 0);
+            assert_eq!(limit, 1 << 20);
+        }
+        other => panic!("expected MemoryLimitExceeded, got {other:?}"),
+    }
+}
+
+#[test]
+fn each_run_starts_with_a_fresh_budget() {
+    let mut b = InstructionBuilder::new();
+    b.emit_push(100).emit_bsmx(Register(0)).emit_halt();
+    let bytecode = b.build().expect("builder build");
+
+    let mut vm = Vm::new();
+    vm.set_memory_limit(1000);
+    vm.run(&bytecode).expect("first run");
+    assert_eq!(vm.memory_used(), 800);
+    vm.run(&bytecode)
+        .expect("second run should not inherit the first run's charge");
+    assert_eq!(vm.memory_used(), 800);
+    vm.reset();
+    assert_eq!(vm.memory_used(), 0);
+}
+
+#[test]
+fn the_default_budget_admits_ordinary_programs() {
+    // A 100,000-variable sample is 800 KB: comfortably inside the 1 GiB default.
+    let vm = run(|b| {
+        b.emit_push(100_000).emit_bsmx(Register(0)).emit_halt();
+    });
+    assert_eq!(vm.memory_limit(), 1 << 30);
+    assert_eq!(vm.memory_used(), 800_000);
+}
+
+#[test]
+fn reentrant_iter_copies_are_charged() {
+    // A loop frame is only popped by `NEXT`, so a back-edge that re-enters an
+    // `ITER` piles up one copy of the slice per execution -- growth the step
+    // limit alone bounds only at 8 bytes per element per step.
+    let (vm, result) = run_with_memory_limit(4096, |b| {
+        b.emit_vec_i(Register(0));
+        for i in 0..64 {
+            b.emit_push(i).emit_vec_push(Register(0));
+        }
+        let top = b.label();
+        b.place(top).expect("place label");
+        b.emit_push(0).emit_push(64).emit_iter(Register(0));
+        b.emit_jump(top);
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            result.expect_err("expected the accumulating copies to exhaust the budget"),
+            Error::MemoryLimitExceeded { .. }
+        ),
+        "re-entrant ITER copies must be charged"
+    );
+    assert!(
+        vm.memory_used() > 1024,
+        "the charge should cover more than the 64 vec pushes, got {}",
+        vm.memory_used()
+    );
+}

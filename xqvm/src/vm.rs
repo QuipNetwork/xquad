@@ -192,6 +192,59 @@ fn sign_extend_be(bytes: &[u8]) -> i64 {
 /// Default step limit to guard against infinite loops.
 const DEFAULT_STEP_LIMIT: u64 = 10_000_000;
 
+/// Default allocation budget, in bytes.
+///
+/// Generous for off-chain use (a 1 GiB budget holds a sample of 134 million
+/// variables, far beyond anything the toolchain compiles today) while still
+/// bounding what a hostile program can ask a host for. Embedders that run
+/// untrusted bytecode -- the Substrate pallet above all -- should set a much
+/// smaller budget with [`Vm::set_memory_limit`].
+const DEFAULT_MEMORY_LIMIT: u64 = 1 << 30;
+
+/// Bytes charged per XQMX variable.
+///
+/// A variable costs one `i64` in a sample's value buffer. Model allocators are
+/// charged at the same rate even though [`XqmxModel`] stores its coefficients
+/// sparsely: the declared size is a promise that every consumer of the model --
+/// `ENERGY`, the sample the program must allocate to evaluate it, every solver
+/// backend -- has to materialise, so leaving it uncharged would let a program
+/// hand the host an unbounded obligation for free.
+const VARIABLE_BYTES: u64 = size_of::<i64>() as u64;
+
+/// Bytes charged per element appended to a `vec<int>`.
+///
+/// A `Vec` grown one element at a time doubles its capacity, so it holds
+/// between one and two elements' worth of buffer per live element. As with the
+/// coefficient maps the budget charges the upper end.
+const VEC_ELEMENT_BYTES: u64 = 2 * size_of::<i64>() as u64;
+
+/// Bytes charged per nonzero linear coefficient.
+///
+/// A `BTreeMap` node holds up to eleven key/value pairs behind a fixed header
+/// and is typically between half and completely full, so an entry's live cost
+/// lies between one and two times its key/value payload. The budget charges the
+/// upper end: the accounted total is meant to bound real heap use, not
+/// approximate it from below.
+const LINEAR_ENTRY_BYTES: u64 = 2 * (size_of::<usize>() + size_of::<i64>()) as u64;
+
+/// Bytes charged per nonzero quadratic coefficient. See [`LINEAR_ENTRY_BYTES`]
+/// for the factor of two; the key here is a `(usize, usize)` pair.
+const QUAD_ENTRY_BYTES: u64 = 2 * (size_of::<(usize, usize)>() + size_of::<i64>()) as u64;
+
+/// Worst-case number of coefficient entries an equality expansion over `n`
+/// terms writes: `n` linear terms and one quadratic term per unordered pair.
+///
+/// Saturating throughout, so an `n` large enough to overflow the arithmetic
+/// yields `u64::MAX` and is rejected by the budget rather than wrapping into a
+/// small charge. The count is a worst case: repeated indices collide on the
+/// same map key and cancelling coefficients are removed again, so an expansion
+/// can write fewer entries than it is charged for.
+fn equality_expansion_bytes(n: u64) -> u64 {
+    let pairs = n.saturating_mul(n.saturating_sub(1)) / 2;
+    n.saturating_mul(LINEAR_ENTRY_BYTES)
+        .saturating_add(pairs.saturating_mul(QUAD_ENTRY_BYTES))
+}
+
 /// The XQVM bytecode interpreter.
 ///
 /// # Examples
@@ -217,6 +270,8 @@ pub struct Vm {
     outputs: Vec<RegVal>,
     step_limit: u64,
     steps: u64,
+    memory_limit: u64,
+    memory_used: u64,
 }
 
 impl Default for Vm {
@@ -240,6 +295,8 @@ impl Vm {
             outputs: Vec::new(),
             step_limit: DEFAULT_STEP_LIMIT,
             steps: 0,
+            memory_limit: DEFAULT_MEMORY_LIMIT,
+            memory_used: 0,
         }
     }
 
@@ -308,6 +365,51 @@ impl Vm {
         self
     }
 
+    /// Set the allocation budget, in bytes, for a single [`run`](Self::run).
+    ///
+    /// Every instruction that allocates a sample buffer, declares model
+    /// variables, grows a vec, or expands constraint coefficients is charged
+    /// against this budget before it allocates; an instruction that cannot pay
+    /// fails with [`Error::MemoryLimitExceeded`] and allocates nothing. The
+    /// default is 1 GiB.
+    ///
+    /// The budget is *cumulative*, not a high-water mark of live memory:
+    /// bytes are charged when they are allocated and are never refunded, so a
+    /// loop that allocates and discards cannot spend more than the budget in
+    /// total. Pass `u64::MAX` for an effectively unlimited budget -- unlike a
+    /// step limit of `0`, there is no sentinel value here.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use xqvm::{Error, InstructionBuilder, Register, Vm};
+    ///
+    /// // A three-instruction program that asks for a 1 GiB sample.
+    /// let mut b = InstructionBuilder::new();
+    /// b.emit_push(1 << 27).emit_bsmx(Register(0)).emit_halt();
+    /// let program = b.build().unwrap();
+    ///
+    /// let mut vm = Vm::new();
+    /// vm.set_memory_limit(1 << 20); // 1 MiB
+    /// let err = vm.run(&program).unwrap_err();
+    /// assert!(matches!(err, Error::MemoryLimitExceeded { .. }));
+    /// ```
+    pub fn set_memory_limit(&mut self, bytes: u64) -> &mut Self {
+        self.memory_limit = bytes;
+        self
+    }
+
+    /// Return the configured allocation budget in bytes.
+    pub fn memory_limit(&self) -> u64 {
+        self.memory_limit
+    }
+
+    /// Return the bytes charged against the budget by the last
+    /// [`run`](Self::run) call.
+    pub fn memory_used(&self) -> u64 {
+        self.memory_used
+    }
+
     /// Return the current stack (bottom first).
     pub fn stack(&self) -> &[i64] {
         &self.stack
@@ -364,6 +466,7 @@ impl Vm {
         self.regs.iter_mut().for_each(|r| *r = RegVal::Unset);
         self.loop_stack.clear();
         self.steps = 0;
+        self.memory_used = 0;
     }
 
     /// Execute a [`Program`].
@@ -398,6 +501,7 @@ impl Vm {
         let mut stream = InstructionStream::from_program(program);
         let table = program.jump_table();
         self.steps = 0;
+        self.memory_used = 0;
 
         loop {
             if self.steps >= self.step_limit {
@@ -551,6 +655,55 @@ impl Vm {
         }
         self.stack.push(v);
         Ok(())
+    }
+
+    /// Charge `bytes` against the allocation budget.
+    ///
+    /// Callers must charge *before* they allocate. Letting the allocator fail
+    /// instead is not an option for the embedders that matter: inside a Wasm
+    /// runtime a failed allocation traps the whole execution rather than
+    /// returning an error the host can map to a dispatch error.
+    fn charge(&mut self, pos: usize, bytes: u64) -> Result<(), Error> {
+        let total = self.memory_used.saturating_add(bytes);
+        if total > self.memory_limit {
+            return Err(Error::MemoryLimitExceeded {
+                pos,
+                requested: bytes,
+                used: self.memory_used,
+                limit: self.memory_limit,
+            });
+        }
+        self.memory_used = total;
+        Ok(())
+    }
+
+    /// Charge for `count` XQMX variables. See [`VARIABLE_BYTES`].
+    fn charge_variables(&mut self, pos: usize, count: usize) -> Result<(), Error> {
+        let count = u64::try_from(count).unwrap_or(u64::MAX);
+        self.charge(pos, count.saturating_mul(VARIABLE_BYTES))
+    }
+
+    /// Charge `bytes` for one coefficient written into `reg`, but only when
+    /// `reg` holds a model.
+    ///
+    /// A model stores its coefficients sparsely, so writing one can create a
+    /// map entry. A sample writes into a buffer that was charged when it was
+    /// allocated, so it costs nothing further. Writing a coefficient that
+    /// already exists is charged too: the alternative is measuring the map
+    /// before and after every write, and the step limit already bounds how
+    /// many of these a program can run.
+    fn charge_coefficient(&mut self, pos: usize, reg: Register, bytes: u64) -> Result<(), Error> {
+        if matches!(self.reg(reg), RegVal::Model(_)) {
+            self.charge(pos, bytes)?;
+        }
+        Ok(())
+    }
+
+    /// Charge the worst-case cost of an equality expansion over `n` terms.
+    /// See [`equality_expansion_bytes`].
+    fn charge_equality_expansion(&mut self, pos: usize, n: usize) -> Result<(), Error> {
+        let n = u64::try_from(n).unwrap_or(u64::MAX);
+        self.charge(pos, equality_expansion_bytes(n))
     }
 
     fn reg(&self, r: Register) -> &RegVal {
@@ -747,10 +900,18 @@ impl Vm {
         // `NEXT` pops the frame, mirroring the existing `RANGE` behaviour.
         let end = self.pop(pos)?;
         let start = self.pop(pos)?;
+        // The copy is charged: a loop frame is only popped by `NEXT`, so a
+        // back-edge that re-enters an `ITER` without reaching its `NEXT` piles
+        // up one copy of the slice per execution.
         match self.reg(reg) {
             RegVal::VecInt(v) => {
                 let len = v.len();
                 let (start_offset, range) = resolve_iter_slice(pos, start, end, len)?;
+                self.charge_variables(pos, range.len())?;
+                let v = self
+                    .reg(reg)
+                    .as_vec_int()
+                    .unwrap_or_else(|_| unreachable!("register still holds the vec just matched"));
                 let copy = v
                     .get(range)
                     .unwrap_or_else(|| unreachable!("resolve_iter_slice already validated"))
@@ -766,6 +927,23 @@ impl Vm {
             RegVal::VecXqmx(v) => {
                 let len = v.len();
                 let (start_offset, range) = resolve_iter_slice(pos, start, end, len)?;
+                // Cloning a model clones its coefficient maps, so charge for
+                // what each one actually holds rather than per element.
+                let cost = v
+                    .get(range.clone())
+                    .unwrap_or_else(|| unreachable!("resolve_iter_slice already validated"))
+                    .iter()
+                    .fold(0u64, |acc, m| {
+                        let linear = u64::try_from(m.linear_len()).unwrap_or(u64::MAX);
+                        let quadratic = u64::try_from(m.quadratic_len()).unwrap_or(u64::MAX);
+                        acc.saturating_add(size_of::<XqmxModel>() as u64)
+                            .saturating_add(linear.saturating_mul(LINEAR_ENTRY_BYTES))
+                            .saturating_add(quadratic.saturating_mul(QUAD_ENTRY_BYTES))
+                    });
+                self.charge(pos, cost)?;
+                let RegVal::VecXqmx(v) = self.reg(reg) else {
+                    unreachable!("register still holds the vec just matched")
+                };
                 let copy = v
                     .get(range)
                     .unwrap_or_else(|| unreachable!("resolve_iter_slice already validated"))
@@ -1173,15 +1351,22 @@ impl Vm {
     }
 
     // -- Allocators --
+    //
+    // Every allocator takes its size from the value stack, where any positive
+    // `i64` is reachable in a single `PUSH`. Each one charges the allocation
+    // budget for the size it is about to materialise before it touches the
+    // allocator; a request that does not fit leaves the target register alone.
 
     fn exec_bqmx(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let size = usize::try_from(self.pop(pos)?).unwrap_or(0);
+        self.charge_variables(pos, size)?;
         *self.reg_mut(reg) = RegVal::Model(XqmxModel::new(Domain::Binary, size));
         Ok(StepResult::Continue)
     }
 
     fn exec_sqmx(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let size = usize::try_from(self.pop(pos)?).unwrap_or(0);
+        self.charge_variables(pos, size)?;
         *self.reg_mut(reg) = RegVal::Model(XqmxModel::new(Domain::Spin, size));
         Ok(StepResult::Continue)
     }
@@ -1192,18 +1377,21 @@ impl Vm {
         if k < 2 {
             return Err(Error::InvalidDiscreteK { pos, k });
         }
+        self.charge_variables(pos, size)?;
         *self.reg_mut(reg) = RegVal::Model(XqmxModel::new(Domain::Discrete(k), size));
         Ok(StepResult::Continue)
     }
 
     fn exec_bsmx(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let size = usize::try_from(self.pop(pos)?).unwrap_or(0);
+        self.charge_variables(pos, size)?;
         *self.reg_mut(reg) = RegVal::Sample(XqmxSample::new(Domain::Binary, vec![0; size]));
         Ok(StepResult::Continue)
     }
 
     fn exec_ssmx(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let size = usize::try_from(self.pop(pos)?).unwrap_or(0);
+        self.charge_variables(pos, size)?;
         *self.reg_mut(reg) = RegVal::Sample(XqmxSample::new(Domain::Spin, vec![-1; size]));
         Ok(StepResult::Continue)
     }
@@ -1214,11 +1402,15 @@ impl Vm {
         if k < 2 {
             return Err(Error::InvalidDiscreteK { pos, k });
         }
+        self.charge_variables(pos, size)?;
         *self.reg_mut(reg) = RegVal::Sample(XqmxSample::new(Domain::Discrete(k), vec![0; size]));
         Ok(StepResult::Continue)
     }
 
     // -- Vec allocators --
+    //
+    // `VEC`, `VECI` and `VECX` install an empty `Vec`, which allocates nothing.
+    // Their storage is charged as it is created, by `VECPUSH` and `SLACK`.
 
     #[expect(
         clippy::unnecessary_wraps,
@@ -1252,6 +1444,7 @@ impl Vm {
 
     fn exec_vec_push(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let v = self.pop(pos)?;
+        self.charge(pos, VEC_ELEMENT_BYTES)?;
         let vec = self
             .reg_mut(reg)
             .as_vec_int_mut()
@@ -1341,6 +1534,10 @@ impl Vm {
         if capacity <= 0 {
             return Ok(StepResult::Continue);
         }
+        // Both loops below run once per set bit position in `capacity`, so at
+        // most 63 iterations each; charge for the entries they will append.
+        let entries = u64::from(i64::BITS - capacity.leading_zeros());
+        self.charge(pos, entries.saturating_mul(2 * VEC_ELEMENT_BYTES))?;
         // Append index entries to the indices register.
         {
             let vec = self
@@ -1433,6 +1630,7 @@ impl Vm {
     fn exec_set_line(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let val = self.pop(pos)?;
         let i = self.pop(pos)?;
+        self.charge_coefficient(pos, reg, LINEAR_ENTRY_BYTES)?;
         let mut grid = self
             .reg_mut(reg)
             .as_xqmx_grid_mut()
@@ -1461,6 +1659,7 @@ impl Vm {
     fn exec_add_line(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let delta = self.pop(pos)?;
         let i = self.pop(pos)?;
+        self.charge_coefficient(pos, reg, LINEAR_ENTRY_BYTES)?;
         let mut grid = self
             .reg_mut(reg)
             .as_xqmx_grid_mut()
@@ -1512,6 +1711,7 @@ impl Vm {
         let val = self.pop(pos)?;
         let j = self.pop(pos)?;
         let i = self.pop(pos)?;
+        self.charge_coefficient(pos, reg, QUAD_ENTRY_BYTES)?;
         let m = self
             .reg_mut(reg)
             .as_model_mut()
@@ -1538,6 +1738,7 @@ impl Vm {
         let delta = self.pop(pos)?;
         let j = self.pop(pos)?;
         let i = self.pop(pos)?;
+        self.charge_coefficient(pos, reg, QUAD_ENTRY_BYTES)?;
         let m = self
             .reg_mut(reg)
             .as_model_mut()
@@ -1685,6 +1886,16 @@ impl Vm {
     fn exec_one_hot_r(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let penalty = self.pop(pos)?;
         let row = self.pop(pos)?;
+        // The expansion writes one linear term per column and one quadratic
+        // term per pair of columns, so a single `ONEHOTR` costs O(cols^2) map
+        // entries -- and `RESIZE` takes `cols` straight off the value stack.
+        // Charge before expanding. A register holding something other than a
+        // model charges nothing and falls through to the type error below.
+        let cols = match self.reg(reg) {
+            RegVal::Model(m) => m.cols,
+            _ => 0,
+        };
+        self.charge_equality_expansion(pos, cols)?;
         let m = self
             .reg_mut(reg)
             .as_model_mut()
@@ -1716,6 +1927,12 @@ impl Vm {
     fn exec_one_hot_c(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let penalty = self.pop(pos)?;
         let col = self.pop(pos)?;
+        // O(rows^2) map entries in one step; see `exec_one_hot_r`.
+        let rows = match self.reg(reg) {
+            RegVal::Model(m) => m.rows,
+            _ => 0,
+        };
+        self.charge_equality_expansion(pos, rows)?;
         let m = self
             .reg_mut(reg)
             .as_model_mut()
@@ -1747,6 +1964,7 @@ impl Vm {
         let penalty = self.pop(pos)?;
         let j = self.pop(pos)?;
         let i = self.pop(pos)?;
+        self.charge(pos, QUAD_ENTRY_BYTES)?;
         let m = self
             .reg_mut(reg)
             .as_model_mut()
@@ -1774,6 +1992,7 @@ impl Vm {
         let penalty = self.pop(pos)?;
         let j = self.pop(pos)?;
         let i = self.pop(pos)?;
+        self.charge(pos, LINEAR_ENTRY_BYTES + QUAD_ENTRY_BYTES)?;
         let m = self
             .reg_mut(reg)
             .as_model_mut()
@@ -1833,6 +2052,22 @@ impl Vm {
                 b: coeff_vec.len(),
             });
         }
+        // The expansion is quadratic in the number of terms, and `EQUALITY`
+        // also grows the model to cover the largest index it was handed --
+        // both from vec contents the program controls. Charge for the growth
+        // and the expansion before either happens.
+        let current_size = match self.reg(model) {
+            RegVal::Model(m) => m.size,
+            _ => 0,
+        };
+        let needed = idx_vec
+            .iter()
+            .max()
+            .and_then(|&max_idx| max_idx.checked_add(1))
+            .and_then(|needed| usize::try_from(needed).ok())
+            .unwrap_or(0);
+        self.charge_variables(pos, needed.saturating_sub(current_size))?;
+        self.charge_equality_expansion(pos, idx_vec.len())?;
         let m = self
             .reg_mut(model)
             .as_model_mut()
@@ -1841,10 +2076,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
-        if let Some(&max_idx) = idx_vec.iter().max()
-            && let Ok(needed) = usize::try_from(max_idx + 1)
-            && needed > m.size
-        {
+        if needed > m.size {
             m.size = needed;
         }
         let idx_us = indices_to_usize(&idx_vec, pos, m.size)?;
@@ -1880,6 +2112,19 @@ impl Vm {
                 len: n,
             });
         }
+        let max_excess = n_i64 - k;
+        // `max_excess > 0` implies `leading_zeros` operates on a positive i64,
+        // so the bit-length fits in u32; widening u32 → usize is lossless on
+        // every supported target.
+        let num_slacks = if max_excess <= 0 {
+            0
+        } else {
+            (i64::BITS - max_excess.leading_zeros()) as usize
+        };
+        // The slack variables grow the model, and the expansion is quadratic
+        // in the total term count. Charge for both before either happens.
+        self.charge_variables(pos, num_slacks)?;
+        self.charge_equality_expansion(pos, n.saturating_add(num_slacks))?;
         let m = self
             .reg_mut(model)
             .as_model_mut()
@@ -1888,18 +2133,12 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
-        let max_excess = n_i64 - k;
-        if max_excess <= 0 {
+        if num_slacks == 0 {
             let unit_coeffs = vec![1i64; n];
             let idx_us = indices_to_usize(&idx_vec, pos, m.size)?;
             expand_equality(m, &idx_us, &unit_coeffs, k, penalty);
             return Ok(StepResult::Continue);
         }
-        // `max_excess > 0` here (the `<= 0` branch returned above), so
-        // `leading_zeros` operates on a positive i64 and the bit-length
-        // fits in u32; widening u32 → usize is lossless on every supported
-        // target.
-        let num_slacks = (i64::BITS - max_excess.leading_zeros()) as usize;
         let slack_start = m.size;
         let idx_us = indices_to_usize(&idx_vec, pos, slack_start)?;
         m.size += num_slacks;
@@ -1956,6 +2195,16 @@ impl Vm {
                 len: n,
             });
         }
+        let weight_sum: i64 = coeff_vec.iter().sum();
+        let max_excess = weight_sum - k;
+        // See `exec_at_least` for the `leading_zeros` widening argument.
+        let num_slacks = if max_excess <= 0 {
+            0
+        } else {
+            (i64::BITS - max_excess.leading_zeros()) as usize
+        };
+        self.charge_variables(pos, num_slacks)?;
+        self.charge_equality_expansion(pos, n.saturating_add(num_slacks))?;
         let m = self
             .reg_mut(model)
             .as_model_mut()
@@ -1964,18 +2213,11 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
-        let weight_sum: i64 = coeff_vec.iter().sum();
-        let max_excess = weight_sum - k;
-        if max_excess <= 0 {
+        if num_slacks == 0 {
             let idx_us = indices_to_usize(&idx_vec, pos, m.size)?;
             expand_equality(m, &idx_us, &coeff_vec, k, penalty);
             return Ok(StepResult::Continue);
         }
-        // `max_excess > 0` here (the `<= 0` branch returned above), so
-        // `leading_zeros` operates on a positive i64 and the bit-length
-        // fits in u32; widening u32 → usize is lossless on every supported
-        // target.
-        let num_slacks = (i64::BITS - max_excess.leading_zeros()) as usize;
         let slack_start = m.size;
         let idx_us = indices_to_usize(&idx_vec, pos, slack_start)?;
         m.size += num_slacks;
@@ -1993,6 +2235,10 @@ impl Vm {
         let p_aux = self.pop(pos)?;
         let var_b = self.pop(pos)?;
         let var_a = self.pop(pos)?;
+        // Rosenberg reduction adds one auxiliary variable, three quadratic
+        // terms and one linear term.
+        self.charge_variables(pos, 1)?;
+        self.charge(pos, 3 * QUAD_ENTRY_BYTES + LINEAR_ENTRY_BYTES)?;
         let m = self
             .reg_mut(model)
             .as_model_mut()

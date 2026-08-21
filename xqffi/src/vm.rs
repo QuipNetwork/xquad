@@ -243,6 +243,17 @@ impl PyVm {
         let _ = self.inner.set_unlimited_steps();
     }
 
+    /// Set the allocation budget in bytes (safety cap against oversized
+    /// models, samples and vectors). Defaults to 1 GiB.
+    fn set_memory_limit(&mut self, bytes: u64) {
+        let _ = self.inner.set_memory_limit(bytes);
+    }
+
+    /// Return the bytes charged against the allocation budget by the last run.
+    fn memory_used(&self) -> u64 {
+        self.inner.memory_used()
+    }
+
     /// Execute `bytecode` (raw wire-format bytes) on this VM.
     ///
     /// # Errors

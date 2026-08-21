@@ -32,6 +32,7 @@ from xqffi.asm import assemble_source as _assemble_source
 from xqffi.vm import Vm as _RustVm
 from xqffi.vm import XqmxModel as ModelFFI
 from xqffi.vm import XqmxSample as SampleFFI
+from xqvm_py.executor import DEFAULT_MEMORY_LIMIT as _DEFAULT_MEMORY_LIMIT
 from xqvm_py.executor import Executor as _PyExecutor
 from xqvm_py.program import program_from_bytecode as _program_from_bytecode
 from xqvm_py.program import program_from_xqasm as _program_from_xqasm
@@ -189,6 +190,7 @@ class VM:
         self._calldata: list = []
         self._output_slots: int = 0
         self._step_limit: int | None = None
+        self._memory_limit: int = _DEFAULT_MEMORY_LIMIT
 
         if backend == VMBackend.RUST:
             self._rust_vm = _RustVm()
@@ -196,6 +198,7 @@ class VM:
             self._py_outputs: dict[int, Any] = {}
             self._py_stack: list[int] = []
             self._py_steps: int = 0
+            self._py_memory_used: int = 0
 
     @property
     def backend(self) -> VMBackend:
@@ -213,6 +216,14 @@ class VM:
         The limit is exact: `0` permits none at all. `None` is unlimited.
         """
         self._step_limit = limit
+
+    def set_memory_limit(self, nbytes: int) -> None:
+        """Set the allocation budget in bytes (default 1 GiB).
+
+        Both backends charge the same rates, so both reject the same
+        programs at the same instruction.
+        """
+        self._memory_limit = nbytes
 
     # -- execution -----------------------------------------------------------
 
@@ -248,16 +259,28 @@ class VM:
             return self._rust_vm.steps()
         return self._py_steps
 
+    def memory_used(self) -> int:
+        """Bytes charged against the allocation budget by the last run.
+
+        Both backends charge the same schedule, so this is identical across
+        them for any program that runs on both.
+        """
+        if self._backend == VMBackend.RUST:
+            return self._rust_vm.memory_used()
+        return self._py_memory_used
+
     def reset(self) -> None:
         self._calldata = []
         self._output_slots = 0
         self._step_limit = None
+        self._memory_limit = _DEFAULT_MEMORY_LIMIT
         if self._backend == VMBackend.RUST:
             self._rust_vm.reset()
         else:
             self._py_outputs = {}
             self._py_stack = []
             self._py_steps = 0
+            self._py_memory_used = 0
 
     # -- private -------------------------------------------------------------
 
@@ -270,6 +293,7 @@ class VM:
             self._rust_vm.set_unlimited_steps()
         else:
             self._rust_vm.set_step_limit(self._step_limit)
+        self._rust_vm.set_memory_limit(self._memory_limit)
         self._rust_vm.run(bytecode)
 
     def _run_python(self, source: str) -> None:
@@ -283,6 +307,7 @@ class VM:
     def _execute_python(self, program) -> None:
         cd = _prepare_calldata_python(self._calldata)
         executor = _PyExecutor()
-        self._py_outputs = executor.execute(program, cd, step_limit=self._step_limit)
+        self._py_outputs = executor.execute(program, cd, step_limit=self._step_limit, memory_limit=self._memory_limit)
         self._py_stack = list(executor.state.stack)
         self._py_steps = executor.steps
+        self._py_memory_used = executor.memory_used

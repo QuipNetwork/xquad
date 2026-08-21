@@ -30,6 +30,7 @@ from typing import Any, Protocol, runtime_checkable
 from .errors import (
     DivisionByZero,
     InvalidOpcode,
+    MemoryLimitExceeded,
     TargetNotFound,
     TypeMismatch,
 )
@@ -57,6 +58,50 @@ from .xqmx import (
 from .xqmx import (
     row_sum as xqmx_row_sum,
 )
+
+# --------------------------------------------------------------------------
+# Allocation budget
+#
+# The charge schedule is defined over program-visible quantities -- variables
+# declared, elements appended, coefficients written -- and not over either
+# interpreter's internal representation, so both reject exactly the same
+# programs at exactly the same instruction. The rates below must stay
+# byte-for-byte identical to the constants in `xqvm/src/vm.rs`.
+# --------------------------------------------------------------------------
+
+#: Default allocation budget in bytes. Generous for off-chain use; embedders
+#: running untrusted bytecode should pass a much smaller `memory_limit`.
+DEFAULT_MEMORY_LIMIT = 1 << 30
+
+#: Bytes charged per XQMX variable (one `i64` in a sample buffer). Model
+#: allocators are charged at the same rate: both interpreters store model
+#: coefficients sparsely, but a declared size is an obligation every consumer
+#: of the model has to materialise.
+VARIABLE_BYTES = 8
+
+#: Bytes charged per element appended to a vec. Rust's `Vec` doubles its
+#: capacity as it grows, so it holds between one and two elements' worth of
+#: buffer per live element; the budget charges the upper end.
+VEC_ELEMENT_BYTES = 16
+
+#: Bytes charged per nonzero linear coefficient (key plus value, doubled for
+#: container overhead).
+LINEAR_ENTRY_BYTES = 32
+
+#: Bytes charged per nonzero quadratic coefficient; the key is an index pair.
+QUAD_ENTRY_BYTES = 48
+
+
+def equality_expansion_bytes(n: int) -> int:
+    """Worst-case bytes for an equality expansion over `n` terms.
+
+    The expansion writes one linear term per index and one quadratic term per
+    unordered pair. It is a worst case: repeated indices collide on the same
+    key and cancelling coefficients are removed again, so an expansion can
+    write fewer entries than it is charged for.
+    """
+    pairs = n * (n - 1) // 2
+    return n * LINEAR_ENTRY_BYTES + pairs * QUAD_ENTRY_BYTES
 
 
 @runtime_checkable
@@ -106,6 +151,8 @@ class Executor:
         self.state = MachineState()
         self.program: Program | None = None
         self.tracer = tracer
+        self._memory_limit = DEFAULT_MEMORY_LIMIT
+        self._memory_used = 0
         self._dispatch = self._build_dispatch_table()
 
     def _build_dispatch_table(self) -> dict[Opcode, Callable[[Instruction], None]]:
@@ -223,6 +270,7 @@ class Executor:
         program: Program,
         input_data: dict[int, Any] | None = None,
         step_limit: int | None = None,
+        memory_limit: int = DEFAULT_MEMORY_LIMIT,
     ) -> dict[int, Any]:
         """
         Execute a program to completion.
@@ -233,6 +281,9 @@ class Executor:
             step_limit: Maximum steps before raising RuntimeError. `None` is
                 unlimited; the limit is otherwise exact, so `0` permits no
                 instructions at all. Matches `xqvm::Vm::set_step_limit`.
+            memory_limit: Allocation budget in bytes, charged against every
+                allocating instruction before it allocates. Unlike step_limit
+                there is no "unlimited" sentinel -- pass a large value.
 
         Returns:
             Output data keyed by slot number
@@ -242,6 +293,8 @@ class Executor:
         """
         self.state.reset()
         self.program = program
+        self._memory_limit = memory_limit
+        self._memory_used = 0
 
         if input_data:
             for slot, value in input_data.items():
@@ -262,6 +315,50 @@ class Executor:
     def steps(self) -> int:
         """Total steps executed since the last `execute()` call."""
         return self.state.steps
+
+    @property
+    def memory_used(self) -> int:
+        """Bytes charged against the allocation budget by the last `execute()`."""
+        return self._memory_used
+
+    @property
+    def memory_limit(self) -> int:
+        """The allocation budget in bytes."""
+        return self._memory_limit
+
+    # -- allocation accounting ------------------------------------------------
+
+    def _charge(self, nbytes: int) -> None:
+        """Charge `nbytes` against the allocation budget.
+
+        Callers charge *before* they allocate, so an oversized request is
+        rejected rather than handed to the allocator. Charges are cumulative
+        and never refunded, so an allocate-and-discard loop cannot spend more
+        than the budget in total.
+        """
+        total = self._memory_used + nbytes
+        if total > self._memory_limit:
+            raise MemoryLimitExceeded(nbytes, self._memory_used, self._memory_limit)
+        self._memory_used = total
+
+    def _charge_variables(self, count: int) -> None:
+        """Charge for `count` XQMX variables. Negative counts clamp to zero."""
+        self._charge(max(count, 0) * VARIABLE_BYTES)
+
+    def _charge_equality_expansion(self, n: int) -> None:
+        """Charge the worst-case cost of an equality expansion over `n` terms."""
+        self._charge(equality_expansion_bytes(max(n, 0)))
+
+    def _charge_coefficient(self, xqmx: XQMX, nbytes: int) -> None:
+        """Charge for one coefficient written into `xqmx`, if it is a model.
+
+        A sample writes into storage that was charged when the sample was
+        allocated, so it costs nothing further. Writing a coefficient that
+        already exists is charged too: the step limit already bounds how many
+        of these a program can run.
+        """
+        if xqmx.is_model():
+            self._charge(nbytes)
 
     def step(self) -> bool:
         """
@@ -419,6 +516,9 @@ class Executor:
         reg = instr.operands[0]
         vec = self._get_register_as_vec(reg)
         end_idx, start_idx = self.state.pop_n(2)
+        # The frame copies the slice, and a frame is only popped by NEXT, so a
+        # back-edge that re-enters an ITER piles up one copy per execution.
+        self._charge_variables(end_idx - start_idx)
         # Store current PC + 1 as the loop target (next instruction)
         self.state.jc.push_loop_iter(self.state.pc + 1, vec, start_idx, end_idx)
 
@@ -671,10 +771,16 @@ class Executor:
         vec.element_type = VecElem("xqmx")
         self.state.set_register(reg, vec)
 
+    # The allocators take their size from the value stack, where any positive
+    # 64-bit value is reachable in a single PUSH. Each charges the allocation
+    # budget for the size it is about to declare before it constructs
+    # anything, so a request that does not fit leaves the register alone.
+
     def _runner_BQMX(self, instr: Instruction) -> None:
         """BQMX: Create binary model XQMX."""
         reg = instr.operands[0]
         size = self.state.pop()
+        self._charge_variables(size)
         xqmx = XQMX.binary_model(size)
         self.state.set_register(reg, xqmx)
 
@@ -682,6 +788,7 @@ class Executor:
         """SQMX: Create spin model XQMX."""
         reg = instr.operands[0]
         size = self.state.pop()
+        self._charge_variables(size)
         xqmx = XQMX.spin_model(size)
         self.state.set_register(reg, xqmx)
 
@@ -689,6 +796,10 @@ class Executor:
         """XQMX: Create discrete model XQMX."""
         reg = instr.operands[0]
         k, size = self.state.pop_n(2)
+        # Rust rejects k < 2 before charging; here the XQMX constructor
+        # raises, so only charge once k is known good.
+        if k >= 2:
+            self._charge_variables(size)
         xqmx = XQMX.discrete_model(size, k)
         self.state.set_register(reg, xqmx)
 
@@ -696,6 +807,7 @@ class Executor:
         """BSMX: Create binary sample XQMX."""
         reg = instr.operands[0]
         size = self.state.pop()
+        self._charge_variables(size)
         xqmx = XQMX.binary_sample(size)
         self.state.set_register(reg, xqmx)
 
@@ -703,6 +815,7 @@ class Executor:
         """SSMX: Create spin sample XQMX."""
         reg = instr.operands[0]
         size = self.state.pop()
+        self._charge_variables(size)
         xqmx = XQMX.spin_sample(size)
         self.state.set_register(reg, xqmx)
 
@@ -710,6 +823,8 @@ class Executor:
         """XSMX: Create discrete sample XQMX."""
         reg = instr.operands[0]
         k, size = self.state.pop_n(2)
+        if k >= 2:
+            self._charge_variables(size)
         xqmx = XQMX.discrete_sample(size, k)
         self.state.set_register(reg, xqmx)
 
@@ -718,6 +833,7 @@ class Executor:
         reg = instr.operands[0]
         vec = self._get_register_as_vec(reg)
         value = self.state.pop()
+        self._charge(VEC_ELEMENT_BYTES)
         vec.push(value)
 
     def _runner_VECGET(self, instr: Instruction) -> None:
@@ -753,6 +869,9 @@ class Executor:
         capacity, start_index = self.state.pop_n(2)
         if capacity <= 0:
             return
+        # The loop runs once per bit position in `capacity` and appends to
+        # both vecs; charge for the entries before creating them.
+        self._charge(capacity.bit_length() * 2 * VEC_ELEMENT_BYTES)
         power = 1
         i = 0
         while power <= capacity:
@@ -774,6 +893,7 @@ class Executor:
         reg = instr.operands[0]
         xqmx = self._get_register_as_xqmx(reg)
         value, index = self.state.pop_n(2)
+        self._charge_coefficient(xqmx, LINEAR_ENTRY_BYTES)
         xqmx.set_linear(index, value)
 
     def _runner_ADDLINE(self, instr: Instruction) -> None:
@@ -781,6 +901,7 @@ class Executor:
         reg = instr.operands[0]
         xqmx = self._get_register_as_xqmx(reg)
         delta, index = self.state.pop_n(2)
+        self._charge_coefficient(xqmx, LINEAR_ENTRY_BYTES)
         xqmx.add_linear(index, delta)
 
     def _runner_GETQUAD(self, instr: Instruction) -> None:
@@ -796,6 +917,7 @@ class Executor:
         reg = instr.operands[0]
         xqmx = self._get_register_as_xqmx(reg)
         value, j, i = self.state.pop_n(3)
+        self._charge_coefficient(xqmx, QUAD_ENTRY_BYTES)
         xqmx.set_quadratic(i, j, value)
 
     def _runner_ADDQUAD(self, instr: Instruction) -> None:
@@ -803,6 +925,7 @@ class Executor:
         reg = instr.operands[0]
         xqmx = self._get_register_as_xqmx(reg)
         delta, j, i = self.state.pop_n(3)
+        self._charge_coefficient(xqmx, QUAD_ENTRY_BYTES)
         xqmx.add_quadratic(i, j, delta)
 
     def _runner_IDXGRID(self, instr: Instruction) -> None:
@@ -869,6 +992,10 @@ class Executor:
         if model.rows == 0 or model.cols == 0:
             raise ValueError("ONEHOTR requires grid dimensions to be set")
 
+        # The expansion writes one linear term per column and one quadratic
+        # term per pair of columns, so ONEHOTR costs O(cols^2) entries in one
+        # step -- and RESIZE takes cols straight off the value stack.
+        self._charge_equality_expansion(model.cols)
         indices = row_indices(model, row)
         expand_onehot(model, indices, penalty)
 
@@ -881,6 +1008,8 @@ class Executor:
         if model.rows == 0 or model.cols == 0:
             raise ValueError("ONEHOTC requires grid dimensions to be set")
 
+        # O(rows^2) entries in one step; see ONEHOTR.
+        self._charge_equality_expansion(model.rows)
         indices = col_indices(model, col)
         expand_onehot(model, indices, penalty)
 
@@ -889,6 +1018,7 @@ class Executor:
         reg = instr.operands[0]
         model = self._get_register_as_xqmx(reg)
         penalty, j, i = self.state.pop_n(3)
+        self._charge_coefficient(model, QUAD_ENTRY_BYTES)
         expand_exclude(model, i, j, penalty)
 
     def _runner_IMPLIES(self, instr: Instruction) -> None:
@@ -896,6 +1026,7 @@ class Executor:
         reg = instr.operands[0]
         model = self._get_register_as_xqmx(reg)
         penalty, j, i = self.state.pop_n(3)
+        self._charge_coefficient(model, LINEAR_ENTRY_BYTES + QUAD_ENTRY_BYTES)
         expand_implies(model, i, j, penalty)
 
     def _runner_EQUALITY(self, instr: Instruction) -> None:
@@ -909,8 +1040,14 @@ class Executor:
         penalty, target = self.state.pop_n(2)
         indices = [indices_vec.get(i) for i in range(indices_vec.length)]
         coeffs = [coeffs_vec.get(i) for i in range(coeffs_vec.length)]
+        # The expansion is quadratic in the number of terms, and EQUALITY
+        # also grows the model to cover the largest index it was handed --
+        # both from vec contents the program controls.
         if indices:
-            model.size = max(model.size, max(indices) + 1)
+            needed = max(indices) + 1
+            self._charge_variables(needed - model.size)
+            model.size = max(model.size, needed)
+        self._charge_equality_expansion(len(indices))
         expand_equality(model, indices, coeffs, target, penalty)
 
     def _runner_ATLEAST(self, instr: Instruction) -> None:
@@ -926,10 +1063,14 @@ class Executor:
             raise ValueError(f"ATLEAST: k={k} out of valid range (0, {n}]")
         orig_indices = [indices_vec.get(i) for i in range(n)]
         max_excess = n - k
-        if max_excess <= 0:
+        num_slacks = max_excess.bit_length() if max_excess > 0 else 0
+        # The slack variables grow the model, and the expansion is quadratic
+        # in the total term count. Charge for both before either happens.
+        self._charge_variables(num_slacks)
+        self._charge_equality_expansion(n + num_slacks)
+        if num_slacks == 0:
             expand_equality(model, orig_indices, [1] * n, k, penalty)
             return
-        num_slacks = max_excess.bit_length()
         slack_start = model.size
         model.size += num_slacks
         combined_indices = orig_indices + [slack_start + i for i in range(num_slacks)]
@@ -954,10 +1095,12 @@ class Executor:
         orig_indices = [indices_vec.get(i) for i in range(n)]
         weights = [coeffs_vec.get(i) for i in range(n)]
         max_excess = sum(weights) - k
-        if max_excess <= 0:
+        num_slacks = max_excess.bit_length() if max_excess > 0 else 0
+        self._charge_variables(num_slacks)
+        self._charge_equality_expansion(n + num_slacks)
+        if num_slacks == 0:
             expand_equality(model, orig_indices, weights, k, penalty)
             return
-        num_slacks = max_excess.bit_length()
         slack_start = model.size
         model.size += num_slacks
         combined_indices = orig_indices + [slack_start + i for i in range(num_slacks)]
@@ -969,6 +1112,10 @@ class Executor:
         model_reg = instr.operands[0]
         model = self._get_register_as_xqmx(model_reg)
         p_aux, var_b, var_a = self.state.pop_n(3)
+        # Rosenberg reduction adds one auxiliary variable, three quadratic
+        # terms and one linear term.
+        self._charge_variables(1)
+        self._charge(3 * QUAD_ENTRY_BYTES + LINEAR_ENTRY_BYTES)
         w = expand_reduce(model, var_a, var_b, p_aux)
         self.state.push(w)
 

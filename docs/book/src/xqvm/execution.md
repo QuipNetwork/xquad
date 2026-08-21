@@ -63,6 +63,23 @@ counted. `xqvm_py`'s executor increments after checking for more
 instructions, so the two interpreters can disagree by one on the same
 non-`HALT`-terminated program.
 
+## Allocation Accounting
+
+Steps bound how long a program runs, not how much memory it asks for: a
+three-instruction program can name a sample of any size the value stack can
+hold. A second counter tracks bytes. Every allocating instruction is charged
+against a configurable budget (default: 1 GiB) *before* it allocates, and one
+that cannot pay stops execution with a `MemoryLimitExceeded` error without
+allocating anything.
+
+```rust
+let mut vm = Vm::new();
+vm.set_memory_limit(16 * 1024 * 1024);  // 16 MiB
+```
+
+`vm.memory_used()` reports what the run spent. See
+[Runtime Limits](limits-and-errors.md) for the per-opcode charges.
+
 ## Control Flow Results
 
 Each instruction handler returns a `StepResult` that tells the execution loop
