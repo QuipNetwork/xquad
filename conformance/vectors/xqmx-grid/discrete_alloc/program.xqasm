@@ -1,0 +1,48 @@
+; discrete_alloc: allocate a discrete model and a discrete sample and use
+; the signed centred domain [-k, k-1].
+;
+; No vector allocated a discrete model or sample before this one, which is
+; why the domain could be documented two different ways -- [-k, k-1] in
+; spec/xqvm/ and [0..k-1] in spec/xqsa/DOMAINS.md and the xqvm_py
+; docstrings -- without anything failing.
+;
+; k = 3, so the domain is [-3, 2]. The sample defaults to 0, which the
+; centred range always contains. The negative assignment below is the part
+; the [0..k-1] reading would have called out-of-domain.
+
+PUSH 4           ; size
+PUSH 3           ; k
+XQMX r0          ; discrete model, domain [-3, 2]
+
+PUSH 4           ; size
+PUSH 3           ; k
+XSMX r1          ; discrete sample, defaults to 0
+
+; a freshly allocated discrete sample reads 0
+PUSH 0
+GETLINE r1
+STOW r2
+PUSH 0
+OUTPUT r2
+
+; the lower end of the centred domain is a legal assignment
+PUSH 1
+PUSH -3
+SETLINE r1
+PUSH 1
+GETLINE r1
+STOW r3
+PUSH 1
+OUTPUT r3
+
+; and the upper end
+PUSH 2
+PUSH 2
+SETLINE r1
+PUSH 2
+GETLINE r1
+STOW r4
+PUSH 2
+OUTPUT r4
+
+HALT

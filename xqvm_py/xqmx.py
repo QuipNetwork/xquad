@@ -20,7 +20,7 @@ XQVM XQMX Types and Operations
 
 XQMX represents quadratic models (QUBO/Ising) with:
 - mode: MODEL (for building constraints/objectives) or SAMPLE (for solutions)
-- domain: BINARY [0,1], SPIN [-1,+1], or DISCRETE [0..k-1]
+- domain: BINARY [0,1], SPIN [-1,+1], or DISCRETE [-k, k-1] (signed, centred)
 - Grid operations for row/column indexing
 - High-level functions (HLF)
 """
@@ -47,7 +47,7 @@ class XQMXDomain(Enum):
 
     BINARY = auto()  # [0, 1] - QUBO/BQM
     SPIN = auto()  # [-1, +1] - Ising
-    DISCRETE = auto()  # [0..k-1] - discrete with k values
+    DISCRETE = auto()  # [-k, k-1] - signed centred range, 2k values
 
 
 @dataclass
@@ -57,7 +57,7 @@ class XQMX:
 
     XQMX represents a quadratic model (QUBO/Ising) with:
     - mode: MODEL (for building constraints/objectives) or SAMPLE (for solutions)
-    - domain: BINARY [0,1], SPIN [-1,+1], or DISCRETE [0..k-1]
+    - domain: BINARY [0,1], SPIN [-1,+1], or DISCRETE [-k, k-1] (signed, centred)
     - dimensions: size (total variables), rows, cols (for grid indexing)
     - linear: dict mapping variable index -> linear coefficient
     - quadratic: dict mapping (i, j) tuple -> coupling coefficient (i < j)
@@ -72,7 +72,7 @@ class XQMX:
     cols: int = 0  # Grid cols (0 if not grid-indexed)
     linear: dict[int, int] = field(default_factory=dict)
     quadratic: dict[tuple[int, int], int] = field(default_factory=dict)
-    discrete_k: int = 2  # For DISCRETE domain: number of values [0..k-1]
+    discrete_k: int = 2  # For DISCRETE domain: half-width of the range [-k, k-1]
 
     def __post_init__(self) -> None:
         if self.size < 0:
@@ -106,7 +106,7 @@ class XQMX:
 
     @classmethod
     def discrete_model(cls, size: int, k: int, rows: int = 0, cols: int = 0) -> XQMX:
-        """Create a discrete [0..k-1] model XQMX."""
+        """Create a discrete model XQMX over the signed centred range [-k, k-1]."""
         return cls(
             mode=XQMXMode.MODEL,
             domain=XQMXDomain.DISCRETE,
@@ -147,7 +147,10 @@ class XQMX:
 
     @classmethod
     def discrete_sample(cls, size: int, k: int, rows: int = 0, cols: int = 0) -> XQMX:
-        """Create a discrete [0..k-1] sample XQMX."""
+        """Create a discrete sample XQMX over the signed centred range [-k, k-1].
+
+        Values default to 0, which the centred range always contains.
+        """
         return cls(
             mode=XQMXMode.SAMPLE,
             domain=XQMXDomain.DISCRETE,

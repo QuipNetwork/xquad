@@ -78,7 +78,8 @@ Programs execute independently with no shared state. Communication occurs only t
 
 - Sparse x-quadratic matrix
 - **Mode:** `model` (linear & quadratic are hamiltonian coefficients) or `sample` (linear are variable assignments, quadratic is nil)
-- **Domain:** `[0,1]` binary, `[-1,1]` spin, `[-k, ..., k-1]` discrete
+- **Domain:** `[0,1]` binary, `[-1,1]` spin, `[-k, ..., k-1]` discrete (signed and centred, so the sample default `0` is always in-domain; `spec/xqsa/DOMAINS.md` states the same range)
+- **The domain is not enforced at runtime.** Neither implementation range-checks an assignment written through `SETLINE`/`ADDLINE` against the variable's domain, and both accept an out-of-domain value. The domain constrains what a solver may return and what an encoder should write; it is not a per-write invariant the VM maintains. Enforcing it would put a check on every sample write, whose cost and placement belong with the bytecode verifier rather than the interpreter
 - **Dimension:** `size` (total linear variables), optional `rows`/`cols` for grid layout
 - **Storage:** Sparse tables for `linear` and `quadratic`
 - Constraint opcodes (ONEHOTR, ONEHOTC, EXCLUDE, IMPLIES, EQUALITY, ATLEAST, ATLEASTW, REDUCE) are only valid in model mode
