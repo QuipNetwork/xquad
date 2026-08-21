@@ -1,0 +1,5 @@
+; sqr_min: i64::MIN squared is far outside the range and must raise.
+
+PUSH -9223372036854775808
+SQR
+HALT

@@ -1,0 +1,5 @@
+; inc_max: INC at the upper bound must raise.
+
+PUSH 9223372036854775807
+INC
+HALT

@@ -81,8 +81,8 @@ Operand bytes are concatenated in big-endian order (most significant byte first)
 | `0x20` | `ADD` | `[..., a, b] → [..., a+b]` | Addition. |
 | `0x21` | `SUB` | `[..., a, b] → [..., a-b]` | Subtraction. |
 | `0x22` | `MUL` | `[..., a, b] → [..., a*b]` | Multiplication. |
-| `0x23` | `DIV` | `[..., a, b] → [..., a/b]` | Floor division (rounds toward negative infinity, matching Python `//`). Error: `DivisionByZero` if `b == 0`. |
-| `0x24` | `MOD` | `[..., a, b] → [..., a%b]` | Modulo (result has same sign as divisor). Error: `DivisionByZero` if `b == 0`. |
+| `0x23` | `DIV` | `[..., a, b] → [..., a/b]` | Floor division (rounds toward negative infinity, matching Python `//`). Errors: `DivisionByZero` if `b == 0`; `ArithmeticOverflow` for `i64::MIN / -1`, whose quotient is not representable. |
+| `0x24` | `MOD` | `[..., a, b] → [..., a%b]` | Modulo (result has same sign as divisor). Error: `DivisionByZero` if `b == 0`. `i64::MIN % -1` yields `0` and does not raise -- the remainder is representable even though the underlying division overflows. |
 | `0x25` | `SQR` | `[..., a] → [..., a*a]` | Square. |
 | `0x26` | `ABS` | `[..., a] → [..., \|a\|]` | Absolute value. |
 | `0x27` | `NEG` | `[..., a] → [..., -a]` | Negation. |

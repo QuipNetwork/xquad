@@ -1,0 +1,17 @@
+; energy_overflow: a coefficient at the i64 lower bound against the spin
+; sample's default -1 produces a product outside the range.
+;
+; linear = [i64::MIN], sample = [-1] => i64::MIN * -1 is not representable.
+; ENERGY must raise rather than wrap.
+
+PUSH 1
+SQMX r0
+PUSH 0
+PUSH -9223372036854775808
+SETLINE r0
+
+PUSH 1
+SSMX r1
+
+ENERGY r0 r1
+HALT

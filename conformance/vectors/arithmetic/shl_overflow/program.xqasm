@@ -1,0 +1,6 @@
+; shl_overflow: a shift that discards significant bits must raise.
+
+PUSH 9223372036854775807
+PUSH 1
+SHL
+HALT

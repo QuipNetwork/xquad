@@ -1,0 +1,5 @@
+; abs_min: |i64::MIN| is not representable and must raise.
+
+PUSH -9223372036854775808
+ABS
+HALT

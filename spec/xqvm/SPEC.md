@@ -55,7 +55,9 @@ Programs execute independently with no shared state. Communication occurs only t
 
 - Integer only. All primitive operations work on integers.
 - **Value type:** signed 64-bit integer. Valid range `[-2^63, 2^63 - 1]`.
-- **Overflow:** any operation that would produce a value outside the i64 range raises `ArithmeticOverflow` (same class as `DivisionByZero`, `StackOverflow`). This applies to arithmetic, shift, and `INC`/`DEC`/`NEG`/`ABS`/`SQR` opcodes, as well as integer values entering the VM through `INPUT`. Implementations backed by fixed-width 64-bit integers may instead wrap silently — such wrapping is implementation-defined and programs that rely on it are non-portable.
+- **Overflow:** any operation that would produce a value outside the i64 range raises `ArithmeticOverflow` (same class as `DivisionByZero`, `StackOverflow`). This applies to arithmetic, shift, and `INC`/`DEC`/`NEG`/`ABS`/`SQR` opcodes, to model coefficients and the reductions over them, and to integer values entering the VM through `INPUT`. The rule is normative and has no implementation-defined alternative: an implementation backed by fixed-width 64-bit integers performs checked arithmetic and raises, rather than wrapping.
+  - The test is on the **result**, not on the intermediate hardware operation. `i64::MIN / -1` raises, because the quotient 2^63 is not representable; `i64::MIN % -1` yields `0`, which is, even though a fixed-width machine computes it through the same overflowing division.
+  - Where a value is built from several operations -- a constraint expansion's coefficient, an energy accumulation -- **each** step is checked, so a computation that leaves the range on the way to an in-range answer raises rather than silently recovering. This is why the accumulation order in [HLF.md](HLF.md#accumulation-order) is normative.
 - Maximum depth: 8192 (2^13)
 
 ### Registers (`r0`–`r255`)

@@ -141,7 +141,6 @@ defect "QUI-1026" "docs/book/src/xqvm/verifier.md" 1
 defect "QUI-1027" "docs/book/src/modelling/expressions.md" 1
 defect "QUI-1027" "docs/book/src/modelling/outputs-and-decoding.md" 1
 defect "QUI-1029" "examples/bin_packing/README.md" 1
-defect "QUI-998" "docs/book/src/xqvm/instructions/arithmetic.md" 1
 
 DEFECT_TRACKER='https://gitlab.com/quip.network/xquad/-/issues'
 

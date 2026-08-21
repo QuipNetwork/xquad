@@ -101,12 +101,19 @@ impl XqmxModel {
     }
 
     /// Add `delta` to the linear coefficient for variable `i`.
-    pub fn add_linear(&mut self, i: usize, delta: i64) {
-        let v = self.linear.entry(i).or_insert(0);
-        *v = v.wrapping_add(delta);
-        if *v == 0 {
-            let _ = self.linear.remove(&i);
-        }
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::ArithmeticOverflow`] when the resulting
+    /// coefficient would leave the signed 64-bit range. The model is left
+    /// unchanged, so a rejected mutation cannot half-apply.
+    pub fn add_linear(&mut self, i: usize, delta: i64) -> Result<(), crate::Error> {
+        let current = self.get_linear(i);
+        let updated = current
+            .checked_add(delta)
+            .ok_or(crate::Error::ArithmeticOverflow { pos: None })?;
+        self.set_linear(i, updated);
+        Ok(())
     }
 
     /// Get the quadratic coefficient for the pair (i, j). Returns 0 if absent.
@@ -127,13 +134,19 @@ impl XqmxModel {
     }
 
     /// Add `delta` to the quadratic coefficient for the pair (i, j).
-    pub fn add_quad(&mut self, i: usize, j: usize, delta: i64) {
-        let key = if i <= j { (i, j) } else { (j, i) };
-        let v = self.quadratic.entry(key).or_insert(0);
-        *v = v.wrapping_add(delta);
-        if *v == 0 {
-            let _ = self.quadratic.remove(&key);
-        }
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::ArithmeticOverflow`] when the resulting
+    /// coefficient would leave the signed 64-bit range. The model is left
+    /// unchanged.
+    pub fn add_quad(&mut self, i: usize, j: usize, delta: i64) -> Result<(), crate::Error> {
+        let current = self.get_quad(i, j);
+        let updated = current
+            .checked_add(delta)
+            .ok_or(crate::Error::ArithmeticOverflow { pos: None })?;
+        self.set_quad(i, j, updated);
+        Ok(())
     }
 
     /// Return the number of nonzero linear (bias) terms.
@@ -195,15 +208,20 @@ impl XqmxModel {
                 sample_len: sample.len(),
             });
         }
+        // Sorted key order throughout, and every partial sum is checked:
+        // once overflow raises, the order in which terms are accumulated
+        // decides whether a program errors at all (spec/xqvm/HLF.md).
+        let overflow = || crate::Error::ArithmeticOverflow { pos: None };
         let mut h: i64 = 0;
-        for (&i, &coeff) in &self.linear {
+        for (i, coeff) in self.iter_linear() {
             let xi = sample.get(i).copied().ok_or(crate::Error::SizeMismatch {
                 model_size: self.size,
                 sample_len: i.saturating_add(1),
             })?;
-            h = h.wrapping_add(coeff.wrapping_mul(xi));
+            let term = coeff.checked_mul(xi).ok_or_else(overflow)?;
+            h = h.checked_add(term).ok_or_else(overflow)?;
         }
-        for (&(i, j), &coeff) in &self.quadratic {
+        for (i, j, coeff) in self.iter_quadratic() {
             let xi = sample.get(i).copied().ok_or(crate::Error::SizeMismatch {
                 model_size: self.size,
                 sample_len: i.saturating_add(1),
@@ -212,7 +230,11 @@ impl XqmxModel {
                 model_size: self.size,
                 sample_len: j.saturating_add(1),
             })?;
-            h = h.wrapping_add(coeff.wrapping_mul(xi).wrapping_mul(xj));
+            let term = coeff
+                .checked_mul(xi)
+                .and_then(|partial| partial.checked_mul(xj))
+                .ok_or_else(overflow)?;
+            h = h.checked_add(term).ok_or_else(overflow)?;
         }
         Ok(h)
     }
@@ -261,44 +283,111 @@ impl XqmxSample {
 #[cfg(test)]
 mod tests {
     use super::{Domain, XqmxModel};
+    use crate::Error;
 
     #[test]
-    fn add_linear_wraps_past_i64_max() {
+    fn add_linear_raises_past_i64_max() {
         let mut m = XqmxModel::new(Domain::Binary, 2);
         m.set_linear(0, i64::MAX);
 
-        m.add_linear(0, 1);
+        let err = m
+            .add_linear(0, 1)
+            .expect_err("coefficient leaves the range");
 
-        assert_eq!(m.get_linear(0), i64::MIN);
+        assert!(
+            matches!(err, Error::ArithmeticOverflow { .. }),
+            "got {err:?}"
+        );
+        assert_eq!(
+            m.get_linear(0),
+            i64::MAX,
+            "a rejected mutation must not apply"
+        );
     }
 
     #[test]
-    fn add_linear_wraps_past_i64_min() {
+    fn add_linear_raises_past_i64_min() {
         let mut m = XqmxModel::new(Domain::Binary, 2);
         m.set_linear(0, i64::MIN);
 
-        m.add_linear(0, -1);
+        let err = m
+            .add_linear(0, -1)
+            .expect_err("coefficient leaves the range");
 
-        assert_eq!(m.get_linear(0), i64::MAX);
+        assert!(
+            matches!(err, Error::ArithmeticOverflow { .. }),
+            "got {err:?}"
+        );
+        assert_eq!(
+            m.get_linear(0),
+            i64::MIN,
+            "a rejected mutation must not apply"
+        );
     }
 
     #[test]
-    fn add_quad_wraps_past_i64_max() {
+    fn add_quad_raises_past_i64_max() {
         let mut m = XqmxModel::new(Domain::Binary, 2);
         m.set_quad(0, 1, i64::MAX);
 
-        m.add_quad(0, 1, 1);
+        let err = m
+            .add_quad(0, 1, 1)
+            .expect_err("coefficient leaves the range");
 
-        assert_eq!(m.get_quad(0, 1), i64::MIN);
+        assert!(
+            matches!(err, Error::ArithmeticOverflow { .. }),
+            "got {err:?}"
+        );
+        assert_eq!(
+            m.get_quad(0, 1),
+            i64::MAX,
+            "a rejected mutation must not apply"
+        );
     }
 
     #[test]
-    fn add_quad_wraps_past_i64_min() {
+    fn add_quad_raises_past_i64_min() {
         let mut m = XqmxModel::new(Domain::Binary, 2);
         m.set_quad(0, 1, i64::MIN);
 
-        m.add_quad(0, 1, -1);
+        let err = m
+            .add_quad(0, 1, -1)
+            .expect_err("coefficient leaves the range");
 
-        assert_eq!(m.get_quad(0, 1), i64::MAX);
+        assert!(
+            matches!(err, Error::ArithmeticOverflow { .. }),
+            "got {err:?}"
+        );
+        assert_eq!(
+            m.get_quad(0, 1),
+            i64::MIN,
+            "a rejected mutation must not apply"
+        );
+    }
+
+    #[test]
+    fn add_linear_within_range_still_accumulates() {
+        let mut m = XqmxModel::new(Domain::Binary, 2);
+        m.add_linear(0, 5).expect("in range");
+        m.add_linear(0, -2).expect("in range");
+        assert_eq!(m.get_linear(0), 3);
+    }
+
+    #[test]
+    fn energy_raises_when_a_partial_sum_leaves_the_range() {
+        // Sorted key order is normative, so the first term is linear[0].
+        // i64::MAX + i64::MAX overflows on the second.
+        let mut m = XqmxModel::new(Domain::Binary, 2);
+        m.set_linear(0, i64::MAX);
+        m.set_linear(1, i64::MAX);
+
+        let err = m
+            .energy(&[1, 1])
+            .expect_err("accumulation leaves the range");
+
+        assert!(
+            matches!(err, Error::ArithmeticOverflow { .. }),
+            "got {err:?}"
+        );
     }
 }

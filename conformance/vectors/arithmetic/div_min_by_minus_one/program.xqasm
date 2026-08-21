@@ -1,0 +1,7 @@
+; div_min_by_minus_one: i64::MIN / -1 overflows. Distinct from
+; DivisionByZero, which is the only error ISA.md documents for DIV.
+
+PUSH -9223372036854775808
+PUSH -1
+DIV
+HALT

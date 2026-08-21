@@ -12,16 +12,6 @@ of order in the spec (`spec/xqvm/ISA.md`) and in `xqvm_py`, but the Rust
 VM does not, so the two implementations disagree whenever `i > j`. No
 conformance vector catches it today.
 
-Wrapping integer arithmetic is not a divergence *from the spec* --
-`spec/xqvm/SPEC.md` explicitly permits it: an implementation backed by
-fixed-width 64-bit integers may wrap silently instead of trapping on
-overflow, and programs that rely on that wrapping are non-portable by
-the spec's own words. The Rust VM's wrapping behaviour is conformant,
-not a gap. The two interpreters still part company there -- `xqvm_py`
-raises `ArithmeticOverflow` where the Rust VM wraps -- which
-[Arithmetic](../xqvm/instructions/arithmetic.md#wrapping-semantics)
-covers.
-
 Neither list is closed. For others, check the book chapter covering the
 component you are working with, or search the spec files directly.
 

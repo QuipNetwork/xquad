@@ -1,0 +1,5 @@
+; dec_min: DEC at the lower bound must raise.
+
+PUSH -9223372036854775808
+DEC
+HALT

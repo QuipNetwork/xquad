@@ -1,0 +1,25 @@
+; equality_penalty_overflow: EQUALITY doubles its penalty to build the
+; quadratic coefficients (two_p = 2 * penalty). At i64::MAX that doubling
+; leaves the range, so the expansion must raise instead of writing a
+; wrapped coefficient into the model.
+
+PUSH 2
+BQMX r0
+
+VECI r1
+PUSH 0
+VECPUSH r1
+PUSH 1
+VECPUSH r1
+
+VECI r2
+PUSH 1
+VECPUSH r2
+PUSH 1
+VECPUSH r2
+
+PUSH 0           ; target
+PUSH 9223372036854775807        ; penalty
+EQUALITY r0 r1 r2
+
+HALT

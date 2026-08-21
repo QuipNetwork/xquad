@@ -1,0 +1,6 @@
+; add_overflow: i64::MAX + 1 leaves the range and must raise.
+
+PUSH 9223372036854775807
+PUSH 1
+ADD
+HALT
