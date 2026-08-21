@@ -1,0 +1,10 @@
+; triu_negative_operands: j*(j-1) is a product of consecutive integers,
+; so it is non-negative and even for every operand -- including negative
+; ones. Truncation and flooring therefore agree, and the two VMs cannot
+; part company on the division.
+; i = -5, j = -2 => swap => (-2)*(-3)/2 + (-5) = 3 - 5 = -2
+
+PUSH -5
+PUSH -2
+IDXTRIU
+HALT

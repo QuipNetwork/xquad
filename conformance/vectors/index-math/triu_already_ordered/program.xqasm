@@ -1,0 +1,7 @@
+; triu_already_ordered: i < j needs no swap.
+; i = 2, j = 5 => 5*4/2 + 2 = 12
+
+PUSH 2
+PUSH 5
+IDXTRIU
+HALT

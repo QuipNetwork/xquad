@@ -1,0 +1,7 @@
+; triu_small_swap: the smallest case that separates the two behaviours.
+; i = 3, j = 1 => swap => 3*2/2 + 1 = 4 (without the swap it is 3)
+
+PUSH 3
+PUSH 1
+IDXTRIU
+HALT

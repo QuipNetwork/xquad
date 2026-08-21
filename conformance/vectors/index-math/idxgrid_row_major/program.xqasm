@@ -1,0 +1,8 @@
+; idxgrid_row_major: flat row-major index. Pop cols, col, row.
+; row = 2, col = 3, cols = 4 => 2*4 + 3 = 11
+
+PUSH 2
+PUSH 3
+PUSH 4
+IDXGRID
+HALT

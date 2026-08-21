@@ -109,13 +109,6 @@ depend on argument order, per the swap rule
 gives for `IDXTRIU`. `xq_triu(2, 5)` returns `12`
 (`5 * 4 // 2 + 2`; no swap needed, since `2 <= 5`).
 
-<!-- xquad:defect QUI-1021 -->
-> **Known issue.** The spec and the Python reference VM swap `i` and `j` when `i > j` before
-> packing the index; the Rust VM does not, so the two implementations disagree whenever
-> `i > j`. Pass indices already ordered so that `i <= j`; see
-> [Index Math](../xqvm/instructions/index-math.md) for detail. Report problems at the
-> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
-
 ## Logical and Other Free Functions
 
 Python's `and`, `or`, and `not` keywords cannot be overloaded. XQCP gives
