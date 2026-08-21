@@ -1,0 +1,17 @@
+; colfind_col_out_of_range: a column past the grid extent must raise.
+;
+; The grid is 2x2, so valid columns are 0 and 1. Column 5 addresses no
+; line of the grid: the Rust VM used to scan absent coefficients and push
+; -1 while xqvm_py raised, so this vector pins IndexOutOfBounds on both.
+
+PUSH 4
+BSMX r0
+
+PUSH 2           ; rows
+PUSH 2           ; cols
+RESIZE r0
+
+PUSH 5           ; col >= cols
+PUSH 1           ; value
+COLFIND r0
+HALT

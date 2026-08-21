@@ -1,0 +1,13 @@
+; rowsum_ungridded: ROWSUM without a grid must raise.
+;
+; No RESIZE ran, so rows = cols = 0 and there is no row to sum. The Rust
+; VM used to push 0 (an empty reduction) while xqvm_py raised, so this
+; vector pins InvalidGridDimensions on both -- the same identity ONEHOTR
+; and ONEHOTC raise without a grid.
+
+PUSH 4
+BQMX r0
+
+PUSH 0           ; row
+ROWSUM r0
+HALT

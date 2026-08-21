@@ -31,7 +31,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
-from .errors import XQMXModeError
+from .errors import IndexOutOfBounds, InvalidGridDimensions, XQMXModeError
 from .limits import check_i64
 
 
@@ -279,11 +279,15 @@ def row_indices(xqmx: XQMX, row: int) -> list[int]:
     Get all variable indices in a given row.
 
     For a grid with `cols` columns, row `r` contains indices [r*cols, (r+1)*cols).
+
+    Raises the typed errors the Rust VM raises for the same faults, so the
+    conformance harness can map them: `InvalidGridDimensions` for an
+    ungridded XQMX, `IndexOutOfBounds` for a row outside `[0, rows)`.
     """
     if xqmx.rows == 0 or xqmx.cols == 0:
-        raise ValueError("Grid indexing requires non-zero rows and cols")
+        raise InvalidGridDimensions(xqmx.rows, xqmx.cols)
     if row < 0 or row >= xqmx.rows:
-        raise IndexError(f"Row {row} out of range [0, {xqmx.rows})")
+        raise IndexOutOfBounds(row, xqmx.rows)
 
     start = row * xqmx.cols
     return list(range(start, start + xqmx.cols))
@@ -294,11 +298,14 @@ def col_indices(xqmx: XQMX, col: int) -> list[int]:
     Get all variable indices in a given column.
 
     For a grid with `cols` columns, column `c` contains indices [c, c+cols, c+2*cols, ...].
+
+    Raises like `row_indices`: `InvalidGridDimensions` for an ungridded
+    XQMX, `IndexOutOfBounds` for a column outside `[0, cols)`.
     """
     if xqmx.rows == 0 or xqmx.cols == 0:
-        raise ValueError("Grid indexing requires non-zero rows and cols")
+        raise InvalidGridDimensions(xqmx.rows, xqmx.cols)
     if col < 0 or col >= xqmx.cols:
-        raise IndexError(f"Column {col} out of range [0, {xqmx.cols})")
+        raise IndexOutOfBounds(col, xqmx.cols)
 
     return [col + r * xqmx.cols for r in range(xqmx.rows)]
 
@@ -335,10 +342,10 @@ def row_find(xqmx: XQMX, row: int, value: int) -> int:
     Find the first column index where the row has the given value.
 
     Used primarily with SAMPLE mode to find which column is selected in a row.
-    Returns -1 if no column has the given value.
+    Returns -1 if no column has the given value. An ungridded XQMX raises
+    `InvalidGridDimensions` (via `row_indices`) rather than returning -1,
+    matching the Rust VM.
     """
-    if xqmx.cols == 0:
-        return -1
     indices = row_indices(xqmx, row)
     for col, idx in enumerate(indices):
         if xqmx.get_linear(idx) == value:
@@ -351,10 +358,10 @@ def col_find(xqmx: XQMX, col: int, value: int) -> int:
     Find the first row index where the column has the given value.
 
     Used primarily with SAMPLE mode to find which row is selected in a column.
-    Returns -1 if no row has the given value.
+    Returns -1 if no row has the given value. An ungridded XQMX raises
+    `InvalidGridDimensions` (via `col_indices`) rather than returning -1,
+    matching the Rust VM.
     """
-    if xqmx.rows == 0:
-        return -1
     indices = col_indices(xqmx, col)
     for row, idx in enumerate(indices):
         if xqmx.get_linear(idx) == value:

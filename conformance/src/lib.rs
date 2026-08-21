@@ -399,6 +399,7 @@ fn fault_from_python(class_name: &str) -> Result<Fault, String> {
         "OutputIndex" => Ok(Fault::OutputIndex),
         "InvalidGridDimensions" => Ok(Fault::InvalidGridDimensions),
         "ArithmeticOverflow" => Ok(Fault::ArithmeticOverflow),
+        "IndexOutOfBounds" => Ok(Fault::IndexOutOfBounds),
         "InvalidOpcode" => Ok(Fault::BadOpcode),
         "TargetNotFound" => Ok(Fault::BadJumpTarget),
         "StepLimitExceeded" => Ok(Fault::StepLimitExceeded),

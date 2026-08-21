@@ -1854,6 +1854,39 @@ impl Vm {
         Ok(StepResult::Continue)
     }
 
+    /// Validate a grid-addressed opcode's operands and return `index` as a
+    /// `usize` line number along axis `extent`.
+    ///
+    /// The register must carry non-zero grid extents whose product is
+    /// addressable, and `index` must lie in `[0, extent)`. An ungridded or
+    /// unaddressable grid raises `InvalidGridDimensions` -- the same identity
+    /// ONEHOTR/ONEHOTC raise without a grid -- and an out-of-range index
+    /// raises `IndexOutOfBounds`, so an absent row is an error rather than a
+    /// silent sum of zeroes (`xqvm_py` has always raised here).
+    fn grid_axis_index(
+        pos: usize,
+        rows: usize,
+        cols: usize,
+        index: i64,
+        extent: usize,
+    ) -> Result<usize, Error> {
+        if rows == 0 || cols == 0 || rows.checked_mul(cols).is_none() {
+            return Err(Error::InvalidGridDimensions {
+                pos,
+                rows: i64::try_from(rows).unwrap_or(i64::MAX),
+                cols: i64::try_from(cols).unwrap_or(i64::MAX),
+            });
+        }
+        usize::try_from(index)
+            .ok()
+            .filter(|&i| i < extent)
+            .ok_or(Error::IndexOutOfBounds {
+                pos,
+                index,
+                len: extent,
+            })
+    }
+
     fn exec_row_find(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let value = self.pop(pos)?;
         let row = self.pop(pos)?;
@@ -1865,12 +1898,10 @@ impl Vm {
                 expected: "model|sample",
                 got: e.actual.kind_name(),
             })?;
-        let usize_row = usize::try_from(row).map_err(|_| Error::IndexOutOfBounds {
-            pos,
-            index: row,
-            len: grid.rows(),
-        })?;
         let cols = grid.cols();
+        let usize_row = Self::grid_axis_index(pos, grid.rows(), cols, row, grid.rows())?;
+        // grid_axis_index guarantees rows*cols fits usize and usize_row is
+        // in range, so row addressing cannot overflow.
         let row_start = usize_row * cols;
         // cols ≤ i64::MAX (validated via exec_resize); try_from never fails.
         let result = (0..cols)
@@ -1891,13 +1922,9 @@ impl Vm {
                 expected: "model|sample",
                 got: e.actual.kind_name(),
             })?;
-        let usize_col = usize::try_from(col).map_err(|_| Error::IndexOutOfBounds {
-            pos,
-            index: col,
-            len: grid.cols(),
-        })?;
         let rows = grid.rows();
         let cols = grid.cols();
+        let usize_col = Self::grid_axis_index(pos, rows, cols, col, cols)?;
         // rows ≤ i64::MAX (validated via exec_resize); try_from never fails.
         let result = (0..rows)
             .find(|&row| grid.linear(row * cols + usize_col) == value)
@@ -1916,23 +1943,15 @@ impl Vm {
                 expected: "model|sample",
                 got: e.actual.kind_name(),
             })?;
-        let usize_row = usize::try_from(row).map_err(|_| Error::IndexOutOfBounds {
-            pos,
-            index: row,
-            len: grid.rows(),
-        })?;
         let cols = grid.cols();
-        let oob = || Error::IndexOutOfBounds {
-            pos,
-            index: row,
-            len: grid.rows(),
-        };
-        let row_start = usize_row.checked_mul(cols).ok_or_else(oob)?;
+        let usize_row = Self::grid_axis_index(pos, grid.rows(), cols, row, grid.rows())?;
+        // grid_axis_index guarantees rows*cols fits usize and usize_row is
+        // in range, so row addressing cannot overflow.
+        let row_start = usize_row * cols;
         // A reduction over coefficients is checked per partial sum
         // (spec/xqvm/SPEC.md overflow rule): wrapping here was observable.
         let sum = (0..cols).try_fold(0i64, |acc, c| {
-            let idx = row_start.checked_add(c).ok_or_else(oob)?;
-            acc.checked_add(grid.linear(idx))
+            acc.checked_add(grid.linear(row_start + c))
                 .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })
         })?;
         self.push_stack(sum, pos)?;
@@ -1949,24 +1968,13 @@ impl Vm {
                 expected: "model|sample",
                 got: e.actual.kind_name(),
             })?;
-        let usize_col = usize::try_from(col).map_err(|_| Error::IndexOutOfBounds {
-            pos,
-            index: col,
-            len: grid.cols(),
-        })?;
         let rows = grid.rows();
         let cols = grid.cols();
-        // Checked like ROWSUM: partial sums are normative, and a huge column
-        // index must not wrap the index computation either.
+        let usize_col = Self::grid_axis_index(pos, rows, cols, col, cols)?;
+        // Checked like ROWSUM: partial sums are normative, and
+        // grid_axis_index keeps the column addressing in range.
         let sum = (0..rows).try_fold(0i64, |acc, r| {
-            let idx = (r * cols)
-                .checked_add(usize_col)
-                .ok_or(Error::IndexOutOfBounds {
-                    pos,
-                    index: col,
-                    len: cols,
-                })?;
-            acc.checked_add(grid.linear(idx))
+            acc.checked_add(grid.linear(r * cols + usize_col))
                 .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })
         })?;
         self.push_stack(sum, pos)?;
