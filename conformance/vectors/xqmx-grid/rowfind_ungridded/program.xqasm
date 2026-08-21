@@ -1,0 +1,14 @@
+; rowfind_ungridded: ROWFIND without a grid must raise.
+;
+; No RESIZE ran, so rows = cols = 0. Both VMs used to answer -1 here (an
+; empty scan), which is indistinguishable from "searched a real row and
+; found nothing" -- so this raises InvalidGridDimensions instead, like
+; every other grid-addressed opcode.
+
+PUSH 4
+BSMX r0
+
+PUSH 0           ; row
+PUSH 1           ; value
+ROWFIND r0
+HALT

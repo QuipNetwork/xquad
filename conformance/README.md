@@ -112,7 +112,7 @@ bug ever motivates them.
 | `UNSET_REGISTER` | `UnsetRegister` | `RegisterNotFound` |
 | `DIVISION_BY_ZERO` | `DivisionByZero` | `DivisionByZero` |
 | `ARITHMETIC_OVERFLOW` | `ArithmeticOverflow` | `ArithmeticOverflow` |
-| `INDEX_OUT_OF_BOUNDS` | `IndexOutOfBounds` | -- |
+| `INDEX_OUT_OF_BOUNDS` | `IndexOutOfBounds` | `IndexOutOfBounds` |
 | `NO_ACTIVE_LOOP` | `NoActiveLoop` | -- (see below) |
 | `UNMATCHED_LOOP` | `UnmatchedLoop` | -- (see below) |
 | `BAD_JUMP_TARGET` | `BadJumpTarget` | `TargetNotFound` |

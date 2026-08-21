@@ -1407,6 +1407,68 @@ fn col_sum_past_i64_min_raises() {
 }
 
 #[test]
+fn row_sum_row_out_of_range_raises() {
+    // Valid rows of a 2x2 grid are 0 and 1; row 2 addresses no line of the
+    // grid and must raise rather than sum absent coefficients to 0.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bqmx(Register(0));
+        b.emit_push(2).emit_push(2).emit_resize(Register(0));
+        b.emit_push(2).emit_row_sum(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(err, Error::IndexOutOfBounds { .. }),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
+}
+
+#[test]
+fn row_sum_without_a_grid_raises() {
+    // No RESIZE ran, so there is no row to sum: raising matches ONEHOTR's
+    // no-grid behaviour rather than pushing 0 from an empty reduction.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bqmx(Register(0));
+        b.emit_push(0).emit_row_sum(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(err, Error::InvalidGridDimensions { .. }),
+        "expected InvalidGridDimensions, got {err:?}"
+    );
+}
+
+#[test]
+fn col_find_col_out_of_range_raises() {
+    // Valid columns of a 2x2 grid are 0 and 1; column 5 must raise rather
+    // than scan absent coefficients and push -1.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bsmx(Register(0));
+        b.emit_push(2).emit_push(2).emit_resize(Register(0));
+        b.emit_push(5).emit_push(1).emit_col_find(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(err, Error::IndexOutOfBounds { .. }),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
+}
+
+#[test]
+fn row_find_without_a_grid_raises() {
+    // An ungridded scan used to answer -1, indistinguishable from a real
+    // row that lacks the value; it now raises like the other grid opcodes.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bsmx(Register(0));
+        b.emit_push(0).emit_push(1).emit_row_find(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(err, Error::InvalidGridDimensions { .. }),
+        "expected InvalidGridDimensions, got {err:?}"
+    );
+}
+
+#[test]
 fn row_find_and_col_find() {
     // 2x2 grid: [0]=10, [1]=20, [2]=30, [3]=10.
     // ROWFIND: pops value (top) then row -> push first col where match, or -1

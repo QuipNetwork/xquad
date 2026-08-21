@@ -1,0 +1,16 @@
+; rowsum_row_out_of_range: a row at the grid extent must raise.
+;
+; The grid is 2x2, so valid rows are 0 and 1. Row 2 addresses no line of
+; the grid: the Rust VM used to sum absent coefficients to 0 while
+; xqvm_py raised, so this vector pins IndexOutOfBounds on both.
+
+PUSH 4
+BQMX r0
+
+PUSH 2           ; rows
+PUSH 2           ; cols
+RESIZE r0
+
+PUSH 2           ; row == rows
+ROWSUM r0
+HALT

@@ -127,6 +127,20 @@ class OutputIndex(XQVMError):
         super().__init__(f"Output index {index} out of range (len {length})")
 
 
+class IndexOutOfBounds(XQVMError):
+    """Raised when an index falls outside its valid range.
+
+    Mirrors Rust's `xqvm::Error::IndexOutOfBounds`, which is what
+    `spec/xqvm/ISA.md` names for a grid opcode whose row or column index
+    lies outside `[0, extent)`.
+    """
+
+    def __init__(self, index: int, length: int):
+        self.index = index
+        self.length = length
+        super().__init__(f"Index {index} out of range [0, {length})")
+
+
 class InvalidGridDimensions(XQVMError):
     """Raised when grid dimensions are absent or non-positive.
 

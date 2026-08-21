@@ -21,7 +21,12 @@ Tests for XQMX class and operations.
 
 import pytest
 
-from xqvm_py.errors import ArithmeticOverflow, XQMXModeError
+from xqvm_py.errors import (
+    ArithmeticOverflow,
+    IndexOutOfBounds,
+    InvalidGridDimensions,
+    XQMXModeError,
+)
 from xqvm_py.limits import I64_MAX, I64_MIN
 from xqvm_py.xqmx import (
     XQMX,
@@ -286,6 +291,28 @@ class TestGridOperations:
         with pytest.raises(ArithmeticOverflow):
             col_sum(grid_model, 0)
 
+    def test_row_sum_row_out_of_range_raises(self, grid_model):
+        """row_sum with a row at the extent raises IndexOutOfBounds."""
+        with pytest.raises(IndexOutOfBounds):
+            row_sum(grid_model, 5)
+
+    def test_col_find_col_out_of_range_raises(self, grid_model):
+        """col_find with a column past the extent raises IndexOutOfBounds."""
+        with pytest.raises(IndexOutOfBounds):
+            col_find(grid_model, 7, 1)
+
+    def test_row_sum_ungridded_raises(self):
+        """row_sum on an ungridded model raises InvalidGridDimensions."""
+        model = XQMX.binary_model(size=4)
+        with pytest.raises(InvalidGridDimensions):
+            row_sum(model, 0)
+
+    def test_row_find_ungridded_raises(self):
+        """row_find on an ungridded model raises instead of returning -1."""
+        model = XQMX.binary_model(size=4)
+        with pytest.raises(InvalidGridDimensions):
+            row_find(model, 0, 1)
+
     def test_row_find(self, grid_model):
         """row_find finds first column with value."""
         grid_model.set_linear(2, 1)  # Row 0, Col 2
@@ -305,19 +332,19 @@ class TestGridOperations:
         assert col_find(grid_model, 0, 1) == -1
 
     def test_grid_without_dimensions_raises(self):
-        """Grid ops on non-grid XQMX raise ValueError."""
+        """Grid ops on non-grid XQMX raise InvalidGridDimensions."""
         x = XQMX.binary_model(size=10)  # No grid dimensions
-        with pytest.raises(ValueError):
+        with pytest.raises(InvalidGridDimensions):
             row_indices(x, 0)
 
     def test_row_out_of_bounds(self, grid_model):
-        """Row out of bounds raises IndexError."""
-        with pytest.raises(IndexError):
+        """Row out of bounds raises IndexOutOfBounds."""
+        with pytest.raises(IndexOutOfBounds):
             row_indices(grid_model, 10)
 
     def test_col_out_of_bounds(self, grid_model):
-        """Column out of bounds raises IndexError."""
-        with pytest.raises(IndexError):
+        """Column out of bounds raises IndexOutOfBounds."""
+        with pytest.raises(IndexOutOfBounds):
             col_indices(grid_model, 10)
 
 
