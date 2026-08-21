@@ -6,13 +6,13 @@
 |--------|------|-----------------|----------------|-----------------|----------------|
 | Binary | `XQMXDomain.BINARY` | `{0, 1}` | `0` | `BQMX` | Supported |
 | Spin | `XQMXDomain.SPIN` | `{-1, +1}` | `-1` | `SQMX` | Supported |
-| Discrete | `XQMXDomain.DISCRETE` | `{0, 1, ..., k-1}` | `0` | -- | Reserved |
+| Discrete | `XQMXDomain.DISCRETE` | `{-k, ..., -1, 0, 1, ..., k-1}` | `0` | `XQMX` | Reserved |
 
 **Binary (QUBO):** variables take values 0 or 1. The standard domain for Quadratic Unconstrained Binary Optimization. All solvers must support this domain.
 
 **Spin (Ising):** variables take values -1 or +1. Maps directly to physical qubits on quantum annealers. All solvers must support this domain.
 
-**Discrete (reserved):** variables take values 0 through `k-1`, where `k` is the model's `discrete_k` parameter. This domain is defined at the XQMX type level and the encoding semantics are specified here, but no solver currently supports it. `_validate_model()` rejects DISCRETE with `ValueError`. Future solver implementations may add support without changing this specification -- they need only relax the validation check.
+**Discrete (reserved):** variables take values in the signed centred range `-k` through `k-1`, where `k` is the model's `discrete_k` parameter and the range therefore holds `2k` values. The range is centred rather than starting at 0 so that the sample default `0` is always in-domain; `spec/xqvm/SPEC.md` and `spec/xqvm/ISA.md` state the same range, and this file previously contradicted both. This domain is defined at the XQMX type level and the encoding semantics are specified here, but no solver currently supports it. `_validate_model()` rejects DISCRETE with `ValueError`. Future solver implementations may add support without changing this specification -- they need only relax the validation check.
 
 ## Sample Encoding
 
@@ -25,7 +25,7 @@ sample.linear: dict[int, int]   # variable_index -> assignment_value
 **Construction:**
 - Binary: `XQMX.binary_sample(size, rows=0, cols=0)` -- all variables default to 0
 - Spin: `XQMX.spin_sample(size, rows=0, cols=0)` -- all variables default to -1
-- Discrete: `XQMX.discrete_sample(size, k, rows=0, cols=0)` -- all variables default to 0
+- Discrete: `XQMX.discrete_sample(size, k, rows=0, cols=0)` -- all variables default to 0, which is in-domain for every `k >= 2`
 
 **Access:**
 - `sample.get_linear(i)` -- returns the assignment for variable `i`, or the domain default if unset
