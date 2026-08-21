@@ -1,0 +1,14 @@
+; resize_zero_cols: RESIZE with a non-positive extent must raise.
+;
+; ISA.md already names InvalidGridDimensions for rows or cols <= 0. The
+; Rust VM enforced it; xqvm_py assigned unconditionally and left the model
+; with a degenerate grid, which is how a grid reaches the state ONEHOTR
+; and ONEHOTC now reject.
+
+PUSH 4
+BQMX r0
+
+PUSH 2           ; rows
+PUSH 0           ; cols
+RESIZE r0
+HALT

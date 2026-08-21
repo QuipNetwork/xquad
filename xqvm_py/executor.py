@@ -955,6 +955,11 @@ class Executor:
         reg = instr.operands[0]
         xqmx = self._get_register_as_xqmx(reg)
         cols, rows = self.state.pop_n(2)
+        # A non-positive extent is not a grid. Assigning it unconditionally
+        # left the model degenerate, which is how a grid reached the state
+        # ONEHOTR and ONEHOTC reject.
+        if rows <= 0 or cols <= 0:
+            raise InvalidGridDimensions(rows, cols)
         xqmx.rows = rows
         xqmx.cols = cols
 
