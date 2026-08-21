@@ -1,0 +1,10 @@
+; onehotc_without_grid: ONEHOTC on a model with no grid must raise, for
+; the same reason as onehotr_without_grid.
+
+PUSH 4
+BQMX r0
+
+PUSH 0           ; col
+PUSH 1           ; penalty
+ONEHOTC r0
+HALT

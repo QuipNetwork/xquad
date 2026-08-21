@@ -396,6 +396,7 @@ fn fault_from_python(class_name: &str) -> Result<Fault, String> {
         "TypeMismatch" => Ok(Fault::TypeMismatch),
         "RegisterNotFound" => Ok(Fault::UnsetRegister),
         "DivisionByZero" => Ok(Fault::DivisionByZero),
+        "InvalidGridDimensions" => Ok(Fault::InvalidGridDimensions),
         "ArithmeticOverflow" => Ok(Fault::ArithmeticOverflow),
         "InvalidOpcode" => Ok(Fault::BadOpcode),
         "TargetNotFound" => Ok(Fault::BadJumpTarget),
