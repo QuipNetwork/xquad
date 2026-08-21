@@ -56,9 +56,18 @@ pub(crate) struct Args {
     #[arg(long, default_value = "16")]
     outputs: usize,
 
-    /// Maximum number of instructions to execute (0 = unlimited).
+    /// Maximum number of instructions to execute.
+    ///
+    /// Exact: `--step-limit 0` executes nothing. Pass `--unlimited-steps` to
+    /// run without a bound.
     #[arg(long, default_value = "10000000")]
     step_limit: u64,
+
+    /// Run without a step limit, ignoring `--step-limit`.
+    ///
+    /// A program that never halts will not return.
+    #[arg(long, conflicts_with = "step_limit")]
+    unlimited_steps: bool,
 
     /// Enable step-by-step execution tracing.
     #[arg(long)]
@@ -99,7 +108,9 @@ pub(crate) fn exec(args: Args) -> miette::Result<()> {
 
     let mut vm = Vm::new();
     let _ = vm.set_calldata(calldata).set_output_slots(args.outputs);
-    if args.step_limit > 0 {
+    if args.unlimited_steps {
+        let _ = vm.set_unlimited_steps();
+    } else {
         let _ = vm.set_step_limit(args.step_limit);
     }
 

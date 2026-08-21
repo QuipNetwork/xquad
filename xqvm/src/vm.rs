@@ -281,9 +281,30 @@ impl Vm {
 
     /// Set the maximum number of instructions that may execute.
     ///
-    /// Passing `0` sets the limit to `u64::MAX` (effectively unlimited).
+    /// The limit is exact: `0` permits no instructions at all, and running a
+    /// program under it fails immediately with
+    /// [`Error::StepLimitExceeded`](crate::Error::StepLimitExceeded).
+    ///
+    /// For an unbounded run, say so explicitly with
+    /// [`set_unlimited_steps`](Self::set_unlimited_steps).
+    ///
+    /// # Note for embedders
+    ///
+    /// Until 0.4.0 this method treated `0` as "unlimited". That made a zero
+    /// budget the most dangerous value a caller could pass rather than the
+    /// safest, which is the wrong way round for anything that takes a step
+    /// limit from untrusted input.
     pub fn set_step_limit(&mut self, limit: u64) -> &mut Self {
-        self.step_limit = if limit == 0 { u64::MAX } else { limit };
+        self.step_limit = limit;
+        self
+    }
+
+    /// Remove the step limit, allowing the program to run to completion.
+    ///
+    /// Only safe where the caller controls the program or can abandon the
+    /// thread. A program that never halts will not return.
+    pub fn set_unlimited_steps(&mut self) -> &mut Self {
+        self.step_limit = u64::MAX;
         self
     }
 

@@ -222,7 +222,7 @@ class Executor:
         self,
         program: Program,
         input_data: dict[int, Any] | None = None,
-        step_limit: int = 0,
+        step_limit: int | None = None,
     ) -> dict[int, Any]:
         """
         Execute a program to completion.
@@ -230,7 +230,9 @@ class Executor:
         Args:
             program: The program to execute
             input_data: Optional input data keyed by slot number
-            step_limit: Maximum steps before raising RuntimeError (0 = unlimited)
+            step_limit: Maximum steps before raising RuntimeError. `None` is
+                unlimited; the limit is otherwise exact, so `0` permits no
+                instructions at all. Matches `xqvm::Vm::set_step_limit`.
 
         Returns:
             Output data keyed by slot number
@@ -249,7 +251,7 @@ class Executor:
             self.state.jc.define_target(target_id, pc)
 
         while not self.state.halted and self.state.pc < len(program):
-            if step_limit > 0 and self.state.steps >= step_limit:
+            if step_limit is not None and self.state.steps >= step_limit:
                 raise RuntimeError(f"StepLimitExceeded: execution exceeded {step_limit} steps")
             self.state.steps += 1
             self.step()

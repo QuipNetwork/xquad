@@ -82,7 +82,7 @@ class Program:
         except ImportError:
             return -1
 
-    def session(self, output_slots: int = 16, step_limit: int = 0) -> Session:
+    def session(self, output_slots: int = 16, step_limit: int | None = None) -> Session:
         return Session(self, output_slots, step_limit)
 
     def __repr__(self) -> str:
@@ -95,7 +95,7 @@ class Session:
 
     __slots__ = ("_program", "_calldata", "_output_slots", "_step_limit")
 
-    def __init__(self, program: Program, output_slots: int, step_limit: int) -> None:
+    def __init__(self, program: Program, output_slots: int, step_limit: int | None) -> None:
         self._program = program
         self._calldata: list = []
         self._output_slots = output_slots
@@ -109,14 +109,20 @@ class Session:
     def set_output_slots(self, n: int) -> None:
         self._output_slots = n
 
-    def set_step_limit(self, limit: int) -> None:
+    def set_step_limit(self, limit: int | None) -> None:
+        """Cap the instructions a run may execute.
+
+        The limit is exact: `0` permits none at all. `None` is unlimited.
+        """
         self._step_limit = limit
 
     def run(self) -> RunResult:
         vm = Vm()
         vm.set_calldata(self._calldata)
         vm.set_output_slots(self._output_slots)
-        if self._step_limit:
+        if self._step_limit is None:
+            vm.set_unlimited_steps()
+        else:
             vm.set_step_limit(self._step_limit)
         vm.run(self._program.bytecode())
 
@@ -125,7 +131,7 @@ class Session:
         return RunResult(outputs, list(vm.stack()), vm.steps())
 
     def __repr__(self) -> str:
-        limit = "unlimited" if self._step_limit == 0 else str(self._step_limit)
+        limit = "unlimited" if self._step_limit is None else str(self._step_limit)
         return f"Session(calldata_len={len(self._calldata)}, output_slots={self._output_slots}, step_limit={limit})"
 
 
