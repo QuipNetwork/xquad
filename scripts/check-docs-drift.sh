@@ -126,11 +126,12 @@ defect() {
     DEFECTS+=("${1}|${2}|${3}")
 }
 
-defect "QUI-1026" "docs/book/src/running/verification.md" 2
-defect "QUI-1026" "docs/book/src/xqvm/verifier.md" 1
 defect "QUI-1027" "docs/book/src/modelling/expressions.md" 1
 defect "QUI-1027" "docs/book/src/modelling/outputs-and-decoding.md" 1
 defect "QUI-1029" "examples/bin_packing/README.md" 1
+defect "QUI-1062" "docs/book/src/running/verification.md" 2
+defect "QUI-1062" "docs/book/src/xqvm/verifier.md" 1
+defect "QUI-1062" "docs/book/src/xqvm/cli/verify.md" 1
 
 DEFECT_TRACKER='https://gitlab.com/quip.network/xquad/-/issues'
 

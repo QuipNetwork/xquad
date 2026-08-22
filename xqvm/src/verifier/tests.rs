@@ -397,6 +397,131 @@ fn stack_depth_mismatch_at_conditional_join() {
 }
 
 #[test]
+fn stack_depth_mismatch_on_back_edge_to_entry_block() {
+    // .0: PUSH 1; JUMP .0; HALT
+    //
+    // The loop grows the stack by one per iteration and overflows at runtime.
+    // It used to verify clean: the entry block's only *predecessor block* is
+    // itself, so the join check skipped it. Program entry is an implicit
+    // incoming edge at depth 0, and counting it makes this the same
+    // disagreement the conditional-join test above catches.
+    let mut b = InstructionBuilder::new();
+    let top = b.label();
+    let _ = b
+        .place(top)
+        .unwrap()
+        .emit_push(1)
+        .emit_jump(top)
+        .emit_halt();
+    let err = StackDepthPhase.run(&b.build().unwrap()).unwrap_err();
+    let VerifierError::StackDepthMismatch {
+        target_offset,
+        depth_a,
+        depth_b,
+    } = err
+    else {
+        panic!("expected StackDepthMismatch, got {err:?}");
+    };
+    // Program entry contributes depth 0; the back-edge arrives at depth 1.
+    assert_eq!(target_offset, 0);
+    assert_eq!(depth_a, 0);
+    assert_eq!(depth_b, 1);
+}
+
+#[test]
+fn stack_depth_mismatch_on_entry_block_with_two_explicit_predecessors() {
+    // .0: PUSH 1; JUMPI .1; PUSH 5; PUSH 5; JUMP .0
+    // .1: PUSH 5; PUSH 5; JUMP .0
+    //
+    // The second shape the fix newly rejects: the entry block already has two
+    // explicit predecessors, so the pre-fix eligibility check fired -- but both
+    // back-edges agree (depth 2), and only the implicit program-entry edge
+    // (depth 0) creates the disagreement. Guards against weakening the fix to
+    // "count the implicit edge only when there are fewer than two explicit
+    // predecessors", which passes the other two tests and silently reinstates
+    // acceptance of this program, growing the stack by 2 per iteration.
+    let mut b = InstructionBuilder::new();
+    let top = b.label();
+    let alt = b.label();
+    let _ = b
+        .place(top)
+        .unwrap()
+        .emit_push(1)
+        .emit_jump_if(alt)
+        .emit_push(5)
+        .emit_push(5)
+        .emit_jump(top)
+        .place(alt)
+        .unwrap()
+        .emit_push(5)
+        .emit_push(5)
+        .emit_jump(top);
+    let err = StackDepthPhase.run(&b.build().unwrap()).unwrap_err();
+    let VerifierError::StackDepthMismatch {
+        target_offset,
+        depth_a,
+        depth_b,
+    } = err
+    else {
+        panic!("expected StackDepthMismatch, got {err:?}");
+    };
+    assert_eq!(target_offset, 0);
+    assert_eq!(depth_a, 0);
+    assert_eq!(depth_b, 2);
+}
+
+#[test]
+fn balanced_back_edge_to_entry_block_is_accepted() {
+    // The counterpart: a loop whose body leaves the stack as it found it must
+    // still verify, so the implicit entry edge does not reject honest programs.
+    //
+    // .0: PUSH 1; POP; JUMP .0; HALT  -- net zero per iteration.
+    let mut b = InstructionBuilder::new();
+    let top = b.label();
+    let _ = b
+        .place(top)
+        .unwrap()
+        .emit_push(1)
+        .emit_pop()
+        .emit_jump(top)
+        .emit_halt();
+    assert!(StackDepthPhase.run(&b.build().unwrap()).is_ok());
+}
+
+#[test]
+fn sclr_back_edge_to_entry_block_is_rejected() {
+    // .0: SCLR; PUSH 1; JUMP .0; HALT
+    //
+    // This loop cannot overflow at runtime -- SCLR resets the stack every
+    // iteration -- so rejecting it is an over-rejection, pinned here as
+    // intended rather than incidental: the same loop with a NOP before the
+    // label was already rejected at a non-entry join before the implicit
+    // entry edge was counted, and the entry block gets no special exemption.
+    let mut b = InstructionBuilder::new();
+    let top = b.label();
+    let _ = b
+        .place(top)
+        .unwrap()
+        .emit_sclr()
+        .emit_push(1)
+        .emit_jump(top)
+        .emit_halt();
+    let err = StackDepthPhase.run(&b.build().unwrap()).unwrap_err();
+    let VerifierError::StackDepthMismatch {
+        target_offset,
+        depth_a,
+        depth_b,
+    } = err
+    else {
+        panic!("expected StackDepthMismatch, got {err:?}");
+    };
+    // Program entry contributes depth 0; the back-edge arrives at depth 1.
+    assert_eq!(target_offset, 0);
+    assert_eq!(depth_a, 0);
+    assert_eq!(depth_b, 1);
+}
+
+#[test]
 fn stack_effect_underflow_on_pop_empty() {
     // POP with nothing on the stack.
     let code = bytes(&[Instruction::Pop {}, Instruction::Halt {}]);

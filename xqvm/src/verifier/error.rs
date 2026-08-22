@@ -74,6 +74,14 @@ pub enum VerifierError {
     },
 
     /// A stack-consuming instruction was reached with insufficient items on the stack.
+    ///
+    /// The absence of this error is not proof that no runtime underflow is
+    /// possible. The depth analysis models each block as a *net* stack delta,
+    /// so an opcode that both pops and pushes (e.g. `IDXGRID`: pop 3, push 1,
+    /// delta -2) has its pop requirement absorbed whenever the running depth
+    /// stays non-negative. Such a program passes verification and underflows
+    /// at runtime; see "Net-delta blindness" under Phase 4 in
+    /// `spec/xqvm/VERIFIER.md` and QUI-1026.
     #[error("stack underflow at byte {offset:#06x}")]
     StackUnderflow { offset: usize },
 

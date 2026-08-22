@@ -24,14 +24,16 @@ guaranteed structurally sound: every opcode decodes, every jump lands on a
 real `TARGET`, every loop is balanced, and every register is read only after
 it is written on every reachable path. For the value stack, phase 4 found no
 underflow, no join-point depth disagreement, and no basic block whose depth
-exceeds the 8,192-item limit. That analysis works per basic block and does
-not bound how many times a loop iterates, so a backward jump that grows the
-stack by a fixed amount on every pass can still overflow the real stack at
-runtime even though the program verified.
+exceeds the 8,192-item limit. That analysis models each basic block as a
+*net* stack delta, so an instruction that pops more operands than it pushes
+has its pop requirement absorbed whenever the running depth stays
+non-negative -- a stack underflow caused by an operand-ordering error can
+still pass verification.
 
-<!-- xquad:defect QUI-1026 -->
+<!-- xquad:defect QUI-1062 -->
 > **Known issue.** Verification passes some programs that fault at runtime, because the
-> stack-depth phase does not bound how many times a loop iterates. See
+> stack-depth phase sees only each block's net delta: an instruction's pop requirement
+> is absorbed by earlier pushes, so a stack underflow can pass verification. See
 > [Verification](../running/verification.md) for the specific failure modes and what to
 > do about them today. Report problems at the
 > [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
@@ -125,22 +127,27 @@ Checks run in this order:
    matching `RANGE`/`ITER` opener. A non-zero net effect is an imbalance,
    reported before anything else in that loop is checked.
 2. **Stack depth mismatch.** After the pass converges, every join block --
-   two or more predecessors -- has its predecessors' exit depths compared;
-   any two that differ mean the stack state at that point is not
-   well-defined.
+   two or more incoming edges -- has the arrival depths of all its reachable
+   incoming edges compared; any two that differ mean the stack state at that
+   point is not well-defined.
+
+   Program entry counts as an incoming edge of the entry block, arriving at
+   depth 0. So a back-edge targeting the entry block makes it a join block
+   even though it has only one predecessor *block*, and the loop body's exit
+   depth is compared against entry's depth 0.
 3. **Underflow and overflow risk.** A block whose converged depth would
-   fall below zero, or exceed 8,192, is flagged. Like the join-point check
-   above, this compares the depths the analysis converges to per basic
-   block; it does not itself count loop iterations, so it cannot flag a
-   stack that only grows past the limit after enough passes through an
-   unbounded backward jump.
+   fall below zero, or exceed 8,192, is flagged. The block's entry
+   requirement is a running minimum that rises only when the depth within
+   the block goes negative: a pop requirement absorbed by pushes earlier
+   in the same block never makes the running depth negative, so it is
+   invisible to this check.
 
 `SCLR` resets the abstract depth unconditionally to zero, which the analysis
 treats as a reset rather than a delta. If the entry depth was `N > 0` and the
 exit depth is `0`, that reset is itself the imbalance: inside a loop it is
 reported directly as `LoopStackImbalance` by check 1, ahead of everything
 else in that loop. Outside a loop, the same reset is only a problem if it
-creates a discrepancy between predecessors at a join, in which case check 2
+creates a discrepancy between incoming edges at a join, in which case check 2
 catches it as `StackDepthMismatch`.
 
 Errors: `LoopStackImbalance`, `StackDepthMismatch`, `StackUnderflow`,

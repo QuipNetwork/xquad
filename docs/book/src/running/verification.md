@@ -224,50 +224,21 @@ so both arms inherit it.
 
 ## What passing verification does not guarantee
 
-<!-- xquad:defect QUI-1026 -->
-> **Known issue.** The bytecode verifier passes programs that fault at runtime: a
-> back-edge to the entry block escapes the join-point check, and the net-delta stack
-> scan cannot see an operand-ordering error, so both a stack overflow and a stack
-> underflow can pass verification. Treat a verification pass as a static check, not a
+<!-- xquad:defect QUI-1062 -->
+> **Known issue.** The bytecode verifier passes programs that fault at runtime: the
+> net-delta stack scan cannot see an operand-ordering error, so a stack underflow
+> can pass verification. Treat a verification pass as a static check, not a
 > guarantee that the program runs to completion. Report problems at the
 > [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
 
 A pass means every phase's static checks succeeded. It does not mean the
 program runs to completion. The stack-depth phase reasons about each basic
-block's net effect. It does not count how many times a backward jump
-actually executes, so a loop that grows the stack by a fixed amount every
-pass can still overflow the real 8,192-item limit at runtime, after enough
-iterations:
-
-```asm
-.0: PUSH 1
-JUMP .0
-HALT
-```
-
-```sh
-$ xquad verify --text selfloop.xqasm
-ok: selfloop.xqasm (4 instructions)
-```
-
-```sh
-$ xquad run --text selfloop.xqasm
-Error: xqvm::runtime_error
-
-  × stack overflow at byte 0x0001 (limit: 8192)
-   ╭─[selfloop.xqasm:2:1]
- 1 │   0x0000:  .0:  TARGET
- 2 │   0x0001:       PUSH1   1
-   · ────────────┬────────────
-   ·             ╰── execution failed here
- 3 │   0x0003:       JUMP1   .0
-   ╰────
-```
-
-The same net-delta reasoning also misses an underflow that only appears
-once real values are on the stack. `PUSH 1 / ADD / HALT` passes because the
-scan sees a net effect of `+1 - 1 = 0` for the two instructions together,
-not that `ADD` needs two operands and only one was ever pushed:
+block's *net* effect, so an instruction that pops more operands than it
+pushes has its pop requirement absorbed whenever the running depth stays
+non-negative -- an operand-ordering error is invisible to it. `PUSH 1 / ADD
+/ HALT` passes because the scan sees a net effect of `+1 - 1 = 0` for the
+two instructions together, not that `ADD` needs two operands and only one
+was ever pushed:
 
 ```sh
 $ xquad verify --text add_underflow.xqasm
@@ -288,9 +259,8 @@ Error: xqvm::runtime_error
    ╰────
 ```
 
-Both are documented, current limitations of the per-basic-block analysis,
-not bugs specific to these two programs. [Verifier: what passing
-verification
+This is a documented, current limitation of the per-basic-block analysis,
+not a bug specific to this program. [Verifier: what passing verification
 guarantees](../xqvm/verifier.md#what-passing-verification-guarantees) states
 the precise scope. Treat a pass as "structurally sound," not as "will run
 to completion."
@@ -320,7 +290,7 @@ does not check whether a sample is a good answer.
 
 ## The generated verifier's `valid` flag does not check every constraint
 
-<!-- xquad:defect QUI-1026 -->
+<!-- xquad:defect QUI-1062 -->
 > **Known issue.** The generated solution verifier emits a row-sum check only for
 > `onehot_row` and a column-sum check only for `onehot_col`, and otherwise checks only
 > domain membership, so a sample violating any other constraint kind can still report

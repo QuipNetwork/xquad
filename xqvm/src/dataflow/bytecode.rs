@@ -33,6 +33,27 @@
 //! This deliberately does not model the internal pop/push split for instructions
 //! like `ADD` (pop 2, push 1, delta -1).  Any false negatives are the same as
 //! those already present in a linear net-delta scan.
+//!
+//! # Invariant: program entry is an incoming edge
+//!
+//! The entry block has one incoming edge that appears nowhere in
+//! [`Cfg::predecessors`]: program entry itself, arriving at depth 0 (see
+//! [`StackDepthAnalysis::boundary_value`]).
+//!
+//! The join-point mismatch check below must count it, or the entry block is
+//! silently exempted. (The `solve` worklist itself deliberately does not: it
+//! pins the entry input to `boundary_value` unconditionally, which is sound
+//! for every current phase's meet.) That is not hypothetical -- counting only
+//! predecessor *blocks* let `.0: PUSH 1 / JUMP .0 / HALT` verify clean and then
+//! overflow the stack at runtime, because a back-edge onto the entry block
+//! leaves it with a single predecessor. Putting any instruction before the
+//! label splits the entry block off and the identical check fires, which is
+//! what gave it away. See the `StackDepthMismatch` check below.
+//!
+//! This is recorded here rather than only in `spec/xqvm/VERIFIER.md` because it
+//! is a property of *this* analysis, and the two regression tests in
+//! `verifier::tests` are what actually enforce it. The verifier is Rust-only --
+//! `xqvm_py` has no counterpart -- so no conformance vector can pin it.
 
 #[cfg(not(feature = "std"))]
 use alloc::{
@@ -537,7 +558,7 @@ pub(crate) fn build_cfg(code: &[u8], jump_table: &JumpTable) -> Option<CfgContex
 ///
 /// 1. [`VerifierError::LoopStackImbalance`] -- a loop body has non-zero net
 ///    stack effect (detected via a one-pass BFS that ignores back-edges).
-/// 2. [`VerifierError::StackDepthMismatch`] -- two predecessors of a join
+/// 2. [`VerifierError::StackDepthMismatch`] -- two incoming edges of a join
 ///    point carry different stack depths.
 /// 3. [`VerifierError::StackUnderflow`] -- a reachable block has insufficient
 ///    entry depth or a static post-`SCLR` underflow.
@@ -584,8 +605,9 @@ pub(crate) fn check_stack_depth_with_context(
 
     // --- StackDepthMismatch check ---
     //
-    // For every block with two or more reachable predecessors, collect the
-    // exit depth of each predecessor and verify they are all equal.  A
+    // For every block with two or more incoming edges -- explicit predecessor
+    // blocks, plus program entry itself for the entry block -- collect the
+    // arrival depth of each edge and verify they are all equal.  A
     // discrepancy means the stack is in an undefined state at the join point.
     // Blocks are visited in program order (ascending byte offset) so the
     // error reported is deterministic.
@@ -595,10 +617,24 @@ pub(crate) fn check_stack_depth_with_context(
     let mut sorted_join_blocks: Vec<BlockId> = cfg.nodes().to_vec();
     sorted_join_blocks.sort_unstable();
 
+    let entry_block = *cfg.entry();
+
     for &block in &sorted_join_blocks {
-        // Skip single-predecessor and entry blocks (no join to check).
         let preds = cfg.predecessors(&block);
-        if preds.len() < 2 {
+
+        // Program entry is an implicit predecessor of the entry block, and it
+        // arrives at depth 0 -- that is what `boundary_value` states. It is not
+        // in `predecessors()`, which only holds edges derived from the
+        // instruction stream.
+        //
+        // Without counting it, a back-edge onto the entry block leaves that
+        // block with a single explicit predecessor, the join check is skipped,
+        // and `.0: PUSH 1 / JUMP .0 / HALT` verifies clean and then overflows
+        // the stack at runtime. Putting any instruction before the label splits
+        // the entry block off and the identical check fires correctly, which is
+        // what gave the defect away.
+        let has_implicit_entry_edge = block == entry_block;
+        if preds.len() + usize::from(has_implicit_entry_edge) < 2 {
             continue;
         }
         // Skip unreachable blocks (their before-state is Top or missing).
@@ -606,14 +642,28 @@ pub(crate) fn check_stack_depth_with_context(
             None | Some(DepthValue::Top) => continue,
             _ => {}
         }
-        // Collect known exit depths from reachable predecessors.
-        let mut known = preds.iter().filter_map(|p| {
-            if let Some(DepthValue::Known(d)) = result.after(p) {
-                Some(*d)
-            } else {
-                None
-            }
-        });
+        // Collect known exit depths from reachable incoming edges, starting
+        // with the implicit entry edge where there is one. Its depth comes from
+        // `boundary_value`, which owns that number: if programs ever start with
+        // a non-empty entry stack, the join check follows automatically instead
+        // of raising a spurious mismatch against a hardcoded 0. A boundary
+        // that is not `Known` contributes no edge, the same exclusion applied
+        // to non-`Known` predecessors below -- this path runs inside the
+        // runtime once `store_program` calls `verify()`, where a panic fails
+        // block import, so it must degrade rather than abort.
+        let implicit_depth = match (has_implicit_entry_edge, analysis.boundary_value()) {
+            (true, DepthValue::Known(depth)) => Some(depth),
+            _ => None,
+        };
+        let mut known = implicit_depth
+            .into_iter()
+            .chain(preds.iter().filter_map(|p| {
+                if let Some(DepthValue::Known(d)) = result.after(p) {
+                    Some(*d)
+                } else {
+                    None
+                }
+            }));
         let Some(first) = known.next() else { continue };
         for other in known {
             if other != first {

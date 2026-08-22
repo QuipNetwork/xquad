@@ -85,6 +85,11 @@ impl<N: Eq + Hash + Clone> Cfg<N> {
     }
 
     /// Direct predecessors of `node`.  Returns `&[]` if `node` is not in the graph.
+    ///
+    /// This list only holds edges derived from the instruction stream. The
+    /// entry block has one more incoming edge that is not in it: program entry
+    /// itself. Any caller reasoning about join points must add that edge, or
+    /// the entry block is silently exempted.
     pub fn predecessors(&self, node: &N) -> &[N] {
         self.preds.get(node).map(Vec::as_slice).unwrap_or_default()
     }
