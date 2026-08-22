@@ -69,38 +69,47 @@ may surface the next.
 
 ## Passing verification is not a runtime guarantee
 
-Verification is a set of static, per-basic-block checks. It does not
-simulate how many times a loop body actually executes, so a program whose
-defect only shows up after enough iterations can pass. `selfloop.xqasm`
-pushes a value and jumps back to the same point forever:
+<!-- xquad:defect QUI-1062 -->
+> **Known issue.** The bytecode verifier passes programs that fault at runtime: the
+> net-delta stack scan cannot see an operand-ordering error, so a stack underflow
+> can pass verification. Treat a verification pass as a static check, not a
+> guarantee that the program runs to completion. Report problems at the
+> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+
+Verification is a set of static, per-basic-block checks. The stack-depth
+phase sees each block's *net* stack effect, so an instruction that pops
+more operands than it pushes has its pop requirement absorbed by earlier
+pushes. `idx_underflow.xqasm` pushes two values and then runs `IDXGRID`,
+which pops three:
 
 ```asm
-.0: PUSH 1
-JUMP .0
+PUSH 1
+PUSH 2
+IDXGRID
 HALT
 ```
 
 ```sh
-xquad verify --text selfloop.xqasm
+xquad verify --text idx_underflow.xqasm
 ```
 
 ```
-ok: selfloop.xqasm (4 instructions)
+ok: idx_underflow.xqasm (4 instructions)
 ```
 
-`xquad run --text selfloop.xqasm` then overflows the value stack once the
-loop has pushed past the runtime limit:
+`xquad run --text idx_underflow.xqasm` then underflows the value stack at
+the `IDXGRID`:
 
 ```
 Error: xqvm::runtime_error
 
-  × stack overflow at byte 0x0001 (limit: 8192)
-   ╭─[selfloop.xqasm:2:1]
- 1 │   0x0000:  .0:  TARGET  
- 2 │   0x0001:       PUSH1   1
-   · ────────────┬────────────
-   ·             ╰── execution failed here
- 3 │   0x0003:       JUMP1   .0
+  × stack underflow at byte 0x0004
+   ╭─[idx_underflow.xqasm:3:1]
+ 2 │   0x0002:  PUSH1   2
+ 3 │   0x0004:  IDXGRID 
+   · ─────────┬─────────
+   ·          ╰── execution failed here
+ 4 │   0x0005:  HALT    
    ╰────
 ```
 

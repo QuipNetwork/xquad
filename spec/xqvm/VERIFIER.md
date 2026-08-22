@@ -146,13 +146,33 @@ most conservative depth to successors.
    has a non-zero net stack effect.
 
 2. **`StackDepthMismatch`** -- after the worklist converges, every join block
-   (2+ predecessors) is examined. The exit depths of all reachable predecessors
-   are collected and compared. If any two differ, the stack is in an undefined
-   state at the join point. Blocks are checked in program order (ascending byte
-   offset) for deterministic error reporting.
+   (2+ incoming edges) is examined. The arrival depths of all reachable
+   incoming edges are collected and compared, program entry contributing
+   depth 0. If any two differ, the stack is in
+   an undefined state at the join point. Blocks are checked in program order
+   (ascending byte offset) for deterministic error reporting.
+
+   Program entry counts as an incoming edge of the entry block, arriving at
+   depth 0. So a back-edge targeting the entry block makes it a join block with
+   two incoming edges -- entry at depth 0, and the back-edge at whatever depth
+   the loop body leaves -- even though it has only one predecessor *block*.
+   Counting predecessor blocks alone would let `.0: PUSH 1 / JUMP .0 / HALT`
+   verify clean and then overflow the stack at runtime.
 
 3. **`StackUnderflow`** / **`StackOverflowRisk`** -- blocks whose `before` or
    `after` depth falls below 0 or exceeds 8192 are flagged.
+
+### Net-delta blindness
+
+`BlockEffect` characterises a block by its net stack delta, and its
+`min_input` rises only when the running depth goes negative within the block.
+An opcode with both `stack_pop > 0` and `stack_push > 0` therefore has its pop
+requirement absorbed whenever the running depth stays non-negative: `PUSH 1 /
+PUSH 2 / IDXGRID / HALT` passes Phase 4 (running depth 0, 1, 2, 0) and
+underflows at runtime, because `IDXGRID` pops 3 before pushing 1. This is a
+property of the current analysis, documented as the resolution of QUI-1026
+Case B; making the verifier reject such programs is future work, and a
+breaking change to what `verify()` accepts.
 
 ### Loop handling
 

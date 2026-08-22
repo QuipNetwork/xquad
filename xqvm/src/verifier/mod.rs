@@ -48,7 +48,8 @@
 //! * [`UninitRegisterPhase`] -- AND-meet at join points; flags registers that
 //!   are definitely unset on at least one incoming path.
 //! * [`StackDepthPhase`] -- min-meet for underflow detection, plus a strict-
-//!   equality pass over join-point predecessors for [`VerifierError::StackDepthMismatch`].
+//!   equality pass over each join point's incoming edges (program entry
+//!   included) for [`VerifierError::StackDepthMismatch`].
 //!
 //! # Quick start
 //!
