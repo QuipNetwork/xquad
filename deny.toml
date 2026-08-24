@@ -2,7 +2,14 @@
 db-path      = "~/.cargo/advisory-db"
 db-urls      = [ "https://github.com/rustsec/advisory-db" ]
 unmaintained = "workspace"
-yanked       = "warn"
+# Deliberately deny: a yank often signals a pulled-for-good-reason version,
+# and Cargo.lock pins exact versions, so this can turn pipelines red with no
+# code change involved. When it fires, bump the pinned version to a
+# non-yanked release. If the pin is not ours to bump (a transitive dependency
+# yanked with no replacement published), suppress it for that one crate with
+# ignore = [ { crate = "name@=x.y.z", reason = "..." } ] in this section; do
+# not flip this back to "warn".
+yanked = "deny"
 
 [licenses]
 confidence-threshold = 0.8
@@ -22,6 +29,24 @@ allow = [
 
 [bans]
 multiple-versions = "warn"
+deny = [
+    # Crates weaponized in the 2026-08-20 crates.io supply-chain attack
+    # (https://blog.rust-lang.org/2026/08/20/supply-chain-attack-on-arrayref/).
+    # The malicious versions were deleted from the registry, but ban them
+    # anyway in case of mirrors or vendored copies.
+    { crate = "arrayref@=0.3.10" },
+    { crate = "internment@=0.8.7" },
+    { crate = "append-only-vec@=0.1.9" },
+    # Attacker-owned dropper/typosquat crates from the same incident; no
+    # version was ever legitimate. proc-macro1 in particular is one typo
+    # away from proc-macro2.
+    { crate = "proc-macro1" },
+    { crate = "proc-macro-en" },
+    { crate = "aovine" },
+    { crate = "arone" },
+    { crate = "aronenao" },
+    { crate = "tinymember" },
+]
 wildcards = "allow"
 highlight = "all"
 skip = [
@@ -37,6 +62,6 @@ skip = [
 ]
 
 [sources]
-unknown-registry = "warn"
-unknown-git      = "warn"
+unknown-registry = "deny"
+unknown-git      = "deny"
 allow-registry   = [ "https://github.com/rust-lang/crates.io-index" ]
