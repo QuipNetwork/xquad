@@ -1,0 +1,23 @@
+; onehotr_row_at_grid_extent: a row at the grid extent must raise.
+;
+; The grid is 1x4, so the only valid row is 0. Row 2 addresses no line of
+; the grid, and unlike the 2^62 row in onehotr_row_out_of_range it does
+; not wrap: this vector pins the extent itself rather than the multiply.
+;
+; The grid is deliberately not square, and the row is deliberately inside
+; the column count, so this pins the extent that is actually addressed
+; rather than merely rejecting a large number: a check against the column
+; count would accept row 2 here, and against a square grid, or a row
+; larger than both extents, the two are indistinguishable.
+
+PUSH 4
+BQMX r0
+
+PUSH 1           ; rows
+PUSH 4           ; cols
+RESIZE r0
+
+PUSH 2           ; row: outside [0, rows) but inside [0, cols)
+PUSH 1           ; penalty
+ONEHOTR r0
+HALT

@@ -1,0 +1,33 @@
+; onehotc_col_at_grid_extent: a column at the grid extent must raise.
+;
+; The mirror of onehotr_row_at_grid_extent. The grid is 4x1, so the only
+; valid column is 0, and column 2 addresses no line of the grid.
+;
+; A column cannot wrap the way ONEHOTR's row can -- nothing multiplies by
+; it -- but it does not need to. The address is `ri * cols + col`, so an
+; out-of-extent column still lands outside the column it named: on a 2x2
+; grid, column 3 addressed flat indices 3 and 5. Index 3 is a declared
+; variable in the wrong column; index 5 is past the four the model
+; declared. The Rust VM wrote both -- coefficients accumulate into a
+; sparse map that grows to fit whatever index it is handed -- so it
+; created `linear[5]` and `quad(3, 5)` out of nothing and halted
+; successfully, while xqvm_py raised. A model that solves cleanly and
+; answers wrongly.
+;
+; The grid is deliberately not square, and the column is deliberately
+; inside the row count, so this pins the extent that is actually
+; addressed rather than merely rejecting a large number: a check against
+; the row count would accept column 2 here, and against a square grid the
+; two are indistinguishable.
+
+PUSH 4
+BQMX r0
+
+PUSH 4           ; rows
+PUSH 1           ; cols
+RESIZE r0
+
+PUSH 2           ; col: outside [0, cols) but inside [0, rows)
+PUSH 1           ; penalty
+ONEHOTC r0
+HALT

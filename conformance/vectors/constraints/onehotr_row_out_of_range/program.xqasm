@@ -1,0 +1,20 @@
+; onehotr_row_out_of_range: a row outside the grid extent must raise.
+;
+; The only row of a 1x4 grid is row 0. `usize::try_from(row)` accepted any
+; positive row, and `row * cols` then wrapped: 2^62 * 4 is exactly 0 modulo
+; a 64-bit usize, so the Rust VM wrote a clean-looking one-hot constraint
+; onto row 0 and halted successfully under `release` while it panicked
+; under `ci-test` and xqvm_py raised. This vector pins IndexOutOfBounds on
+; both implementations and on every profile.
+
+PUSH 4
+BQMX r0
+
+PUSH 1           ; rows
+PUSH 4           ; cols
+RESIZE r0
+
+PUSH 4611686018427387904   ; row == 2^62; row * cols wraps to 0
+PUSH 1                     ; penalty
+ONEHOTR r0
+HALT

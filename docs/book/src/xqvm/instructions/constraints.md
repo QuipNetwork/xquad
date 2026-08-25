@@ -4,16 +4,23 @@ These instructions inject QUBO penalty terms for common combinatorial
 constraints, expanding into linear and quadratic coefficient deltas
 automatically. The model register must hold a `Model` in model mode.
 Grid-based opcodes (`ONEHOTR`, `ONEHOTC`) read the grid dimensions set by
-`RESIZE` and require them. On a model with no grid set (`rows` and `cols`
-both `0`) both raise `InvalidGridDimensions` rather than expanding over
+`RESIZE` and require them, in both halves of the grid precondition
+[`spec/xqvm/ISA.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/ISA.md#xqmx-grid)
+states normatively. On a model with no grid set (`rows` and `cols` both
+`0`) both raise `InvalidGridDimensions` rather than expanding over
 nothing, so forgetting `RESIZE` fails at the instruction that needed it
-rather than producing a model missing a constraint. Both implementations
-agree. `xquad verify` still cannot catch it, because grid dimensions are
-popped stack values rather than something the verifier's dataflow passes
-track. Vec-based opcodes (`EQUALITY`,
-`ATLEAST`, `ATLEASTW`, `REDUCE`) operate on arbitrary variable sets. All
-coefficients are `i64`. For each opcode's byte value and operand layout,
-see the [Opcode Reference](../opcodes.md).
+rather than producing a model missing a constraint. A `row` outside
+`[0, rows)`, or a `col` outside `[0, cols)`, raises `IndexOutOfBounds`
+rather than applying the constraint to variables the grid does not
+address -- the same fault the four
+[grid opcodes](grid.md) raise for an out-of-range row or column. Both
+implementations agree on both halves. `xquad verify` cannot catch either,
+because the grid dimensions and the index alike are popped stack values
+rather than something the verifier's dataflow passes track. Vec-based
+opcodes (`EQUALITY`, `ATLEAST`, `ATLEASTW`, `REDUCE`) operate on
+arbitrary variable sets. All coefficients are `i64`. For each opcode's
+byte value and operand layout, see the
+[Opcode Reference](../opcodes.md).
 
 ## `ONEHOTR reg`
 
