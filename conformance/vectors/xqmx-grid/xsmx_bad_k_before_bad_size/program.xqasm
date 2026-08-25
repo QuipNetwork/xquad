@@ -1,0 +1,13 @@
+; xsmx_bad_k_before_bad_size: the sample allocator orders its two faults
+; the same way the model allocator does.
+;
+; The companion to xqmx_bad_k_before_bad_size. XSMX shares the operand
+; order and the fault order, and shared the same divergence: a bad k with
+; a bad size reported INVALID_DISCRETE_K on Rust and INVALID_ALLOCATION on
+; xqvm_py. Pinning both allocators keeps a future edit to one of them from
+; silently splitting the pair.
+
+PUSH -1          ; size -- not an allocation
+PUSH 1           ; k -- below the minimum of 2
+XSMX r0
+HALT

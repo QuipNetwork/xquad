@@ -126,17 +126,16 @@ git checkout -b release/vX.Y.Z main
 git commit -s -am "chore: bump workspace to X.Y.Z"
 
 #    Main carries `X.Y.Z-dev` (Rust) / `X.Y.Z.devN` (Python) between
-#    releases, so this step usually just drops the suffix. The suffix is
-#    load-bearing, not decorative: `release:validate` runs
-#    `cargo publish --dry-run --workspace` on every pipeline, and if the
-#    workspace version names an already-published release then a sibling
-#    crate's `version = "X.Y.Z"` dependency can be satisfied from
-#    crates.io instead of the local source. A branch that adds an API to
-#    xqvm and calls it from xqcli then fails to verify, and a branch that
-#    does not silently verifies against the published crate rather than
-#    its own. An unpublished version makes the local source the only
-#    candidate. After tagging, open a follow-up that bumps main to the
-#    next `-dev` version.
+#    releases, so this step usually just drops the suffix. The suffix no
+#    longer carries the resolution argument it was introduced with:
+#    `check-crate-publish` packages every workspace member into a scratch
+#    tree and resolves each against the locally packaged siblings rather
+#    than against crates.io, so a workspace version that names an
+#    already-published release can no longer pull a sibling from
+#    crates.io in place of the local source. See the `check-crate-publish`
+#    comment in the Makefile for what that target does and why. Keep the
+#    suffix as the convention that says main is unreleased. After
+#    tagging, open a follow-up that bumps main to the next `-dev` version.
 #
 #    The two ecosystems spell prereleases differently and always have:
 #    Cargo wants SemVer (`0.4.0-dev`, `0.3.0-rc1`), Python wants PEP 440

@@ -30,6 +30,17 @@ has its pop requirement absorbed whenever the running depth stays
 non-negative -- a stack underflow caused by an operand-ordering error can
 still pass verification.
 
+Every phase reasons about types, control flow and depths. None reasons
+about values, so no phase can decide a question whose answer the program
+computes at run time. An allocator size, a grid extent, a loop bound, a
+shift amount, a calldata or output index and every arithmetic operand are
+all ordinary popped stack values, which is why `InvalidAllocation`,
+`InvalidGridDimensions`, `InvalidDiscreteK`, `InvalidShift`,
+`ArithmeticOverflow`, `IndexOutOfBounds`, `LoopStackOverflow` and the two
+budget faults exist only at runtime and have no verifier counterpart.
+That is a boundary rather than a gap: an embedder gets its bound from the
+step and allocation budgets it sets, not from a verification pass.
+
 <!-- xquad:defect QUI-1062 -->
 > **Known issue.** Verification passes some programs that fault at runtime, because the
 > stack-depth phase sees only each block's net delta: an instruction's pop requirement

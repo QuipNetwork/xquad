@@ -229,7 +229,7 @@ macro_rules! opcodes {
             // ---------------------------------------------------------------
             (0x5A, IdxGrid, "IDXGRID",  "Pop cols, col, row; push the flat grid index row * cols + col.",
              -2_i8, {}),
-            (0x5B, IdxTriu, "IDXTRIU",  "Pop j and i (i <= j); push the upper-triangular index for (i, j).",
+            (0x5B, IdxTriu, "IDXTRIU",  "Pop j and i; push the upper-triangular index for the unordered pair (i, j).",
              -1_i8, {}),
             // ---------------------------------------------------------------
             // XQMX Coefficient Access

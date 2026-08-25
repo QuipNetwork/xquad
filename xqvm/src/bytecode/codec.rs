@@ -300,6 +300,10 @@ macro_rules! impl_codec {
         /// assert_eq!(instr, Instruction::Load { reg: Register(3) });
         /// assert_eq!(n, 2);
         /// ```
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "`pos` accumulates one instruction's operand widths, at most eight bytes by `spec/xqvm/ENCODING.md`'s instruction-length table"
+        )]
         pub fn decode(bytes: &[u8]) -> Result<(Instruction, usize), DecodeError> {
             let opcode = *bytes.first().ok_or(DecodeError::EmptyInput)?;
             let payload = bytes.get(1..).unwrap_or(&[]);

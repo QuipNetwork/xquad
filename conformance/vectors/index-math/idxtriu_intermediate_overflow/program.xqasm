@@ -1,0 +1,11 @@
+; idxtriu_intermediate_overflow: the mirror of
+; idxgrid_intermediate_overflow on the triangular index.
+;
+; i = 0, j = 2^32. j * (j - 1) = 2^64 - 2^32 is not representable; the
+; halved result 2^63 - 2^31 is. Range-checking only the pushed value
+; therefore accepts the program, which is what xqvm_py did.
+
+PUSH 0                     ; i
+PUSH 4294967296            ; j
+IDXTRIU
+HALT

@@ -29,6 +29,8 @@ from xqffi.asm import assemble_source
 from xqffi.vm import Vm, XqmxModel, XqmxSample
 from xqvm_py.executor import DEFAULT_MEMORY_LIMIT as _DEFAULT_MEMORY_LIMIT
 
+from .vm import DEFAULT_STEP_LIMIT
+
 __all__ = ["Program", "RunResult", "Session"]
 
 
@@ -83,7 +85,7 @@ class Program:
         except ImportError:
             return -1
 
-    def session(self, output_slots: int = 16, step_limit: int | None = None) -> Session:
+    def session(self, output_slots: int = 16, step_limit: int | None = DEFAULT_STEP_LIMIT) -> Session:
         return Session(self, output_slots, step_limit)
 
     def __repr__(self) -> str:
@@ -96,7 +98,12 @@ class Session:
 
     __slots__ = ("_program", "_calldata", "_output_slots", "_step_limit", "_memory_limit")
 
-    def __init__(self, program: Program, output_slots: int, step_limit: int | None) -> None:
+    def __init__(
+        self,
+        program: Program,
+        output_slots: int,
+        step_limit: int | None = DEFAULT_STEP_LIMIT,
+    ) -> None:
         self._program = program
         self._calldata: list = []
         self._output_slots = output_slots
@@ -114,7 +121,9 @@ class Session:
     def set_step_limit(self, limit: int | None) -> None:
         """Cap the instructions a run may execute.
 
-        The limit is exact: `0` permits none at all. `None` is unlimited.
+        The limit is exact: `0` permits none at all. `None` is unlimited and
+        has to be written by the caller; the default is
+        `xquad.vm.DEFAULT_STEP_LIMIT`.
         """
         self._step_limit = limit
 

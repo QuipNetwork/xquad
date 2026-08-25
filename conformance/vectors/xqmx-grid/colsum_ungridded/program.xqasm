@@ -1,0 +1,12 @@
+; colsum_ungridded: COLSUM on a register with no grid must raise.
+;
+; The other half of COLSUM's missing fault coverage. No RESIZE ran, so
+; there is no column to sum: raising matches ONEHOTC's no-grid behaviour
+; rather than pushing 0 from an empty reduction.
+
+PUSH 4
+BQMX r0
+
+PUSH 0           ; col
+COLSUM r0
+HALT

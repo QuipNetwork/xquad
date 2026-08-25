@@ -1,0 +1,30 @@
+; iter_unset_register: an ITER whose register was never written raises the
+; unset-register fault, not the type-mismatch fault, and raises it even when
+; the slice is empty and the body would not have run.
+;
+; Two identities are at stake and they are distinct: UNSET_REGISTER is what
+; xqvm_py's RegisterNotFound maps onto and TYPE_MISMATCH is what its
+; TypeMismatch maps onto. Vm::require_vec sent RegVal::Unset into its type
+; arm, so a never-written register faulted TYPE_MISMATCH on the Rust VM and
+; UNSET_REGISTER on the Python one.
+;
+; The empty slice is the point. Resolving the register above the skip is what
+; iter_non_vec_register_empty_slice pins for an int register; this vector
+; pins the same ordering for the unset case, which that vector does not
+; reach because INPUT always writes something.
+;
+; A verifying host rejects this program statically -- xqvm/src/verifier
+; reg_type.rs gives a read of an unset slot ReadUnsetRegister -- so this is
+; a fault the VM raises for a non-verifying embedder and for this harness,
+; which runs bytecode without a verifier pass.
+
+PUSH 1           ; start_idx
+PUSH 1           ; end_idx -- empty slice
+ITER r5          ; r5 never written
+NEXT
+
+PUSH 7
+STOW r0
+PUSH 0
+OUTPUT r0
+HALT

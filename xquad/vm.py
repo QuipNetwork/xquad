@@ -29,6 +29,7 @@ from enum import Enum, auto
 from typing import Any
 
 from xqffi.asm import assemble_source as _assemble_source
+from xqffi.vm import DEFAULT_STEP_LIMIT as _DEFAULT_STEP_LIMIT
 from xqffi.vm import Vm as _RustVm
 from xqffi.vm import XqmxModel as ModelFFI
 from xqffi.vm import XqmxSample as SampleFFI
@@ -39,7 +40,17 @@ from xqvm_py.program import program_from_xqasm as _program_from_xqasm
 from xqvm_py.vector import Vec
 from xqvm_py.xqmx import XQMX, XQMXDomain
 
-__all__ = ["VM", "VMBackend"]
+__all__ = ["DEFAULT_STEP_LIMIT", "VM", "VMBackend"]
+
+#: Default step budget, read from the Rust VM rather than restated here so
+#: the two cannot drift. Same number as the `xquad run --step-limit`
+#: default, which now reads it from the same place.
+#:
+#: Unbounded execution has to be asked for rather than stumbled into, so
+#: `None` is reserved for a caller who writes it. Defaulting to `None` made
+#: `Program.from_source("TARGET .0\nNOP\nJUMP .0").session().run()` -- which
+#: raised in about a tenth of a second on 0.3.x -- never return.
+DEFAULT_STEP_LIMIT: int = _DEFAULT_STEP_LIMIT
 
 
 class VMBackend(Enum):
@@ -140,6 +151,13 @@ def _prepare_calldata_python(data: list) -> dict[int, Any]:
     result: dict[int, Any] = {}
     for i, item in enumerate(data):
         if item is None:
+            # An unset slot is kept at its index rather than dropped, so the
+            # map stays as long as the caller's sequence. `_prepare_calldata_rust`
+            # above passes `None` to `py_to_regval`, which yields `RegVal::Unset`
+            # and leaves `calldata.len()` counting it; dropping it here made the
+            # same `[None, 5]` two slots on one backend and one on the other, so
+            # reading slot 1 succeeded there and raised `CallDataIndex` here.
+            result[i] = None
             continue
         if isinstance(item, list):
             result[i] = Vec.from_list(item)
@@ -189,7 +207,7 @@ class VM:
         self._backend = backend
         self._calldata: list = []
         self._output_slots: int = 0
-        self._step_limit: int | None = None
+        self._step_limit: int | None = DEFAULT_STEP_LIMIT
         self._memory_limit: int = _DEFAULT_MEMORY_LIMIT
 
         if backend == VMBackend.RUST:
@@ -213,7 +231,9 @@ class VM:
     def set_step_limit(self, limit: int | None) -> None:
         """Cap the instructions a run may execute.
 
-        The limit is exact: `0` permits none at all. `None` is unlimited.
+        The limit is exact: `0` permits none at all. `None` is unlimited and
+        has to be written by the caller; the default is
+        `DEFAULT_STEP_LIMIT`.
         """
         self._step_limit = limit
 
@@ -272,7 +292,7 @@ class VM:
     def reset(self) -> None:
         self._calldata = []
         self._output_slots = 0
-        self._step_limit = None
+        self._step_limit = DEFAULT_STEP_LIMIT
         self._memory_limit = _DEFAULT_MEMORY_LIMIT
         if self._backend == VMBackend.RUST:
             self._rust_vm.reset()

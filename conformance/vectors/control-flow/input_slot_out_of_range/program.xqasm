@@ -1,0 +1,19 @@
+; input_slot_out_of_range: INPUT addressing a calldata slot the host did
+; not fix raises CallDataIndex rather than storing a null.
+;
+; spec/xqvm/ISA.md's INPUT row states that the host fixes the calldata
+; before the run and that a slot outside [0, slots) is a program error
+; rather than a null result. The bound is the slot count: an in-range slot
+; the host left unset is a different case and reads as unset, which
+; calldata_hole_reads_as_unset pins.
+;
+; xqvm_py's get_input returned None with no bounds check, so this program
+; charged nothing, stored None in r0, and halted successfully there while
+; the Rust VM raised CallDataIndex -- a fault-versus-success divergence
+; against the spec text this release itself rewrote. The Python VM had no
+; CallDataIndex class at all, and no vector reached the identity on either
+; implementation.
+
+PUSH 0
+INPUT r0         ; calldata is empty, so slot 0 does not exist
+HALT

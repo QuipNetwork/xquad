@@ -4,6 +4,28 @@ These expansions describe the QUBO penalty terms injected by the [XQMX High-Leve
 
 ---
 
+## Expansion Rules
+
+These rules hold for every expansion in this file. They are normative: each one decides whether a program faults, so an implementation that reorders or defers any of them accepts a different set of programs than one that does not.
+
+### Scale factors are validated before the terms that use them
+
+An expansion computes each penalty scale factor once, range-checks it, and does so before the loop that emits the terms scaled by it -- unconditionally, whether or not that loop goes on to emit anything. `ONEHOTR` and `ONEHOTC` check `-penalty` and `2 × penalty` before the linear loop; `EQUALITY` (and `ATLEAST` and `ATLEASTW`, which route through it) checks `2 × target` before the linear loop and `2 × penalty` before the pair loop.
+
+The consequence is the reason for writing it down: a one-column `ONEHOTR` raises for a `2 × penalty` that no emitted term uses, and a one-element `EQUALITY` raises for the same factor over a pair loop that emits nothing. A factor outside the i64 range is a defective constraint whether or not this particular row or index list is wide enough to make the defect visible, and evaluating it lazily would make the same constraint accepted at one width and rejected at another.
+
+### Deltas are applied as they are computed
+
+An expansion is not atomic and does not stage its deltas. Each delta is computed, range-checked, and applied to the model before the next one is computed, in the order the expansion enumerates its terms: the whole linear pass first, in ascending position order over the index list, then the whole quadratic pass, in ascending `(k, m)` order over the pairs with `k < m`. An expansion that raises part-way through leaves the deltas it has already applied standing in the model.
+
+The order is observable whenever an index appears twice in the same `indices` vector, because a repeated index accumulates: the second delta is added on top of the first, and the coefficient that is range-checked is the accumulated result rather than the delta. A size-1 model holding `linear[0] = 7e18`, expanded by `EQUALITY` with `indices = [0, 0]`, `coeffs = [3e9, 1e9]`, `target = 1e9` and `penalty = 1`, raises in the order above and would complete in the reverse one. Both current implementations apply deltas in the order stated here.
+
+### An expansion that would write nothing
+
+`ONEHOTR` and `ONEHOTC` raise `InvalidGridDimensions` on a register with no grid, rather than expanding to nothing and continuing, while `EQUALITY` accepts an empty `indices` vector and writes nothing. That is not an inconsistency: an absent grid is a precondition the program never established, so there is no row to constrain and the instruction cannot mean anything, whereas an empty `indices` vector is a caller-supplied set that is legitimately empty, and a constraint over no variables is vacuously satisfied.
+
+---
+
 ## `ONEHOTR` / `ONEHOTC` Expansion
 
 Apply the one-hot constraint over a set of variable indices (all variables in a row or column):
@@ -130,10 +152,22 @@ The penalty is 0 when `w = x_a × x_b` and ≥ 1 otherwise, so the solver always
 
 ```
 E = Σ_i linear_model[i] × x_sample[i]
-  + Σ_{i<j} quad_model[i,j] × x_sample[i] × x_sample[j]
+  + Σ_{i<=j} quad_model[i,j] × x_sample[i] × x_sample[j]
 ```
 
 Where `x_sample[i] = sample.values[i]` (the variable assignment). Error if `model.size != sample.size`: `xqvm_py` raises `ValueError`, the Rust `xqvm` VM raises `SizeMismatch`.
+
+### Term grouping
+
+Each quadratic term is evaluated as `(coeff × x_i) × x_j`, not as `coeff × (x_i × x_j)`. The two group differently under checked arithmetic: on the spin domain with `coeff = -2^63` and `x_i = x_j = -1`, the first raises at `coeff × x_i` and the second never leaves the range. The stated grouping is what both implementations do, and it is normative for the same reason the accumulation order is -- the grouping decides whether the program errors at all.
+
+### The diagonal
+
+The quadratic table's keys satisfy `i <= j`, not `i < j`: **the diagonal is legal**. `SETQUAD`, `ADDQUAD` and `GETQUAD` normalise a pair by swapping when `i > j` and impose no further restriction, so `PUSH 2 / BQMX r0 / PUSH 1 / PUSH 1 / PUSH 7 / SETQUAD r0` stores `quadratic[(1,1)] = 7`, and `ENERGY` evaluates that entry as `7 × x_1 × x_1` like any other. Both implementations store and evaluate self-couplings.
+
+What a self-coupling means is domain-dependent, and the VM does not interpret it. On binary variables `x² = x`, so a diagonal term acts as a linear bias written through the quadratic table; on spin variables `x² = 1`, so it acts as a constant energy offset; on the discrete domain it is neither. A program that writes one is doing something the VM permits and gives no meaning to.
+
+`IDXTRIU` is unaffected. It enumerates the strictly upper-triangular pairs `i < j`, so no diagonal cell has an index of its own in that enumeration: `IDXTRIU` with `i == j` yields the index of some off-diagonal pair rather than of a diagonal one.
 
 ### Accumulation order
 
@@ -143,4 +177,12 @@ This is normative, not an implementation detail. An implementation whose sparse 
 
 The order is observable because overflow raises: a partial sum can leave the `i64` range in one order and stay inside it in the other, so two orders would disagree about whether the program errors at all. Every partial sum is checked, not just the total.
 
-The same rule applies to any reduction over a model's sparse tables. Reductions over an index list computed by the program (`ROWSUM`, `COLSUM`) are already ordered by that list and are unaffected.
+The same rule applies to any reduction over a model's sparse tables.
+
+`ROWSUM` and `COLSUM` are not reductions over the sparse tables and need no sorting rule. They fold the grid extent `RESIZE` established, in ascending flat-index order along their axis -- column order for `ROWSUM`, row order for `COLSUM` -- reading the `linear` surface at every cell of the extent whether or not an entry exists there. The reduction that does fold an index list the program supplied is `ATLEASTW`, whose weight sum is accumulated in the order of the `coeffs` vector; that order is the program's own and likewise needs no sorting rule. Both are still subject to the per-step check: every partial sum is range-checked, so the order in which the program built the list is observable through whether the reduction raises.
+
+### Declined: order-free `ENERGY`
+
+An alternative was considered and declined: range-check each term product, accumulate the total in a type wider than the value type (`i128` on Rust, native unbounded integers on Python), and range-check only the final total. It would make the accumulation order unobservable, and `ENERGY` would then return every total that is representable rather than raising on some of them.
+
+It is declined because per-step checking is the arithmetic-safety paradigm the rest of the VM is built on, and because it keeps the implementation contract to checked 64-bit arithmetic: a third implementation written from this specification needs no intermediate type wider than the value type, and the failure mode of getting a wide accumulator subtly wrong is a silently wrong energy rather than a spurious fault. The cost is stated here rather than left implicit -- the accumulation order above is normative because of this decision, and `ENERGY` raises for some totals that are exactly representable.

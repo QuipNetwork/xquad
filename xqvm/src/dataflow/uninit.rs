@@ -208,6 +208,10 @@ pub(crate) fn check_uninit_registers_with_cfg(
         .iter()
         .enumerate()
         .map(|(i, &s)| {
+            #[expect(
+                clippy::arithmetic_side_effects,
+                reason = "`i` is an `enumerate` index into `starts`, so `i + 1` is at most its length"
+            )]
             let end = starts.get(i + 1).copied().unwrap_or(code.len());
             (s, end)
         })
@@ -255,6 +259,10 @@ pub(crate) fn check_uninit_registers_with_cfg(
         let mut stream = InstructionStream::new(block_code);
         while let Some(item) = stream.next_instruction() {
             let Ok((rel_pos, _, instr)) = item else { break };
+            #[expect(
+                clippy::arithmetic_side_effects,
+                reason = "`rel_pos` is an offset inside `code[block_start..block_end]`, so the absolute position is bounded by `code.len()`"
+            )]
             let abs_pos = block_start + rel_pos;
             check_reads(abs_pos, &instr, &regs)?;
             if let Some((reg, reg_type)) = write_effect(&instr)

@@ -291,6 +291,10 @@ fn compute_block_effect(
     let mut stream = InstructionStream::new(block_code);
     while let Some(item) = stream.next_instruction() {
         let Ok((rel_pos, _, instr)) = item else { break };
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "`rel_pos` is an offset inside `code[block_start..block_end]`, so the absolute position is bounded by `code.len()`"
+        )]
         let abs_pos = block_start + rel_pos;
 
         match instr.stack_effect() {
@@ -302,6 +306,10 @@ fn compute_block_effect(
                 static_underflow = false;
                 depth = 0;
             }
+            #[expect(
+                clippy::arithmetic_side_effects,
+                reason = "`depth` moves by at most one slot per instruction (max stack_push - stack_pop is +1 across the opcode table), so it is bounded by the block's instruction count and only a program at `spec/xqvm/ENCODING.md`'s 4 GiB `code_len` cap could approach i32::MAX"
+            )]
             StackEffect::Delta(d) => {
                 let d = i32::from(d);
                 depth += d;
@@ -489,6 +497,10 @@ pub(crate) fn build_cfg(code: &[u8], jump_table: &JumpTable) -> Option<CfgContex
     let mut loop_regions: Vec<LoopRegion> = Vec::new();
 
     for (idx, &block_start) in leaders_sorted.iter().enumerate() {
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "`idx` is an `enumerate` index into `leaders_sorted`, so `idx + 1` is at most its length"
+        )]
         let block_end = leaders_sorted.get(idx + 1).copied().unwrap_or(code.len());
 
         let (effect, term_kind, term_pos) = compute_block_effect(code, block_start, block_end);
@@ -634,6 +646,10 @@ pub(crate) fn check_stack_depth_with_context(
         // the entry block off and the identical check fires correctly, which is
         // what gave the defect away.
         let has_implicit_entry_edge = block == entry_block;
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "`preds` is a subset of the CFG's blocks, so its length is bounded by the block count, and the addend is at most 1"
+        )]
         if preds.len() + usize::from(has_implicit_entry_edge) < 2 {
             continue;
         }

@@ -31,7 +31,7 @@ below are the parts most people need first.
 
 - `xquad asm`: `-o, --output <OUTPUT>` (defaults to `<input>.xqb`), `--stdout` to write bytecode to stdout instead of a file.
 - `xquad dism`: reads from stdin when `FILE` is omitted.
-- `xquad run`: `--text` to treat `FILE` as assembly, `--calldata <CALLDATA>` (comma-separated integers), `--outputs <OUTPUTS>` (default 16), `--step-limit <STEP_LIMIT>` (default 10000000, 0 = unlimited), `--trace` with `--trace-format text|json` and `--trace-file <FILE>`.
+- `xquad run`: `--text` to treat `FILE` as assembly, `--calldata <CALLDATA>` (comma-separated integers), `--outputs <OUTPUTS>` (default 16), `--step-limit <STEP_LIMIT>` (default 10000000; the value is an exact limit, so `0` executes nothing), `--unlimited-steps` to run without a step limit, `--trace` with `--trace-format text|json` and `--trace-file <FILE>`.
 - `xquad verify`: `--text` to treat `FILE` as assembly before verifying.
 
 ## Quick start

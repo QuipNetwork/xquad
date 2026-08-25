@@ -16,7 +16,7 @@ maps. `XQMX` pops two values, `k` (top of stack) then `size`, since a
 discrete model also needs the per-variable domain width. The model holds
 the Hamiltonian being built up:
 
-$$H(x) = \sum_i \text{linear}[i] \cdot x_i + \sum_{i < j} \text{quadratic}[i, j] \cdot x_i \cdot x_j$$
+$$H(x) = \sum_i \text{linear}[i] \cdot x_i + \sum_{i \le j} \text{quadratic}[i, j] \cdot x_i \cdot x_j$$
 
 which [Coefficient Access](coefficient-access.md) instructions populate one
 term at a time. What differs between the three allocators is the domain the

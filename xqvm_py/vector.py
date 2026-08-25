@@ -24,6 +24,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .errors import IndexOutOfBounds, TypeMismatch
+
 
 @dataclass
 class VecElem:
@@ -117,15 +119,15 @@ class Vec:
             self._capacity = len(self._elements)
 
     def get(self, index: int) -> Any:
-        """Get element at index. Raises IndexError if out of bounds."""
+        """Get element at index. Raises IndexOutOfBounds if out of range."""
         if index < 0 or index >= len(self._elements):
-            raise IndexError(f"Vec index {index} out of range [0, {len(self._elements)})")
+            raise IndexOutOfBounds(index, len(self._elements))
         return self._elements[index]
 
     def set(self, index: int, value: Any) -> None:
-        """Set element at index. Raises IndexError if out of bounds."""
+        """Set element at index. Raises IndexOutOfBounds if out of range."""
         if index < 0 or index >= len(self._elements):
-            raise IndexError(f"Vec index {index} out of range [0, {len(self._elements)})")
+            raise IndexOutOfBounds(index, len(self._elements))
         self._validate_element(value)
         self._elements[index] = value
 
@@ -141,13 +143,13 @@ class Vec:
         elif isinstance(element, Vec):
             return VecElem("vec", element.element_type)
         else:
-            raise TypeError(f"Cannot store {type(element).__name__} in vec")
+            raise TypeMismatch("int|xqmx|vec", type(element).__name__, "vec element")
 
     def _validate_element(self, element: Any) -> None:
         """Validate that an element matches the vec's type."""
         inferred = self._infer_type(element)
         if not self._types_compatible(self.element_type, inferred):
-            raise TypeError(f"{self.element_type} cannot hold {inferred}")
+            raise TypeMismatch(str(self.element_type), str(inferred), "vec element")
 
     def _types_compatible(self, expected: VecElem, actual: VecElem) -> bool:
         """Check if actual type is compatible with expected type."""

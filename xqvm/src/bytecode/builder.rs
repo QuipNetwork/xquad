@@ -82,12 +82,18 @@ use super::types::{Instruction, Register};
 // Error and Result
 // ---------------------------------------------------------------------------
 
+/// Wire-format cap on placed labels: sequential `TARGET` ids are encoded as
+/// `u16`, so a program may place `u16::MAX + 1` of them.
+/// Needs no allow-list entry: arithmetic in a const initialiser is evaluated
+/// at compile time, so an overflow here is a build failure rather than a wrap.
+const MAX_TARGETS: usize = u16::MAX as usize + 1;
+
 /// Error returned by [`InstructionBuilder::build`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum Error {
     /// A program contains more than `u16::MAX + 1` placed labels, exceeding
     /// the wire-format limit on sequential `TARGET` ids.
-    #[error("too many TARGETs: {count} (max {})", u16::MAX as usize + 1)]
+    #[error("too many TARGETs: {count} (max {MAX_TARGETS})")]
     TooManyTargets {
         /// Total number of placed labels in the program.
         count: usize,
@@ -532,6 +538,10 @@ impl InstructionBuilder {
                 JumpKind::JumpIf => Instruction::JumpI2 { label: seq_id },
             };
             let encoded = codec::encode(&instr);
+            #[expect(
+                clippy::arithmetic_side_effects,
+                reason = "`fixup.site` indexes `self.buf`, whose length is bounded by isize::MAX, so the end offset cannot overflow usize; `get_mut` rejects it if it is past the buffer"
+            )]
             let end = fixup.site + encoded.len();
             let buf_len = self.buf.len();
             self.buf
@@ -559,6 +569,10 @@ impl InstructionBuilder {
             }
         }
         narrowable.sort_by_key(|&(site, _, _)| site);
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "sites are ascending and at least three bytes apart (the wide jump form), so the nth site is at least 3n and cannot fall below the n bytes already removed; `actual + nb_len` stays inside a buffer bounded by isize::MAX and `get_mut` rejects it otherwise"
+        )]
         for (shrinkage, (site, kind, narrow_id)) in narrowable.into_iter().enumerate() {
             let actual = site - shrinkage;
             let narrow = match kind {
@@ -589,6 +603,10 @@ impl InstructionBuilder {
 // ---------------------------------------------------------------------------
 
 /// Return the smallest `PushN` instruction that faithfully represents `val`.
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "`n` ranges over 1..=7, so `n * 8` is at most 56 and `64 - bits` stays in 8..=56"
+)]
 fn minimal_push(val: i64) -> Instruction {
     let be = val.to_be_bytes();
     for n in 1..=7 {

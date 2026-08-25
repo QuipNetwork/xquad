@@ -41,11 +41,12 @@ All solver implementations inherit from `Solver` and override `solve()`.
 1. Must call `_validate_model(model)` (or equivalent validation) before solving
 2. Must measure wall-clock timing via `time.perf_counter()`
 3. Must return the best sample (lowest energy) if multiple reads are performed
-4. Must populate `SolverResult.energy` with the authoritative integer energy computed via `_recompute_energy(model, sample)` (see [ENERGY.md](ENERGY.md))
+4. Must populate `SolverResult.energy` with the authoritative integer energy computed via `_recompute_energy(model, sample)` (see [ENERGY.md](ENERGY.md)). That call raises `ArithmeticOverflow` when the energy of the returned sample is not representable in signed 64 bits, or when a partial sum leaves the range on the way to a total that is; a solver must not catch it and substitute the backend's own float energy
 5. Must populate the metadata keys its backend documents (see [Metadata Schema](#metadata-schema))
 
 **Failure semantics:**
 - `solve()` raises on failure; it only returns `SolverResult` on success
+- `ArithmeticOverflow` from `_recompute_energy()` propagates out of `solve()`. It reports that the model and the sample the backend returned have no representable energy, which is a property of the pair rather than a hardware or connectivity failure
 - Hardware or connectivity failures raise implementation-specific exceptions
 - "No sample produced" scenarios (e.g. QPU embedding failure) also raise
 - The verifier's `valid` flag handles the separate concern of "sample returned but does not satisfy constraints"
@@ -78,7 +79,7 @@ class SolverResult:
 - `sample.size == model.size` (same number of variables)
 - `sample.rows == model.rows` and `sample.cols == model.cols` (grid dimensions preserved)
 - `sample.domain == model.domain`
-- `energy == compute_energy(model, sample)` (see [ENERGY.md](ENERGY.md))
+- `energy == compute_energy(model, sample)` (see [ENERGY.md](ENERGY.md)); where `compute_energy` raises, no `SolverResult` exists
 - `timing >= 0.0`
 - Frozen (immutable after construction)
 

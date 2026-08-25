@@ -372,5 +372,9 @@ pub(crate) fn register(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()>
     m.add_class::<PyVm>()?;
     m.add_class::<PyXqmxModel>()?;
     m.add_class::<PyXqmxSample>()?;
+    // Exported so the Python hosts read the budget off the VM rather than
+    // restating the literal. `xquad.vm` and the conformance harness both
+    // carried their own copy with a comment claiming to match this one.
+    m.add("DEFAULT_STEP_LIMIT", xqvm::DEFAULT_STEP_LIMIT)?;
     Ok(())
 }

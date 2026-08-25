@@ -57,9 +57,12 @@ pre-assembled bytecode artifact is committed.
 
 `output_slots` is optional (defaults to 16, matching `xquad run`). The
 `calldata` array is exposed to the program in slot order: slot 0 holds
-the first value, slot 1 the second, and so on. `step_limit` is optional;
-omit it to leave each implementation on its own default, and set it only
-for a vector that is specifically exercising the budget.
+the first value, slot 1 the second, and so on. `step_limit` is optional
+and defaults to 10000000, matching `xquad run`; the harness resolves the
+default itself and passes it to both runners, because the two
+implementations disagree on what an omitted budget means and a vector
+that left it out used to run bounded on Rust and unbounded on Python.
+Set it only for a vector that is specifically exercising the budget.
 
 ### `expected.json`
 
@@ -118,18 +121,20 @@ bug ever motivates them.
 | `BAD_JUMP_TARGET` | `BadJumpTarget` | `TargetNotFound` |
 | `INVALID_LABEL` | `InvalidLabel` | -- |
 | `BAD_OPCODE` | `BadOpcode` | `InvalidOpcode` |
-| `TRUNCATED_INSTRUCTION` | `TruncatedInstruction` | -- |
+| `TRUNCATED_INSTRUCTION` | `TruncatedInstruction` | `TruncatedInstruction` |
 | `CALL_DATA_INDEX` | `CallDataIndex` | -- |
 | `OUTPUT_INDEX` | `OutputIndex` | `OutputIndex` |
-| `SIZE_MISMATCH` | `SizeMismatch` | -- |
-| `VEC_LENGTH_MISMATCH` | `VecLengthMismatch` | -- |
+| `SIZE_MISMATCH` | `SizeMismatch` | `SizeMismatch` |
+| `VEC_LENGTH_MISMATCH` | `VecLengthMismatch` | `VecLengthMismatch` |
 | `STEP_LIMIT_EXCEEDED` | `StepLimitExceeded` | `StepLimitExceeded` |
 | `MEMORY_LIMIT_EXCEEDED` | `MemoryLimitExceeded` | `MemoryLimitExceeded` |
-| `INVALID_SHIFT` | `InvalidShift` | -- |
+| `INVALID_SHIFT` | `InvalidShift` | `InvalidShift` |
 | `INVALID_GRID_DIMENSIONS` | `InvalidGridDimensions` | `InvalidGridDimensions` |
-| `INVALID_DISCRETE_K` | `InvalidDiscreteK` | -- |
+| `INVALID_DISCRETE_K` | `InvalidDiscreteK` | `InvalidDiscreteK` |
 | `XQMX_MODE` | -- | `XQMXModeError` |
 | `TRACE_FAILED` | `TraceFailed` | -- |
+| `INVALID_ALLOCATION` | `InvalidAllocation` | `InvalidAllocation` |
+| `LOOP_STACK_OVERFLOW` | `LoopStackOverflow` | `LoopStackOverflow` |
 
 The Rust mapping is an exhaustive `match`, so adding a variant to
 `xqvm::Error` without extending this table fails to compile rather than

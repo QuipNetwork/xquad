@@ -50,6 +50,21 @@ use crate::bytecode::Program;
 #[cfg(feature = "std")]
 use crate::disasm::Disassembly;
 
+/// Renders an optional byte offset as the `" at byte 0x0000"` suffix every
+/// other variant spells out inline, or as nothing when there is no position.
+///
+/// Display-only, and allocation-free so the `no_std` build carries no `format!`.
+struct OptionalPos(Option<usize>);
+
+impl core::fmt::Display for OptionalPos {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            Some(pos) => write!(f, " at byte {pos:#06x}"),
+            None => Ok(()),
+        }
+    }
+}
+
 /// Errors that can occur during XQVM bytecode execution.
 #[derive(Debug, Error)]
 #[expect(
@@ -90,15 +105,28 @@ pub enum Error {
 
     /// An operation produced a value outside the signed 64-bit range.
     ///
+    /// Raised by every `i64` operation the VM performs on a program's
+    /// behalf, intermediates included: arithmetic and shift opcodes, loop
+    /// control, index construction, grid address arithmetic, constraint
+    /// expansion and `ENERGY` accumulation. Because each step is checked
+    /// rather than the final result, a computation whose mathematical answer
+    /// is representable still faults when a partial result is not.
+    ///
     /// `pos` is the byte offset of the faulting instruction where one is
     /// known. Model mutations and reductions raise without a position,
     /// because they are reached through an API that carries no program
     /// counter; the VM supplies the position when it calls them.
-    #[error("arithmetic overflow")]
+    #[error("arithmetic overflow{}", OptionalPos(*pos))]
     ArithmeticOverflow { pos: Option<usize> },
 
-    /// Vec index out of bounds.
-    #[error("vec index {index} out of bounds (len {len}) at byte {pos:#06x}")]
+    /// An index operand fell outside the range of what it addresses.
+    ///
+    /// Not only a vec index. The same identity covers a coefficient index
+    /// against a model's declared size, a grid row or column against the
+    /// extent `RESIZE` declared, and a sample assignment index, so the
+    /// message names neither the container nor the opcode. `len` is the
+    /// exclusive bound the index had to fall under.
+    #[error("index {index} out of bounds (len {len}) at byte {pos:#06x}")]
     IndexOutOfBounds { pos: usize, index: i64, len: usize },
 
     /// NEXT or LVAL executed outside a loop.
@@ -168,7 +196,20 @@ pub enum Error {
     #[error("invalid shift amount {amount} at byte {pos:#06x}")]
     InvalidShift { pos: usize, amount: i64 },
 
-    /// The RESIZE instruction received non-positive dimensions.
+    /// A grid extent is unusable, on `RESIZE` or on an opcode that reads one.
+    ///
+    /// Three distinct conditions share the identity, and the `rows`/`cols`
+    /// pair in the message tells them apart:
+    ///
+    /// - `RESIZE` with either extent not strictly positive.
+    /// - `RESIZE` with `rows * cols` exceeding the register's declared size.
+    ///   A grid reinterprets variables the program already declared, so it
+    ///   cannot describe cells that do not exist. The bound is `<=`, not
+    ///   `==`: `EQUALITY`, `ATLEAST`, `ATLEASTW` and `REDUCE` append
+    ///   variables past the grid.
+    /// - An opcode that reads a grid finding none. `ROWFIND`, `COLFIND`,
+    ///   `ROWSUM`, `COLSUM`, `ONEHOTR` and `ONEHOTC` on a register with
+    ///   `rows = cols = 0` raise rather than reducing over nothing.
     #[error("invalid grid dimensions {rows}x{cols} at byte {pos:#06x}")]
     InvalidGridDimensions { pos: usize, rows: i64, cols: i64 },
 
@@ -187,6 +228,25 @@ pub enum Error {
     /// A tracer callback returned an error (e.g. I/O write failure).
     #[error("trace failed at byte {pos:#06x}: {message}")]
     TraceFailed { pos: usize, message: String },
+
+    /// An allocator was handed a size that is not an allocation: negative, or
+    /// too large for the executing target to address.
+    ///
+    /// The size is carried as the `i64` the program pushed, not as a `usize`,
+    /// so the fault reports what the program asked for on every target. See
+    /// `Vm::allocation_size` for the validate-charge-convert order that keeps
+    /// this identity target-independent.
+    #[error("invalid allocation size {size} at byte {pos:#06x}")]
+    InvalidAllocation { pos: usize, size: i64 },
+
+    /// The loop stack exceeded the 8192-frame nesting limit.
+    ///
+    /// `RANGE` and `ITER` each push a frame and only `NEXT` pops one, so a
+    /// program that jumps back over a loop header without running its `NEXT`
+    /// grows the stack without bound. The value stack has been capped at 8192
+    /// since the first release; this is the same cap on the other stack.
+    #[error("loop stack overflow at byte {pos:#06x} (limit: 8192)")]
+    LoopStackOverflow { pos: usize },
 }
 
 // `into_diagnostic` and `byte_pos` require the disassembler (std-only).
@@ -246,11 +306,13 @@ impl Error {
             | Self::InvalidGridDimensions { pos, .. }
             | Self::InvalidDiscreteK { pos, .. }
             | Self::UnmatchedLoop { pos }
+            | Self::LoopStackOverflow { pos }
             | Self::TraceFailed { pos, .. }
             | Self::BadJumpTarget { pos, .. }
             | Self::InvalidLabel { pos, .. }
             | Self::UnsetRegister { pos, .. }
             | Self::MemoryLimitExceeded { pos, .. }
+            | Self::InvalidAllocation { pos, .. }
             | Self::IndexOutOfBounds { pos, .. } => Some(*pos),
             Self::ArithmeticOverflow { pos } => *pos,
             Self::RegisterType { .. }
@@ -334,6 +396,10 @@ pub struct RuntimeDiagnostic {
 /// for `"0x{byte_pos:04X}:"` and extend the span to cover the whole line.
 /// Returns `None` when no matching line is found.
 #[cfg(feature = "std")]
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "both offsets are byte positions inside `text`, whose length is bounded by isize::MAX"
+)]
 fn find_line_span(text: &str, byte_pos: usize) -> Option<SourceSpan> {
     let needle = format!("0x{byte_pos:04X}:");
     let match_start = text.find(&needle)?;

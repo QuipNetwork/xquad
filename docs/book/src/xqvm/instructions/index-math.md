@@ -42,16 +42,27 @@ This program's result, read back with `STOW`/`OUTPUT`, is `9`.
 
 `IDXTRIU` pops `j`, then `i`, and pushes
 
-$$\text{index} = \frac{j \cdot (j - 1)}{2} + i \qquad (i \le j)$$
+$$\text{index} = \frac{j \cdot (j - 1)}{2} + i \qquad (i < j)$$
 
-the packed index for the pair \\((i, j)\\) in the upper triangle of a
-symmetric matrix, useful for iterating over quadratic coefficient pairs
-without visiting \\((i, j)\\) and \\((j, i)\\) as two different positions.
-If `i > j`, `IDXTRIU` swaps them before computing the index, so the
-result is order-independent: \\((i, j)\\) and \\((j, i)\\) pack to the
-same value, the same guarantee
+the packed index for the pair \\((i, j)\\) in the **strictly** upper
+triangle of a symmetric matrix, useful for iterating over quadratic
+coefficient pairs without visiting \\((i, j)\\) and \\((j, i)\\) as two
+different positions. If `i > j`, `IDXTRIU` swaps them before computing
+the index, so the result is order-independent: \\((i, j)\\) and \\((j,
+i)\\) pack to the same value, the same guarantee
 [`SETQUAD`/`GETQUAD`](coefficient-access.md) give by normalising the pair
 internally.
+
+The enumeration is strictly upper-triangular, so it has no slot for a
+diagonal cell even though the quadratic table has one. `SETQUAD` and
+`GETQUAD` accept \\(i = j\\) and store a self-coupling; `IDXTRIU` called
+with \\(i = j\\) yields the index of some off-diagonal pair rather than
+of the diagonal one. Do not use it to address a diagonal coefficient.
+
+`IDXTRIU` and `IDXGRID` do not range-check their operands, but every
+intermediate of the computation is checked, so a product or sum that
+leaves the `i64` range raises `ArithmeticOverflow` even when the final
+index would land back inside it.
 
 ```asm
 PUSH 1        ; i = 1

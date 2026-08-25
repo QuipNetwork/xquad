@@ -172,6 +172,10 @@ fn resolve_iter_slice(
 }
 
 /// Sign-extend a big-endian byte slice (1..=8 bytes) to `i64`.
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "`n` is `bytes.len().min(8)`, so `n * 8` is at most 64 and the shift stays in 0..=56"
+)]
 fn sign_extend_be(bytes: &[u8]) -> i64 {
     debug_assert!(!bytes.is_empty() && bytes.len() <= 8);
     let mut v = 0i64;
@@ -190,7 +194,14 @@ fn sign_extend_be(bytes: &[u8]) -> i64 {
 // ---------------------------------------------------------------------------
 
 /// Default step limit to guard against infinite loops.
-const DEFAULT_STEP_LIMIT: u64 = 10_000_000;
+///
+/// Public because it is the number every host that does not choose its own
+/// has to agree on, and there are four such hosts: `xqcli run`'s
+/// `--step-limit` default, `xquad`'s Python VM wrapper, the conformance
+/// harness's per-vector default, and this crate. Each used to restate the
+/// literal with a comment claiming to match this constant, and nothing
+/// enforced the claim.
+pub const DEFAULT_STEP_LIMIT: u64 = 10_000_000;
 
 /// Default allocation budget, in bytes.
 ///
@@ -225,12 +236,24 @@ const VEC_ELEMENT_BYTES: u64 = 2 * size_of::<i64>() as u64;
 /// lies between one and two times its key/value payload. The budget charges the
 /// upper end: the accounted total is meant to bound real heap use, not
 /// approximate it from below.
-const LINEAR_ENTRY_BYTES: u64 = 2 * (size_of::<usize>() + size_of::<i64>()) as u64;
+///
+/// The rate is a literal, not `2 * (size_of::<usize>() + size_of::<i64>())`.
+/// The charge schedule is normative and target-independent, so it may not be
+/// derived from the executing target's pointer width: the derivation gave 32
+/// on a 64-bit host and 24 on wasm32, which is the runtime the pallet executes
+/// in, while `xqvm_py/executor.py` and the published documentation both state
+/// 32. That made the deployed VM enforce a schedule nothing in this repository
+/// reproduced.
+const LINEAR_ENTRY_BYTES: u64 = 32;
 
 /// Bytes charged per nonzero quadratic coefficient. See [`LINEAR_ENTRY_BYTES`]
-/// for the factor of two; the key here is a `(usize, usize)` pair.
-const QUAD_ENTRY_BYTES: u64 = 2 * (size_of::<(usize, usize)>() + size_of::<i64>()) as u64;
+/// for the factor of two and for why the rate is a literal; the key here is an
+/// index pair rather than a single index.
+const QUAD_ENTRY_BYTES: u64 = 48;
 
+/// Bytes charged for one model's fixed header when `ITER` copies a
+/// `vec<xqmx>`, on top of the entries the model actually holds.
+///
 /// Worst-case number of coefficient entries an equality expansion over `n`
 /// terms writes: `n` linear terms and one quadratic term per unordered pair.
 ///
@@ -243,6 +266,41 @@ fn equality_expansion_bytes(n: u64) -> u64 {
     let pairs = n.saturating_mul(n.saturating_sub(1)) / 2;
     n.saturating_mul(LINEAR_ENTRY_BYTES)
         .saturating_add(pairs.saturating_mul(QUAD_ENTRY_BYTES))
+}
+
+/// Bytes one whole [`XqmxModel`] costs to duplicate.
+///
+/// Priced at exactly what the allocator and the coefficient writes charged
+/// to build it: the declared size at [`VARIABLE_BYTES`] plus one entry per
+/// live coefficient. Measuring the copy the same way the original was
+/// measured is what keeps a copy from being cheaper than the thing it copies.
+fn model_bytes(m: &XqmxModel) -> u64 {
+    let size = u64::try_from(m.size).unwrap_or(u64::MAX);
+    let linear = u64::try_from(m.linear_len()).unwrap_or(u64::MAX);
+    let quadratic = u64::try_from(m.quadratic_len()).unwrap_or(u64::MAX);
+    size.saturating_mul(VARIABLE_BYTES)
+        .saturating_add(linear.saturating_mul(LINEAR_ENTRY_BYTES))
+        .saturating_add(quadratic.saturating_mul(QUAD_ENTRY_BYTES))
+}
+
+/// Bytes one whole [`RegVal`] costs to duplicate.
+///
+/// The rates are the schedule's own, applied to the same program-visible
+/// quantities the allocating opcodes charge for, so a value costs the same
+/// to copy as it cost to build. `Unset` is free because there is nothing to
+/// copy.
+fn regval_bytes(val: &RegVal) -> u64 {
+    let count = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+    match val {
+        RegVal::Unset => 0,
+        RegVal::Int(_) => VARIABLE_BYTES,
+        RegVal::VecInt(v) => count(v.len()).saturating_mul(VEC_ELEMENT_BYTES),
+        RegVal::VecXqmx(v) => v
+            .iter()
+            .fold(0u64, |acc, m| acc.saturating_add(model_bytes(m))),
+        RegVal::Model(m) => model_bytes(m),
+        RegVal::Sample(s) => count(s.values.len()).saturating_mul(VARIABLE_BYTES),
+    }
 }
 
 /// The XQVM bytecode interpreter.
@@ -463,11 +521,50 @@ impl Vm {
         self.steps
     }
 
-    /// Reset the VM to its initial state (stack, registers, loops cleared).
+    /// Reset the VM to its initial state.
+    ///
+    /// Restores everything a run touches to the state a freshly-constructed
+    /// [`Vm`] is in: the value stack, the register file, the loop stack, the
+    /// step and memory counters, the output slots, the calldata and the
+    /// outputs themselves. The configured budgets ([`set_step_limit`] and
+    /// [`set_memory_limit`]) are settings rather than run state and survive.
+    ///
+    /// Clearing the outputs and the calldata is the point. Leaving them
+    /// standing meant a reused VM answered with the previous run's outputs:
+    /// the Rust backend returned `[42]` where the Python one returned `[]`
+    /// for the same reuse. A host that resets and runs again must call
+    /// [`set_calldata`] and [`set_output_slots`] again too, exactly as it
+    /// does after [`Vm::new`].
+    ///
+    /// [`set_step_limit`]: Self::set_step_limit
+    /// [`set_memory_limit`]: Self::set_memory_limit
+    /// [`set_calldata`]: Self::set_calldata
+    /// [`set_output_slots`]: Self::set_output_slots
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use xqvm::{InstructionBuilder, Register, Vm};
+    ///
+    /// let mut b = InstructionBuilder::new();
+    /// b.emit_push(42).emit_stow(Register(0));
+    /// b.emit_push(0).emit_output(Register(0)).emit_halt();
+    /// let program = b.build().unwrap();
+    ///
+    /// let mut vm = Vm::new();
+    /// vm.set_output_slots(1);
+    /// vm.run(&program).unwrap();
+    /// assert_eq!(vm.outputs().len(), 1);
+    ///
+    /// vm.reset();
+    /// assert!(vm.outputs().is_empty());
+    /// ```
     pub fn reset(&mut self) {
         self.stack.clear();
         self.regs.iter_mut().for_each(|r| *r = RegVal::Unset);
         self.loop_stack.clear();
+        self.calldata.clear();
+        self.outputs.clear();
         self.steps = 0;
         self.memory_used = 0;
     }
@@ -497,6 +594,10 @@ impl Vm {
     ///
     /// Returns [`Error`] on any runtime fault, or [`Error::TraceFailed`] if
     /// the tracer callback returns an error.
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "`self.steps < self.step_limit` is checked immediately above, so the step counter stops at u64::MAX rather than wrapping (`spec/xqvm/SPEC.md`'s Step budget)"
+    )]
     pub fn run_trace<T: Tracer>(&mut self, tracer: &mut T, program: &Program) -> Result<(), Error>
     where
         T::Error: core::fmt::Display,
@@ -582,9 +683,16 @@ impl Vm {
                     stream.seek(target).map_err(Error::from)?;
                 }
                 StepResult::StartLoop { kind } => {
+                    if self.loop_stack.len() >= Self::LOOP_LIMIT {
+                        return Err(Error::LoopStackOverflow { pos });
+                    }
                     let body_start = stream.pos();
                     self.loop_stack.push(LoopFrame { kind, body_start });
                 }
+                #[expect(
+                    clippy::arithmetic_side_effects,
+                    reason = "one `depth` step per instruction scanned, and the stream is bounded by `spec/xqvm/ENCODING.md`'s u32 `code_len`; the decrement runs only while `depth >= 1` because reaching 0 breaks"
+                )]
                 StepResult::SkipLoop => {
                     let mut depth: u32 = 1;
                     loop {
@@ -653,6 +761,16 @@ impl Vm {
     /// Stack depth limit required by the spec.
     const STACK_LIMIT: usize = 8192;
 
+    /// Loop-nesting limit required by the spec.
+    ///
+    /// `RANGE` and `ITER` each push a frame and only `NEXT` pops one, so a
+    /// program that jumps back over a loop header without running its `NEXT`
+    /// grows the loop stack without bound -- and a `LoopFrame` is not charged
+    /// against the allocation budget, so nothing else bounds it either. The
+    /// value stack has been capped since the first release; this is the same
+    /// cap on the other stack.
+    const LOOP_LIMIT: usize = 8192;
+
     fn push_stack(&mut self, v: i64, pos: usize) -> Result<(), Error> {
         if self.stack.len() >= Self::STACK_LIMIT {
             return Err(Error::StackOverflow { pos });
@@ -687,6 +805,26 @@ impl Vm {
         self.charge(pos, count.saturating_mul(VARIABLE_BYTES))
     }
 
+    /// Validate, charge for, and convert an allocator's size operand.
+    ///
+    /// The order is normative and the whole point of the helper: reject a
+    /// size that is not an allocation, then charge the budget off the `i64`,
+    /// and only then narrow to `usize`. Charging before the conversion is
+    /// what keeps the fault identity target-independent -- a negative size
+    /// raises [`Error::InvalidAllocation`] on every target and an oversized
+    /// one raises [`Error::MemoryLimitExceeded`] on every target, including
+    /// the wasm32 runtime the Substrate pallet executes in, where `usize` is
+    /// 32 bits wide and a `usize::try_from` would otherwise decide the
+    /// answer.
+    fn allocation_size(&mut self, pos: usize, size: i64) -> Result<usize, Error> {
+        if size < 0 {
+            return Err(Error::InvalidAllocation { pos, size });
+        }
+        let bytes = u64::try_from(size).unwrap_or(u64::MAX);
+        self.charge(pos, bytes.saturating_mul(VARIABLE_BYTES))?;
+        usize::try_from(size).map_err(|_| Error::InvalidAllocation { pos, size })
+    }
+
     /// Charge `bytes` for one coefficient written into `reg`, but only when
     /// `reg` holds a model.
     ///
@@ -701,6 +839,26 @@ impl Vm {
             self.charge(pos, bytes)?;
         }
         Ok(())
+    }
+
+    /// Charge for one copy of `bytes` worth of register value crossing the
+    /// host boundary. See [`regval_bytes`] for the measurement.
+    ///
+    /// `OUTPUT` and `INPUT` both duplicate a whole register: `OUTPUT` clones
+    /// it into an output slot the host keeps after the run, `INPUT` clones a
+    /// calldata entry into a register. Neither had a charge site, so the only
+    /// guards were a slot bound and an `Unset` check -- and `run_trace` does
+    /// not clear `outputs`, which makes those copies live memory no other
+    /// charge site ever sees. At the 1 GiB default and the CLI's 16 slots,
+    /// `PUSH 134217728 / BSMX r0` spends the budget exactly and thirty-five
+    /// further instructions then reach roughly 17 GiB resident with
+    /// `memory_used()` still reading 1073741824.
+    ///
+    /// The copy is charged rather than the overwritten slot refunded, which
+    /// keeps the budget cumulative: charges are never given back, so an
+    /// output-and-overwrite loop cannot spend more than the budget in total.
+    fn charge_clone(&mut self, pos: usize, bytes: u64) -> Result<(), Error> {
+        self.charge(pos, bytes)
     }
 
     /// Charge the worst-case cost of an equality expansion over `n` terms.
@@ -720,6 +878,49 @@ impl Vm {
         self.regs.get_mut(usize::from(r.slot())).unwrap_or_else(|| {
             unreachable!("register slot {} always valid in a 256-slot file", r.slot())
         })
+    }
+
+    /// Raise unless `r` holds a vec of either kind.
+    ///
+    /// Separated from the arms that consume the vec so that a caller can
+    /// discriminate the register kind without also borrowing its contents.
+    ///
+    /// An unset register raises [`Error::UnsetRegister`] rather than
+    /// [`Error::RegisterType`]. The two are distinct fault identities --
+    /// `UnsetRegister` is what `xqvm_py`'s `RegisterNotFound` maps onto and
+    /// `RegisterType` is what its `TypeMismatch` maps onto -- so folding
+    /// "never written" into the type arm makes an unset register a
+    /// `TypeMismatch` here and an `UnsetRegister` there. `LOAD` and `OUTPUT`
+    /// already discriminate the two; this is the helper that did not.
+    fn require_vec(&self, pos: usize, r: Register) -> Result<(), Error> {
+        match self.reg(r) {
+            RegVal::VecInt(_) | RegVal::VecXqmx(_) => Ok(()),
+            RegVal::Unset => Err(Error::UnsetRegister { pos, reg: r.slot() }),
+            other => Err(Error::RegisterType {
+                reg: r.slot(),
+                expected: "vec",
+                got: other.kind().kind_name(),
+            }),
+        }
+    }
+
+    /// Raise unless `r` holds a `vec<int>` specifically.
+    ///
+    /// The narrower counterpart to [`Vm::require_vec`], for the opcodes whose
+    /// element type is fixed rather than either vec kind. It discriminates
+    /// `Unset` from a wrong value kind for the same reason, and it borrows
+    /// immutably, so a caller can validate a register it is about to take a
+    /// mutable borrow of and validate a second register in between.
+    fn require_vec_int(&self, pos: usize, r: Register) -> Result<(), Error> {
+        match self.reg(r) {
+            RegVal::VecInt(_) => Ok(()),
+            RegVal::Unset => Err(Error::UnsetRegister { pos, reg: r.slot() }),
+            other => Err(Error::RegisterType {
+                reg: r.slot(),
+                expected: "vec<int>",
+                got: other.kind().kind_name(),
+            }),
+        }
     }
 
     // -- Control flow --
@@ -787,10 +988,23 @@ impl Vm {
                 .ok_or(Error::NoActiveLoop { pos })?;
             match &mut frame.kind {
                 LoopKind::Range { current, end } => {
-                    *current += 1;
+                    // Checked, not bare: `SPEC.md`'s overflow rule covers loop
+                    // control. `RANGE` now range-checks `start + count`, so
+                    // `current` can no longer reach `i64::MAX` with an
+                    // iteration left to run and this cannot fire from
+                    // bytecode -- it is the second half of the same guard,
+                    // kept so the invariant is enforced where it is relied on
+                    // rather than only where it is established.
+                    *current = current
+                        .checked_add(1)
+                        .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
                     let looping = *current < *end;
                     (looping, frame.body_start)
                 }
+                #[expect(
+                    clippy::arithmetic_side_effects,
+                    reason = "`index` walks `elements` and the frame is popped once it reaches the length, so the ITER cursor is bounded by a live Vec length"
+                )]
                 LoopKind::Iter {
                     elements, index, ..
                 } => {
@@ -879,10 +1093,20 @@ impl Vm {
         if count <= 0 {
             return Ok(StepResult::SkipLoop);
         }
+        // The exclusive bound is checked, not wrapped. `SPEC.md` ranges its
+        // overflow rule over every i64 operation the VM performs on a
+        // program's behalf, and loop control is not carved out of it. Wrapping
+        // made `PUSH 2^63-2 / PUSH 3 / RANGE / LIDX r0 / NEXT / HALT` run one
+        // iteration here and three on xqvm_py, with different register
+        // contents and different step counts -- and step count is metering on
+        // a chain that prices per step.
+        let end = start
+            .checked_add(count)
+            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
         Ok(StepResult::StartLoop {
             kind: LoopKind::Range {
                 current: start,
-                end: start.wrapping_add(count),
+                end,
             },
         })
     }
@@ -906,6 +1130,16 @@ impl Vm {
         // reading was mistaken and the two openers had drifted apart.
         let end = self.pop(pos)?;
         let start = self.pop(pos)?;
+        // The register kind is discriminated before the skip, not after it:
+        // `ITER` carries a `read` effect on `reg` that the verifier's static
+        // type system depends on, and skipping the loop without ever
+        // resolving the register discards it. `spec/xqvm/ISA.md`'s `ITER` row
+        // orders the steps register-read-before-skip and its error clause has
+        // no emptiness carve-out. Returning `SkipLoop` first made
+        // `INPUT r0 / PUSH 1 / PUSH 1 / ITER r0 / NEXT / ...` complete and
+        // write outputs where 0.3.x aborted with a register-type fault, on a
+        // program the verifier admits because `INPUT` writes `RegType::Any`.
+        self.require_vec(pos, reg)?;
         if start >= end {
             return Ok(StepResult::SkipLoop);
         }
@@ -938,17 +1172,15 @@ impl Vm {
                 let (start_offset, range) = resolve_iter_slice(pos, start, end, len)?;
                 // Cloning a model clones its coefficient maps, so charge for
                 // what each one actually holds rather than per element.
+                // `model_bytes` is the schedule's single measure of one model
+                // copy: the same number `OUTPUT` and `INPUT` charge, so a
+                // model does not get cheaper by being copied through a loop
+                // header instead of a register.
                 let cost = v
                     .get(range.clone())
                     .unwrap_or_else(|| unreachable!("resolve_iter_slice already validated"))
                     .iter()
-                    .fold(0u64, |acc, m| {
-                        let linear = u64::try_from(m.linear_len()).unwrap_or(u64::MAX);
-                        let quadratic = u64::try_from(m.quadratic_len()).unwrap_or(u64::MAX);
-                        acc.saturating_add(size_of::<XqmxModel>() as u64)
-                            .saturating_add(linear.saturating_mul(LINEAR_ENTRY_BYTES))
-                            .saturating_add(quadratic.saturating_mul(QUAD_ENTRY_BYTES))
-                    });
+                    .fold(0u64, |acc, m| acc.saturating_add(model_bytes(m)));
                 self.charge(pos, cost)?;
                 let RegVal::VecXqmx(v) = self.reg(reg) else {
                     unreachable!("register still holds the vec just matched")
@@ -1040,6 +1272,10 @@ impl Vm {
         if len < 2 {
             return Err(Error::StackUnderflow { pos });
         }
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "`len < 2` returned StackUnderflow above"
+        )]
         self.stack.swap(len - 1, len - 2);
         Ok(StepResult::Continue)
     }
@@ -1075,6 +1311,15 @@ impl Vm {
                 index: idx,
                 len: self.calldata.len(),
             })?;
+        // Charge before the clone: a calldata entry the host supplied is
+        // duplicated into the register file, and the copy is as real as an
+        // allocation the program made itself.
+        let bytes = regval_bytes(
+            self.calldata
+                .get(usize_idx)
+                .unwrap_or_else(|| unreachable!("usize_idx < calldata.len() checked above")),
+        );
+        self.charge_clone(pos, bytes)?;
         let val = self
             .calldata
             .get(usize_idx)
@@ -1104,6 +1349,30 @@ impl Vm {
 
     fn exec_output(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let idx = self.pop(pos)?;
+        // Charge before the clone, and before the two validations below.
+        // The output slots survive the run, so this copy is live memory the
+        // host holds on to; without a charge site a program can spend the
+        // whole budget once and then hand the host an unbounded multiple of
+        // it, one OUTPUT at a time.
+        //
+        // The charge precedes the slot bound and the unset check because
+        // spec/xqvm/SPEC.md's error-precedence rule puts operand pops first,
+        // then the charge, then type and range validation, and says in
+        // as many words that an instruction may raise `MemoryLimitExceeded`
+        // for work it would never have done "because ... the index it was
+        // given is out of range". Validating first made a near-exhausted
+        // budget plus an out-of-range slot raise `OutputIndex` here and
+        // `MemoryLimitExceeded` on xqvm_py. `regval_bytes` of an unset
+        // register is 0, so an unset register still charges nothing and
+        // still faults.
+        let bytes = regval_bytes(self.reg(reg));
+        self.charge_clone(pos, bytes)?;
+        if matches!(self.reg(reg), RegVal::Unset) {
+            return Err(Error::UnsetRegister {
+                pos,
+                reg: reg.slot(),
+            });
+        }
         let usize_idx = usize::try_from(idx)
             .ok()
             .filter(|&i| i < self.outputs.len())
@@ -1111,12 +1380,6 @@ impl Vm {
                 index: idx,
                 len: self.outputs.len(),
             })?;
-        if matches!(self.reg(reg), RegVal::Unset) {
-            return Err(Error::UnsetRegister {
-                pos,
-                reg: reg.slot(),
-            });
-        }
         let val = self.reg(reg).clone();
         *self
             .outputs
@@ -1270,6 +1533,10 @@ impl Vm {
     fn exec_bit_len(&mut self, pos: usize) -> Result<StepResult, Error> {
         let a = self.pop(pos)?;
         let result = if a > 0 {
+            #[expect(
+                clippy::arithmetic_side_effects,
+                reason = "`leading_zeros()` returns at most `i64::BITS`, so the bit-length subtraction stays in 0..=64"
+            )]
             i64::from(i64::BITS - a.leading_zeros())
         } else {
             0
@@ -1382,6 +1649,12 @@ impl Vm {
         // A shift that discards significant bits leaves the i64 range, so it
         // raises like any other overflowing operation. Shifting back recovers
         // the operand exactly when nothing was lost.
+        //
+        // Allow-list entry, outside `arithmetic_side_effects` because the wrap
+        // is a method call: `spec/xqvm/SPEC.md`'s overflow rule tests the
+        // result rather than the intermediate hardware operation, which is
+        // exactly what wrapping and then shifting back does. `b` is in 0..64
+        // by the guard above, so the `unwrap_or` is unreachable.
         let shifted = a.wrapping_shl(u32::try_from(b).unwrap_or(u32::MAX));
         if shifted >> b != a {
             return Err(Error::ArithmeticOverflow { pos: Some(pos) });
@@ -1405,57 +1678,59 @@ impl Vm {
 
     // -- Allocators --
     //
-    // Every allocator takes its size from the value stack, where any positive
-    // `i64` is reachable in a single `PUSH`. Each one charges the allocation
-    // budget for the size it is about to materialise before it touches the
-    // allocator; a request that does not fit leaves the target register alone.
+    // Every allocator takes its size from the value stack, where any `i64` is
+    // reachable in a single `PUSH`. Each one routes that value through
+    // `allocation_size`, which validates the sign, charges the allocation
+    // budget off the `i64`, and only then narrows to `usize`; a size that is
+    // not an allocation, or a request that does not fit, leaves the target
+    // register alone.
 
     fn exec_bqmx(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
-        let size = usize::try_from(self.pop(pos)?).unwrap_or(0);
-        self.charge_variables(pos, size)?;
+        let size = self.pop(pos)?;
+        let size = self.allocation_size(pos, size)?;
         *self.reg_mut(reg) = RegVal::Model(XqmxModel::new(Domain::Binary, size));
         Ok(StepResult::Continue)
     }
 
     fn exec_sqmx(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
-        let size = usize::try_from(self.pop(pos)?).unwrap_or(0);
-        self.charge_variables(pos, size)?;
+        let size = self.pop(pos)?;
+        let size = self.allocation_size(pos, size)?;
         *self.reg_mut(reg) = RegVal::Model(XqmxModel::new(Domain::Spin, size));
         Ok(StepResult::Continue)
     }
 
     fn exec_xqmx(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let k = self.pop(pos)?;
-        let size = usize::try_from(self.pop(pos)?).unwrap_or(0);
+        let size = self.pop(pos)?;
         if k < 2 {
             return Err(Error::InvalidDiscreteK { pos, k });
         }
-        self.charge_variables(pos, size)?;
+        let size = self.allocation_size(pos, size)?;
         *self.reg_mut(reg) = RegVal::Model(XqmxModel::new(Domain::Discrete(k), size));
         Ok(StepResult::Continue)
     }
 
     fn exec_bsmx(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
-        let size = usize::try_from(self.pop(pos)?).unwrap_or(0);
-        self.charge_variables(pos, size)?;
+        let size = self.pop(pos)?;
+        let size = self.allocation_size(pos, size)?;
         *self.reg_mut(reg) = RegVal::Sample(XqmxSample::new(Domain::Binary, vec![0; size]));
         Ok(StepResult::Continue)
     }
 
     fn exec_ssmx(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
-        let size = usize::try_from(self.pop(pos)?).unwrap_or(0);
-        self.charge_variables(pos, size)?;
+        let size = self.pop(pos)?;
+        let size = self.allocation_size(pos, size)?;
         *self.reg_mut(reg) = RegVal::Sample(XqmxSample::new(Domain::Spin, vec![-1; size]));
         Ok(StepResult::Continue)
     }
 
     fn exec_xsmx(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let k = self.pop(pos)?;
-        let size = usize::try_from(self.pop(pos)?).unwrap_or(0);
+        let size = self.pop(pos)?;
         if k < 2 {
             return Err(Error::InvalidDiscreteK { pos, k });
         }
-        self.charge_variables(pos, size)?;
+        let size = self.allocation_size(pos, size)?;
         *self.reg_mut(reg) = RegVal::Sample(XqmxSample::new(Domain::Discrete(k), vec![0; size]));
         Ok(StepResult::Continue)
     }
@@ -1576,6 +1851,10 @@ impl Vm {
         Ok(StepResult::Continue)
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "NOT COVERED BY THE SPEC: `spec/xqvm/SPEC.md`'s overflow rule reaches the index sequence SLACK appends (which is checked), but nothing normative permits the `power = power.wrapping_mul(2)` that drives these two loops; recorded here pending normative text. The behaviour is correct and verified equivalent to xqvm_py across the whole domain: `power > 0` consumes the wrap to i64::MIN, so Rust runs `i64::BITS - capacity.leading_zeros()` iterations where Python runs `capacity.bit_length()`, equal for every positive i64. `capacity.leading_zeros() <= i64::BITS` bounds the charge, and `i` is bounded by the same 63 iterations"
+    )]
     fn exec_slack(
         &mut self,
         pos: usize,
@@ -1584,6 +1863,23 @@ impl Vm {
     ) -> Result<StepResult, Error> {
         let capacity = self.pop(pos)?;
         let start_index = self.pop(pos)?;
+        // Both registers are discriminated before the empty-capacity skip,
+        // and before either is mutated. `SLACK` carries a `mutate` effect on
+        // both, and the verifier's static type system depends on it:
+        // `xqvm/src/verifier/reg_type.rs` requires `vec<int>` of each, and
+        // `RegType::Any` -- what `INPUT` writes -- satisfies that, so
+        // `INPUT r0 / INPUT r1 / PUSH 0 / PUSH 0 / SLACK r0 r1` is
+        // verifier-clean and reaches here with two ints. Returning on
+        // `capacity <= 0` before touching either register discarded the
+        // effect and halted Ok where xqvm_py faulted. Same rule, and same
+        // reason, as `ITER`'s register-read-before-skip.
+        //
+        // Resolving both up front also fixes the order within the non-empty
+        // path: the second register used to be discriminated only after the
+        // first loop had already appended to the first, so a bad `coeffs`
+        // left `indices` mutated by a faulting instruction.
+        self.require_vec_int(pos, indices)?;
+        self.require_vec_int(pos, coeffs)?;
         if capacity <= 0 {
             return Ok(StepResult::Continue);
         }
@@ -1596,18 +1892,24 @@ impl Vm {
             let vec = self
                 .reg_mut(indices)
                 .as_vec_int_mut()
-                .map_err(|e| Error::RegisterType {
-                    reg: indices.slot(),
-                    expected: "vec<int>",
-                    got: e.actual.kind_name(),
-                })?;
+                .unwrap_or_else(|_| unreachable!("require_vec_int already validated indices"));
             let mut power = 1i64;
             let mut i = 0i64;
             // `power > 0` guards against wrapping_mul overflow: once `power`
             // reaches 2^62 the next doubling wraps to i64::MIN, which would
             // otherwise be `<= capacity` and loop forever.
             while power > 0 && power <= capacity {
-                vec.push(start_index + i);
+                // Checked: `start_index` comes straight off the value stack,
+                // so `start_index + i` leaves the range for any start within
+                // 63 of `i64::MAX`. `VECI r0 / VECI r1 / PUSH 2^63-1 /
+                // PUSH 3 / SLACK r0, r1` charged 64 bytes and passed at any
+                // default while iteration 2 panicked under `ci-test`, wrapped
+                // under `release`, and stored 2^63 on xqvm_py.
+                vec.push(
+                    start_index
+                        .checked_add(i)
+                        .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?,
+                );
                 power = power.wrapping_mul(2);
                 i += 1;
             }
@@ -1617,11 +1919,7 @@ impl Vm {
             let vec = self
                 .reg_mut(coeffs)
                 .as_vec_int_mut()
-                .map_err(|e| Error::RegisterType {
-                    reg: coeffs.slot(),
-                    expected: "vec<int>",
-                    got: e.actual.kind_name(),
-                })?;
+                .unwrap_or_else(|_| unreachable!("require_vec_int already validated coeffs"));
             let mut power = 1i64;
             while power > 0 && power <= capacity {
                 vec.push(power);
@@ -1850,6 +2148,24 @@ impl Vm {
                 expected: "model|sample",
                 got: e.actual.kind_name(),
             })?;
+        // A grid is a reinterpretation of variables the program already
+        // declared and already paid for at allocation, so it cannot describe
+        // cells that do not exist. Without this bound the four read-only grid
+        // opcodes scan an arbitrary extent for one metered step: a size-4
+        // model resized to `1 x 2^62` makes a single ROWSUM run for
+        // geological time while charging nothing at all, which a step budget
+        // cannot see and a memory budget is never asked about.
+        //
+        // The rule is `rows * cols <= size`, not `==`: EQUALITY, ATLEAST,
+        // ATLEASTW and REDUCE append slack and auxiliary variables past the
+        // grid. They only ever grow `size` and nothing shrinks it, so a grid
+        // that fits when RESIZE runs still fits afterwards.
+        if usize_rows
+            .checked_mul(usize_cols)
+            .is_none_or(|cells| cells > grid.size())
+        {
+            return Err(Error::InvalidGridDimensions { pos, rows, cols });
+        }
         grid.set_grid(usize_rows, usize_cols);
         Ok(StepResult::Continue)
     }
@@ -1863,6 +2179,14 @@ impl Vm {
     /// ONEHOTR/ONEHOTC raise without a grid -- and an out-of-range index
     /// raises `IndexOutOfBounds`, so an absent row is an error rather than a
     /// silent sum of zeroes (`xqvm_py` has always raised here).
+    ///
+    /// The `rows * cols` addressability arm is unreachable from bytecode
+    /// once `RESIZE` enforces `rows * cols <= size`, but it is *not* dead: a
+    /// host can install a register directly through [`Vm::set_register`] or
+    /// [`Vm::set_calldata`], and `xqffi` exposes both extents to Python
+    /// unvalidated. It is the guard that keeps `usize_row * cols` in the four
+    /// read-only grid handlers from overflowing on that path, which would
+    /// panic under `ci-test` and wrap under `release`.
     fn grid_axis_index(
         pos: usize,
         rows: usize,
@@ -1887,6 +2211,10 @@ impl Vm {
             })
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "`grid_axis_index` has already proved `rows * cols` fits usize and `usize_row < rows`, so `row_start + col` addresses a declared variable (`spec/xqvm/ISA.md`'s XQMX Grid precondition)"
+    )]
     fn exec_row_find(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let value = self.pop(pos)?;
         let row = self.pop(pos)?;
@@ -1911,6 +2239,10 @@ impl Vm {
         Ok(StepResult::Continue)
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "`grid_axis_index` has already proved `rows * cols` fits usize and `usize_col < cols`, so `row * cols + usize_col` addresses a declared variable (`spec/xqvm/ISA.md`'s XQMX Grid precondition)"
+    )]
     fn exec_col_find(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let value = self.pop(pos)?;
         let col = self.pop(pos)?;
@@ -1933,6 +2265,10 @@ impl Vm {
         Ok(StepResult::Continue)
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "`grid_axis_index` has already proved `rows * cols` fits usize and `usize_row < rows`, so `row_start + c` addresses a declared variable (`spec/xqvm/ISA.md`'s XQMX Grid precondition); the i64 fold over the coefficients is checked"
+    )]
     fn exec_row_sum(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let row = self.pop(pos)?;
         let grid = self
@@ -1958,6 +2294,10 @@ impl Vm {
         Ok(StepResult::Continue)
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "`grid_axis_index` has already proved `rows * cols` fits usize and `usize_col < cols`, so `r * cols + usize_col` addresses a declared variable (`spec/xqvm/ISA.md`'s XQMX Grid precondition); the i64 fold over the coefficients is checked"
+    )]
     fn exec_col_sum(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let col = self.pop(pos)?;
         let grid = self
@@ -1983,6 +2323,10 @@ impl Vm {
 
     // -- Constraints --
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "NOT PERMITTED, RECORDED: `usize::try_from(row)` bounds the row from below only, so `usize_row * m.cols` can wrap for a row near 2^62 -- QUI-1107 replaces that precondition with `grid_axis_index` and closes it, and this reason becomes the ROWFIND/ROWSUM one when it lands. `row_start + c`, `ci + 1` and the pair addressing are bounded by `m.cols`, a live extent RESIZE keeps within `size`"
+    )]
     fn exec_one_hot_r(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let penalty = self.pop(pos)?;
         let row = self.pop(pos)?;
@@ -2040,6 +2384,10 @@ impl Vm {
         Ok(StepResult::Continue)
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "NOT PERMITTED, RECORDED: nothing multiplies by the column, but `usize::try_from(col)` bounds it from below only, so `ri * m.cols + col_idx` addresses outside the named column for a large `col` -- QUI-1107 replaces that precondition with `grid_axis_index` and closes it, and this reason becomes the COLFIND/COLSUM one when it lands. `ri`, `rj` and `ri + 1` are bounded by `m.rows`, a live extent RESIZE keeps within `size`"
+    )]
     fn exec_one_hot_c(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let penalty = self.pop(pos)?;
         let col = self.pop(pos)?;
@@ -2213,6 +2561,10 @@ impl Vm {
         Ok(StepResult::Continue)
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "`1 <= k <= n_i64` is checked above so the excess is in `0..n_i64`, `leading_zeros()` returns at most `i64::BITS` so `num_slacks` is at most 63, and the model growth was charged against the allocation budget before the model was touched (`spec/xqvm/SPEC.md`'s Allocation budget), which bounds `m.size + num_slacks`, `slack_start + i` and `1i64 << i` for `i <= 62`"
+    )]
     fn exec_at_least(
         &mut self,
         pos: usize,
@@ -2281,6 +2633,10 @@ impl Vm {
         Ok(StepResult::Continue)
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "`max_excess` comes from a checked subtraction so `leading_zeros()` returns at most `i64::BITS` and `num_slacks` is at most 63, and the model growth was charged against the allocation budget before the model was touched (`spec/xqvm/SPEC.md`'s Allocation budget), which bounds `m.size + num_slacks`, `slack_start + i` and `1i64 << i` for `i <= 62`"
+    )]
     fn exec_at_least_w(
         &mut self,
         pos: usize,
@@ -2443,7 +2799,7 @@ impl Vm {
                 });
             }
         };
-        let energy = m.energy(&sample_values)?;
+        let energy = m.energy(&sample_values).map_err(at_pos(pos))?;
         self.push_stack(energy, pos)?;
         Ok(StepResult::Continue)
     }
@@ -2480,6 +2836,10 @@ fn expand_equality(
         model.add_linear(idx, coefficient).map_err(at_pos(pos))?;
     }
     let two_p = checked(penalty.checked_mul(2), pos)?;
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "`k` is an `enumerate` index into `indices`, so `k + 1` is at most its length; every coefficient product is checked (`spec/xqvm/SPEC.md`'s per-step rule)"
+    )]
     for (k, (&idx_k, &a_k)) in indices.iter().zip(coeffs.iter()).enumerate() {
         for (&idx_m, &a_m) in indices.iter().zip(coeffs.iter()).skip(k + 1) {
             let coefficient = checked(
@@ -2534,6 +2894,10 @@ fn indices_to_usize(idxs: &[i64], pos: usize, model_size: usize) -> Result<Vec<u
 /// Rosenberg degree reduction: replace `x_a·x_b` with auxiliary variable w.
 ///
 /// Allocates w at `model.size`, adds 4 enforcement terms, returns w.
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "the one auxiliary variable was charged against the allocation budget before the call (`spec/xqvm/SPEC.md`'s Allocation budget), so `size` is bounded by it"
+)]
 fn expand_reduce(
     model: &mut XqmxModel,
     var_a: usize,

@@ -1,0 +1,24 @@
+; iter_slice_past_the_end: an ITER whose end index is past the vec raises
+; rather than iterating a short slice.
+;
+; The neighbouring vectors cover the two empty cases -- iter_empty_skip and
+; iter_inverted_skip both skip the body without faulting -- so nothing
+; distinguished "empty, so skip" from "out of range, so raise". Rust's
+; resolve_iter_slice validates the slice before it charges the copy;
+; xqvm_py charged first and let the element read raise afterwards, which
+; is the same fault under a generous budget and a different one under a
+; tight one.
+;
+; The vec holds two elements and the slice asks for three.
+
+VECI r0
+PUSH 1
+VECPUSH r0
+PUSH 2
+VECPUSH r0
+
+PUSH 0           ; start_idx
+PUSH 3           ; end_idx -- one past the end
+ITER r0
+NEXT
+HALT

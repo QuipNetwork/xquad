@@ -31,7 +31,15 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
-from .errors import IndexOutOfBounds, InvalidGridDimensions, XQMXModeError
+from .errors import (
+    IndexOutOfBounds,
+    InvalidAllocation,
+    InvalidDiscreteK,
+    InvalidGridDimensions,
+    SizeMismatch,
+    VecLengthMismatch,
+    XQMXModeError,
+)
 from .limits import check_i64
 
 
@@ -76,11 +84,11 @@ class XQMX:
 
     def __post_init__(self) -> None:
         if self.size < 0:
-            raise ValueError(f"XQMX size must be non-negative, got {self.size}")
+            raise InvalidAllocation(self.size)
         if self.rows < 0 or self.cols < 0:
-            raise ValueError("XQMX rows/cols must be non-negative")
+            raise InvalidGridDimensions(self.rows, self.cols)
         if self.domain == XQMXDomain.DISCRETE and self.discrete_k < 2:
-            raise ValueError(f"DISCRETE domain requires k >= 2, got {self.discrete_k}")
+            raise InvalidDiscreteK(self.discrete_k)
 
     @classmethod
     def binary_model(cls, size: int, rows: int = 0, cols: int = 0) -> XQMX:
@@ -175,7 +183,7 @@ class XQMX:
     def set_linear(self, i: int, value: int) -> None:
         """Set linear coefficient/value for variable i."""
         if i < 0 or i >= self.size:
-            raise IndexError(f"Variable index {i} out of range [0, {self.size})")
+            raise IndexOutOfBounds(i, self.size)
 
         check_i64(value, f"linear[{i}]")
         if value == 0:
@@ -186,7 +194,7 @@ class XQMX:
     def add_linear(self, i: int, delta: int) -> None:
         """Add to linear coefficient for variable i."""
         if i < 0 or i >= self.size:
-            raise IndexError(f"Variable index {i} out of range [0, {self.size})")
+            raise IndexOutOfBounds(i, self.size)
 
         current = self.linear.get(i, 0)
         new_value = check_i64(current + delta, f"linear[{i}]")
@@ -204,8 +212,10 @@ class XQMX:
 
     def set_quadratic(self, i: int, j: int, value: int) -> None:
         """Set quadratic coefficient for variables i, j."""
-        if i < 0 or i >= self.size or j < 0 or j >= self.size:
-            raise IndexError(f"Variable indices ({i}, {j}) out of range [0, {self.size})")
+        if i < 0 or i >= self.size:
+            raise IndexOutOfBounds(i, self.size)
+        if j < 0 or j >= self.size:
+            raise IndexOutOfBounds(j, self.size)
 
         if i > j:
             i, j = j, i
@@ -218,8 +228,10 @@ class XQMX:
 
     def add_quadratic(self, i: int, j: int, delta: int) -> None:
         """Add to quadratic coefficient for variables i, j."""
-        if i < 0 or i >= self.size or j < 0 or j >= self.size:
-            raise IndexError(f"Variable indices ({i}, {j}) out of range [0, {self.size})")
+        if i < 0 or i >= self.size:
+            raise IndexOutOfBounds(i, self.size)
+        if j < 0 or j >= self.size:
+            raise IndexOutOfBounds(j, self.size)
 
         if i > j:
             i, j = j, i
@@ -416,15 +428,26 @@ def expand_onehot(model: XQMX, indices: list[int], penalty: int) -> None:
     """
     require_model_mode(model, "ONEHOT")
 
+    # Both scale factors are validated before any term is emitted, so an
+    # out-of-range factor raises whether or not the expansion goes on to emit
+    # a term that uses it. Rust hoists them the same way (`exec_one_hot_r`,
+    # `exec_one_hot_c`), and both implementations already do this in
+    # `expand_equality`; evaluating `2 * penalty` lazily inside the pair loop
+    # made a one-column ONEHOTR halt here and raise on Rust, which under the
+    # pallet is an eight-instruction extrinsic that faults on one node
+    # version and succeeds on another.
+    neg_penalty = check_i64(-penalty, "ONEHOT -penalty")
+    two_penalty = check_i64(2 * penalty, "ONEHOT 2*penalty")
+
     # Linear terms: -penalty for each variable
     for i in indices:
-        model.add_linear(i, check_i64(-penalty, "ONEHOT -penalty"))
+        model.add_linear(i, neg_penalty)
 
     # Quadratic terms: +2*penalty for each pair
     n = len(indices)
     for a in range(n):
         for b in range(a + 1, n):
-            model.add_quadratic(indices[a], indices[b], check_i64(2 * penalty, "ONEHOT 2*penalty"))
+            model.add_quadratic(indices[a], indices[b], two_penalty)
 
 
 def expand_exclude(model: XQMX, i: int, j: int, penalty: int) -> None:
@@ -471,7 +494,7 @@ def compute_energy(model: XQMX, sample: XQMX) -> int:
     require_sample_mode(sample, "ENERGY (sample)")
 
     if model.size != sample.size:
-        raise ValueError(f"Model and sample size mismatch: {model.size} vs {sample.size}")
+        raise SizeMismatch(model.size, sample.size, "ENERGY model vs sample")
 
     energy = 0
 
@@ -517,7 +540,7 @@ def expand_equality(
 
     n = len(indices)
     if n != len(coeffs):
-        raise ValueError(f"EQUALITY: indices length {n} != coeffs length {len(coeffs)}")
+        raise VecLengthMismatch("indices", n, "coeffs", len(coeffs))
 
     # Each intermediate is checked, in the same order the Rust VM checks
     # them, so a product that overflows on the way to an in-range result
@@ -547,9 +570,9 @@ def expand_reduce(model: XQMX, var_a: int, var_b: int, p_aux: int) -> int:
     require_model_mode(model, "REDUCE")
 
     if var_a < 0 or var_a >= model.size:
-        raise ValueError(f"REDUCE: var_a={var_a} out of range [0, {model.size})")
+        raise IndexOutOfBounds(var_a, model.size)
     if var_b < 0 or var_b >= model.size:
-        raise ValueError(f"REDUCE: var_b={var_b} out of range [0, {model.size})")
+        raise IndexOutOfBounds(var_b, model.size)
 
     w = model.size
     model.size += 1

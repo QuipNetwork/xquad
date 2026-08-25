@@ -40,11 +40,16 @@ parameter_types! {
     pub const MaxProgramSize: u32 = 65_536;
     /// 256 slots matches the xqvm register file width.
     pub const MaxCalldata: u32 = 256;
+    /// Matches `xqvm::DEFAULT_STEP_LIMIT`, the budget `Vm::new()` installs
+    /// when no host names one. Every fixture program runs in far fewer
+    /// steps, so the cap is only ever reached by a call that is trying to.
+    pub const MaxStepLimit: u64 = 10_000_000;
 }
 
 impl pallet_xqvm::Config for Test {
     type MaxProgramSize = MaxProgramSize;
     type MaxCalldata = MaxCalldata;
+    type MaxStepLimit = MaxStepLimit;
 }
 
 /// Build a `TestExternalities` with block number 1 initialised.

@@ -1,0 +1,15 @@
+; shl_amount_at_or_above_word_size: a shift count of 64 or more is out of
+; range on both implementations.
+;
+; Rust guards the amount with `(0..64)` before shifting. Python computes in
+; unbounded integers, so before this vector `PUSH 1 / PUSH 64 / SHL` reached
+; the push check and raised ARITHMETIC_OVERFLOW instead -- a fault-identity
+; divergence -- while `PUSH 0 / PUSH 100 / SHL` completed and pushed 0, a
+; fault-versus-success divergence on a verifier-clean four-instruction
+; program. Both are admissible to a stored program, so both were reachable
+; from a signed account.
+
+PUSH 1
+PUSH 64
+SHL
+HALT

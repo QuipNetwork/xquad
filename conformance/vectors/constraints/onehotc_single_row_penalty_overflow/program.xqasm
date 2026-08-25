@@ -1,0 +1,16 @@
+; onehotc_single_row_penalty_overflow: the column mirror of
+; onehotr_single_column_penalty_overflow. A 1x2 grid gives ONEHOTC exactly
+; one row, so the pair loop never runs and only the hoisted factor can
+; raise.
+
+PUSH 2
+BQMX r0
+
+PUSH 1                     ; rows
+PUSH 2                     ; cols
+RESIZE r0
+
+PUSH 0                     ; col
+PUSH 4611686018427387904   ; penalty
+ONEHOTC r0
+HALT

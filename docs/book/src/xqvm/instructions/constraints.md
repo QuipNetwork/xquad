@@ -4,18 +4,16 @@ These instructions inject QUBO penalty terms for common combinatorial
 constraints, expanding into linear and quadratic coefficient deltas
 automatically. The model register must hold a `Model` in model mode.
 Grid-based opcodes (`ONEHOTR`, `ONEHOTC`) read the grid dimensions set by
-`RESIZE`, but do not require them: on a model with no grid set (`rows` and
-`cols` both `0`), `ONEHOTR`/`ONEHOTC` write nothing and raise no error --
-both loops run zero times, so the instruction succeeds and the constraint
-is silently absent from the model. Forgetting `RESIZE` is the single most
-expensive mistake this page can warn about, since neither `xquad verify`
-nor `xquad run` catches it; the Python reference implementation
-(`xqvm_py`) raises `ValueError("ONEHOTR requires grid dimensions to be
-set")` instead, so this is a behavioural divergence between the two
-implementations rather than documented, uniform behaviour. Vec-based
-opcodes (`EQUALITY`, `ATLEAST`, `ATLEASTW`, `REDUCE`) operate on arbitrary
-variable sets. All coefficients are `i64`. For each opcode's byte value and
-operand layout, see the [Opcode Reference](../opcodes.md).
+`RESIZE` and require them. On a model with no grid set (`rows` and `cols`
+both `0`) both raise `InvalidGridDimensions` rather than expanding over
+nothing, so forgetting `RESIZE` fails at the instruction that needed it
+rather than producing a model missing a constraint. Both implementations
+agree. `xquad verify` still cannot catch it, because grid dimensions are
+popped stack values rather than something the verifier's dataflow passes
+track. Vec-based opcodes (`EQUALITY`,
+`ATLEAST`, `ATLEASTW`, `REDUCE`) operate on arbitrary variable sets. All
+coefficients are `i64`. For each opcode's byte value and operand layout,
+see the [Opcode Reference](../opcodes.md).
 
 ## `ONEHOTR reg`
 

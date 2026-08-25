@@ -53,18 +53,22 @@ def test_bytecode_decode_empty_program():
 
 
 def test_bytecode_decode_unknown_opcode():
-    """Unknown opcode byte in the payload raises ValueError."""
+    """Unknown opcode byte in the payload raises InvalidOpcode."""
     import pytest
 
-    with pytest.raises(ValueError, match="unknown opcode 0x0D"):
+    from xqvm_py.errors import InvalidOpcode
+
+    with pytest.raises(InvalidOpcode, match="0x0D"):
         program_from_bytecode(_make_xqbc(bytes([0x0D])))
 
 
 def test_bytecode_decode_truncated():
-    """Truncated operands in the payload raise ValueError."""
+    """Truncated operands in the payload raise TruncatedInstruction."""
     import pytest
 
-    with pytest.raises(ValueError, match="truncated operands"):
+    from xqvm_py.errors import TruncatedInstruction
+
+    with pytest.raises(TruncatedInstruction, match="Truncated instruction"):
         program_from_bytecode(_make_xqbc(bytes([0x11])))  # PUSH1 needs 1 operand byte
 
 

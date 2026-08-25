@@ -22,7 +22,9 @@ Tests for MachineState and related components.
 import pytest
 
 from xqvm_py.errors import (
+    CallDataIndex,
     LoopError,
+    OutputIndex,
     RegisterNotFound,
     StackOverflow,
     StackUnderflow,
@@ -233,6 +235,19 @@ class TestLoopRangeOperations:
         assert jc.in_loop is True
         assert jc.current_loop_value() == 0
 
+    def test_push_loop_range_does_not_materialise_the_iteration_space(self):
+        """A huge RANGE is held lazily, so pushing it is O(1) and allocation-free."""
+        jc = JumpControl()
+        jc.push_loop_range(target=0, start=0, count=10**9)
+
+        frame = jc.current_loop()
+        assert frame is not None
+        assert not isinstance(frame.values, list)
+        assert len(frame.values) == 10**9
+        assert jc.current_loop_value() == 0
+        assert jc.advance_loop() is True
+        assert jc.current_loop_value() == 1
+
     def test_range_loop_values(self):
         """Range loop generates correct sequence."""
         jc = JumpControl()
@@ -389,12 +404,27 @@ class TestIOOperations:
 
     def test_set_get_input(self, empty_state):
         """Set and get input slot."""
+        empty_state.input_slots = 4
         empty_state.set_input(0, 42)
         assert empty_state.get_input(0) == 42
 
-    def test_get_missing_input(self, empty_state):
-        """Getting missing input returns None."""
-        assert empty_state.get_input(99) is None
+    def test_get_input_past_the_slot_count_raises(self, empty_state):
+        """A slot outside the count is a program error, not a null result.
+
+        The mirror of `set_output`: the host fixes both counts before the
+        run, so reading past the calldata is a fault rather than None.
+        Returning None let `PUSH 0 / INPUT r0 / HALT` on empty calldata
+        store None and halt successfully here while the Rust VM raised
+        `CallDataIndex`.
+        """
+        empty_state.input_slots = 4
+        with pytest.raises(CallDataIndex):
+            empty_state.get_input(99)
+
+    def test_get_input_with_no_calldata_raises(self, empty_state):
+        """Zero slots is the default, so any read is out of range."""
+        with pytest.raises(CallDataIndex):
+            empty_state.get_input(0)
 
     def test_set_get_output(self, empty_state):
         """Set and get output slot."""
@@ -408,6 +438,7 @@ class TestIOOperations:
 
     def test_multiple_io_slots(self, empty_state):
         """Multiple I/O slots work independently."""
+        empty_state.input_slots = 4
         empty_state.set_input(0, "a")
         empty_state.set_input(1, "b")
         empty_state.output_slots = 4
@@ -424,6 +455,7 @@ class TestIOOperations:
         v = Vec.from_list([1, 2, 3])
         x = XQMX.binary_model(5)
 
+        empty_state.input_slots = 4
         empty_state.set_input(0, v)
         empty_state.output_slots = 4
         empty_state.set_output(0, x)
@@ -485,13 +517,31 @@ class TestReset:
         assert empty_state.halted is False
 
     def test_reset_clears_io(self, empty_state):
-        """reset clears I/O slots."""
+        """reset clears I/O slots and both slot counts."""
+        empty_state.input_slots = 4
         empty_state.set_input(0, "in")
         empty_state.output_slots = 4
         empty_state.set_output(0, "out")
         empty_state.reset()
-        assert empty_state.get_input(0) is None
+        # `input_slots` goes back to 0 with everything else, so the read is
+        # out of range rather than a surviving None.
+        with pytest.raises(CallDataIndex):
+            empty_state.get_input(0)
         assert empty_state.get_output(0) is None
+
+    def test_reset_clears_the_output_slot_count(self, empty_state):
+        """reset restores initial conditions, `output_slots` included.
+
+        Leaving the slot count standing meant a reset state still described
+        the previous run's host contract -- the mirror of the Rust VM leaving
+        its outputs, calldata and slot count in place.
+        """
+        empty_state.output_slots = 4
+        empty_state.set_output(0, "out")
+        empty_state.reset()
+        assert empty_state.output_slots == 0
+        with pytest.raises(OutputIndex):
+            empty_state.set_output(0, "again")
 
     def test_reset_clears_jump_control(self, empty_state):
         """reset clears jump targets and loops."""

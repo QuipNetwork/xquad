@@ -23,16 +23,21 @@ import pytest
 
 from xqvm_py.errors import (
     ArithmeticOverflow,
+    CallDataIndex,
     DivisionByZero,
+    IndexOutOfBounds,
+    InvalidDiscreteK,
+    InvalidShift,
     LoopError,
     MemoryLimitExceeded,
     RegisterNotFound,
     StackUnderflow,
     TargetNotFound,
     TypeMismatch,
+    VecLengthMismatch,
     XQMXModeError,
 )
-from xqvm_py.executor import DEFAULT_MEMORY_LIMIT, Executor
+from xqvm_py.executor import DEFAULT_MEMORY_LIMIT, VEC_ELEMENT_BYTES, Executor
 from xqvm_py.opcodes import Opcode
 from xqvm_py.program import Instruction, make_program, run_program
 from xqvm_py.state import I64_MAX, I64_MIN, MachineState
@@ -2072,8 +2077,8 @@ class TestAtleast:
         assert m.size == 3  # no slack variables added
 
     def test_k_zero_raises(self):
-        """ATLEAST with k=0 raises ValueError."""
-        with pytest.raises(ValueError, match="ATLEAST"):
+        """ATLEAST with k=0 raises IndexOutOfBounds."""
+        with pytest.raises(IndexOutOfBounds):
             run_program(
                 [
                     Instruction(Opcode.PUSH1, (3,)),
@@ -2089,8 +2094,8 @@ class TestAtleast:
             )
 
     def test_k_exceeds_n_raises(self):
-        """ATLEAST with k > N raises ValueError."""
-        with pytest.raises(ValueError, match="ATLEAST"):
+        """ATLEAST with k > N raises IndexOutOfBounds."""
+        with pytest.raises(IndexOutOfBounds):
             run_program(
                 [
                     Instruction(Opcode.PUSH1, (3,)),
@@ -2143,8 +2148,8 @@ class TestAtleastw:
         assert len(m.linear) > 0
 
     def test_length_mismatch_raises(self):
-        """ATLEASTW with mismatched indices/coeffs raises ValueError."""
-        with pytest.raises(ValueError, match="ATLEASTW"):
+        """ATLEASTW with mismatched indices/coeffs raises VecLengthMismatch."""
+        with pytest.raises(VecLengthMismatch, match="indices"):
             run_program(
                 [
                     Instruction(Opcode.PUSH1, (5,)),
@@ -2165,32 +2170,43 @@ class TestAtleastw:
             )
 
     def test_weight_sum_overflow_raises(self):
-        """ATLEASTW with a weight sum past i64::MAX raises ArithmeticOverflow."""
-        with pytest.raises(ArithmeticOverflow):
+        """ATLEASTW with a weight sum past i64::MAX raises ArithmeticOverflow.
+
+        The operands discriminate rather than merely agree: three weights of
+        2^62 wrap to -2^62, which makes the excess negative, allocates no
+        slack variables and -- with a penalty of 0 -- emits nothing, so a
+        wrapping implementation halts with a size-3 all-zero model. A weight
+        pair that also faulted when wrapped would not tell the two apart.
+        """
+        with pytest.raises(ArithmeticOverflow, match=r"\(ATLEASTW weight sum\)"):
             run_program(
                 [
-                    Instruction(Opcode.PUSH1, (2,)),
+                    Instruction(Opcode.PUSH1, (3,)),
                     Instruction(Opcode.BQMX, (0,)),
                     Instruction(Opcode.VECI, (1,)),
                     Instruction(Opcode.PUSH1, (0,)),
                     Instruction(Opcode.VECPUSH, (1,)),
                     Instruction(Opcode.PUSH1, (1,)),
                     Instruction(Opcode.VECPUSH, (1,)),
+                    Instruction(Opcode.PUSH1, (2,)),
+                    Instruction(Opcode.VECPUSH, (1,)),
                     Instruction(Opcode.VECI, (2,)),
-                    _push_i64(I64_MAX),
+                    _push_i64(1 << 62),
                     Instruction(Opcode.VECPUSH, (2,)),
-                    Instruction(Opcode.PUSH1, (1,)),
+                    _push_i64(1 << 62),
                     Instruction(Opcode.VECPUSH, (2,)),
-                    Instruction(Opcode.PUSH1, (1,)),  # k
-                    Instruction(Opcode.PUSH1, (1,)),  # penalty
+                    _push_i64(1 << 62),
+                    Instruction(Opcode.VECPUSH, (2,)),
+                    _push_i64(1 << 61),  # k
+                    Instruction(Opcode.PUSH1, (0,)),  # penalty
                     Instruction(Opcode.ATLEASTW, (0, 1, 2)),
                     Instruction(Opcode.HALT),
                 ]
             )
 
     def test_k_zero_raises(self):
-        """ATLEASTW with k=0 raises ValueError."""
-        with pytest.raises(ValueError, match="ATLEASTW"):
+        """ATLEASTW with k=0 raises IndexOutOfBounds."""
+        with pytest.raises(IndexOutOfBounds):
             run_program(
                 [
                     Instruction(Opcode.PUSH1, (3,)),
@@ -2261,8 +2277,8 @@ class TestReduce:
         assert m.size == 6
 
     def test_var_out_of_range_raises(self):
-        """REDUCE with var_a out of range raises ValueError."""
-        with pytest.raises(ValueError, match="REDUCE"):
+        """REDUCE with var_a out of range raises IndexOutOfBounds."""
+        with pytest.raises(IndexOutOfBounds):
             run_program(
                 [
                     Instruction(Opcode.PUSH1, (3,)),
@@ -2526,8 +2542,11 @@ class TestExecutorHelpers:
             ]
         )
         ex = Executor()
-        output = ex.execute(prog, input_data={0: "hello"}, output_slots=16)
-        assert output[1] == "hello"
+        # An int rather than an opaque marker: `_value_bytes` is exhaustive
+        # over the types a register can hold, mirroring `regval_bytes`, so a
+        # str is now a charge-schedule gap rather than a convenient payload.
+        output = ex.execute(prog, input_data={0: 42}, output_slots=16)
+        assert output[1] == 42
 
     def test_step_returns_continue_flag(self):
         """step returns True to continue, False to stop."""
@@ -2720,11 +2739,32 @@ class TestArithmeticOverflow:
             )
 
     def test_shl_overflow(self):
+        """A shift that discards significant bits leaves the i64 range."""
         with pytest.raises(ArithmeticOverflow):
             run_program(
                 [
+                    _push_i64(1 << 62),
+                    Instruction(Opcode.PUSH1, (2,)),  # (2^62) << 2 = 2^64
+                    Instruction(Opcode.SHL),
+                    Instruction(Opcode.HALT),
+                ]
+            )
+
+    def test_shl_amount_at_word_size_is_a_shift_fault_not_an_overflow(self):
+        """An out-of-range shift amount is rejected before anything shifts.
+
+        This test previously drove `1 << 64` and asserted ArithmeticOverflow,
+        which pinned a Python-only behaviour: Rust guards the amount with
+        `(0..64)` and raises InvalidShift, so the two implementations
+        disagreed on a verifier-clean four-instruction program. The amount
+        check now runs first on both, and the overflow case above uses an
+        in-range amount so it still exercises what it claims to.
+        """
+        with pytest.raises(InvalidShift):
+            run_program(
+                [
                     Instruction(Opcode.PUSH1, (1,)),
-                    Instruction(Opcode.PUSH1, (64,)),  # 1 << 64 > I64_MAX
+                    Instruction(Opcode.PUSH1, (64,)),
                     Instruction(Opcode.SHL),
                     Instruction(Opcode.HALT),
                 ]
@@ -2742,6 +2782,64 @@ class TestArithmeticOverflow:
         )
         # I64_MIN >> 1 = -(2^62), well within range
         assert ex.state.peek(0) == I64_MIN >> 1
+
+
+class TestInputSlotBound:
+    """INPUT bounds its slot against the calldata the host fixed."""
+
+    def test_slot_past_the_calldata_raises(self):
+        """The sharpest shape: empty calldata, so slot 0 does not exist.
+
+        `get_input` returned None with no bounds check, so this program
+        charged nothing, stored None in r0 and halted successfully, while
+        the Rust VM raised `CallDataIndex`. Pinned across implementations
+        by the `input_slot_out_of_range` conformance vector.
+        """
+        with pytest.raises(CallDataIndex):
+            run_program(
+                [
+                    Instruction(Opcode.PUSH1, (0,)),
+                    Instruction(Opcode.INPUT, (0,)),
+                    Instruction(Opcode.HALT),
+                ],
+            )
+
+    def test_slot_inside_the_calldata_is_accepted(self):
+        """The boundary: the last in-range slot is not rejected."""
+        ex = run_program(
+            [
+                Instruction(Opcode.PUSH1, (1,)),
+                Instruction(Opcode.INPUT, (0,)),
+                Instruction(Opcode.HALT),
+            ],
+            input_data={0: 7, 1: 9},
+        )
+        assert ex.state.get_register(0) == 9
+
+    def test_slot_one_past_the_end_raises(self):
+        """The other side of the same boundary."""
+        with pytest.raises(CallDataIndex):
+            run_program(
+                [
+                    Instruction(Opcode.PUSH1, (2,)),
+                    Instruction(Opcode.INPUT, (0,)),
+                    Instruction(Opcode.HALT),
+                ],
+                input_data={0: 7, 1: 9},
+            )
+
+    def test_negative_slot_raises(self):
+        """A negative slot is out of range rather than a Python dict miss."""
+        with pytest.raises(CallDataIndex):
+            run_program(
+                [
+                    Instruction(Opcode.PUSH1, (0,)),
+                    Instruction(Opcode.DEC, ()),
+                    Instruction(Opcode.INPUT, (0,)),
+                    Instruction(Opcode.HALT),
+                ],
+                input_data={0: 7},
+            )
 
 
 class TestInputBoundaryCheck:
@@ -2853,7 +2951,7 @@ class TestAllocationBudget:
                 Instruction(Opcode.HALT),
             ]
         )
-        with pytest.raises(ValueError, match="DISCRETE domain requires"):
+        with pytest.raises(InvalidDiscreteK, match="requires k >= 2"):
             Executor().execute(prog, memory_limit=8)
 
     def test_vec_push_is_charged_on_growth(self):
@@ -2894,13 +2992,20 @@ class TestAllocationBudget:
         assert ex.state.get_register(0).quadratic == {}, "a rejected expansion must not write coefficients"
 
     def test_one_hot_r_over_a_huge_grid_is_rejected(self):
-        """RESIZE takes its extents off the stack; ONEHOTR then expands O(cols^2)."""
+        """ONEHOTR expands O(cols^2) terms in a single step.
+
+        The grid is legitimately oversized rather than degenerate: the model
+        declares 4096 variables and the grid describes exactly those 4096
+        cells, so RESIZE accepts it and the budget is what stops the
+        expansion. A size-4 model resized to `1 x 2^20` is now rejected at
+        RESIZE, one instruction earlier and with a better identity.
+        """
         prog = make_program(
             [
-                Instruction(Opcode.PUSH1, (4,)),
+                Instruction(Opcode.PUSH2, (16, 0)),  # size = 4096
                 Instruction(Opcode.BQMX, (0,)),
                 Instruction(Opcode.PUSH1, (1,)),  # rows
-                Instruction(Opcode.PUSH4, (0, 16, 0, 0)),  # cols = 1 << 20
+                Instruction(Opcode.PUSH2, (16, 0)),  # cols = 4096
                 Instruction(Opcode.RESIZE, (0,)),
                 Instruction(Opcode.PUSH1, (0,)),  # row
                 Instruction(Opcode.PUSH1, (1,)),  # penalty
@@ -3009,3 +3114,60 @@ class TestStepLimit:
         )
         ex.execute(program, step_limit=10)
         assert ex.state.halted is True
+
+
+class TestCalldataChargeParity:
+    """A calldata value costs the same to copy here as on the Rust VM."""
+
+    def test_a_raw_list_is_charged_as_a_vec(self):
+        """`execute` converts a list to a Vec, so INPUT charges the vec rate.
+
+        Stored unconverted the list fell through `_value_bytes`'s recursion
+        to the per-int rate, charging 8 bytes an element against
+        `regval_bytes`'s 16 for the same `vec<int>`, so a program tuned near
+        the memory limit passed here and faulted on Rust. Only the direct
+        Executor API was exposed -- `xquad.vm` already converted at its own
+        boundary.
+        """
+        ex = run_program(
+            [
+                Instruction(Opcode.PUSH1, (0,)),
+                Instruction(Opcode.INPUT, (0,)),
+                Instruction(Opcode.HALT),
+            ],
+            input_data={0: [1, 2, 3]},
+        )
+        assert ex.memory_used == 3 * VEC_ELEMENT_BYTES
+        assert isinstance(ex.state.get_register(0), Vec)
+
+    def test_a_vec_and_the_list_it_came_from_cost_the_same(self):
+        """The conversion is what makes the two paths agree."""
+        as_list = run_program(
+            [
+                Instruction(Opcode.PUSH1, (0,)),
+                Instruction(Opcode.INPUT, (0,)),
+                Instruction(Opcode.HALT),
+            ],
+            input_data={0: [4, 5]},
+        )
+        as_vec = run_program(
+            [
+                Instruction(Opcode.PUSH1, (0,)),
+                Instruction(Opcode.INPUT, (0,)),
+                Instruction(Opcode.HALT),
+            ],
+            input_data={0: Vec.from_list([4, 5])},
+        )
+        assert as_list.memory_used == as_vec.memory_used
+
+    def test_a_value_with_no_rate_is_rejected_rather_than_priced(self):
+        """`_value_bytes` is exhaustive, mirroring `regval_bytes`.
+
+        Rust's match over `RegVal` has no wildcard, so an added variant is
+        a compile error. The trailing fallback here priced anything at the
+        per-variable rate and stored it, which is a divergence an
+        implementation cannot discover from the schedule.
+        """
+        ex = Executor()
+        with pytest.raises(TypeMismatch):
+            ex._value_bytes(object())

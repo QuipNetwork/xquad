@@ -1,0 +1,33 @@
+; slack_empty_capacity_int_register: SLACK discriminates both of its
+; registers even when the capacity is non-positive and nothing is appended.
+;
+; SLACK carries a `mutate` effect on both registers, and the verifier's
+; static type system depends on it: xqvm/src/verifier/reg_type.rs requires
+; vec<int> of each, and RegType::Any -- the write type INPUT carries -- 
+; satisfies that requirement. So this program is verifier-clean and
+; therefore admissible to a chain's store_program, and it arrives at SLACK
+; with two int registers.
+;
+; exec_slack returned Continue on `capacity <= 0` before touching either
+; register, so the program halted and wrote outputs on the Rust VM while
+; xqvm_py raised TypeMismatch. Same class, and same fix, as ITER's
+; register-read-before-skip.
+;
+; The registers come from calldata rather than STOW for the same reason
+; iter_non_vec_register_empty_slice uses INPUT: it is the shape the
+; verifier admits.
+
+PUSH 0
+INPUT r0         ; r0 = 5, an int, not a vec<int>
+PUSH 1
+INPUT r1         ; r1 = 5, an int, not a vec<int>
+
+PUSH 0           ; start_index
+PUSH 0           ; capacity -- non-positive, appends nothing
+SLACK r0 r1
+
+PUSH 7
+STOW r2
+PUSH 0
+OUTPUT r2
+HALT

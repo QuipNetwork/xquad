@@ -41,6 +41,7 @@ from typing import Any
 
 from xqvm_py import Executor, Program, program_from_bytecode, program_from_xqasm
 from xqvm_py.errors import XQVMError
+from xqvm_py.executor import DEFAULT_STEP_LIMIT
 
 
 def _load_program(path: Path, *, text: bool) -> Program:
@@ -107,15 +108,25 @@ def main(argv: list[str] | None = None) -> int:
         "--outputs",
         type=int,
         default=16,
-        help="Number of output slots reserved (outputs beyond this index are null).",
+        help="Number of output slots reserved. OUTPUT to a slot at or past this count fails with OutputIndex.",
     )
     run.add_argument(
         "--step-limit",
         type=int,
-        default=None,
+        default=DEFAULT_STEP_LIMIT,
         help=(
             "Maximum steps before the run is stopped. The limit is exact, so 0 "
-            "executes nothing; omit the flag to run unbounded."
+            f"executes nothing. Defaults to {DEFAULT_STEP_LIMIT}, matching the "
+            "Rust VM; pass --unlimited-steps to run without a bound."
+        ),
+    )
+
+    run.add_argument(
+        "--unlimited-steps",
+        action="store_true",
+        help=(
+            "Run without a step limit. Conflicts with --step-limit: opting "
+            "out of the bound has to be said rather than defaulted into."
         ),
     )
 
@@ -123,6 +134,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command != "run":
         parser.error(f"unknown command: {args.command}")
+
+    # Mirrors `xqcli run`: the two flags conflict, so an unbounded run is
+    # something the caller says rather than something a default produces.
+    # argparse cannot express "was --step-limit given" against a non-None
+    # default, so the comparison is against the default itself.
+    if args.unlimited_steps and args.step_limit != DEFAULT_STEP_LIMIT:
+        parser.error("--unlimited-steps conflicts with --step-limit")
+    step_limit = None if args.unlimited_steps else args.step_limit
 
     program = _load_program(args.file, text=args.text)
     input_data = _build_input_data(args)
@@ -132,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
         output_map = executor.execute(
             program,
             input_data=input_data,
-            step_limit=args.step_limit,
+            step_limit=step_limit,
             output_slots=args.outputs,
         )
     except XQVMError as exc:

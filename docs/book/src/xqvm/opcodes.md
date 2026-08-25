@@ -170,7 +170,7 @@ Total: **93 opcodes**.
 | Code | Mnemonic | Operands | Stack | Description |
 |------|----------|----------|-------|-------------|
 | `0x5A` | `IDXGRID` | -- | `3 → 1` | Pop cols, col, row; push the flat grid index row * cols + col. |
-| `0x5B` | `IDXTRIU` | -- | `2 → 1` | Pop j and i (i <= j); push the upper-triangular index for (i, j). |
+| `0x5B` | `IDXTRIU` | -- | `2 → 1` | Pop j and i; push the upper-triangular index for the unordered pair (i, j). |
 
 ---
 

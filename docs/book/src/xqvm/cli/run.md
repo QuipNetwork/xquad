@@ -22,7 +22,9 @@ xquad run [OPTIONS] <FILE>
 | `--text` | off | Treat `FILE` as assembly source and assemble it before running. |
 | `--calldata <CALLDATA>` | none | Comma-separated `i64` integers passed to `INPUT` instructions. |
 | `--outputs <OUTPUTS>` | `16` | Number of output slots available for `OUTPUT` instructions. |
-| `--step-limit <STEP_LIMIT>` | `10000000` | Maximum number of instructions to execute. `0` leaves the interpreter's built-in 10,000,000-step default in force; it does not remove the limit. See [Step limits](../../running/#step-limits). |
+| `--step-limit <STEP_LIMIT>` | `10000000` | Maximum number of instructions to execute. The limit is exact: `0` executes nothing. Conflicts with `--unlimited-steps`. See [Step limits](../../running/#step-limits). |
+| `--unlimited-steps` | off | Run without a step limit. Conflicts with `--step-limit`. A program that never halts will not return. |
+| `--memory-limit <MEMORY_LIMIT>` | `1073741824` | Allocation budget in bytes for models, samples and vectors. See [The allocation budget](../limits-and-errors.md#the-allocation-budget). |
 | `--trace` | off | Enable step-by-step execution tracing. |
 | `--trace-format <TRACE_FORMAT>` | `text` | Trace output format: `text` or `json`. Requires `--trace`. |
 | `--trace-file <TRACE_FILE>` | stderr | Write trace output to a file instead of stderr. Requires `--trace`. |
@@ -146,27 +148,52 @@ Error: xqvm::runtime_error
   × step limit of 3 exceeded
 ```
 
-`--step-limit 0` does not remove the limit. The CLI only calls
-`Vm::set_step_limit` when the flag is greater than zero, so `0` leaves the
-interpreter's own built-in default of 10,000,000 steps in force -- the
-same behaviour the Python `Session` layer documents at
-[Step limits](../../running/#step-limits). `countloop.xqb` needs
-14 steps, well under that default, so it still runs to completion:
+The limit is exact, and `0` is not a sentinel for "unlimited". A zero
+budget permits no instructions at all, so the first fetch fails:
 
 ```sh
 xquad run countloop.xqb --step-limit 0
 ```
 
+```
+Error: xqvm::runtime_error
+
+  × step limit of 0 exceeded
+```
+
+Passing `--unlimited-steps` alongside `--step-limit` is rejected by the
+argument parser rather than resolved by precedence, so opting out of the
+bound cannot be said two ways at once:
+
+```sh
+xquad run countloop.xqb --step-limit 0 --unlimited-steps
+```
+
+```
+error: the argument '--step-limit <STEP_LIMIT>' cannot be used with '--unlimited-steps'
+```
+
+The conflict fires on an explicit `--step-limit`, not on the default, so
+`--unlimited-steps` on its own is accepted. It removes the bound
+entirely, which is only safe where you control the program or can
+abandon the thread -- a program that never halts will not return:
+
+```sh
+xquad run countloop.xqb --unlimited-steps
+```
+
 prints nothing, since the program leaves no outputs and no residual
-stack. To raise the limit past 10,000,000 rather than rely on the
-default, pass a larger number explicitly, up to `u64::MAX`:
+stack. To raise the limit rather than remove it, pass a larger number,
+up to `u64::MAX`:
 
 ```sh
 xquad run countloop.xqb --step-limit 18446744073709551615
 ```
 
-also runs to completion, but for a different reason: the limit itself is
-now higher, not absent.
+also runs to completion, but for a different reason: the limit is higher,
+not absent. A budget that exactly covers the program succeeds --
+`--step-limit 14` runs `countloop.xqb` to completion, and `--step-limit
+13` does not.
 
 ## Output
 

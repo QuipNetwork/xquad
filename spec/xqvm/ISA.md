@@ -12,6 +12,7 @@ The following conventions are used throughout this section to describe opcode be
   - **`mutate`** — register's existing value is modified in-place (e.g. appending to a vec, incrementing a coefficient).
 - Assignments use `←` (register write) and `→` (stack push).
 - **Boolean representation** — `0` is false, any non-zero value is true. Boolean-producing opcodes always push `0` or `1`.
+- **Error names** are fault identities from [SPEC.md](SPEC.md#faults). An implementation spells them in its own language; the identity is what conformance compares. Where a row records that the two current implementations raise different identities for the same program, that is a recorded divergence rather than a licence.
 
 ## Control Flow
 
@@ -22,11 +23,11 @@ The following conventions are used throughout this section to describe opcode be
 | `0x02` | `JUMPI1` | `.N` | `[..., cond] → [...]` | — | Pop `cond`. If `cond != 0`, set PC to `targets[N]` (u8); otherwise fall through. Error: `TargetNotFound` if N is undefined and condition is non-zero. |
 | `0x03` | `JUMP2` | `hi`, `lo` | `[...] → [...]` | — | Set PC to the instruction at `targets[N]`, where N is the sequential target ID encoded as u16 big-endian (`N = hi << 8 \| lo`). Unconditional. Error: `TargetNotFound` if N is undefined. |
 | `0x04` | `JUMPI2` | `hi`, `lo` | `[..., cond] → [...]` | — | Pop `cond`. If `cond != 0`, set PC to `targets[N]` (u16 big-endian); otherwise fall through. Error: `TargetNotFound` if N is undefined and condition is non-zero. |
-| `0x05` | `LIDX` | `reg` | `[...] → [...]` | `write` — `reg ← index + start_offset` | Copy the current loop index (offset-adjusted) into `reg`. For RANGE loops: equivalent to LVAL (values are indices). For ITER loops: returns the original vec index (`frame.index + start_idx`). Error: `LoopError` if no active loop. |
-| `0x06` | `LVAL` | `reg` | `[...] → [...]` | `write` — `reg ← values[index]` | Copy the current loop value into `reg`. For RANGE loops: `reg ← int`. For ITER loops: `reg ← vec element` (type preserved: int or xqmx). Error: `LoopError` if no active loop. |
-| `0x07` | `NEXT` | — | `[...] → [...]` | — | Advance the active loop frame index. If more values remain, set PC to `frame.target` (loop body start). Otherwise pop the frame and fall through. Error: `LoopError` if no loop frame is active. |
+| `0x05` | `LIDX` | `reg` | `[...] → [...]` | `write` — `reg ← index + start_offset` | Copy the current loop index (offset-adjusted) into `reg`. For RANGE loops: equivalent to LVAL (values are indices). For ITER loops: returns the original vec index (`frame.index + start_idx`). Error: `NoActiveLoop` if no active loop. |
+| `0x06` | `LVAL` | `reg` | `[...] → [...]` | `write` — `reg ← values[index]` | Copy the current loop value into `reg`. For RANGE loops: `reg ← int`. For ITER loops: `reg ← vec element` (type preserved: int or xqmx). Error: `NoActiveLoop` if no active loop. |
+| `0x07` | `NEXT` | — | `[...] → [...]` | — | Advance the active loop frame index. If more values remain, set PC to `frame.target` (loop body start). Otherwise pop the frame and fall through. Error: `NoActiveLoop` if no loop frame is active. |
 | `0x08` | `RANGE` | — | `[..., start, count] → [...]` | — | Pop `count`, then `start`. Generate values `[start, start+1, ..., start+count-1]`. Push a loop frame with `target = PC+1` and `start_offset = start`. If `count <= 0`, the loop body is skipped entirely (see **Empty-loop skip** below). |
-| `0x09` | `ITER` | `reg` | `[..., start_idx, end_idx] → [...]` | `read` — validates `reg` holds `vec` | Pop `end_idx`, then `start_idx`. Read vec from `reg`. Copy elements `vec[start_idx:end_idx]` into a loop frame with `target = PC+1` and `start_offset = start_idx`. If `start_idx >= end_idx`, the loop body is skipped -- the condition is `>=`, so an inverted range is empty rather than an error, and no bounds check applies to a slice that is never taken. Elements are copied for immutability. Error: `TypeMismatch` if `reg` is not a vec. |
+| `0x09` | `ITER` | `reg` | `[..., start_idx, end_idx] → [...]` | `read` — validates `reg` holds `vec` | Pop `end_idx`, then `start_idx`. Read vec from `reg`. Copy elements `vec[start_idx:end_idx]` into a loop frame with `target = PC+1` and `start_offset = start_idx`. If `start_idx >= end_idx`, the loop body is skipped -- the condition is `>=`, so an inverted range is empty rather than an error, and no bounds check applies to a slice that is never taken. Elements are copied for immutability. Errors: `RegisterNotFound` if `reg` is unset; `TypeMismatch` if `reg` holds a value that is not a vec. The two are distinct identities, so a register that was never written is not a type mismatch. |
 
 The `0xF_` range is reserved for control flow utilities. The two currently assigned opcodes:
 
@@ -48,8 +49,8 @@ The `0xF_` range is reserved for control flow utilities. The two currently assig
 | `0x0A` | `LOAD` | `reg` | `[...] → [..., v]` | `read` — `reg` must hold `int` | Push the integer value from `reg` onto the stack. Error: `TypeMismatch` if `reg` holds vec or xqmx. Error: `RegisterNotFound` if `reg` is unset. |
 | `0x0B` | `STOW` | `reg` | `[..., v] → [...]` | `write` — `reg ← int(v)` | Pop `v`. Write `reg ← v` as an integer. |
 | `0x0C` | `DROP` | `reg` | `[...] → [...]` | `write` — `reg ← unset` | Clear the register, releasing any value it held. The register becomes unset. No error if already unset. |
-| `0x0E` | `INPUT` | `reg` | `[..., s] → [...]` | `write` — `reg ← input[s]` | Pop `s` (slot index). Copy `input[s]` into `reg`. Any value type is transferable (int, vec, or xqmx). Returns `None` if slot is not set. |
-| `0x0F` | `OUTPUT` | `reg` | `[..., s] → [...]` | `read` — `reg` value copied to `output[s]` | Pop `s` (slot index). Copy `reg`'s value into `output[s]`. Any value type is transferable. The host fixes the slot count before the run; `s` outside `[0, slots)` is a program error and raises `OutputIndex` rather than growing the output map. Errors: `RegisterNotFound` if `reg` is unset; `OutputIndex` if `s` is out of range. |
+| `0x0E` | `INPUT` | `reg` | `[..., s] → [...]` | `write` — `reg ← input[s]` | Pop `s` (slot index). Copy `input[s]` into `reg`. Any value type is transferable (int, vec, or xqmx). The host fixes the calldata before the run; `s` outside `[0, slots)` is a program error and raises `CallDataIndex`. Calldata is a dense sequence of slots, and the `"input": {}` map in [SPEC.md](SPEC.md#machine-state)'s machine-state sketch is a notation for that sequence rather than a sparse map whose largest key fixes the count. The entries of that sequence need not all be set: an in-range slot the host left unset is not out of range, and copying it leaves `reg` unset rather than storing a null, so the next instruction to read `reg` raises `RegisterNotFound`. Error: `CallDataIndex` if `s` is out of range. |
+| `0x0F` | `OUTPUT` | `reg` | `[..., s] → [...]` | `read` — `reg` value copied to `output[s]` | Pop `s` (slot index). Copy `reg`'s value into `output[s]`. Any value type is transferable. The host fixes the slot count before the run; `s` outside `[0, slots)` is a program error and raises `OutputIndex` rather than growing the output map. Errors, in this order: the copy is charged first, so a budget too small for it raises `MemoryLimitExceeded` even when the write would not have happened; then `RegisterNotFound` if `reg` is unset; then `OutputIndex` if `s` is out of range. This is the general precedence in [SPEC.md](SPEC.md#allocation-budget) applied to `OUTPUT`, and an unset register is charged 0, so it still faults. |
 
 ---
 
@@ -133,8 +134,8 @@ Operate on raw integer bit patterns.
 | `0x3B` | `BOR` | `[..., a, b] → [..., a \| b]` | Bitwise OR. |
 | `0x3C` | `BXOR` | `[..., a, b] → [..., a ^ b]` | Bitwise XOR. |
 | `0x3D` | `BNOT` | `[..., a] → [..., ~a]` | Bitwise NOT (one's complement). |
-| `0x3E` | `SHL` | `[..., a, b] → [..., a << b]` | Left shift. |
-| `0x3F` | `SHR` | `[..., a, b] → [..., a >> b]` | Right shift (arithmetic, sign-extending). |
+| `0x3E` | `SHL` | `[..., a, b] → [..., a << b]` | Left shift. Raises `InvalidShift` unless `0 <= b < 64`, and `ArithmeticOverflow` when the shift discards significant bits. |
+| `0x3F` | `SHR` | `[..., a, b] → [..., a >> b]` | Right shift (arithmetic, sign-extending). Raises `InvalidShift` unless `0 <= b < 64`. |
 
 > **Design note — shift opcodes.**
 > `SHR` is arithmetic (sign-extending), not logical (zero-filling).
@@ -151,6 +152,8 @@ Operate on raw integer bit patterns.
 ## Register Allocators
 
 These instructions allocate typed objects into registers.
+
+**Size precondition.** Every allocator that takes a `size` from the stack -- `BQMX`, `SQMX`, `XQMX`, `BSMX`, `SSMX`, `XSMX` -- requires that size to be an allocation: non-negative, and no larger than the executing target can address. A size that is neither raises `InvalidAllocation` and leaves the target register alone. A size that is an allocation is then charged against the [allocation budget](SPEC.md#allocation-budget) before anything is allocated, and raises `MemoryLimitExceeded` if it does not fit. The order is normative (see [Allocator validation order](SPEC.md#allocation-budget)): validating and charging off the operand as the program pushed it, rather than off a value already narrowed to the executing target's native width, is what makes a five-billion-variable request raise the same fault on a 32-bit target as on a 64-bit one, instead of quietly becoming an empty model that costs nothing. The rows below name only what is theirs.
 
 ### Model Allocators
 
@@ -185,10 +188,10 @@ Sample allocation is dense: after `BSMX`/`SSMX`/`XSMX` every position `i` in `[0
 | Code | Mnemonic | Arguments | Stack effect | Register effect | Interpretation |
 |------|----------|-----------|--------------|-----------------|----------------|
 | `0x50` | `VECPUSH` | `reg` | `[..., v] → [...]` | `mutate` — appends `v` to `reg`'s vec | Pop `v`. `reg` must hold a vec. Append `v`. If vec type is unset, infer from `v`. Otherwise validate type compatibility. Error: `TypeMismatch` if `reg` is not a vec or if `v` has incompatible type. |
-| `0x51` | `VECGET` | `reg` | `[..., idx] → [..., v]` | `read` — `reg` must hold `vec<int>` | Pop `idx`. `reg` must hold a vec. Bounds-check: `0 ≤ idx < len`. Push `vec[idx]`. Error: `IndexError` if out of bounds. Error: `TypeMismatch` if element is not int (cannot push non-int to stack). |
+| `0x51` | `VECGET` | `reg` | `[..., idx] → [..., v]` | `read` — `reg` must hold `vec<int>` | Pop `idx`. `reg` must hold a vec. Bounds-check: `0 ≤ idx < len`. Push `vec[idx]`. Error: `IndexOutOfBounds` if out of bounds. Error: `TypeMismatch` if element is not int (cannot push non-int to stack). |
 | `0x52` | `VECSET` | `reg` | `[..., idx, v] → [...]` | `mutate` — sets `reg.vec[idx] ← v` | Pop `v`, then `idx`. `reg` must hold a vec. Bounds-check: `0 ≤ idx < len`. Set `vec[idx] ← v`. Validates type compatibility. |
 | `0x53` | `VECLEN` | `reg` | `[...] → [..., n]` | `read` — `reg` must hold a vec | `reg` must hold a vec. Push `len(vec)` as integer. Error: `TypeMismatch` if `reg` is not a vec. |
-| `0x54` | `SLACK` | `indices coeffs` | `[..., start_index, capacity] → [...]` | `mutate` — appends elements to both `indices` and `coeffs` vecs | Pop `capacity`, then `start_index`. Compute S = floor(log2(capacity)) + 1 slack variable entries. Append indices `[start_index, start_index+1, ..., start_index+S-1]` and coefficients `[1, 2, 4, ..., 2^(S-1)]` to the register vecs. If `capacity <= 0`, no elements are appended. Both registers must hold `vec<int>`; error `TypeError` otherwise. See derivation below. |
+| `0x54` | `SLACK` | `indices coeffs` | `[..., start_index, capacity] → [...]` | `mutate` — appends elements to both `indices` and `coeffs` vecs | Pop `capacity`, then `start_index`. Compute S = floor(log2(capacity)) + 1 slack variable entries. Append indices `[start_index, start_index+1, ..., start_index+S-1]` and coefficients `[1, 2, 4, ..., 2^(S-1)]` to the register vecs. Both registers are read and must hold `vec<int>` before anything is appended, and before the `capacity` test: `SLACK` carries a `mutate` effect on both that the verifier's static type system depends on, so a non-appending `SLACK` still resolves them, and neither register is mutated by an instruction that goes on to fault on the other. If `capacity <= 0`, no elements are appended. Errors: `RegisterNotFound` if either register is unset; `TypeMismatch` if either holds a value that is not a `vec<int>`. See derivation below. |
 
 ### `SLACK` Derivation
 
@@ -210,6 +213,8 @@ Which is satisfied iff `Σ(w_i × x_i) ≤ W`.
 
 `SLACK` appends rather than overwrites so that item variables and slack variables can be built into the same vec pair in sequence.
 
+Steps 2 and 3 are two passes and not one interleaved pass: the whole index sequence is appended before the first coefficient. The order is only observable when `indices` and `coeffs` name the same register, in which case the resulting vec is `[start_index, ..., start_index+S-1, 1, ..., 2^(S-1)]`. Aliasing the two operands is a legal program, so the order is normative rather than an implementation detail.
+
 ---
 
 ## Index Math
@@ -219,7 +224,7 @@ Utilities for mapping 2-D coordinates to flat array indices.
 | Code | Mnemonic | Stack effect | Interpretation |
 |------|----------|--------------|----------------|
 | `0x5A` | `IDXGRID` | `[..., row, col, cols] → [..., row*cols+col]` | Row-major flat index. Pop `cols`, then `col`, then `row`. Push `row * cols + col`. |
-| `0x5B` | `IDXTRIU` | `[..., i, j] → [..., j*(j-1)/2+i]` | Upper-triangular index for the pair `(i, j)`. Pop `j`, then `i`. If `i > j`, swap them, so `(i, j)` and `(j, i)` address the same cell. Push `j * (j - 1) / 2 + i`. The division is exact: `j * (j - 1)` is a product of consecutive integers, hence non-negative and even for every operand, so truncating and flooring division agree and no rounding rule needs stating. |
+| `0x5B` | `IDXTRIU` | `[..., i, j] → [..., j*(j-1)/2+i]` | Upper-triangular index for the pair `(i, j)`. Pop `j`, then `i`. If `i > j`, swap them, so `(i, j)` and `(j, i)` address the same cell. Push `j * (j - 1) / 2 + i`. The division is exact: `j * (j - 1)` is a product of consecutive integers, hence non-negative and even for every operand, so truncating and flooring division agree and no rounding rule needs stating. The operands need not be non-negative and are not range-checked here -- `IDXTRIU` computes an index, and the opcode that consumes it bounds-checks it against the structure it addresses. Every intermediate of the computation is range-checked (SPEC.md overflow rule), so a pair whose index is representable but whose product is not raises `ArithmeticOverflow` rather than pushing a wrapped result. |
 
 ---
 
@@ -227,23 +232,23 @@ Utilities for mapping 2-D coordinates to flat array indices.
 
 Read and write the linear (bias) and quadratic (coupling) coefficients of an XQMX register. Missing entries read as `0`; writes create the entry on first call. Zero values are removed from sparse storage to maintain sparsity. `reg` must hold an XQMX.
 
-The linear opcodes (`GETLINE`, `SETLINE`, `ADDLINE`) accept either MODEL or SAMPLE mode — sample values are stored densely in `values[i]`, model biases sparsely in `linear[i]`. The quadratic opcodes (`GETQUAD`, `SETQUAD`, `ADDQUAD`) require MODEL mode: samples carry no quadratic storage, and `reg` must hold an XQMX in MODEL mode; error `XQMXModeError` otherwise.
+The linear opcodes (`GETLINE`, `SETLINE`, `ADDLINE`) accept either MODEL or SAMPLE mode — sample values are stored densely in `values[i]`, model biases sparsely in `linear[i]`. The quadratic opcodes (`GETQUAD`, `SETQUAD`, `ADDQUAD`) require MODEL mode: samples carry no quadratic storage, and `reg` must hold an XQMX in MODEL mode. A sample register raises `XqmxMode` on `xqvm_py` and `TypeMismatch` on the Rust `xqvm` VM, whose error type has no mode-specific variant.
 
 ### Linear Coefficients
 
 | Code | Mnemonic | Arguments | Stack effect | Register effect | Interpretation |
 |------|----------|-----------|--------------|-----------------|----------------|
 | `0x60` | `GETLINE` | `reg` | `[..., i] → [..., linear[i]]` | `read` — `reg.xqmx.linear[i]` | Pop `i`. Push `linear[i]` (0 if absent). |
-| `0x61` | `SETLINE` | `reg` | `[..., i, v] → [...]` | `mutate` — `reg.xqmx.linear[i] ← v` | Pop `v`, then `i`. Set `linear[i] ← v`. Error: `IndexError` if `i` out of range `[0, size)`. |
-| `0x62` | `ADDLINE` | `reg` | `[..., i, δ] → [...]` | `mutate` — `reg.xqmx.linear[i] += δ` | Pop `δ`, then `i`. `linear[i] += δ`. Error: `IndexError` if `i` out of range. |
+| `0x61` | `SETLINE` | `reg` | `[..., i, v] → [...]` | `mutate` — `reg.xqmx.linear[i] ← v` | Pop `v`, then `i`. Set `linear[i] ← v`. Error: `IndexOutOfBounds` if `i` out of range `[0, size)`. |
+| `0x62` | `ADDLINE` | `reg` | `[..., i, δ] → [...]` | `mutate` — `reg.xqmx.linear[i] += δ` | Pop `δ`, then `i`. `linear[i] += δ`. Error: `IndexOutOfBounds` if `i` out of range. |
 
 ### Quadratic Coefficients
 
 | Code | Mnemonic | Arguments | Stack effect | Register effect | Interpretation |
 |------|----------|-----------|--------------|-----------------|----------------|
 | `0x63` | `GETQUAD` | `reg` | `[..., i, j] → [..., quad[i,j]]` | `read` — `reg.xqmx.quad[i,j]` | Pop `j`, then `i`. If `i > j`, swap. Push `quad[i,j]` (0 if absent). |
-| `0x64` | `SETQUAD` | `reg` | `[..., i, j, v] → [...]` | `mutate` — `reg.xqmx.quad[i,j] ← v` | Pop `v`, then `j`, then `i`. If `i > j`, swap. Set `quad[i,j] ← v`. Error: `IndexError` if indices out of range `[0, size)`. |
-| `0x65` | `ADDQUAD` | `reg` | `[..., i, j, δ] → [...]` | `mutate` — `reg.xqmx.quad[i,j] += δ` | Pop `δ`, then `j`, then `i`. If `i > j`, swap. `quad[i,j] += δ`. Error: `IndexError` if indices out of range. |
+| `0x64` | `SETQUAD` | `reg` | `[..., i, j, v] → [...]` | `mutate` — `reg.xqmx.quad[i,j] ← v` | Pop `v`, then `j`, then `i`. If `i > j`, swap. Set `quad[i,j] ← v`. Error: `IndexOutOfBounds` if indices out of range `[0, size)`. |
+| `0x65` | `ADDQUAD` | `reg` | `[..., i, j, δ] → [...]` | `mutate` — `reg.xqmx.quad[i,j] += δ` | Pop `δ`, then `j`, then `i`. If `i > j`, swap. `quad[i,j] += δ`. Error: `IndexOutOfBounds` if indices out of range. |
 
 ---
 
@@ -251,24 +256,26 @@ The linear opcodes (`GETLINE`, `SETLINE`, `ADDLINE`) accept either MODEL or SAMP
 
 An XQMX register (model or sample) can optionally be given 2-D grid dimensions so that variables are addressed as `(row, col)` with flat index `row * cols + col`. `reg` must hold an XQMX. These opcodes accept either MODEL or SAMPLE mode — row/column reads scan the register's `linear` surface (models: sparse `linear[idx]`; samples: dense `values[idx]`).
 
+**Grid precondition.** Every grid-addressed opcode other than `RESIZE` requires two things of its operands, stated here once rather than repeated per row. The register must carry a grid: a register with none raises `InvalidGridDimensions`, because an absent grid is a precondition the program never established, and answering with nothing written or a sum of zeroes would answer a question that was never well posed. And the index must lie in the grid's extent along the axis the opcode addresses: outside `[0, rows)` for a row opcode, or `[0, cols)` for a column opcode, raises `IndexOutOfBounds`. The rows below name only what is theirs.
+
 | Code | Mnemonic | Arguments | Stack effect | Register effect | Interpretation |
 |------|----------|-----------|--------------|-----------------|----------------|
-| `0x66` | `RESIZE` | `reg` | `[..., rows, cols] → [...]` | `mutate` — `reg.xqmx.rows ← rows; reg.xqmx.cols ← cols` | Pop `cols`, then `rows`. Set grid dimensions on the XQMX. Both extents must be positive: `rows <= 0` or `cols <= 0` raises `InvalidGridDimensions` and leaves the grid unchanged, since a degenerate grid is not a grid the grid-addressed opcodes can act on. |
-| `0x67` | `ROWFIND` | `reg` | `[..., row, value] → [..., col]` | `read` — scans `reg.xqmx.linear` across row | Pop `value`, then `row`. Scan `linear[row*cols + c]` for `c` in `0..cols`. Push the column index of the first entry equal to `value`, or `-1` if not found. Grid dimensions must be set: `InvalidGridDimensions` otherwise. `row` must lie in `[0, rows)`: `IndexOutOfBounds` otherwise. |
-| `0x68` | `COLFIND` | `reg` | `[..., col, value] → [..., row]` | `read` — scans `reg.xqmx.linear` down column | Pop `value`, then `col`. Scan `linear[r*cols + col]` for `r` in `0..rows`. Push the row index of the first match, or `-1` if not found. Grid dimensions must be set: `InvalidGridDimensions` otherwise. `col` must lie in `[0, cols)`: `IndexOutOfBounds` otherwise. |
-| `0x69` | `ROWSUM` | `reg` | `[..., row] → [..., sum]` | `read` — sums `reg.xqmx.linear` across row | Pop `row`. Push `Σ linear[row*cols + c]` for `c` in `0..cols`. The sum is accumulated in column order with every partial sum range-checked; overflow raises `ArithmeticOverflow` (SPEC.md overflow rule). Grid dimensions must be set: `InvalidGridDimensions` otherwise. `row` must lie in `[0, rows)`: `IndexOutOfBounds` otherwise. |
-| `0x6A` | `COLSUM` | `reg` | `[..., col] → [..., sum]` | `read` — sums `reg.xqmx.linear` down column | Pop `col`. Push `Σ linear[r*cols + col]` for `r` in `0..rows`. The sum is accumulated in row order with every partial sum range-checked; overflow raises `ArithmeticOverflow` (SPEC.md overflow rule). Grid dimensions must be set: `InvalidGridDimensions` otherwise. `col` must lie in `[0, cols)`: `IndexOutOfBounds` otherwise. |
+| `0x66` | `RESIZE` | `reg` | `[..., rows, cols] → [...]` | `mutate` — `reg.xqmx.rows ← rows; reg.xqmx.cols ← cols` | Pop `cols`, then `rows`. Set grid dimensions on the XQMX. Both extents must be positive: `rows <= 0` or `cols <= 0` raises `InvalidGridDimensions` and leaves the grid unchanged, since a degenerate grid is not a grid the grid-addressed opcodes can act on. The grid must also fit the register's variables: `rows * cols` may not exceed the model or sample's `size`, and a pair that does not raises `InvalidGridDimensions` and leaves the grid unchanged. A grid is a reinterpretation of an array the program has already declared and already paid for at allocation, so it cannot name cells that do not exist; stating the bound in the register's own terms makes it hold identically on every target. The bound is `<=` rather than `==` because `EQUALITY`, `ATLEAST`, `ATLEASTW` and `REDUCE` append variables past the grid, and they only ever grow `size`, so a grid accepted at `RESIZE` stays inside the bound afterwards. |
+| `0x67` | `ROWFIND` | `reg` | `[..., row, value] → [..., col]` | `read` — scans `reg.xqmx.linear` across row | Pop `value`, then `row`. Scan `linear[row*cols + c]` for `c` in `0..cols`. Push the column index of the first entry equal to `value`, or `-1` if not found. Subject to the **Grid precondition** above. |
+| `0x68` | `COLFIND` | `reg` | `[..., col, value] → [..., row]` | `read` — scans `reg.xqmx.linear` down column | Pop `value`, then `col`. Scan `linear[r*cols + col]` for `r` in `0..rows`. Push the row index of the first match, or `-1` if not found. Subject to the **Grid precondition** above. |
+| `0x69` | `ROWSUM` | `reg` | `[..., row] → [..., sum]` | `read` — sums `reg.xqmx.linear` across row | Pop `row`. Push `Σ linear[row*cols + c]` for `c` in `0..cols`. The sum is accumulated in column order with every partial sum range-checked; overflow raises `ArithmeticOverflow` (SPEC.md overflow rule). Subject to the **Grid precondition** above. |
+| `0x6A` | `COLSUM` | `reg` | `[..., col] → [..., sum]` | `read` — sums `reg.xqmx.linear` down column | Pop `col`. Push `Σ linear[r*cols + col]` for `r` in `0..rows`. The sum is accumulated in row order with every partial sum range-checked; overflow raises `ArithmeticOverflow` (SPEC.md overflow rule). Subject to the **Grid precondition** above. |
 
 ---
 
 ## XQMX High-Level Functions
 
-These instructions inject QUBO penalty terms for common combinatorial constraints, expanding into linear and quadratic coefficient deltas automatically. `reg` must hold an XQMX in MODEL mode. Error: `XQMXModeError` if the XQMX is in SAMPLE mode.
+These instructions inject QUBO penalty terms for common combinatorial constraints, expanding into linear and quadratic coefficient deltas automatically. `reg` must hold an XQMX in MODEL mode. A SAMPLE-mode XQMX raises `XqmxMode` on `xqvm_py` and `TypeMismatch` on the Rust `xqvm` VM, whose error type has no mode-specific variant.
 
 | Code | Mnemonic | Arguments | Stack effect | Register effect | Interpretation |
 |------|----------|-----------|--------------|-----------------|----------------|
-| `0x70` | `ONEHOTR` | `reg` | `[..., row, penalty] → [...]` | `mutate` — adds to linear and quadratic for row variables | Pop `penalty`, then `row`. Apply one-hot constraint over all variables in grid row `row`. Grid dimensions must be set: with no grid there is no row to constrain, and the instruction raises `InvalidGridDimensions` rather than writing nothing. See [expansion](HLF.md#onehotr--onehotc-expansion). |
-| `0x71` | `ONEHOTC` | `reg` | `[..., col, penalty] → [...]` | `mutate` — adds to linear and quadratic for column variables | Pop `penalty`, then `col`. Apply one-hot constraint over all variables in grid column `col`. Grid dimensions must be set: with no grid there is no column to constrain, and the instruction raises `InvalidGridDimensions` rather than writing nothing. See [expansion](HLF.md#onehotr--onehotc-expansion). |
+| `0x70` | `ONEHOTR` | `reg` | `[..., row, penalty] → [...]` | `mutate` — adds to linear and quadratic for row variables | Pop `penalty`, then `row`. Apply one-hot constraint over all variables in grid row `row`. Subject to the **[Grid precondition](#xqmx-grid)**: with no grid there is no row to constrain, and the instruction raises `InvalidGridDimensions` rather than writing nothing. See [expansion](HLF.md#onehotr--onehotc-expansion). |
+| `0x71` | `ONEHOTC` | `reg` | `[..., col, penalty] → [...]` | `mutate` — adds to linear and quadratic for column variables | Pop `penalty`, then `col`. Apply one-hot constraint over all variables in grid column `col`. Subject to the **[Grid precondition](#xqmx-grid)**: with no grid there is no column to constrain, and the instruction raises `InvalidGridDimensions` rather than writing nothing. See [expansion](HLF.md#onehotr--onehotc-expansion). |
 | `0x72` | `EXCLUDE` | `reg` | `[..., i, j, penalty] → [...]` | `mutate` — `reg.xqmx.quad[i,j] += penalty` | Pop `penalty`, then `j`, then `i`. Add mutual-exclusion penalty. See [expansion](HLF.md#exclude-expansion). |
 | `0x73` | `IMPLIES` | `reg` | `[..., i, j, penalty] → [...]` | `mutate` — modifies linear and quadratic | Pop `penalty`, then `j`, then `i`. Add implication constraint `i → j`. See [expansion](HLF.md#implies-expansion). |
 | `0x74` | `EQUALITY` | `model indices coeffs` | `[..., target, penalty] → [...]` | `read` indices, coeffs; `mutate` model | Pop `penalty`, then `target`. Read variable indices from `indices` (`vec<int>`) and coefficients from `coeffs` (`vec<int>`). Expand weighted equality penalty `P × (Σ(a_k × x_k) − b)²` into QUBO terms on `model`. Lengths of `indices` and `coeffs` must match; error otherwise: `xqvm_py` raises `ValueError`, the Rust `xqvm` VM raises `VecLengthMismatch`. See [expansion](HLF.md#equality-expansion). |

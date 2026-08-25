@@ -1,0 +1,12 @@
+; shr_amount_at_or_above_word_size: the SHR mirror of
+; shl_amount_at_or_above_word_size.
+;
+; This is the starker half. Python's `8 >> 64` is 0, well inside the i64
+; range, so it never reached any check: the program completed with 0 on the
+; stack while Rust raised InvalidShift. No overflow was involved, so nothing
+; in the arithmetic sweep could have found it.
+
+PUSH 8
+PUSH 64
+SHR
+HALT

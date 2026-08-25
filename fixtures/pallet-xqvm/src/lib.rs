@@ -24,9 +24,23 @@
 //!
 //! # What it does
 //!
-//! A single dispatchable `submit_program` accepts raw XQBC bytecode and
-//! a vector of `i64` calldata values, runs the program through the VM,
-//! and emits a `ProgramExecuted` event carrying the integer output slots.
+//! A single dispatchable `submit_program` accepts raw XQBC bytecode, a
+//! vector of `i64` calldata values and a step budget, runs the program
+//! through the VM, and emits a `ProgramExecuted` event carrying the
+//! integer output slots.
+//!
+//! The step budget is an extrinsic argument rather than a constant
+//! because that is the shape the real pallet has to take: what a caller
+//! pre-pays for is what the VM may spend. The fixture is the in-repo
+//! stand-in for the threat model, so a budget the caller cannot name is
+//! a threat model the fixture cannot express.
+//!
+//! A caller-named budget is only half of that claim. The other half is
+//! `Config::MaxStepLimit`, which caps what the caller may name: the
+//! extrinsic's weight is a fixed constant, so without a cap a caller
+//! buys `u64::MAX` steps of execution at the price of one. The bound is
+//! what makes the constant weight defensible in a fixture; a production
+//! pallet benchmarks the weight against the budget instead.
 //!
 //! # Running the fixture
 //!
@@ -60,6 +74,14 @@ pub mod pallet {
         /// Maximum number of calldata input slots and output slots.
         #[pallet::constant]
         type MaxCalldata: Get<u32>;
+
+        /// Largest step budget a caller may ask `submit_program` for.
+        ///
+        /// The extrinsic charges a fixed weight, so the step budget is the
+        /// only thing bounding how long a call may run. Unbounded, the
+        /// caller sets that themselves.
+        #[pallet::constant]
+        type MaxStepLimit: Get<u64>;
     }
 
     #[pallet::pallet]
@@ -90,6 +112,10 @@ pub mod pallet {
         ExecutionFailed,
         /// The program produced more output slots than `MaxCalldata` allows.
         OutputOverflow,
+        /// The requested step budget exceeds `MaxStepLimit`.
+        StepLimitTooLarge,
+        /// The requested output-slot count exceeds `MaxCalldata`.
+        OutputSlotsTooLarge,
     }
 
     #[pallet::call]
@@ -102,6 +128,22 @@ pub mod pallet {
         ///   `InstructionBuilder::build().encode()`).
         /// - `calldata`: `i64` values injected as `RegVal::Int` into the VM's
         ///   calldata slots before execution.
+        /// - `output_slots`: the number of output slots to reserve. The
+        ///   caller declares this rather than the pallet deriving it from
+        ///   the bytecode: the XQBC header's `output_slots` byte counts
+        ///   `OUTPUT` *instructions*, not slots, so one `OUTPUT` inside a
+        ///   loop writing slots 0 and 1 records `1` against a required
+        ///   count of 2 and the program faults on a slot it legitimately
+        ///   writes. `spec/xqvm/ENCODING.md` states that neither header
+        ///   count may be used to pre-size a slot array.
+        ///   It may not exceed [`Config::MaxCalldata`], which bounds the
+        ///   output vec the event carries.
+        /// - `step_limit`: the number of instructions the run may execute.
+        ///   The bound is exact, so `0` executes nothing and the call fails
+        ///   with [`Error::ExecutionFailed`] rather than succeeding
+        ///   vacuously. It may not exceed [`Config::MaxStepLimit`]: the
+        ///   weight below is a constant, so an unbounded budget would let a
+        ///   caller buy arbitrary execution at a fixed price.
         ///
         /// # Events
         ///
@@ -112,6 +154,8 @@ pub mod pallet {
         /// - [`Error::BytecodeInvalid`] -- `bytecode` failed XQBC decode.
         /// - [`Error::ExecutionFailed`] -- the VM faulted at runtime.
         /// - [`Error::OutputOverflow`] -- output count exceeds `MaxCalldata`.
+        /// - [`Error::StepLimitTooLarge`] -- `step_limit` exceeds `MaxStepLimit`.
+        /// - [`Error::OutputSlotsTooLarge`] -- `output_slots` exceeds `MaxCalldata`.
         #[pallet::call_index(0)]
         // Fixture-only placeholder weight; production pallets must provide benchmarked weights.
         #[pallet::weight(Weight::from_parts(10_000, 0).saturating_add(T::DbWeight::get().writes(1)))]
@@ -119,13 +163,35 @@ pub mod pallet {
             origin: OriginFor<T>,
             bytecode: BoundedVec<u8, T::MaxProgramSize>,
             calldata: BoundedVec<i64, T::MaxCalldata>,
+            output_slots: u32,
+            step_limit: u64,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
+
+            // Checked before the decode: refusing an over-budget request is
+            // cheaper than parsing the program it would have run.
+            ensure!(
+                step_limit <= T::MaxStepLimit::get(),
+                Error::<T>::StepLimitTooLarge
+            );
+            ensure!(
+                output_slots <= T::MaxCalldata::get(),
+                Error::<T>::OutputSlotsTooLarge
+            );
 
             let program =
                 xqvm::Program::decode(&bytecode).map_err(|_| Error::<T>::BytecodeInvalid)?;
 
-            let output_count = usize::from(program.output_slots());
+            // The caller's count, not `program.output_slots()`. That header
+            // byte is a saturating count of OUTPUT instructions -- see
+            // `xqvm/src/verifier/scan.rs` -- so a single OUTPUT inside a
+            // RANGE writing slots 0 and 1 records 1, sizes `outputs` to 1,
+            // and turns a legitimate write into OutputIndex and so into
+            // ExecutionFailed. spec/xqvm/ENCODING.md is explicit that
+            // neither header count is a slot count and that neither may be
+            // used to pre-size a slot array. Every other host in the tree
+            // (xqcli's --outputs, the wasm fixture) fixes it independently.
+            let output_count = usize::try_from(output_slots).unwrap_or(usize::MAX);
 
             let calldata_regs: Vec<xqvm::RegVal> =
                 calldata.iter().map(|&v| xqvm::RegVal::Int(v)).collect();
@@ -133,6 +199,7 @@ pub mod pallet {
             let mut vm = xqvm::Vm::new();
             vm.set_calldata(calldata_regs);
             vm.set_output_slots(output_count);
+            vm.set_step_limit(step_limit);
             vm.run(&program).map_err(|_| Error::<T>::ExecutionFailed)?;
 
             let int_outputs: Vec<i64> = vm
@@ -147,11 +214,15 @@ pub mod pallet {
                 })
                 .collect();
 
-            let bounded: BoundedVec<i64, T::MaxCalldata> =
-                int_outputs.try_into().map_err(|_| Error::<T>::OutputOverflow)?;
+            let bounded: BoundedVec<i64, T::MaxCalldata> = int_outputs
+                .try_into()
+                .map_err(|_| Error::<T>::OutputOverflow)?;
 
             StoredProgram::<T>::put(bytecode);
-            Self::deposit_event(Event::ProgramExecuted { who, outputs: bounded });
+            Self::deposit_event(Event::ProgramExecuted {
+                who,
+                outputs: bounded,
+            });
 
             Ok(())
         }

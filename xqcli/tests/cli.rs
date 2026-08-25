@@ -295,3 +295,60 @@ fn run_step_limit_exceeded_exits_nonzero() {
         .assert()
         .failure();
 }
+
+#[test]
+fn run_step_limit_zero_exits_nonzero() {
+    // The limit is exact, so 0 is a real budget and not a sentinel: even a
+    // two-instruction program is refused at its first instruction. `0 =
+    // unlimited` made the safest looking value the most dangerous one.
+    let tmp = TempDir::new();
+    let src = tmp.write_str("prog.xqasm", PUSH_42);
+    let _ = xq()
+        .args([
+            "run",
+            "--text",
+            "--step-limit",
+            "0",
+            src.to_str().expect("UTF-8 path"),
+        ])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn run_unlimited_steps_removes_the_bound() {
+    // A million-iteration loop is well past the default budget, so it
+    // completes only if the flag actually removes the bound.
+    let tmp = TempDir::new();
+    let src = tmp.write_str("prog.xqasm", LOOP_1M);
+    let _ = xq()
+        .args([
+            "run",
+            "--text",
+            "--unlimited-steps",
+            src.to_str().expect("UTF-8 path"),
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn run_step_limit_and_unlimited_steps_conflict() {
+    // clap rejects the pair before the VM is built, so this is exit 2 (a
+    // usage error) rather than exit 1 (a program that faulted). The help
+    // text used to say `--unlimited-steps` ignored `--step-limit`, which
+    // described a precedence the parser does not implement.
+    let tmp = TempDir::new();
+    let src = tmp.write_str("prog.xqasm", PUSH_42);
+    let _ = xq()
+        .args([
+            "run",
+            "--text",
+            "--step-limit",
+            "10",
+            "--unlimited-steps",
+            src.to_str().expect("UTF-8 path"),
+        ])
+        .assert()
+        .code(2);
+}

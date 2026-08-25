@@ -60,12 +60,14 @@ pub(crate) struct Args {
     ///
     /// Exact: `--step-limit 0` executes nothing. Pass `--unlimited-steps` to
     /// run without a bound.
-    #[arg(long, default_value = "10000000")]
+    #[arg(long, default_value_t = xqvm::DEFAULT_STEP_LIMIT)]
     step_limit: u64,
 
-    /// Run without a step limit, ignoring `--step-limit`.
+    /// Run without a step limit.
     ///
-    /// A program that never halts will not return.
+    /// Conflicts with `--step-limit`: opting out of the bound has to be said
+    /// aloud, and saying it two ways at once is an error rather than a
+    /// precedence question. A program that never halts will not return.
     #[arg(long, conflicts_with = "step_limit")]
     unlimited_steps: bool,
 

@@ -439,7 +439,7 @@ opcodes:
   # ------------------------------------------------------------------------
 
   - {code: 0x5A, mnemonic: IDXGRID, variant: IdxGrid, category: index-math, operands: [], stack_pop: 3, stack_push: 1, doc: "Pop cols, col, row; push the flat grid index row * cols + col."}
-  - {code: 0x5B, mnemonic: IDXTRIU, variant: IdxTriu, category: index-math, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop j and i (i <= j); push the upper-triangular index for (i, j)."}
+  - {code: 0x5B, mnemonic: IDXTRIU, variant: IdxTriu, category: index-math, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop j and i; push the upper-triangular index for the unordered pair (i, j)."}
 
   # ------------------------------------------------------------------------
   # XQMX Coefficient Access (0x60-0x65)

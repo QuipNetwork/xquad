@@ -1,0 +1,28 @@
+; iter_non_vec_register_empty_slice: an ITER whose register does not hold a
+; vec raises even when the slice is empty and the body would not have run.
+;
+; ITER carries a `read` effect on its register that the verifier's static
+; type system depends on, so skipping the loop without ever resolving the
+; register discards that effect. spec/xqvm/ISA.md's ITER row orders the
+; steps register-read-before-skip and its error clause has no emptiness
+; carve-out.
+;
+; The register is filled from calldata rather than by STOW because that is
+; the shape the verifier admits: xqvm/src/verifier/reg_type.rs gives INPUT
+; the write type RegType::Any, which satisfies ITER's static requirement, so
+; this program is verifier-clean and therefore admissible to a chain's
+; store_program. Rust returned SkipLoop before the type arm, so it halted
+; with outputs = [7] where the Python VM -- and 0.3.x -- faulted.
+
+PUSH 0
+INPUT r0         ; r0 = 5, an int
+PUSH 1           ; start_idx
+PUSH 1           ; end_idx -- empty slice
+ITER r0
+NEXT
+
+PUSH 7
+STOW r1
+PUSH 0
+OUTPUT r1
+HALT

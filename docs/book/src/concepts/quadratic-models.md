@@ -5,7 +5,7 @@ from a candidate assignment, that the solver tries to make as small as
 possible. That number is the model's energy, and a quadratic model is the
 recipe for computing it:
 
-$$H(x) = \sum_i \text{linear}[i] \cdot x_i + \sum_{i<j} \text{quadratic}[i,j] \cdot x_i \cdot x_j$$
+$$H(x) = \sum_i \text{linear}[i] \cdot x_i + \sum_{i \le j} \text{quadratic}[i,j] \cdot x_i \cdot x_j$$
 
 `x` is a vector of variables. `linear[i]` scales with variable `i`'s own
 value, and `quadratic[i,j]` scales with the product of `i` and `j`'s values
@@ -13,7 +13,12 @@ value, and `quadratic[i,j]` scales with the product of `i` and `j`'s values
 on" and "the extra cost of turning `i` and `j` on together" when `x` is
 binary; [Three Domains](#three-domains) below covers two domains where
 nothing is "on." No term touches three variables at once -- that is what
-"quadratic" means here. `H` is called the model's Hamiltonian, borrowing
+"quadratic" means here. The sum runs over \\(i \le j\\), not \\(i < j\\):
+the diagonal is legal, and `quadratic[i,i]` scales with \\(x_i^2\\). What
+that means depends on the domain -- on binary variables \\(x^2 = x\\), so
+it acts as a linear bias written through the quadratic table; on spin
+variables \\(x^2 = 1\\), so it is a constant offset. The VM stores and
+evaluates such a term without interpreting it. `H` is called the model's Hamiltonian, borrowing
 the term physicists use for a system's total energy, because the annealing
 hardware XQuad can target literally is a physical system settling toward a
 low-energy state.

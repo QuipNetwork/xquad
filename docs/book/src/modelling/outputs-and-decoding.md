@@ -118,10 +118,9 @@ host_selection = [sample.get_linear(i) for i in range(n)]   # direct read
 `VM` and `VMBackend` import from `xquad.vm`, alongside the
 `xquad.cp`/`xquad.types` imports [Inputs and Model Shape](inputs-and-model.md)
 opens this chapter with. `set_output_slots` has to run before `vm.run`,
-since the slot count defaults to `0`. On the default `VMBackend.RUST`,
-`OUTPUT` against a slot that was never allocated raises `OutputIndex`
-while the decoder runs; `VMBackend.PYTHON` currently accepts it silently,
-so do not rely on the error to catch a missing `set_output_slots`.
+since the slot count defaults to `0`. `OUTPUT` against a slot that was
+never allocated raises `OutputIndex` while the decoder runs, on both
+`VMBackend.RUST` and `VMBackend.PYTHON`.
 
 `list(result)` works whether `vm.outputs()[0]` comes back as a plain
 `list`, on the default `VMBackend.RUST`, or as a `Vec`, on

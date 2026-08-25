@@ -29,12 +29,19 @@ from typing import Any, Protocol, runtime_checkable
 
 from .errors import (
     DivisionByZero,
+    IndexOutOfBounds,
+    InvalidAllocation,
+    InvalidDiscreteK,
     InvalidGridDimensions,
     InvalidOpcode,
+    InvalidShift,
     MemoryLimitExceeded,
+    OutputIndex,
+    RegisterNotFound,
     StepLimitExceeded,
     TargetNotFound,
     TypeMismatch,
+    VecLengthMismatch,
 )
 from .opcodes import Opcode
 from .program import Instruction, Program
@@ -70,6 +77,12 @@ from .xqmx import (
 # programs at exactly the same instruction. The rates below must stay
 # byte-for-byte identical to the constants in `xqvm/src/vm.rs`.
 # --------------------------------------------------------------------------
+
+#: Default step budget. Unbounded execution has to be asked for rather than
+#: stumbled into: with no default, `TARGET .0 / NOP / JUMP .0` ran forever
+#: here while the Rust VM, `xquad` and `xqcli` all stopped it at this
+#: number. `None` still means unbounded, but a caller has to write it.
+DEFAULT_STEP_LIMIT = 10_000_000
 
 #: Default allocation budget in bytes. Generous for off-chain use; embedders
 #: running untrusted bytecode should pass a much smaller `memory_limit`.
@@ -271,7 +284,7 @@ class Executor:
         self,
         program: Program,
         input_data: dict[int, Any] | None = None,
-        step_limit: int | None = None,
+        step_limit: int | None = DEFAULT_STEP_LIMIT,
         memory_limit: int = DEFAULT_MEMORY_LIMIT,
         output_slots: int = 0,
     ) -> dict[int, Any]:
@@ -281,9 +294,11 @@ class Executor:
         Args:
             program: The program to execute
             input_data: Optional input data keyed by slot number
-            step_limit: Maximum steps before raising StepLimitExceeded. `None`
-                is unlimited; the limit is otherwise exact, so `0` permits no
-                instructions at all. Matches `xqvm::Vm::set_step_limit`.
+            step_limit: Maximum steps before raising StepLimitExceeded.
+                Defaults to `DEFAULT_STEP_LIMIT`, matching `xqvm::Vm::new`.
+                `None` is unlimited and has to be written rather than
+                defaulted into; the limit is otherwise exact, so `0` permits
+                no instructions at all.
             memory_limit: Allocation budget in bytes, charged against every
                 allocating instruction before it allocates. Unlike step_limit
                 there is no "unlimited" sentinel -- pass a large value.
@@ -305,7 +320,26 @@ class Executor:
 
         if input_data:
             for slot, value in input_data.items():
+                # A raw list becomes a Vec at the boundary, the way
+                # `xquad.vm._prepare_calldata_python` already does it, so
+                # `Vm::set_calldata`'s `RegVal::VecInt` and this VM's
+                # calldata are the same kind of thing. Stored unconverted,
+                # a list charged 8 bytes an element against Rust's 16 for
+                # the same value, so a program tuned near the memory limit
+                # passed here and faulted there.
+                if isinstance(value, list):
+                    value = Vec.from_list(value)
                 self.state.set_input(slot, value)
+        # The calldata slot count the host fixed, mirroring `output_slots`
+        # above and `Vm::set_calldata`'s vec length. `input_data` is keyed by
+        # slot for convenience, but the space it stands for is dense, so the
+        # count is its size rather than its largest key. A slot the host
+        # left unset is still a slot and still carries a key here, the way
+        # `RegVal::Unset` still occupies a place in the Rust VM's calldata
+        # vec; a caller that drops one shortens the space and moves the
+        # bound, which is the divergence `xquad.vm._prepare_calldata_python`
+        # used to introduce.
+        self.state.input_slots = len(input_data) if input_data else 0
 
         for target_id, pc in program.jump_targets.items():
             self.state.jc.define_target(target_id, pc)
@@ -352,9 +386,79 @@ class Executor:
         """Charge for `count` XQMX variables. Negative counts clamp to zero."""
         self._charge(max(count, 0) * VARIABLE_BYTES)
 
+    def _allocation_size(self, size: int) -> int:
+        """Validate and charge for an allocator's size operand.
+
+        Mirrors Rust's `Vm::allocation_size`: reject a size that is not an
+        allocation, then charge the budget. Rust's third step -- narrowing to
+        `usize` -- has no counterpart here, because Python integers are
+        unbounded; charging before that narrowing is what makes the two agree
+        on a 32-bit target as well as on a 64-bit one.
+        """
+        if size < 0:
+            raise InvalidAllocation(size)
+        self._charge(size * VARIABLE_BYTES)
+        return size
+
     def _charge_equality_expansion(self, n: int) -> None:
         """Charge the worst-case cost of an equality expansion over `n` terms."""
         self._charge(equality_expansion_bytes(max(n, 0)))
+
+    def _value_bytes(self, value: Any) -> int:
+        """Bytes one whole register value costs to duplicate.
+
+        The rates are the schedule's own, applied to the same
+        program-visible quantities the allocating opcodes charge for, so a
+        value costs the same to copy as it cost to build. `None` -- an unset
+        slot -- is free because there is nothing to copy.
+
+        Mirrors Rust's `regval_bytes`, including its split over vec element
+        type: a `vec<int>` is priced per element, but a `vec<xqmx>` holds
+        whole models whose coefficient maps travel with the copy, so it is
+        priced as the sum of its elements. Charging a two-model vec the
+        flat element rate valued it at 32 bytes where Rust valued it at
+        hundreds.
+        """
+        if value is None:
+            return 0
+        if isinstance(value, XQMX):
+            if not value.is_model():
+                return value.size * VARIABLE_BYTES
+            return (
+                value.size * VARIABLE_BYTES
+                + len(value.linear) * LINEAR_ENTRY_BYTES
+                + len(value.quadratic) * QUAD_ENTRY_BYTES
+            )
+        if isinstance(value, Vec):
+            if value.element_type.kind == "xqmx":
+                return sum(self._value_bytes(item) for item in value)
+            return len(value) * VEC_ELEMENT_BYTES
+        if isinstance(value, int) and not isinstance(value, bool):
+            return VARIABLE_BYTES
+        # Exhaustive, matching `regval_bytes`, whose match over `RegVal` has
+        # no wildcard arm and so fails to compile when a variant is added.
+        # The arms above cover every type a register can legitimately hold;
+        # anything else is a host that installed a value the VM has no rate
+        # for, and pricing it silently is how a raw `list[int]` came to cost
+        # 8 bytes an element here against Rust's 16 for the same `vec<int>`.
+        raise TypeMismatch(
+            "int, Vec or XQMX",
+            type(value).__name__,
+            "a register value the charge schedule has no rate for",
+        )
+
+    def _charge_clone(self, value: Any) -> None:
+        """Charge for one copy of `value` crossing the host boundary.
+
+        OUTPUT and INPUT both duplicate a whole register: OUTPUT copies it
+        into an output slot the host keeps after the run, INPUT copies a
+        calldata entry into a register. Neither had a charge site, so the
+        only guards were a slot bound and an unset check.
+
+        The copy is charged rather than the overwritten slot refunded, which
+        keeps the budget cumulative.
+        """
+        self._charge(self._value_bytes(value))
 
     def _charge_coefficient(self, xqmx: XQMX, nbytes: int) -> None:
         """Charge for one coefficient written into `xqmx`, if it is a model.
@@ -498,6 +602,11 @@ class Executor:
         if count <= 0:
             self._skip_to_matching_next()
             return
+        # The exclusive bound is range-checked, matching Rust's `checked_add`.
+        # spec/xqvm/SPEC.md ranges its overflow rule over every i64 operation
+        # the VM performs on a program's behalf, and loop control is not
+        # carved out of it.
+        check_i64(start + count, "RANGE end")
         self.state.jc.push_loop_range(self.state.pc + 1, start, count)
 
     def _skip_to_matching_next(self) -> None:
@@ -521,8 +630,14 @@ class Executor:
     def _runner_ITER(self, instr: Instruction) -> None:
         """ITER: Start vec iteration. Pop end_idx, start_idx -> iterate vec[start:end]."""
         reg = instr.operands[0]
-        vec = self._get_register_as_vec(reg)
+        # Pops precede the register read. spec/xqvm/ISA.md's ITER row orders
+        # the steps "Pop `end_idx`, then `start_idx`. Read vec from `reg`",
+        # and spec/xqvm/SPEC.md's error-precedence rule makes operand pops
+        # first within every instruction. Resolving the register first made
+        # an int register plus a short stack raise TypeMismatch here and
+        # StackUnderflow on the Rust VM.
         end_idx, start_idx = self.state.pop_n(2)
+        vec = self._get_register_as_vec(reg)
         # An empty slice skips the body, matching RANGE with count <= 0 and
         # the empty-loop-skip clause in spec/xqvm/ISA.md.
         if start_idx >= end_idx:
@@ -530,7 +645,11 @@ class Executor:
             return
         # The frame copies the slice, and a frame is only popped by NEXT, so a
         # back-edge that re-enters an ITER piles up one copy per execution.
-        self._charge_variables(end_idx - start_idx)
+        # Priced over the element type rather than per element: cloning a
+        # model clones its coefficient maps, so a slice of a `vec<xqmx>`
+        # costs what its models hold. One model copy is measured the same
+        # way wherever it happens -- here, at OUTPUT, and at INPUT.
+        self._charge(sum(self._value_bytes(vec.get(i)) for i in range(start_idx, end_idx)))
         # Store current PC + 1 as the loop target (next instruction)
         self.state.jc.push_loop_iter(self.state.pc + 1, vec, start_idx, end_idx)
 
@@ -611,13 +730,47 @@ class Executor:
         # are validated when they reach the stack via GETLINE/GETQUAD/VECGET.
         if isinstance(value, int) and not isinstance(value, bool):
             check_i64(value, f"INPUT slot {slot}")
+        self._charge_clone(value)
+        if value is None:
+            # An in-range slot the host left unset copies unset into the
+            # register, which is what `exec_input` does when the calldata
+            # entry is `RegVal::Unset`. Storing None instead left the
+            # register set to a value no opcode accepts, so the next read
+            # raised `TypeMismatch` where the Rust VM raised
+            # `UnsetRegister`. Absence from `registers` is this VM's
+            # spelling of unset, so the copy is a clear rather than a set.
+            self.state.clear_register(reg)
+            return
         self.state.set_register(reg, value)
 
     def _runner_OUTPUT(self, instr: Instruction) -> None:
         """OUTPUT: Write register to output slot."""
         reg = instr.operands[0]
         slot = self.state.pop()
-        value = self.state.get_register(reg)
+        # Charge before the write, and before both validations. This runner
+        # aliases rather than deep-copies, so the resident-memory
+        # amplification is Rust-only; the missing charge is the defect both
+        # implementations shared, and `xquad/tests/test_memory_parity.py`
+        # pins the two against each other.
+        #
+        # The order is pop, charge, then validate, per spec/xqvm/SPEC.md's
+        # error-precedence rule. `_value_bytes` of an unset register is 0, so
+        # reading it here to size the charge cannot itself fault, which is
+        # what lets the charge precede the unset check.
+        # Membership, not `is None`: `get_register` treats an absent slot as
+        # unset and a slot holding None as set, and the charge for either is
+        # 0, so sizing the charge from `.get` before the membership test
+        # cannot change what is charged.
+        value = self.state.registers.get(reg)
+        self._charge_clone(value)
+        if reg not in self.state.registers:
+            raise RegisterNotFound(reg)
+        # The slot bound is checked here rather than left to `set_output`, so
+        # that all three of OUTPUT's faults are ordered at one site. Charging
+        # inside `set_output` instead would have put the bound ahead of the
+        # charge and inverted the precedence again.
+        if slot < 0 or slot >= self.state.output_slots:
+            raise OutputIndex(slot, self.state.output_slots)
         self.state.set_output(slot, value)
 
     def _runner_ADD(self, instr: Instruction) -> None:
@@ -757,11 +910,22 @@ class Executor:
     def _runner_SHL(self, instr: Instruction) -> None:
         """SHL: push(second << top)."""
         b, a = self.state.pop_n(2)
+        # Rust guards the shift amount with `(0..64)` before shifting. Python's
+        # unbounded integers reach neither end of that guard on their own: a
+        # negative count raises the operator's own `ValueError`, and a count of
+        # 64 or more either overflows the push check or completes with a value
+        # Rust refuses to produce. Both halves are checked here so the two
+        # implementations admit the same programs.
+        if not 0 <= b < 64:
+            raise InvalidShift(b)
         self.state.push(a << b)
 
     def _runner_SHR(self, instr: Instruction) -> None:
         """SHR: push(second >> top)."""
         b, a = self.state.pop_n(2)
+        # See `_runner_SHL`: the same `(0..64)` guard, for the same reason.
+        if not 0 <= b < 64:
+            raise InvalidShift(b)
         self.state.push(a >> b)
 
     def _runner_VEC(self, instr: Instruction) -> None:
@@ -783,24 +947,23 @@ class Executor:
         vec.element_type = VecElem("xqmx")
         self.state.set_register(reg, vec)
 
-    # The allocators take their size from the value stack, where any positive
-    # 64-bit value is reachable in a single PUSH. Each charges the allocation
-    # budget for the size it is about to declare before it constructs
-    # anything, so a request that does not fit leaves the register alone.
+    # The allocators take their size from the value stack, where any 64-bit
+    # value is reachable in a single PUSH. Each routes that value through
+    # _allocation_size, which rejects a size that is not an allocation and
+    # then charges the budget for what it is about to declare, so neither a
+    # negative size nor a request that does not fit reaches the register.
 
     def _runner_BQMX(self, instr: Instruction) -> None:
         """BQMX: Create binary model XQMX."""
         reg = instr.operands[0]
-        size = self.state.pop()
-        self._charge_variables(size)
+        size = self._allocation_size(self.state.pop())
         xqmx = XQMX.binary_model(size)
         self.state.set_register(reg, xqmx)
 
     def _runner_SQMX(self, instr: Instruction) -> None:
         """SQMX: Create spin model XQMX."""
         reg = instr.operands[0]
-        size = self.state.pop()
-        self._charge_variables(size)
+        size = self._allocation_size(self.state.pop())
         xqmx = XQMX.spin_model(size)
         self.state.set_register(reg, xqmx)
 
@@ -808,26 +971,27 @@ class Executor:
         """XQMX: Create discrete model XQMX."""
         reg = instr.operands[0]
         k, size = self.state.pop_n(2)
-        # Rust rejects k < 2 before charging; here the XQMX constructor
-        # raises, so only charge once k is known good.
-        if k >= 2:
-            self._charge_variables(size)
+        # Rust's exec_xqmx rejects k < 2 before it validates or charges for
+        # the size, so raise here rather than deferring to the XQMX
+        # constructor: __post_init__ tests the size first, which would report
+        # InvalidAllocation where Rust reports InvalidDiscreteK.
+        if k < 2:
+            raise InvalidDiscreteK(k)
+        size = self._allocation_size(size)
         xqmx = XQMX.discrete_model(size, k)
         self.state.set_register(reg, xqmx)
 
     def _runner_BSMX(self, instr: Instruction) -> None:
         """BSMX: Create binary sample XQMX."""
         reg = instr.operands[0]
-        size = self.state.pop()
-        self._charge_variables(size)
+        size = self._allocation_size(self.state.pop())
         xqmx = XQMX.binary_sample(size)
         self.state.set_register(reg, xqmx)
 
     def _runner_SSMX(self, instr: Instruction) -> None:
         """SSMX: Create spin sample XQMX."""
         reg = instr.operands[0]
-        size = self.state.pop()
-        self._charge_variables(size)
+        size = self._allocation_size(self.state.pop())
         xqmx = XQMX.spin_sample(size)
         self.state.set_register(reg, xqmx)
 
@@ -835,8 +999,10 @@ class Executor:
         """XSMX: Create discrete sample XQMX."""
         reg = instr.operands[0]
         k, size = self.state.pop_n(2)
-        if k >= 2:
-            self._charge_variables(size)
+        # Same fault order as _runner_XQMX, mirroring Rust's exec_xsmx.
+        if k < 2:
+            raise InvalidDiscreteK(k)
+        size = self._allocation_size(size)
         xqmx = XQMX.discrete_sample(size, k)
         self.state.set_register(reg, xqmx)
 
@@ -876,21 +1042,43 @@ class Executor:
         """SLACK: Append slack variable indices and power-of-two coefficients."""
         indices_reg = instr.operands[0]
         coeffs_reg = instr.operands[1]
+        # Pops precede the register reads, matching exec_slack and
+        # spec/xqvm/SPEC.md's error-precedence rule that operand pops come
+        # first within every instruction. Resolving first made a short stack
+        # raise TypeMismatch here and StackUnderflow on the Rust VM.
+        capacity, start_index = self.state.pop_n(2)
+        # Both registers are discriminated before the empty-capacity return
+        # below, because SLACK carries a mutate effect on both and skipping
+        # the append without resolving them discards it. Rust returned before
+        # touching either, so a verifier-clean program built from INPUT
+        # registers halted Ok there and faulted here.
         indices_vec = self._get_register_as_vec(indices_reg)
         coeffs_vec = self._get_register_as_vec(coeffs_reg)
-        capacity, start_index = self.state.pop_n(2)
         if capacity <= 0:
             return
-        # The loop runs once per bit position in `capacity` and appends to
-        # both vecs; charge for the entries before creating them.
+        # Both loops below run once per bit position in `capacity`; charge
+        # for the entries before creating them.
         self._charge(capacity.bit_length() * 2 * VEC_ELEMENT_BYTES)
+        # Two passes, not one interleaved pass, matching `exec_slack`: the
+        # whole index sequence is appended before the whole coefficient
+        # sequence. The distinction is only observable when `indices` and
+        # `coeffs` name the same register, where interleaving produced
+        # [start, 1, start+1, 2, ...] against Rust's [start, start+1, 1, 2].
+        # spec/xqvm/ISA.md's SLACK derivation pins the two-pass order.
         power = 1
         i = 0
         while power <= capacity:
-            indices_vec.push(start_index + i)
-            coeffs_vec.push(power)
+            # Range-checked, matching Rust: `start_index` comes straight off
+            # the value stack, so `start_index + i` leaves the range for any
+            # start within 63 of i64::MAX. Raising here leaves the
+            # coefficient pass unrun, which is also what Rust does.
+            indices_vec.push(check_i64(start_index + i, "SLACK index"))
             power *= 2
             i += 1
+        power = 1
+        while power <= capacity:
+            coeffs_vec.push(power)
+            power *= 2
 
     def _runner_GETLINE(self, instr: Instruction) -> None:
         """GETLINE: Get linear coefficient."""
@@ -943,16 +1131,30 @@ class Executor:
     def _runner_IDXGRID(self, instr: Instruction) -> None:
         """IDXGRID: Convert (row, col) to flat index using cols."""
         cols, j, i = self.state.pop_n(3)  # pop cols, col, row
-        index = i * cols + j
+        # Every intermediate is range-checked, not just the pushed result.
+        # Rust chains `checked_mul`/`checked_add` here, so a row * cols that
+        # leaves the range raises there; computing in unbounded integers and
+        # checking only the final push made
+        # `PUSH 2^62 / PUSH -1 / PUSH 2 / IDXGRID` raise on Rust and push
+        # i64::MAX here.
+        offset = check_i64(i * cols, "IDXGRID row * cols")
+        index = check_i64(offset + j, "IDXGRID index")
         self.state.push(index)
 
     def _runner_IDXTRIU(self, instr: Instruction) -> None:
         """IDXTRIU: Convert (i, j) to upper triangular index."""
         j, i = self.state.pop_n(2)
-        # Ensure i < j for upper triangular
+        # The pair is unordered: swap so the two orderings address the same
+        # cell.
         if i > j:
             i, j = j, i
-        idx = j * (j - 1) // 2 + i
+        # Range-checked per intermediate, matching Rust's checked chain. The
+        # halving is exact and cannot leave the range: j * (j - 1) is a
+        # product of consecutive integers, so it is non-negative and even for
+        # every operand, and truncating and flooring division agree on it.
+        jm1 = check_i64(j - 1, "IDXTRIU j - 1")
+        product = check_i64(j * jm1, "IDXTRIU j * (j - 1)")
+        idx = check_i64(product // 2 + i, "IDXTRIU index")
         self.state.push(idx)
 
     def _runner_RESIZE(self, instr: Instruction) -> None:
@@ -964,6 +1166,17 @@ class Executor:
         # left the model degenerate, which is how a grid reached the state
         # ONEHOTR and ONEHOTC reject.
         if rows <= 0 or cols <= 0:
+            raise InvalidGridDimensions(rows, cols)
+        # A grid is a reinterpretation of variables the program already
+        # declared and already paid for at allocation, so it cannot describe
+        # cells that do not exist. Without this bound ROWSUM, COLSUM, ROWFIND
+        # and COLFIND scan an arbitrary extent for one metered step, charging
+        # nothing: a size-4 model resized to `1 x 2^62` never returns.
+        #
+        # The rule is `rows * cols <= size`, not `==`: EQUALITY, ATLEAST,
+        # ATLEASTW and REDUCE append slack and auxiliary variables past the
+        # grid, and nothing ever shrinks `size`.
+        if rows * cols > xqmx.size:
             raise InvalidGridDimensions(rows, cols)
         xqmx.rows = rows
         xqmx.cols = cols
@@ -1077,7 +1290,7 @@ class Executor:
         require_model_mode(model, "ATLEAST")
         n = indices_vec.length
         if k <= 0 or k > n:
-            raise ValueError(f"ATLEAST: k={k} out of valid range (0, {n}]")
+            raise IndexOutOfBounds(k, n)
         orig_indices = [indices_vec.get(i) for i in range(n)]
         max_excess = n - k
         num_slacks = max_excess.bit_length() if max_excess > 0 else 0
@@ -1106,9 +1319,9 @@ class Executor:
         require_model_mode(model, "ATLEASTW")
         n = indices_vec.length
         if n != coeffs_vec.length:
-            raise ValueError(f"ATLEASTW: indices length {n} != coeffs length {coeffs_vec.length}")
+            raise VecLengthMismatch("indices", n, "coeffs", coeffs_vec.length)
         if k <= 0:
-            raise ValueError(f"ATLEASTW: k={k} must be > 0")
+            raise IndexOutOfBounds(k, n)
         orig_indices = [indices_vec.get(i) for i in range(n)]
         weights = [coeffs_vec.get(i) for i in range(n)]
         # Accumulate in index order with every partial sum checked, matching

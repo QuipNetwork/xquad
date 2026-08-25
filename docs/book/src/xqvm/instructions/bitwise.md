@@ -5,16 +5,24 @@ pattern of an `i64`; `SHL` and `SHR` shift it. Byte values, operand layouts
 and stack effects are in the [Bitwise](../opcodes.md#bitwise) section of
 the opcode reference. None of these instructions touch a register, and
 none but the shifts can fail: `BAND`/`BOR`/`BXOR`/`BNOT` are defined for
-every `i64` bit pattern, with no invalid input.
+every `i64` bit pattern, with no invalid input. `SHL` and `SHR` fault on
+a shift amount outside \\([0, 64)\\), and `SHL` also faults when the
+shift would lose a significant bit.
 
 For the boolean-algebra equivalents that treat `0`/non-zero as
 false/true instead of operating bit by bit, see [Logical](logical.md).
 
 ## Shift Behaviour
 
-`SHL` performs a left shift; bits shifted past the high end are discarded
-rather than wrapping around, and the vacated low bits are filled with
-zero. `SHR` performs an **arithmetic** (sign-preserving) right shift, not
+`SHL` performs a left shift, filling the vacated low bits with zero. It
+does not discard bits that leave the high end: a shift that loses a
+significant bit takes the value outside the `i64` range, so it raises
+`ArithmeticOverflow` like any other overflowing operation. `PUSH
+4611686018427387904; PUSH 1; SHL` fails rather than yielding
+`i64::MIN`. Shifting the result back recovers the operand exactly
+whenever nothing was lost, which is the test the VM applies.
+
+`SHR` performs an **arithmetic** (sign-preserving) right shift, not
 a logical (zero-filling) one: the sign bit is replicated into the vacated
 high bits, so a negative operand stays negative. `-8 >> 1` yields `-4`,
 and `i64::MIN >> 1` yields `-4611686018427387904`, half the magnitude of

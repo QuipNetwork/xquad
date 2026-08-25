@@ -21,6 +21,7 @@ Tests for Vec and VecElem classes.
 
 import pytest
 
+from xqvm_py.errors import IndexOutOfBounds, TypeMismatch
 from xqvm_py.vector import Vec, VecElem
 from xqvm_py.xqmx import XQMX
 
@@ -183,22 +184,22 @@ class TestVecTypeInference:
         assert v.length == 3
 
     def test_invalid_type_raises_type_error(self):
-        """Pushing wrong type raises TypeError."""
+        """Pushing wrong type raises TypeMismatch."""
         v = Vec()
         v.push(1)  # Now it's vec<int>
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeMismatch):
             v.push(XQMX.binary_model(5))
 
     def test_invalid_type_string_raises_type_error(self):
-        """Pushing unsupported type raises TypeError."""
+        """Pushing unsupported type raises TypeMismatch."""
         v = Vec()
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeMismatch):
             v.push("string")
 
     def test_typed_vec_rejects_wrong_type(self):
         """Vec with explicit type rejects wrong element."""
         v = Vec.with_capacity(10, VecElem("int"))
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeMismatch):
             v.push(XQMX.binary_model(5))
 
 
@@ -213,15 +214,15 @@ class TestVecAccess:
         assert v.get(2) == 30
 
     def test_get_negative_index_raises(self):
-        """Get with negative index raises IndexError."""
+        """Get with negative index raises IndexOutOfBounds."""
         v = Vec.from_list([1, 2, 3])
-        with pytest.raises(IndexError):
+        with pytest.raises(IndexOutOfBounds):
             v.get(-1)
 
     def test_get_out_of_bounds_raises(self):
-        """Get beyond length raises IndexError."""
+        """Get beyond length raises IndexOutOfBounds."""
         v = Vec.from_list([1, 2, 3])
-        with pytest.raises(IndexError):
+        with pytest.raises(IndexOutOfBounds):
             v.get(3)
 
     def test_set_valid_index(self):
@@ -231,21 +232,21 @@ class TestVecAccess:
         assert v.get(1) == 99
 
     def test_set_negative_index_raises(self):
-        """Set with negative index raises IndexError."""
+        """Set with negative index raises IndexOutOfBounds."""
         v = Vec.from_list([1, 2, 3])
-        with pytest.raises(IndexError):
+        with pytest.raises(IndexOutOfBounds):
             v.set(-1, 0)
 
     def test_set_out_of_bounds_raises(self):
-        """Set beyond length raises IndexError."""
+        """Set beyond length raises IndexOutOfBounds."""
         v = Vec.from_list([1, 2, 3])
-        with pytest.raises(IndexError):
+        with pytest.raises(IndexOutOfBounds):
             v.set(3, 99)
 
     def test_set_wrong_type_raises(self):
-        """Set with wrong type raises TypeError."""
+        """Set with wrong type raises TypeMismatch."""
         v = Vec.from_list([1, 2, 3])
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeMismatch):
             v.set(0, XQMX.binary_model(5))
 
 
