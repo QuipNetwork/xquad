@@ -1715,10 +1715,11 @@ fn row_sum_row_out_of_range_raises() {
     // The one valid row of a 1x3 grid is 0; row 1 addresses no line of the
     // grid and must raise rather than sum absent coefficients to 0.
     //
-    // The grid is deliberately not square. `grid_axis_index` takes the axis
-    // extent as a bare `usize` fifth parameter that the caller has to get
-    // right, and against a square grid -- which is what every earlier test
-    // here used -- passing `cols` where `rows` belongs is invisible.
+    // The grid is deliberately not square and the row deliberately inside the
+    // column count, so this pins the extent that is actually addressed rather
+    // than merely rejecting a large number: checking row 1 against the column
+    // count would accept it, and against a square grid -- which is what every
+    // earlier test here used -- the two are indistinguishable.
     let err = run_err(|b| {
         b.emit_push(3).emit_bqmx(Register(0));
         b.emit_push(1).emit_push(3).emit_resize(Register(0));
@@ -1737,8 +1738,8 @@ fn col_sum_col_out_of_range_raises() {
     // valid column of a 3x1 grid is 0; column 1 addresses no line of it.
     //
     // Non-square for the same reason as `row_sum_row_out_of_range_raises`:
-    // this is the case that catches `grid_axis_index` being handed `rows`
-    // where `cols` belongs.
+    // column 1 sits inside the row count, so this is the case that fails if
+    // the column is checked against the wrong axis.
     let err = run_err(|b| {
         b.emit_push(3).emit_bqmx(Register(0));
         b.emit_push(3).emit_push(1).emit_resize(Register(0));
@@ -1985,6 +1986,75 @@ fn one_hot_c_applies_column_constraint() {
     } else {
         panic!("r0 should be a model");
     }
+}
+
+#[test]
+fn one_hot_r_row_out_of_range_raises() {
+    // The only row of a 1x4 grid is row 0. Row 2^62 used to pass
+    // `usize::try_from` untouched, and `usize_row * cols` then wrapped to
+    // exactly 0 -- so `release` wrote a clean-looking one-hot constraint onto
+    // row 0 and halted successfully while `ci-test` panicked and `xqvm_py`
+    // raised. Three answers to one nine-instruction program.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bqmx(Register(0));
+        b.emit_push(1).emit_push(4).emit_resize(Register(0));
+        b.emit_push(1 << 62)
+            .emit_push(1)
+            .emit_one_hot_r(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(err, Error::IndexOutOfBounds { .. }),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
+}
+
+#[test]
+fn one_hot_r_row_at_grid_extent_raises() {
+    // The only valid row of a 1x4 grid is 0, and row 2 does not wrap the way
+    // 2^62 does -- this pins the extent rather than the multiply.
+    //
+    // The grid is deliberately not square and the row deliberately inside the
+    // column count, so this pins the extent that is actually addressed rather
+    // than merely rejecting a large number: checking row 2 against the column
+    // count would accept it, and against a square grid, or a row larger than
+    // both extents, the two are indistinguishable. `grid_row_index` is what
+    // picks the axis, so this is the case that fails if it picks the wrong one.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bqmx(Register(0));
+        b.emit_push(1).emit_push(4).emit_resize(Register(0));
+        b.emit_push(2).emit_push(1).emit_one_hot_r(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(err, Error::IndexOutOfBounds { .. }),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
+}
+
+#[test]
+fn one_hot_c_col_at_grid_extent_raises() {
+    // The mirror: a 4x1 grid whose only valid column is 0, with column 2
+    // inside the row count, so checking against the row count would accept it.
+    // `grid_col_index` picks the axis; this is the case that fails if it picks
+    // the wrong one.
+    //
+    // A column cannot wrap the way a row can -- nothing multiplies by it --
+    // but the address is `ri * cols + col`, so an out-of-extent column still
+    // lands outside the column it named, aliasing another column's variables
+    // or reaching past `size` entirely. Coefficients accumulate into a sparse
+    // map that grows to fit whatever index it is handed, so the old code
+    // minted those entries and halted successfully.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bqmx(Register(0));
+        b.emit_push(4).emit_push(1).emit_resize(Register(0));
+        b.emit_push(2).emit_push(1).emit_one_hot_c(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(err, Error::IndexOutOfBounds { .. }),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
 }
 
 #[test]
@@ -2475,7 +2545,7 @@ fn a_host_supplied_grid_with_an_unaddressable_extent_is_rejected() {
     // unvalidated -- so `grid_axis_index`'s addressability arm is still the
     // guard that keeps `usize_row * cols` in the read-only grid handlers from
     // overflowing. Deleting it turns this case into a `ci-test` panic and a
-    // `release` wrap.
+    // `release` wrap. QUI-1164 tracks validating the boundary itself.
     let mut model = xqvm::XqmxModel::new(Domain::Binary, 4);
     model.rows = usize::MAX / 2;
     model.cols = 8;
@@ -2490,6 +2560,48 @@ fn a_host_supplied_grid_with_an_unaddressable_extent_is_rejected() {
     assert!(
         matches!(err, Error::InvalidGridDimensions { .. }),
         "expected InvalidGridDimensions, got {err:?}"
+    );
+}
+
+#[test]
+fn a_host_supplied_grid_wider_than_the_model_is_rejected_before_it_is_written() {
+    // The sibling above overflows `rows * cols`; this one does not. A 2x3 grid
+    // on a 4-variable model multiplies to 6, well inside `usize`, and every
+    // index it produces is a plain in-range `usize` -- so the addressability
+    // arm alone accepts it and row 1 addresses flat indices 3, 4 and 5. Only
+    // index 3 is a variable the model declared.
+    //
+    // `RESIZE` bounds `rows * cols <= size`, so no bytecode can build this
+    // model; a host installing one directly can (QUI-1164). ONEHOTR then
+    // *writes*, and `XqmxModel::add_linear`/`add_quad` grow a sparse map with
+    // no bound of their own, so without the `size` half of the check the VM
+    // would mint `linear[4]`, `linear[5]` and the pairs among them out of
+    // nothing and halt successfully -- a model that solves cleanly and
+    // answers wrongly, which is the failure QUI-1107 exists to remove.
+    let mut model = xqvm::XqmxModel::new(Domain::Binary, 4);
+    model.rows = 2;
+    model.cols = 3;
+
+    let mut b = InstructionBuilder::new();
+    b.emit_push(1)
+        .emit_push(1)
+        .emit_one_hot_r(Register(0))
+        .emit_halt();
+    let bytecode = b.build().expect("builder build");
+
+    let mut vm = Vm::new();
+    vm.set_register(0, RegVal::Model(model));
+    let err = vm.run(&bytecode).expect_err("expected error");
+    assert!(
+        matches!(
+            err,
+            Error::InvalidGridDimensions {
+                rows: 2,
+                cols: 3,
+                ..
+            }
+        ),
+        "expected InvalidGridDimensions {{ rows: 2, cols: 3 }}, got {err:?}"
     );
 }
 

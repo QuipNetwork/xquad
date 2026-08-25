@@ -22,6 +22,8 @@ The order is observable whenever an index appears twice in the same `indices` ve
 
 ### An expansion that would write nothing
 
+This section settles one half of the grid precondition [ISA.md](ISA.md#xqmx-grid) states normatively -- the no-grid half. The other half, an index outside the axis extent, is not a question about writing nothing: it raises `IndexOutOfBounds` because the variables it would write to are not the ones named, and ISA.md is the statement of record for it.
+
 `ONEHOTR` and `ONEHOTC` raise `InvalidGridDimensions` on a register with no grid, rather than expanding to nothing and continuing, while `EQUALITY` accepts an empty `indices` vector and writes nothing. That is not an inconsistency: an absent grid is a precondition the program never established, so there is no row to constrain and the instruction cannot mean anything, whereas an empty `indices` vector is a caller-supplied set that is legitimately empty, and a constraint over no variables is vacuously satisfied.
 
 ---

@@ -4,10 +4,11 @@
 ; the grid: the Rust VM used to sum absent coefficients to 0 while
 ; xqvm_py raised, so this vector pins IndexOutOfBounds on both.
 ;
-; The grid is deliberately not square. The Rust helper that validates a
-; grid-addressed operand takes the axis extent as a bare parameter the
-; caller supplies, and against a square grid handing it the column count
-; where the row count belongs changes nothing observable.
+; The grid is deliberately not square, and the row is deliberately inside
+; the column count, so this pins the extent that is actually addressed
+; rather than merely rejecting a large number: a check against the column
+; count would accept row 1 here, and against a square grid the two are
+; indistinguishable.
 
 PUSH 3
 BQMX r0
