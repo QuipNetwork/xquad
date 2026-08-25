@@ -1,0 +1,28 @@
+; iter_short_stack_int_register: ITER pops both operands before it reads its
+; register, so a short stack raises StackUnderflow even when the register
+; would also have been rejected.
+;
+; spec/xqvm/ISA.md's ITER row orders the steps "Pop `end_idx`, then
+; `start_idx`. Read vec from `reg`", and spec/xqvm/SPEC.md's error-precedence
+; rule makes operand pops first within every instruction. xqvm_py resolved
+; the register first, so this program raised TYPE_MISMATCH there and
+; STACK_UNDERFLOW on the Rust VM.
+;
+; The register is filled from calldata rather than left unset so that the
+; only fault available to the register arm is a type mismatch: an unset
+; register would raise UNSET_REGISTER on both VMs after
+; iter_unset_register's fix and would not discriminate the pop order.
+;
+; One value is pushed where ITER needs two.
+
+PUSH 0
+INPUT r0         ; r0 = 5, an int
+PUSH 1           ; one operand where ITER pops two
+ITER r0
+NEXT
+
+PUSH 7
+STOW r1
+PUSH 0
+OUTPUT r1
+HALT

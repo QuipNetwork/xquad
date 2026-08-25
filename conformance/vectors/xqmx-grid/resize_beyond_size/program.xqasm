@@ -1,0 +1,23 @@
+; resize_beyond_size: a grid may not describe cells the register never
+; declared.
+;
+; A grid is a reinterpretation of variables the program already allocated
+; and already paid for, so `rows * cols` may not exceed the model or
+; sample's size. Without the bound this twenty-two byte program is
+; verifier-clean and runs for geological time: the ROWSUM that follows
+; scans 2^62 cells for one metered step and charges nothing, so a caller
+; who pre-pays ten steps buys an execution that never finishes.
+;
+; The rule is `<=` rather than `==`, because EQUALITY, ATLEAST, ATLEASTW
+; and REDUCE append slack and auxiliary variables past the grid.
+
+PUSH 4
+BQMX r0
+
+PUSH 1                        ; rows
+PUSH 4611686018427387904      ; cols = 2^62
+RESIZE r0
+
+PUSH 0                        ; row
+ROWSUM r0
+HALT

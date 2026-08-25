@@ -1,20 +1,28 @@
-; colsum_overflow: a column whose coefficients sum past i64::MAX must raise.
+; colsum_overflow: a column whose partial sum leaves the i64 range must
+; raise.
 ;
-; linear = [i64::MAX, 1] down a 2x1 grid: the partial sum after the second
-; row is 2^63, not representable, so COLSUM raises ArithmeticOverflow
-; rather than wrapping (SPEC.md overflow rule on coefficient reductions).
+; The negative mirror of rowsum_overflow: linear = [i64::MIN, -1, 1] down
+; a 3x1 grid. The partial sum after the second row is -2^63 - 1, which is
+; not representable, so COLSUM raises ArithmeticOverflow.
+;
+; Discriminating for the same reason: a wrapping implementation walks
+; i64::MIN -> i64::MAX -> i64::MIN and pushes the exactly correct total,
+; and a descending fold of the same column never leaves the range.
 
-PUSH 2
+PUSH 3
 BQMX r0
 
-PUSH 2           ; rows
+PUSH 3           ; rows
 PUSH 1           ; cols
 RESIZE r0
 
 PUSH 0
-PUSH 9223372036854775807
+PUSH -9223372036854775808
 SETLINE r0
 PUSH 1
+PUSH -1
+SETLINE r0
+PUSH 2
 PUSH 1
 SETLINE r0
 

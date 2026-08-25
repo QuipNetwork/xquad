@@ -10,7 +10,7 @@ formula onto real hardware.
 
 A sample's energy with respect to a model is:
 
-$$E = \sum_i \text{linear}[i] \cdot x_i \;+\; \sum_{i<j} \text{quadratic}[i,j] \cdot x_i \cdot x_j$$
+$$E = \sum_i \text{linear}[i] \cdot x_i \;+\; \sum_{i \le j} \text{quadratic}[i,j] \cdot x_i \cdot x_j$$
 
 identical to the model's Hamiltonian from
 [Quadratic Models](../concepts/quadratic-models.md), evaluated at one
@@ -25,17 +25,28 @@ formula two independent ways.
 exactly, an integer-to-integer comparison with zero tolerance for
 drift. Every XQMX
 coefficient and every variable assignment is an integer, so the energy
-formula is a sum of integer products -- always an exact integer, never
-a float that merely rounds to the right answer. `Solver._recompute_energy()`
+formula is a sum of integer products, not a float that merely rounds to
+the right answer. It is an exact integer whenever it is representable at
+all, and representable is a real condition: `compute_energy` checks every
+term product and every partial sum against the `i64` range and raises
+`ArithmeticOverflow` rather than returning a wrapped number, so a model
+whose energy leaves that range has no energy this contract can report.
+`Solver._recompute_energy()`
 calls `compute_energy()` and casts to `int`; every backend in this
 chapter uses it instead of trusting whatever float its underlying
 library reports. That raw float, where one exists, survives only as
 `metadata["params"]["raw_energy"]`, for diagnostics -- never as the
 authoritative value.
 
-A verifier program never has to take a solver's word for its own
-answer. It recomputes the identical integer independently with
-`ENERGY`, and `==` either holds or it does not.
+A verifier program never has to take a solver's word for its own answer.
+It recomputes the same integer independently with `ENERGY`. There are
+three outcomes, not two: the comparison holds, the comparison fails, or
+`ENERGY` raises `ArithmeticOverflow` and the verifier produces no verdict
+at all. The third is not a solver disagreement and must not be read as
+one -- it says the model's energy left the `i64` range on the way to
+being computed. Both `ENERGY` and `compute_energy` accumulate in the same
+sorted key order and check the same intermediates, so the two agree on
+which models fall into it.
 
 ## A Large Penalty Does Not Corrupt the Model
 

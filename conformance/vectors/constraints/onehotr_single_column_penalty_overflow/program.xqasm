@@ -1,0 +1,28 @@
+; onehotr_single_column_penalty_overflow: a constraint expansion validates
+; its penalty scale factors before it emits terms, so an out-of-range factor
+; raises whether or not the expansion goes on to emit a term that uses it.
+;
+; A 2x1 grid gives ONEHOTR exactly one column, so the pair loop that
+; consumes 2 * penalty never runs. Rust computes the factor above the loop
+; and raises; xqvm_py evaluated it lazily inside the loop and halted. Under
+; the pallet that is an eight-instruction extrinsic that faults on one node
+; version and succeeds on another.
+;
+; penalty = 2^62, so 2 * penalty = 2^63 is not representable while -penalty
+; is -- the linear factor is fine and only the quadratic one is not.
+;
+; EQUALITY, ATLEAST and ATLEASTW already behaved this way on both VMs
+; (see constraints/equality_penalty_overflow), so this makes all five
+; expansion sites consistent rather than making ONEHOT the exception.
+
+PUSH 2
+BQMX r0
+
+PUSH 2                     ; rows
+PUSH 1                     ; cols
+RESIZE r0
+
+PUSH 0                     ; row
+PUSH 4611686018427387904   ; penalty
+ONEHOTR r0
+HALT

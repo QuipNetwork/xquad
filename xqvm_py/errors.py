@@ -113,6 +113,22 @@ class MemoryLimitExceeded(XQVMError):
         )
 
 
+class InvalidAllocation(XQVMError):
+    """Raised when an allocator is handed a size that is not an allocation.
+
+    Mirrors Rust's `xqvm::Error::InvalidAllocation`. The six XQMX allocators
+    take their size straight off the value stack, where a negative value is
+    one PUSH away; a size that is not an allocation is a program error, not a
+    request for an empty model. Rust additionally raises this for a size too
+    large for the executing target to address, which cannot arise here
+    because Python integers are unbounded.
+    """
+
+    def __init__(self, size: int):
+        self.size = size
+        super().__init__(f"Invalid allocation size: {size}")
+
+
 class OutputIndex(XQVMError):
     """Raised when OUTPUT addresses a slot beyond the allocated count.
 
@@ -127,6 +143,24 @@ class OutputIndex(XQVMError):
         super().__init__(f"Output index {index} out of range (len {length})")
 
 
+class CallDataIndex(XQVMError):
+    """Raised when INPUT addresses a calldata slot that does not exist.
+
+    Mirrors Rust's `xqvm::Error::CallDataIndex`. The counterpart to
+    `OutputIndex` on the other side of the host boundary: the host fixes
+    the calldata before the run, so a slot outside it is a program error
+    and not a null result. The bound is the slot count, not the set of
+    populated slots -- `spec/xqvm/ISA.md`'s INPUT row admits an in-range
+    slot the host left unset, and reading one leaves the register unset
+    rather than raising this.
+    """
+
+    def __init__(self, index: int, length: int):
+        self.index = index
+        self.length = length
+        super().__init__(f"Calldata index {index} out of range (len {length})")
+
+
 class IndexOutOfBounds(XQVMError):
     """Raised when an index falls outside its valid range.
 
@@ -139,6 +173,78 @@ class IndexOutOfBounds(XQVMError):
         self.index = index
         self.length = length
         super().__init__(f"Index {index} out of range [0, {length})")
+
+
+class InvalidDiscreteK(XQVMError):
+    """Raised when a discrete XQMX is allocated with a half-width below 2.
+
+    Mirrors Rust's `xqvm::Error::InvalidDiscreteK`. `XQMX` and `XSMX` take
+    `k` off the value stack, and a domain of `[-k, k-1]` needs at least two
+    values to be a domain at all.
+    """
+
+    def __init__(self, k: int):
+        self.k = k
+        super().__init__(f"Invalid discrete k: {k} (requires k >= 2)")
+
+
+class InvalidShift(XQVMError):
+    """Raised when SHL or SHR is given a shift amount outside `[0, 64)`.
+
+    Mirrors Rust's `xqvm::Error::InvalidShift`.
+    """
+
+    def __init__(self, amount: int):
+        self.amount = amount
+        super().__init__(f"Invalid shift amount: {amount} (requires 0 <= amount < 64)")
+
+
+class SizeMismatch(XQVMError):
+    """Raised when two XQMX registers that must agree on `size` do not.
+
+    Mirrors Rust's `xqvm::Error::SizeMismatch`, which is what `ENERGY`
+    raises for a sample whose variable count differs from the model's.
+    """
+
+    def __init__(self, a: int, b: int, context: str = ""):
+        self.a = a
+        self.b = b
+        self.context = context
+        msg = f"Size mismatch: {a} vs {b}"
+        if context:
+            msg += f" ({context})"
+        super().__init__(msg)
+
+
+class VecLengthMismatch(XQVMError):
+    """Raised when two operand lists that must be the same length are not.
+
+    Mirrors Rust's `xqvm::Error::VecLengthMismatch`, which is what the
+    weighted constraint expansions raise for an `indices`/`coeffs` pair of
+    unequal length.
+    """
+
+    def __init__(self, what: str, a: int, other: str, b: int):
+        self.what = what
+        self.a = a
+        self.other = other
+        self.b = b
+        super().__init__(f"Vec length mismatch: {what} has {a}, {other} has {b}")
+
+
+class TruncatedInstruction(XQVMError):
+    """Raised when an instruction's operands run past the end of the stream.
+
+    Mirrors Rust's `xqvm::Error::TruncatedInstruction`.
+    """
+
+    def __init__(self, offset: int, needed: int, available: int):
+        self.offset = offset
+        self.needed = needed
+        self.available = available
+        super().__init__(
+            f"Truncated instruction at byte offset {offset}: need {needed} operand bytes, have {available}"
+        )
 
 
 class InvalidGridDimensions(XQVMError):
@@ -169,6 +275,20 @@ class TargetNotFound(XQVMError):
     def __init__(self, target_id: int):
         self.target_id = target_id
         super().__init__(f"Target not found: {target_id}")
+
+
+class LoopStackOverflow(XQVMError):
+    """Raised when loop nesting exceeds the maximum depth.
+
+    RANGE and ITER each push a frame and only NEXT pops one, so a program
+    that jumps back over a loop header without running its NEXT grows the
+    loop stack without bound. Mirrors Rust's
+    `xqvm::Error::LoopStackOverflow`.
+    """
+
+    def __init__(self, max_depth: int):
+        self.max_depth = max_depth
+        super().__init__(f"Loop stack overflow: maximum nesting depth {max_depth} exceeded")
 
 
 class LoopError(XQVMError):

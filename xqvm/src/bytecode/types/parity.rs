@@ -51,6 +51,10 @@ crate::opcodes!(macro_opcodes_table);
     clippy::indexing_slicing,
     reason = "const fn cannot use slice::get; loop condition bounds the index"
 )]
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "the `while i < ab.len()` condition bounds the cursor; const fn cannot use checked_add"
+)]
 const fn str_eq(a: &str, b: &str) -> bool {
     let ab = a.as_bytes();
     let bb = b.as_bytes();
@@ -70,6 +74,10 @@ const fn str_eq(a: &str, b: &str) -> bool {
 #[expect(
     clippy::indexing_slicing,
     reason = "const fn cannot use slice::get; loop condition bounds the index"
+)]
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "the `while i < MACRO_OPCODES.len()` condition bounds the cursor; const fn cannot use checked_add"
 )]
 const fn tables_match() -> bool {
     if MACRO_OPCODES.len() != YAML_OPCODES.len() {

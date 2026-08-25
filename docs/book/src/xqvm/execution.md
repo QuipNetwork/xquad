@@ -7,20 +7,27 @@ This chapter describes how the VM fetches, decodes, and executes instructions.
 The VM processes instructions in a loop:
 
 ```
-1. Check step limit → error if exceeded
-2. Increment step counter
-3. Fetch next instruction from the instruction stream
-4. Decode the opcode byte and operands
-5. Dispatch to the handler for that instruction
-6. Handle the control flow result:
+1. Fetch and decode the next instruction from the instruction stream
+   - end of stream → stop execution, without consulting the step budget
+2. Check the step budget → StepLimitExceeded if the counter already
+   reached the limit; the fetched instruction does not execute
+3. Increment the step counter
+4. Dispatch to the handler for that instruction
+5. Handle the control flow result:
    - Continue   → advance to next instruction
    - Halt       → stop execution
    - Jump(id)   → seek to the byte offset recorded for that TARGET id
    - Seek(off)  → seek to byte offset (used by NEXT)
    - StartLoop  → a loop frame was pushed; continue to the next instruction
    - SkipLoop   → loop count was zero or negative; scan past the matching NEXT
-7. Repeat from step 1
+6. Repeat from step 1
 ```
+
+The fetch comes before the budget check, not after, and that ordering is
+normative rather than an implementation detail -- see
+[Step budget](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/SPEC.md#step-budget)
+in the specification. The fetch that finds no instruction ends the run
+before the budget is consulted, so it is not a step.
 
 ## Instruction Stream
 
@@ -42,26 +49,40 @@ Each decoded instruction yields:
 
 ## Step Counting
 
-The VM maintains a step counter that increments after every instruction
-dispatch. A configurable step limit (default: 10,000,000) prevents runaway
-programs. When the limit is reached, execution stops with a
-`StepLimitExceeded` error.
+One step is one instruction fetched and dispatched. Every instruction
+costs one step and none costs more: `NOP`, `TARGET` and `HALT` are steps,
+an instruction reached by a jump or a loop back-edge is a step each time,
+and an instruction that faults has been charged before it faults. The
+forward scan of the empty-loop skip is not metered; the instructions it
+passes over are never fetched for execution.
+
+A configurable step limit (default: 10,000,000) bounds runaway programs.
+When the counter reaches it, execution stops with `StepLimitExceeded` and
+the fetched instruction does not run.
 
 ```rust
 let mut vm = Vm::new();
 vm.set_step_limit(1_000_000);  // custom limit
-// set_step_limit(0) sets the limit to u64::MAX (effectively unlimited)
+vm.set_step_limit(0);          // exact: permits no instructions at all
+vm.set_unlimited_steps();      // the only unbounded spelling
 ```
 
-The step counter is accessible after execution via `vm.steps()`. For a
-`HALT`-terminated program it reports the exact number of instructions
-executed, since the loop breaks right after dispatching `HALT`. A program
-that runs off the end of the instruction stream without a `HALT` gets one
-extra count: the counter increments before the next instruction is fetched,
-so the fetch that finds nothing and breaks the loop has already been
-counted. `xqvm_py`'s executor increments after checking for more
-instructions, so the two interpreters can disagree by one on the same
-non-`HALT`-terminated program.
+The limit is exact. Until 0.4.0 `set_step_limit(0)` meant `u64::MAX`,
+which made a zero budget the most dangerous value a caller could pass
+rather than the safest -- the wrong way round for anything taking a limit
+from untrusted input. There is no sentinel now: `set_unlimited_steps()`
+is how a caller opts out, and it has to be written.
+
+The step counter is accessible after execution via `vm.steps()`, and it
+is reset to zero at the start of every run. For a `HALT`-terminated
+program it reports the exact number of instructions executed, since the
+loop breaks right after dispatching `HALT`. A program that runs off the
+end of the instruction stream without a `HALT` reports the same exact
+count: reaching the end is not a step, so the probe that finds nothing is
+never charged. Both implementations count this way, so a program that
+runs off the end having executed exactly `limit` instructions succeeds on
+either, and a program with no instructions at all succeeds under a budget
+of `0`.
 
 ## Allocation Accounting
 

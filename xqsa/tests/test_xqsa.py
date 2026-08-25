@@ -35,6 +35,8 @@ _IN_CI = os.environ.get("CI") is not None
 dimod = pytest.importorskip("dimod", reason="dwave-samplers / dimod not installed")
 
 from xqsa import Solver, SolverDWaveCPU, SolverDWaveQPU, SolverResult
+from xqvm_py.errors import ArithmeticOverflow
+from xqvm_py.limits import I64_MAX
 from xqvm_py.xqmx import XQMX, XQMXMode, compute_energy
 
 # ---------------------------------------------------------------------------
@@ -126,6 +128,36 @@ class TestSolver:
         solver = DummySolver()
         model = XQMX.spin_model(2)
         solver._validate_model(model)  # should not raise
+
+    def test_recompute_energy_raises_past_the_i64_range(self) -> None:
+        """_recompute_energy propagates ArithmeticOverflow.
+
+        `Solver._recompute_energy` is the authoritative energy for all five
+        backends, and its contract narrowed: it now raises where 0.3.2
+        returned a value. `git grep ArithmeticOverflow -- xqsa/` returned
+        nothing, so no test anywhere pinned the raise and a backend that
+        started swallowing it would go unnoticed.
+
+        The sorted fold reaches I64_MAX + 5 before the -10 term could bring
+        the total back to the representable I64_MAX - 5, so the exactly
+        correct answer is one the solver may no longer report.
+        """
+
+        class DummySolver(Solver):
+            def solve(self, model, **kwargs):
+                pass
+
+        model = XQMX.binary_model(3)
+        model.set_linear(0, I64_MAX)
+        model.set_linear(1, 5)
+        model.set_linear(2, -10)
+
+        sample = XQMX.binary_sample(3)
+        for i in range(3):
+            sample.set_linear(i, 1)
+
+        with pytest.raises(ArithmeticOverflow, match=r"\(ENERGY\)"):
+            DummySolver()._recompute_energy(model, sample)
 
 
 # ---------------------------------------------------------------------------

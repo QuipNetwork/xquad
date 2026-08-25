@@ -1,0 +1,27 @@
+; slack_bad_coeffs_leaves_indices_unmutated: a SLACK that faults on its
+; coeffs register does not append to its indices register first.
+;
+; exec_slack discriminated `indices`, ran the whole index loop, and only
+; then discriminated `coeffs`, so a bad coeffs register left indices
+; already grown by an instruction that faulted. xqvm_py resolved both
+; before appending anything. The observable difference is the vec's
+; contents after the fault, which no vector can read, so what this pins is
+; the fault identity that both must agree on plus the ordering that makes
+; the mutation impossible.
+;
+; r0 is a real vec<int>, r1 is an int from calldata. Capacity is positive,
+; so the append path is entered rather than the empty-capacity return.
+
+VECI r0          ; r0 = empty vec<int>
+PUSH 0
+INPUT r1         ; r1 = 5, an int, not a vec<int>
+
+PUSH 0           ; start_index
+PUSH 3           ; capacity -- positive, two slack entries
+SLACK r0 r1
+
+PUSH 7
+STOW r2
+PUSH 0
+OUTPUT r2
+HALT

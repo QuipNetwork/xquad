@@ -24,7 +24,11 @@ import pytest
 from xqvm_py.errors import (
     ArithmeticOverflow,
     IndexOutOfBounds,
+    InvalidAllocation,
+    InvalidDiscreteK,
     InvalidGridDimensions,
+    SizeMismatch,
+    VecLengthMismatch,
     XQMXModeError,
 )
 from xqvm_py.limits import I64_MAX, I64_MIN
@@ -105,13 +109,13 @@ class TestXQMXConstruction:
         assert x.cols == 5
 
     def test_negative_size_raises(self):
-        """Negative size should raise ValueError."""
-        with pytest.raises(ValueError):
+        """Negative size should raise InvalidAllocation."""
+        with pytest.raises(InvalidAllocation):
             XQMX.binary_model(size=-1)
 
     def test_discrete_k_validation(self):
-        """Discrete k < 2 should raise ValueError."""
-        with pytest.raises(ValueError):
+        """Discrete k < 2 should raise InvalidDiscreteK."""
+        with pytest.raises(InvalidDiscreteK):
             XQMX.discrete_model(size=10, k=1)
 
 
@@ -166,13 +170,13 @@ class TestLinearCoefficients:
         assert binary_model.get_linear(5) == 3
 
     def test_linear_index_bounds(self, binary_model):
-        """Out of bounds index raises IndexError."""
-        with pytest.raises(IndexError):
+        """Out of bounds index raises IndexOutOfBounds."""
+        with pytest.raises(IndexOutOfBounds):
             binary_model.set_linear(100, 1)
 
     def test_linear_negative_index(self, binary_model):
-        """Negative index raises IndexError."""
-        with pytest.raises(IndexError):
+        """Negative index raises IndexOutOfBounds."""
+        with pytest.raises(IndexOutOfBounds):
             binary_model.set_linear(-1, 1)
 
 
@@ -213,8 +217,8 @@ class TestQuadraticCoefficients:
         assert binary_model.get_quadratic(3, 4) == 2
 
     def test_quadratic_index_bounds(self, binary_model):
-        """Out of bounds indices raise IndexError."""
-        with pytest.raises(IndexError):
+        """Out of bounds indices raise IndexOutOfBounds."""
+        with pytest.raises(IndexOutOfBounds):
             binary_model.set_quadratic(0, 100, 1)
 
     def test_quadratic_same_index_allowed(self, binary_model):
@@ -276,19 +280,33 @@ class TestGridOperations:
         assert col_sum(grid_model, 1) == 0
 
     def test_row_sum_overflow_raises(self, grid_model):
-        """row_sum with a partial sum past i64::MAX raises ArithmeticOverflow."""
+        """row_sum with a partial sum past i64::MAX raises ArithmeticOverflow.
+
+        The third coefficient brings the exact total back to I64_MAX, so a
+        wrapping fold returns the exactly correct answer instead of raising:
+        the row discriminates rather than merely agreeing. It also pins the
+        ascending flat-index order, which a descending fold of the same row
+        would never overflow.
+        """
         grid_model.set_linear(0, I64_MAX)
         grid_model.set_linear(1, 1)
+        grid_model.set_linear(2, -1)
 
-        with pytest.raises(ArithmeticOverflow):
+        with pytest.raises(ArithmeticOverflow, match=r"\(ROWSUM\)"):
             row_sum(grid_model, 0)
 
     def test_col_sum_overflow_raises(self, grid_model):
-        """col_sum with a partial sum past i64::MIN raises ArithmeticOverflow."""
+        """col_sum with a partial sum past i64::MIN raises ArithmeticOverflow.
+
+        The negative mirror of the row case, discriminating the same way: a
+        wrapping fold walks I64_MIN -> I64_MAX -> I64_MIN and returns the
+        exactly correct total.
+        """
         grid_model.set_linear(0, I64_MIN)
         grid_model.set_linear(5, -1)
+        grid_model.set_linear(10, 1)
 
-        with pytest.raises(ArithmeticOverflow):
+        with pytest.raises(ArithmeticOverflow, match=r"\(COLSUM\)"):
             col_sum(grid_model, 0)
 
     def test_row_sum_row_out_of_range_raises(self, grid_model):
@@ -460,9 +478,9 @@ class TestHLFExpandEquality:
         assert len(model.quadratic) == 0
 
     def test_length_mismatch_raises(self):
-        """Mismatched indices/coeffs lengths raise ValueError."""
+        """Mismatched indices/coeffs lengths raise VecLengthMismatch."""
         model = XQMX.binary_model(size=5)
-        with pytest.raises(ValueError, match="indices length"):
+        with pytest.raises(VecLengthMismatch, match="indices"):
             expand_equality(model, [0, 1, 2], [1, 1], target=1, penalty=1)
 
     def test_requires_model_mode(self):
@@ -514,21 +532,21 @@ class TestHLFExpandReduce:
         assert model.get_linear(w) == 30
 
     def test_var_a_out_of_range_raises(self):
-        """var_a out of range raises ValueError."""
+        """var_a out of range raises IndexOutOfBounds."""
         model = XQMX.binary_model(size=3)
-        with pytest.raises(ValueError, match="var_a"):
+        with pytest.raises(IndexOutOfBounds, match="Index 5"):
             expand_reduce(model, 5, 1, p_aux=10)
 
     def test_var_b_out_of_range_raises(self):
-        """var_b out of range raises ValueError."""
+        """var_b out of range raises IndexOutOfBounds."""
         model = XQMX.binary_model(size=3)
-        with pytest.raises(ValueError, match="var_b"):
+        with pytest.raises(IndexOutOfBounds, match="Index 5"):
             expand_reduce(model, 0, 5, p_aux=10)
 
     def test_negative_var_raises(self):
-        """Negative variable index raises ValueError."""
+        """Negative variable index raises IndexOutOfBounds."""
         model = XQMX.binary_model(size=3)
-        with pytest.raises(ValueError):
+        with pytest.raises(IndexOutOfBounds):
             expand_reduce(model, -1, 1, p_aux=10)
 
     def test_requires_model_mode(self):
@@ -631,7 +649,7 @@ class TestComputeEnergy:
 
         # Sorted order: I64_MAX, then +5 overflows before -10 could bring
         # the exact total (I64_MAX - 5) back into range.
-        with pytest.raises(ArithmeticOverflow):
+        with pytest.raises(ArithmeticOverflow, match=r"\(ENERGY\)"):
             compute_energy(model, sample)
 
     def test_energy_term_product_overflow_raises(self):
@@ -642,15 +660,15 @@ class TestComputeEnergy:
         sample = XQMX.spin_sample(size=1)
         sample.set_linear(0, -1)
 
-        with pytest.raises(ArithmeticOverflow):
+        with pytest.raises(ArithmeticOverflow, match=r"\(ENERGY linear term\)"):
             compute_energy(model, sample)
 
     def test_energy_size_mismatch_raises(self):
-        """Size mismatch raises ValueError."""
+        """Size mismatch raises SizeMismatch."""
         model = XQMX.binary_model(size=5)
         sample = XQMX.binary_sample(size=3)
 
-        with pytest.raises(ValueError):
+        with pytest.raises(SizeMismatch):
             compute_energy(model, sample)
 
     def test_energy_zero_for_empty(self):

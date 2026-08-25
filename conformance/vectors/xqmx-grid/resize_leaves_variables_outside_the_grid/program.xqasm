@@ -1,0 +1,19 @@
+; resize_leaves_variables_outside_the_grid: the extent bound is `<=`, not
+; `==`.
+;
+; EQUALITY, ATLEAST, ATLEASTW and REDUCE append slack and auxiliary
+; variables past the grid, and nothing ever shrinks a register's size, so
+; a model whose size exceeds its extent is the normal state after any of
+; them. A later RESIZE over a strict subset of the variables must still be
+; accepted.
+
+PUSH 10
+BQMX r0
+
+PUSH 2           ; rows
+PUSH 3           ; cols -- 6 cells over 10 declared variables
+RESIZE r0
+
+PUSH 1           ; row
+ROWSUM r0
+HALT

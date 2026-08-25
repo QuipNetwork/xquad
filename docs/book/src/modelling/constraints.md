@@ -16,8 +16,8 @@ Every constraint method hangs off `problem.model`, the `ModelRef` that
 
 | DSL call | Enforces | Reach for it when |
 | --- | --- | --- |
-| `model.apply_onehot_row(row, penalty)` | Exactly one variable in grid row `row` is 1 | A 2D model needs "exactly one choice per row" -- one city per tour position |
-| `model.apply_onehot_col(col, penalty)` | Exactly one variable in grid column `col` is 1 | The column-wise mirror -- one position per city |
+| `model.apply_onehot_row(row, penalty)` | Exactly one variable in grid row `row` is 1 | A 2D model needs "exactly one choice per row" -- one city per tour position. Requires a grid; `row` must name one the grid declares |
+| `model.apply_onehot_col(col, penalty)` | Exactly one variable in grid column `col` is 1 | The column-wise mirror -- one position per city. Same grid requirement |
 | `model.apply_exclude(a, b, penalty)` | `a` and `b` are not both 1 | Two choices conflict and picking both is meaningless or invalid |
 | `model.apply_implies(a, b, penalty)` | If `a` is 1, `b` is 1 | One choice requires another -- selecting a route requires its start node open |
 | `model.apply_equality(indices, coeffs, target, penalty)` | `sum(coeffs[k] * x[indices[k]]) == target` | A weighted sum equals an exact value -- one-hot is a special case of this (all-1 coefficients, target 1); `exclude` is not, despite the resemblance |
@@ -43,6 +43,15 @@ with problem.range(0, n) as c:
 problem.model.apply_exclude((0, 0), (1, 1), penalty=50)
 problem.model.apply_implies((0, 1), (1, 0), penalty=50)
 ```
+
+`rows` and `cols` on `define_model` are what make the two one-hot forms
+legal. Omit them and every `apply_onehot_row`/`apply_onehot_col` call
+raises `InvalidGridDimensions` at run time, on either interpreter --
+`xquad verify` cannot catch it, because grid extents are runtime values.
+The product `rows * cols` must also fit inside `size`; a grid cannot
+describe cells the model never declared. `atleast`, `atleastw` and
+`inequality` append slack variables past the grid and only ever grow
+`size`, so they never invalidate a grid that was legal when it was set.
 
 Compiling and running this for `n = 2` produces a model whose linear and
 quadratic maps match the row/column penalties plus the two pairwise terms:

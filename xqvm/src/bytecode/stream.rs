@@ -287,6 +287,10 @@ impl<'a> InstructionStream<'a> {
     ///   no jump-table entry targets this address.
     /// - `Some(Err(e))` when the bytes at the cursor cannot be decoded.
     ///   The cursor advances by one byte so subsequent calls make progress.
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "`self.pos < self.bytes.len()` is checked on entry and one instruction is at most nine bytes (`spec/xqvm/ENCODING.md`), so the cursor cannot overflow usize"
+    )]
     pub fn next_instruction(
         &mut self,
     ) -> Option<Result<(usize, Option<String>, crate::bytecode::types::Instruction)>> {

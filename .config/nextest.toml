@@ -1,0 +1,33 @@
+# Copyright (C) 2026 Postquant Labs Incorporated
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# nextest configuration for the XQuad workspace.
+#
+# The workspace under test is a VM whose whole subject is bounded
+# execution, so a regression in a budget is a test that does not
+# terminate rather than one that fails. Without a per-test timeout such a
+# test runs to the GitLab job timeout and reports as an infrastructure
+# stall, which is the least legible failure the pipeline can produce.
+#
+# The slowest test in the workspace finishes well inside a second, so
+# `period` is set for the noisiest shared runner rather than for the
+# work: a test still running after 30s is reported as slow, and one
+# still running after four of those periods is killed and reported as a
+# timeout failure.
+
+[profile.default]
+slow-timeout = { period = "30s", terminate-after = 4 }

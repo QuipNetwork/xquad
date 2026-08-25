@@ -61,7 +61,7 @@ Every `.xqb` file begins with a fixed 15-byte XQBC header, followed immediately 
    0..4    4    Magic: b"XQBC"
       4    1    Version: 0x01 (current format version)
       5    1    input_slots: u8 -- count of INPUT instructions (calldata arity)
-      6    1    output_slots: u8 -- count of OUTPUT instructions (minimum output-slot count)
+      6    1    output_slots: u8 -- count of OUTPUT instructions
    7..11   4    code_len: u32 big-endian -- byte length of the instruction stream
   11..15   4    crc32: u32 big-endian -- CRC-32/ISO-HDLC of the instruction stream
   15+      *    instruction stream (raw opcode + operand bytes)
@@ -75,7 +75,7 @@ Decoders must:
 4. Reject files where the payload length differs from `code_len`.
 5. Reject files where the CRC-32/ISO-HDLC of the payload does not match `crc32`.
 
-`input_slots` and `output_slots` are informational; decoders may use them to pre-size calldata and output-slot arrays without scanning the instruction stream. They are not validated by the decoder.
+`input_slots` and `output_slots` are informational and are not validated by the decoder. Each counts *instructions* of that kind in the stream, saturating at 255. Neither is a slot count. A program with three `OUTPUT` instructions that all write slot 0 records `output_slots = 3` against a required slot count of 1; a program with one `OUTPUT` inside a loop that writes slots 0 through 9 records `output_slots = 1` against a required count of 10. Neither byte can therefore be used to pre-size a calldata or output-slot array. The host fixes both counts before the run, and a slot outside them raises `CallDataIndex` or `OutputIndex` at run time.
 
 ### Instruction Stream
 

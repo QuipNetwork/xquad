@@ -102,26 +102,26 @@ Reference](../xqvm/).
 
 A vector exists only where someone wrote one. Nothing tracks coverage:
 there is no script, manifest, or report that computes which opcodes have
-a vector and which don't. `conformance/vectors/` currently holds 32
-vectors across its six directories, against 93 opcodes, and several
-vectors exercise the same opcode -- `bitlen_small` and `bitlen_negative`
-both cover `BITLEN`; three separate `slack_*` vectors all cover `SLACK`
--- so the number of distinct opcodes actually checked is well under 32.
+a vector and which don't. `conformance/vectors/` currently holds 87
+vectors across seven directories, against 93 opcodes, and many vectors
+exercise the same opcode -- `bitlen_small` and `bitlen_negative` both
+cover `BITLEN`; three separate `slack_*` vectors all cover `SLACK`; the
+`xqmx-grid` directory alone spends seventeen vectors on six opcodes --
+so the number of distinct opcodes actually checked is well under 87.
 Where a vector is missing, the harness makes no claim about that opcode
 at all. Passing CI does not mean every opcode has been checked for
 cross-implementation agreement -- only that every opcode a vector
 currently exercises has been.
 
-One concrete instance: `IDXTRIU` has no conformance vector, and the two
-implementations do not actually agree on it. Both compute the same
-upper-triangular index when called with its inputs already in order
-(\\(i \le j\\)). But the Rust implementation assumes that ordering holds
-and does not enforce it, while the Python reference swaps the two values
-first when they arrive out of order. Called with \\(i > j\\), the two VMs
-return different results. This is a real, open divergence, not a
-hypothetical one: it is the kind of gap a vector for every opcode would
-catch mechanically, instead of by reading both implementations side by
-side.
+`IDXTRIU` is the worked example of what that costs. It had no vector, and
+the two implementations disagreed on it in two separate ways: on operand
+order, and on whether an intermediate that leaves `i64` range faults. Both
+were found by reading the implementations side by side rather than by any
+mechanical check, and both are now closed, with
+`index-math/idxtriu_intermediate_overflow` and
+`index-math/idxgrid_intermediate_overflow` pinning the second. Neither
+gap was exotic; both were simply in the part of the opcode table nothing
+had written a vector for.
 
 Treat a green conformance run as evidence for the programs it actually
 tests, not as a blanket guarantee that the two implementations agree on

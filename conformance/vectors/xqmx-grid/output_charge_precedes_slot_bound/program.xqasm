@@ -1,0 +1,27 @@
+; output_charge_precedes_slot_bound: OUTPUT charges for the copy it makes
+; before it validates the slot index, so a budget too small for the copy
+; raises MemoryLimitExceeded even though the write would have been rejected
+; as out of range anyway.
+;
+; spec/xqvm/SPEC.md's error-precedence rule orders an instruction as pops,
+; then the charge, then type and range validation, and says in as many
+; words that an instruction may raise MemoryLimitExceeded "for work it
+; would never have done, because ... the index it was given is out of
+; range". exec_output checked OutputIndex first, so this program raised
+; OUTPUT_INDEX on the Rust VM and MEMORY_LIMIT_EXCEEDED on xqvm_py -- a
+; divergence the release created when it added the charge to both VMs on
+; opposite sides of the bound check.
+;
+; Sizing, against the shared 1 GiB default so no vector-level budget is
+; needed. A binary model of size n charges n * 8 to allocate and the same
+; again for the copy OUTPUT makes, since its coefficient maps are empty.
+; n = 100000000 charges 800000000 to allocate, which fits, and the copy
+; would take the total to 1600000000, which does not. Slot 99 is outside
+; the single output slot the run reserves.
+
+PUSH 100000000
+BQMX r0
+
+PUSH 99
+OUTPUT r0
+HALT

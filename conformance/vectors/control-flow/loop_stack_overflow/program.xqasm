@@ -1,0 +1,16 @@
+; loop_stack_overflow: loop nesting is capped at 8192 frames.
+;
+; RANGE and ITER each push a loop frame and only NEXT pops one, so a
+; program that jumps back over a loop header without running its NEXT
+; grows the loop stack without bound. A LoopFrame is not charged against
+; the allocation budget either, so nothing else bounded it: this six
+; instruction program grew the stack until the host ran out of memory.
+;
+; The cap mirrors the 8192-element value-stack limit that has been in
+; place since the first release.
+
+TARGET .0
+PUSH 0
+PUSH 2
+RANGE
+JUMP .0

@@ -1,0 +1,19 @@
+; bqmx_negative_size: a size that is not an allocation raises, rather than
+; installing an empty model for free.
+;
+; Every allocator used to read its size through
+; `usize::try_from(..).unwrap_or(0)` on Rust, so `PUSH -1 / BQMX r0` halted
+; Ok with a size-0 model and a zero charge, while xqvm_py raised a bare
+; ValueError outside the XQVMError hierarchy -- which the harness reports as
+; "stdout did not parse as JSON" rather than as a divergence. Two
+; instructions, verifier-clean, and no vector anywhere.
+;
+; The same `unwrap_or(0)` swallowed any size above u32::MAX on wasm32, which
+; is the runtime the Substrate pallet executes in, so five billion variables
+; were an empty model charged nothing inside the runtime and a real model on
+; a native node. That half has no in-repo home; it is pinned by the
+; crate-local `an_allocator_size_is_charged_before_it_is_narrowed`.
+
+PUSH -1
+BQMX r0
+HALT

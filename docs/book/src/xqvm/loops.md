@@ -20,7 +20,7 @@ A range frame tracks two values:
 - **`end`** -- the exclusive upper bound (`start + count`).
 
 `RANGE` pops `count` and `start` from the stack. The loop iterates `current`
-from `start` to `end - 1` (where `end = start + count`, wrapping). On each
+from `start` to `end - 1` (where `end = start + count`). On each
 `NEXT`, `current` is incremented. If `current < end`, execution seeks back to
 `body_start`; otherwise the frame is popped and execution falls through. If
 `count` is zero or negative, no frame is pushed at all: execution scans
@@ -98,9 +98,14 @@ subsequent `LVAL` calls return.
 
 ## Nesting
 
-Loops can be nested to arbitrary depth. Each `RANGE` or `ITER` pushes a new
-frame. `LVAL` and `NEXT` always operate on the **innermost** (most recently
-pushed) frame.
+Each `RANGE` or `ITER` pushes a new frame, and `LVAL` and `NEXT` always
+operate on the **innermost** (most recently pushed) frame. The loop stack
+is capped at 8,192 frames, the same cap the value stack has carried since
+the first release; a program past it fails with `LoopStackOverflow`. Real
+nesting never approaches that. The cap exists because only `NEXT` pops a
+frame, so a back-edge that re-enters a loop header without running its
+`NEXT` grows the stack once per execution and would otherwise be bounded
+only by the step budget.
 
 ```asm
 PUSH 0
@@ -119,4 +124,7 @@ NEXT
 ## Errors
 
 - **`NoActiveLoop`** -- `NEXT`, `LVAL`, or `LIDX` with an empty loop stack.
-- **`RegisterType`** -- `ITER` on a register that is not `VecInt` or `VecXqmx`.
+- **`RegisterType`** -- `ITER` on a register that is not `VecInt` or `VecXqmx`. Raised before the empty-slice check, so an `ITER` on the wrong register type faults whether the slice is empty or not.
+- **`LoopStackOverflow`** -- `RANGE` or `ITER` pushing a frame past the 8,192-frame cap.
+- **`IndexOutOfBounds`** -- `ITER` with a slice index outside the vector.
+- **`ArithmeticOverflow`** -- `RANGE` whose `start + count` leaves the `i64` range. The bound is computed before the frame is pushed, so the loop does not run at all.

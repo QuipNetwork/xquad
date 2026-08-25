@@ -83,6 +83,10 @@ use crate::opcodes;
     clippy::cast_possible_truncation,
     reason = "bytes.len() <= 8 per debug_assert; 8 * 8 = 64 always fits in u32"
 )]
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "bytes.len() is 1..=8 per the debug_assert above, so `64 - len * 8` stays in 0..=56"
+)]
 fn sign_extend_be(bytes: &[u8]) -> i64 {
     debug_assert!(!bytes.is_empty() && bytes.len() <= 8);
     let mut v = 0i64;
@@ -302,6 +306,10 @@ impl<'a> Disassembly<'a> {
     pub fn write_to(&self, out: &mut impl io::Write) -> io::Result<()> {
         // Width of the label column: longest ".N:" string, or 0 when there
         // are no labels so the column is omitted entirely.
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "`s` is a jump-table label name, so its length plus one cannot overflow usize"
+        )]
         let label_col = self
             .stream
             .labels()

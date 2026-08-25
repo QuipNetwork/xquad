@@ -149,6 +149,10 @@ impl Program {
         let code_len = code.len();
         let crc = crc32fast::hash(code);
 
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "`code_len` is the length of a live allocation, bounded by isize::MAX, so the header-plus-code capacity cannot overflow usize"
+        )]
         let mut out = Vec::with_capacity(HEADER_SIZE + code_len);
         out.extend_from_slice(MAGIC);
         out.push(FORMAT_VERSION);

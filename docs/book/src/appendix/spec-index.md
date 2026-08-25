@@ -7,13 +7,12 @@ Rust and Python implementations against each other and against
 `conformance/opcodes.yaml`. The implementation is what ships, and the two
 can diverge; where a divergence is known, the relevant book page says so.
 [Conformance](../embedding/conformance.md#coverage-is-per-opcode-and-incomplete)
-documents a live one: `IDXTRIU` swaps its two inputs when they arrive out
-of order in the spec (`spec/xqvm/ISA.md`) and in `xqvm_py`, but the Rust
-VM does not, so the two implementations disagree whenever `i > j`. No
-conformance vector catches it today.
+explains why a green run is evidence about the programs a vector covers
+rather than a blanket guarantee.
 
-Neither list is closed. For others, check the book chapter covering the
-component you are working with, or search the spec files directly.
+The lists below are not closed. For anything they omit, check the book
+chapter covering the component you are working with, or search the spec
+files directly.
 
 ## Top Level
 

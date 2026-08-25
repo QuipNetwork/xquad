@@ -1,0 +1,18 @@
+; range_end_overflow: RANGE's exclusive bound is range-checked, not wrapped.
+;
+; start = 2^63 - 2, count = 3, so end = 2^63 + 1 is not representable. Rust
+; computed it with `wrapping_add` and got 2^63 + 1 mod 2^64 = -(2^63 - 1),
+; which is less than `current`, so the loop ran exactly one iteration;
+; xqvm_py computed in unbounded integers and ran three. Different register
+; contents, and different step counts -- and step count is metering on a
+; chain that prices per step.
+;
+; spec/xqvm/SPEC.md ranges its overflow rule over every i64 operation the VM
+; performs on a program's behalf. Loop control is not carved out of it.
+
+PUSH 9223372036854775806   ; start
+PUSH 3                     ; count
+RANGE
+LIDX r0
+NEXT
+HALT

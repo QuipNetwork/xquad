@@ -6,17 +6,23 @@
 ; -10 term could bring the total back to i64::MAX - 5. Every partial sum
 ; is checked (HLF.md "Accumulation order"), so ENERGY must raise rather
 ; than return the exact total.
+;
+; The SETLINE blocks write index 2, then 0, then 1, so insertion order
+; and sorted order disagree. That makes the vector pin the accumulation
+; order as well as the fault: an insertion-order fold walks -10 ->
+; i64::MAX - 10 -> i64::MAX - 5 and never leaves the range, so it
+; succeeds where the normative sorted fold raises.
 
 PUSH 3
 BQMX r0
+PUSH 2
+PUSH -10
+SETLINE r0
 PUSH 0
 PUSH 9223372036854775807
 SETLINE r0
 PUSH 1
 PUSH 5
-SETLINE r0
-PUSH 2
-PUSH -10
 SETLINE r0
 
 PUSH 3

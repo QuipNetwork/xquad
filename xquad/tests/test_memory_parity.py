@@ -57,15 +57,35 @@ def _equality_expansion(n: int) -> str:
     return "\n".join(lines)
 
 
+# The grid is legitimately oversized rather than degenerate: the model
+# declares 4096 variables and the grid describes exactly those 4096 cells, so
+# RESIZE accepts it and the budget is what stops the O(cols^2) expansion.
+# A size-4 model resized to `1 x 2^20` is now rejected at RESIZE instead.
 HUGE_GRID_ONE_HOT = """
-PUSH 4
+PUSH 4096
 BQMX r0
 PUSH 1
-PUSH 1048576
+PUSH 4096
 RESIZE r0
 PUSH 0
 PUSH 1
 ONEHOTR r0
+HALT
+"""
+
+# OUTPUT copies a whole register into a slot the host keeps after the run, so
+# the copy is live memory that a slot bound alone does not bound. Uncharged,
+# one allocation that spends the budget exactly plus one OUTPUT per slot hands
+# the host an unbounded multiple of the budget.
+OUTPUT_AMPLIFICATION = """
+PUSH 32768
+BSMX r0
+PUSH 0
+OUTPUT r0
+PUSH 1
+OUTPUT r0
+PUSH 2
+OUTPUT r0
 HALT
 """
 
@@ -74,6 +94,7 @@ REJECTED = [
     pytest.param(OVERSIZED_MODEL, 1 << 20, id="bqmx-declared-size"),
     pytest.param(_equality_expansion(200), 1 << 14, id="equality-expansion"),
     pytest.param(HUGE_GRID_ONE_HOT, 1 << 20, id="onehotr-huge-grid"),
+    pytest.param(OUTPUT_AMPLIFICATION, 1 << 19, id="output-clone-amplification"),
 ]
 
 
@@ -105,6 +126,31 @@ def test_both_backends_reject_the_same_programs(source: str, memory_limit: int) 
         pytest.param("PUSH 1000\nBSMX r0\nHALT", id="sample"),
         pytest.param("PUSH 1000\nBQMX r0\nHALT", id="model"),
         pytest.param(_equality_expansion(20), id="equality-expansion"),
+        pytest.param(
+            "PUSH 1000\nBSMX r0\nPUSH 0\nOUTPUT r0\nPUSH 1\nOUTPUT r0\nHALT",
+            id="output-sample-clone",
+        ),
+        pytest.param(
+            "PUSH 1000\nBQMX r0\nPUSH 10\nPUSH 1\nSETLINE r0\nPUSH 0\nOUTPUT r0\nHALT",
+            id="output-model-clone",
+        ),
+        pytest.param("PUSH 7\nSTOW r0\nPUSH 0\nOUTPUT r0\nHALT", id="output-int-clone"),
+        pytest.param(
+            "VECI r0\nPUSH 1\nVECPUSH r0\nPUSH 2\nVECPUSH r0\nPUSH 0\nOUTPUT r0\nHALT",
+            id="output-vec-clone",
+        ),
+        # ITER copies its slice into the loop frame, and the copy is priced
+        # over the element type. The vec<xqmx> half of that rule is not
+        # reachable from bytecode -- VECX makes only an empty vec and
+        # VECPUSH pops from the integer stack -- and xqffi's calldata
+        # accepts a single model but not a list of them, so the vec<int>
+        # half is what a cross-backend test can pin. The model half is
+        # pinned crate-locally by xqvm's
+        # iterating_a_model_vec_costs_what_outputting_the_same_model_costs.
+        pytest.param(
+            "VECI r0\nPUSH 1\nVECPUSH r0\nPUSH 2\nVECPUSH r0\nPUSH 0\nPUSH 2\nITER r0\nNEXT\nHALT",
+            id="iter-vec-int-slice-copy",
+        ),
     ],
 )
 def test_both_backends_charge_the_same_bytes(source: str) -> None:
@@ -113,6 +159,32 @@ def test_both_backends_charge_the_same_bytes(source: str) -> None:
         vm = _run(backend, source, 1 << 30)
         charged[backend] = vm.memory_used()
     assert charged[VMBackend.RUST] > 0, "the program should have been charged something"
+    assert charged[VMBackend.RUST] == charged[VMBackend.PYTHON], (
+        f"charge mismatch -- Rust={charged[VMBackend.RUST]}, Python={charged[VMBackend.PYTHON]}"
+    )
+
+
+# RANGE is the one loop header that allocates nothing: both backends keep the
+# iteration bounds and nothing else, so a count no host could materialise is
+# admitted under a budget of a single kilobyte. The loop is left immediately
+# rather than run, because what is under test is the header's allocation and
+# not the iteration. A backend that built the iteration space eagerly would
+# either blow the budget or -- worse -- exhaust host memory while reporting
+# zero bytes charged.
+LARGE_RANGE = """
+PUSH 0
+PUSH 100000000
+RANGE
+HALT
+"""
+
+
+def test_both_backends_charge_nothing_for_a_range_header() -> None:
+    charged = {}
+    for backend in BACKENDS:
+        vm = _run(backend, LARGE_RANGE, 1 << 10)
+        charged[backend] = vm.memory_used()
+    assert charged[VMBackend.RUST] == 0, "RANGE must not allocate the iteration space"
     assert charged[VMBackend.RUST] == charged[VMBackend.PYTHON], (
         f"charge mismatch -- Rust={charged[VMBackend.RUST]}, Python={charged[VMBackend.PYTHON]}"
     )

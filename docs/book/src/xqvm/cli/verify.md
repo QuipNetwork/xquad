@@ -113,5 +113,12 @@ Error: xqvm::runtime_error
    ╰────
 ```
 
-See [Verifier](../verifier.md#what-passing-verification-guarantees) for the
-precise scope of what a pass proves.
+Nor does verification look at values. An allocator size, a grid extent, a
+loop bound and every arithmetic operand are runtime quantities, so a
+program that allocates a negative model, resizes past its own variable
+count, overflows an `i64` or exhausts its step or allocation budget
+verifies cleanly and faults when run. See
+[Verifier](../verifier.md#what-passing-verification-guarantees) for the
+precise scope of what a pass proves, and [Limits and
+Errors](../limits-and-errors.md#vm-runtime-errors) for the faults that
+have no static counterpart.

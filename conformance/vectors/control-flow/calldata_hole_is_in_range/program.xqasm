@@ -1,0 +1,19 @@
+; calldata_hole_is_in_range: a slot the host left unset still occupies its
+; place in the calldata, so the slots after it keep their indices.
+;
+; spec/xqvm/ISA.md's INPUT row bounds the slot against the count the host
+; fixed, and the entries of that sequence need not all be set. The Rust VM
+; holds an unset entry as RegVal::Unset and counts it in calldata.len();
+; xquad.vm._prepare_calldata_python dropped it, so the same [null, 5]
+; arrived as two slots on one backend and one on the other. Reading slot 1
+; returned 5 there and raised CallDataIndex here -- a fault-versus-success
+; divergence on a calldata shape that is legal on both.
+;
+; The program completes, so xquad/tests/test_step_parity.py runs it through
+; the xquad.vm wrapper on both backends as well as the two CLIs.
+
+PUSH 1
+INPUT r0         ; slot 1 is populated, and the hole at 0 does not shift it
+PUSH 0
+OUTPUT r0
+HALT

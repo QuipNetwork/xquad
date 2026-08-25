@@ -23,7 +23,10 @@ has to report the fault's identity as JSON rather than as a traceback.
 
 import json
 
+import pytest
+
 from xqvm_py.cli.run import main
+from xqvm_py.executor import DEFAULT_STEP_LIMIT
 
 DIVIDE_BY_ZERO = """
 PUSH 1
@@ -80,3 +83,40 @@ class TestRunReporting:
 
         assert code != 0
         assert payload["error"]["type"] == "StepLimitExceeded"
+
+    def test_the_default_budget_bounds_a_runaway_program(self, tmp_path, capsys):
+        """No flag at all still stops. The default used to be unbounded.
+
+        `xqvm_py` was the last host without a bounded default: the Rust VM,
+        `xqcli run` and `xquad` all installed `DEFAULT_STEP_LIMIT`, so this
+        program raised on those in a fraction of a second and hung here
+        until the caller killed it.
+        """
+        code = _run(tmp_path, INFINITE_LOOP, [])
+        payload = json.loads(capsys.readouterr().out)
+
+        assert code != 0
+        assert payload["error"]["type"] == "StepLimitExceeded"
+        assert str(DEFAULT_STEP_LIMIT) in payload["error"]["message"]
+
+    def test_unlimited_steps_conflicts_with_an_explicit_limit(self, tmp_path):
+        """Opting out of the bound is said, not defaulted into.
+
+        Mirrors `xqcli run`, where the two flags conflict for the same
+        reason.
+        """
+        with pytest.raises(SystemExit):
+            _run(tmp_path, INFINITE_LOOP, ["--unlimited-steps", "--step-limit", "5"])
+
+    def test_the_default_matches_the_rust_vm(self):
+        """One constant, four hosts.
+
+        `xqvm::DEFAULT_STEP_LIMIT` is public and re-exported through
+        `xqffi.vm`, so `xquad` reads it rather than restating it. This VM
+        cannot import it without taking an `xqffi` dependency -- the
+        executor stays pure Python so it remains an independent conformance
+        oracle -- so the equality is asserted here instead.
+        """
+        from xqffi.vm import DEFAULT_STEP_LIMIT as RUST_DEFAULT
+
+        assert DEFAULT_STEP_LIMIT == RUST_DEFAULT

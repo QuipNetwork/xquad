@@ -63,6 +63,16 @@
     rustdoc::private_doc_tests,
     reason = "private modules contain doc tests visible only to maintainers"
 )]
+// Unchecked arithmetic is denied by default here, so a new bare `+` on an
+// `i64` stops compiling until its author records why the wrap is permitted.
+// Every exception carries an `#[expect(clippy::arithmetic_side_effects,
+// reason = ...)]` naming the normative text or the structural invariant that
+// allows it; `git grep -n arithmetic_side_effects -- xqvm/src` is the list.
+// Two deliberate wraps are outside the lint's reach because they are method
+// calls rather than operators -- `SHL`'s `wrapping_shl` and `SLACK`'s
+// `power.wrapping_mul(2)` -- and carry the same reason as a comment at the
+// site.
+#![deny(clippy::arithmetic_side_effects)]
 
 #[cfg(not(feature = "std"))]
 extern crate alloc;
@@ -116,4 +126,4 @@ pub use tracer::{JsonTracer, TextTracer};
 pub use tracer::{NoopTracer, StepState, Tracer};
 pub use value::{IncompatibleTypeError, RegVal, RegValKind};
 pub use verifier::{RegType, VerifierError};
-pub use vm::Vm;
+pub use vm::{DEFAULT_STEP_LIMIT, Vm};

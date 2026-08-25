@@ -15,9 +15,11 @@ read a "linear surface" that is the model's sparse coefficient map for a
 `Model` register, and the sample's dense assignment vector for a `Sample`
 register, so the same instruction reads either a model's biases or a
 solved sample's variable values depending on what is in the register.
-`ROWSUM` on a freshly allocated `BSMX` sample (no coefficients to speak
-of, only assignments) runs without a `RegisterType` error and returns the
-row's summed values.
+`ROWSUM` on a `BSMX` sample (no coefficients to speak of, only
+assignments) raises no `RegisterType` error and returns the row's summed
+values. A sample has to be gridded first, though: a freshly allocated one
+carries `rows = cols = 0`, and all four opcodes raise
+`InvalidGridDimensions` on a register with no grid.
 
 ## RESIZE Attaches, It Does Not Reshape
 
@@ -27,12 +29,25 @@ with 16 variables and no grid set, and the same model after `RESIZE r0`
 with rows = 4, cols = 4, have byte-for-byte identical `linear` and
 `quadratic` maps; what changes is how `ROWFIND`, `COLFIND`, `ROWSUM`,
 `COLSUM` and, outside this page, [`ONEHOTR`/`ONEHOTC`](constraints.md)
-interpret a flat index. Both `rows` and `cols` must be strictly positive:
-`RESIZE r0` with either argument \\(\le 0\\) errors at runtime with
-`invalid grid dimensions`, for example with `rows = 0, cols = 4`. This is
-a runtime check, not one the verifier catches statically, since grid
-dimensions are ordinary popped stack values rather than something the
-verifier's dataflow passes track.
+interpret a flat index. A grid has to satisfy two conditions. Both `rows`
+and `cols` must be strictly positive, so `RESIZE r0` with either argument
+\\(\le 0\\) errors at runtime with `invalid grid dimensions`, for example
+with `rows = 0, cols = 4`. And \\(\text{rows} \cdot \text{cols}\\) must
+not exceed the register's declared size: a grid is a reinterpretation of
+variables the program already declared, so it cannot describe cells that
+do not exist. `RESIZE r0` to \\(3 \times 3\\) on a 4-variable model
+raises `InvalidGridDimensions` for the same reason a negative row count
+does.
+
+The extent bound is \\(\le\\), not \\(=\\). `EQUALITY`, `ATLEAST`,
+`ATLEASTW` and `REDUCE` append slack and auxiliary variables past the
+grid and nothing ever shrinks a register's size, so a model whose size
+exceeds its extent is the normal state after any of them; a later
+`RESIZE` over a strict subset of the variables is still accepted.
+
+Both checks are runtime checks, not ones the verifier catches statically,
+since grid dimensions are ordinary popped stack values rather than
+something the verifier's dataflow passes track.
 
 The canonical use is encoding a two-index variable directly instead of
 computing flat indices by hand at every access site. A 4-city TSP, for
@@ -51,20 +66,39 @@ after which row 2 is every variable for city 2 across all four positions,
 and `ONEHOTR r0` over row 2 is exactly the constraint "city 2 occupies
 exactly one position".
 
-## Row and Column Bounds Are Not Enforced
+## Row and Column Bounds Are Enforced
 
-None of `ROWFIND`, `COLFIND`, `ROWSUM` or `COLSUM` checks the row or column
-index it pops against the `rows`/`cols` set by `RESIZE`. Each converts the
-popped value to a `usize` and errors `IndexOutOfBounds` only if that
-conversion fails, meaning the index is negative; a row or column number at
-or past what `RESIZE` declared is scanned anyway, since the underlying flat
-index simply lands on coefficients or assignments beyond the intended grid
-rather than being rejected. `ROWSUM r0` for `row = 99` on a model
-`RESIZE`d to \\(2 \times 2\\) returns `0` rather than erroring, because the
-flat range it scans falls on absent (implicitly zero) sparse entries.
-Treat `RESIZE`'s dimensions as documentation for
-correctly-written bytecode, not as a bound this family of instructions
-enforces for you.
+`ROWFIND`, `COLFIND`, `ROWSUM` and `COLSUM` each check the index they pop
+against the grid axis they address. A negative index and an index at or
+past the declared extent both raise `IndexOutOfBounds`, naming the index
+and the extent it exceeded. `ROWSUM r0` for `row = 99` on a model
+`RESIZE`d to \\(2 \times 2\\) raises rather than returning `0`:
+
+```asm
+PUSH 4
+BQMX r0
+PUSH 2         ; rows
+PUSH 2         ; cols
+RESIZE r0
+PUSH 99        ; row -- past the two rows the grid declares
+ROWSUM r0
+HALT
+```
+
+```
+Error: xqvm::runtime_error
+
+  × index 99 out of bounds (len 2) at byte 0x000c
+```
+
+A register with no grid at all is a separate fault: `rows = cols = 0`
+addresses no line, so all four opcodes raise `InvalidGridDimensions`
+rather than reducing over nothing. That is the same identity `ONEHOTR`
+and `ONEHOTC` raise without a grid.
+
+`RESIZE`'s dimensions are a bound the VM enforces, not a convention
+correct bytecode is trusted to honour. Both implementations agree on all
+three cases, and `conformance/vectors/xqmx-grid/` pins them.
 
 ## ROWFIND and COLFIND
 
@@ -74,10 +108,14 @@ matches. `COLFIND` pops `v` then `c` and is the column-major mirror. Since
 a model's storage is sparse, an unset coefficient reads as `0` (see
 [Coefficient Access](coefficient-access.md)), so searching for `v = 0`
 against a model can match either an explicit zero or nothing at all,
-depending on write history; either way, an unmatched search returns
-\\(-1\\) rather than erroring. On a \\(2 \times 2\\) model with
-`linear[0] = 9` and nothing else set, `ROWFIND` for `v = 9` in row 0
-returns `0` (the match), and the identical search in row 1 returns `-1`.
+depending on write history. An unmatched search returns \\(-1\\) rather
+than erroring, but only once the search has run: the register still has
+to carry a grid, and `r` still has to name a row that grid declares.
+\\(-1\\) means "scanned, no match", never "no such row". On a \\(2
+\times 2\\) model with `linear[0] = 9` and nothing else set, `ROWFIND`
+for `v = 9` in row 0 returns `0` (the match), and the identical search
+in row 1 returns \\(-1\\); the same search in row 2 raises
+`IndexOutOfBounds`.
 
 ## ROWSUM and COLSUM
 

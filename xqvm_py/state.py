@@ -21,10 +21,19 @@ XQVM Virtual Machine State
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from .errors import LoopError, OutputIndex, RegisterNotFound, StackOverflow, StackUnderflow
+from .errors import (
+    CallDataIndex,
+    LoopError,
+    LoopStackOverflow,
+    OutputIndex,
+    RegisterNotFound,
+    StackOverflow,
+    StackUnderflow,
+)
 from .limits import I64_MAX, I64_MIN, check_i64
 from .vector import Vec
 from .xqmx import XQMX
@@ -34,6 +43,12 @@ Value = int | Vec | XQMX
 
 # Maximum stack size to prevent runaway programs
 MAX_STACK_SIZE = 8192  # 2^13
+
+# Maximum loop nesting depth. RANGE and ITER each push a frame and only NEXT
+# pops one, so a program that jumps back over a loop header without running
+# its NEXT grows the loop stack without bound. Mirrors MAX_STACK_SIZE and
+# `Vm::LOOP_LIMIT` in `xqvm/src/vm.rs`.
+MAX_LOOP_DEPTH = 8192  # 2^13
 
 # Signed 64-bit bounds and the range check live in `limits`, and are
 # re-exported here because both predate that module and callers import them
@@ -47,7 +62,12 @@ class LoopFrame:
     """Loop iteration frame supporting RANGE and ITER paradigms."""
 
     target: int  # PC to jump back to
-    values: list[Value]  # All loop values (plain list, not Vec)
+    #: All loop values, as a plain sequence rather than a Vec. RANGE stores a
+    #: lazy `range` so the iteration space is never materialised -- `xqvm`'s
+    #: `exec_range` likewise keeps only `current`/`end`. ITER stores a real
+    #: list, because it copies the elements it iterates. Both are read only
+    #: through `len()` and a single subscript, which are O(1) either way.
+    values: Sequence[Value]
     index: int = 0  # Current position in values
     start_offset: int = 0  # Base index for LIDX (original start value)
 
@@ -72,13 +92,27 @@ class JumpControl:
         """Resolve a target ID to its program counter. Returns None if not found."""
         return self.targets.get(target_id)
 
+    def _check_depth(self) -> None:
+        """Reject a frame that would exceed the nesting limit."""
+        if len(self.loop_stack) >= MAX_LOOP_DEPTH:
+            raise LoopStackOverflow(MAX_LOOP_DEPTH)
+
     def push_loop_range(self, target: int, start: int, count: int) -> None:
-        """Push a RANGE loop frame."""
-        values = list(range(start, start + count))
+        """Push a RANGE loop frame.
+
+        The iteration space is held lazily as a `range`, not materialised into
+        a list: `count` is bounded only by i64, so a list would let a
+        four-instruction program exhaust host memory while charging nothing
+        against the VM's memory budget. `xqvm`'s `exec_range` stores the same
+        two integers.
+        """
+        self._check_depth()
+        values = range(start, start + count)
         self.loop_stack.append(LoopFrame(target=target, values=values, start_offset=start))
 
     def push_loop_iter(self, target: int, vec: Vec, start_idx: int, end_idx: int) -> None:
         """Push an ITER loop frame. Copies elements for immutability."""
+        self._check_depth()
         values = [vec.get(i) for i in range(start_idx, end_idx)]
         self.loop_stack.append(LoopFrame(target=target, values=values, start_offset=start_idx))
 
@@ -156,6 +190,14 @@ class MachineState:
     #: `xqvm::Vm::new()`, so a program that writes an output without the host
     #: reserving slots is rejected on both implementations.
     output_slots: int = 0
+    #: Number of calldata slots the host fixed before the run. Zero by
+    #: default, matching an empty `Vm::set_calldata`. The counterpart to
+    #: `output_slots` on the other side of the boundary: `input` is a dict
+    #: for convenience, but the slot space it stands for is a dense
+    #: sequence, so reading outside `[0, input_slots)` is a program error
+    #: rather than a null result. Inside it, a slot the host left unset is
+    #: legal and reads as unset.
+    input_slots: int = 0
     halted: bool = False
     steps: int = 0
 
@@ -219,7 +261,21 @@ class MachineState:
     # === I/O Operations ===
 
     def get_input(self, slot: int) -> Any:
-        """Get an input slot value. Returns None if not set."""
+        """Get an input slot value, or None if the host left it unset.
+
+        The slot count is fixed before the run, so a slot outside it is a
+        program error rather than a null result, mirroring `set_output` on
+        the other side of the boundary. Returning None for an out-of-range
+        slot let `PUSH 0 / INPUT r0 / HALT` on empty calldata store None and
+        halt successfully here while the Rust VM raised `CallDataIndex`.
+
+        None inside the count is a different thing and stays: it is an
+        in-range slot the host did not fill, the Python spelling of a
+        `RegVal::Unset` entry in `Vm::set_calldata`'s vec. `_runner_INPUT`
+        turns it into an unset register rather than a stored null.
+        """
+        if slot < 0 or slot >= self.input_slots:
+            raise CallDataIndex(slot, self.input_slots)
         return self.input.get(slot)
 
     def set_input(self, slot: int, value: Any) -> None:
@@ -257,13 +313,23 @@ class MachineState:
     # === State Management ===
 
     def reset(self) -> None:
-        """Reset machine state to initial conditions."""
+        """Reset machine state to initial conditions.
+
+        Every field a run touches goes back to the value a
+        freshly-constructed `MachineState` carries, both slot counts
+        included.
+        Leaving the slot count standing meant a reset state still described
+        the previous run's host contract, which is the mirror of the Rust
+        VM leaving its outputs, calldata and slot count in place.
+        """
         self.stack.clear()
         self.registers.clear()
         self.pc = 0
         self.jc = JumpControl()
         self.input.clear()
         self.output.clear()
+        self.output_slots = 0
+        self.input_slots = 0
         self.halted = False
         self.steps = 0
 

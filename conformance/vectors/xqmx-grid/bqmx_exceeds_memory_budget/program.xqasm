@@ -1,0 +1,19 @@
+; bqmx_exceeds_memory_budget: an allocation past the budget must fault on
+; both implementations, at the same instruction and with no allocation.
+;
+; 2^30 variables at 8 bytes each is 8 GiB against the shared 1 GiB
+; default, so BQMX raises MemoryLimitExceeded on the charge and never
+; reaches the allocation. Three instructions, no calldata, and the
+; largest security change in the release had no cross-implementation
+; vector at all before this one.
+;
+; The fault is MemoryLimitExceeded and not InvalidAllocation: the size is
+; a valid allocation request (non-negative, and representable as a usize
+; on a 64-bit target), it is simply larger than the budget. The charge is
+; taken off the i64 before the usize conversion precisely so this
+; identity is the same on wasm32, where the conversion would otherwise
+; decide it.
+
+PUSH 1073741824
+BQMX r0
+HALT

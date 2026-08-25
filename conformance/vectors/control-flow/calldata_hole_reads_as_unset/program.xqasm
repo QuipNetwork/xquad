@@ -1,0 +1,16 @@
+; calldata_hole_reads_as_unset: reading a slot the host left unset leaves
+; the register unset rather than storing a null in it.
+;
+; The slot is in range, so INPUT does not fault -- spec/xqvm/ISA.md's INPUT
+; row reserves CallDataIndex for a slot outside [0, slots). What it copies
+; is the entry's unset-ness: exec_input clones RegVal::Unset into the
+; register, so LOAD then raises UnsetRegister.
+;
+; xqvm_py stored None in the register instead, which no opcode accepts, so
+; the same program raised TypeMismatch there -- the same fault-identity
+; divergence in a spot the slot bound alone does not reach.
+
+PUSH 0
+INPUT r0         ; slot 0 is in range but unset
+LOAD r0          ; so the register is unset and this faults
+HALT

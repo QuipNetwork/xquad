@@ -150,7 +150,7 @@ class TestHaltEvent:
         ex = Executor(tracer=tracer)
         ex.execute(prog, output_slots=16)
         halt = [e for e in tracer.events if "halt" in e][0]
-        assert halt["output_slots"] == 1
+        assert halt["outputs_written"] == 1
 
 
 # === Error Event ===
@@ -246,7 +246,7 @@ class TestFormatting:
             "halt": True,
             "final_stack": [42],
             "final_registers": 3,
-            "output_slots": 1,
+            "outputs_written": 1,
         }
         text = tracer.format_event(event)
         assert "halt" in text

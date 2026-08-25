@@ -235,9 +235,9 @@ one output slot; `vm.set_calldata([model, sample, n])` and
 `vm.set_output_slots(2)` before the verifier; `vm.set_calldata([sample, n])`
 and `vm.set_output_slots(1)` before the decoder. The output slot count
 defaults to `0`; running a program that executes `OUTPUT` against a slot
-that was never allocated raises `OutputIndex` on the Rust interpreter (see
-[Limits and Errors](../xqvm/limits-and-errors.md)). The Python interpreter
-accepts it silently.
+that was never allocated raises `OutputIndex` (see
+[Limits and Errors](../xqvm/limits-and-errors.md)), on either
+interpreter.
 
 ## Inspecting the Emitted Assembly
 

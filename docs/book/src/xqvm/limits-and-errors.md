@@ -16,14 +16,15 @@ this reason.
 | Register count | 256 slots (r0-r255), statically allocated | -- |
 | Jump label range | 0-65,535 (`u16`), 65,536 labels max | Assembler: `TooManyTargets`. Verifier: `UndefinedJumpTarget`. VM: `InvalidLabel` |
 | Shift amount | 0-63 bits | VM: `InvalidShift` |
-| Grid dimensions | rows and cols must be > 0 | VM: `InvalidGridDimensions` |
+| Grid dimensions | rows and cols must be > 0, and `rows * cols` must not exceed the register's declared size | VM: `InvalidGridDimensions` |
+| Loop nesting | 8,192 frames | VM: `LoopStackOverflow` |
 | Discrete domain size (`XQMX`/`XSMX`) | `k >= 2` | VM: `InvalidDiscreteK` |
 
 ## Configurable Limits
 
 | Limit | Library default | Method | VM error when exceeded |
 |---|---|---|---|
-| Step count | 10,000,000 | `Vm::set_step_limit(n)` | `StepLimitExceeded` |
+| Step count | 10,000,000 | `Vm::set_step_limit(n)` / `Vm::set_unlimited_steps()` | `StepLimitExceeded` |
 | Allocation budget | 1 GiB | `Vm::set_memory_limit(bytes)` | `MemoryLimitExceeded` |
 | Calldata slots | 0 | `Vm::set_calldata(vec)` | `CallDataIndex` |
 | Output slots | 0 | `Vm::set_output_slots(n)` | `OutputIndex` |
@@ -33,8 +34,12 @@ CLI sets its own defaults before handing control to the VM -- 16 output
 slots unless `--outputs` overrides it. See [xquad run](cli/run.md) for the
 CLI's own default table.
 
-Calling `set_step_limit(0)` sets the limit to `u64::MAX` (effectively
-unlimited), not to zero steps.
+The step limit is exact: `set_step_limit(0)` permits no instructions at
+all, not unlimited ones. To remove the bound, call
+`Vm::set_unlimited_steps()`. Nothing else removes it, and nothing removes
+it by default. Until 0.4.0 `0` was the sentinel for "unlimited", which
+made a zero budget the most dangerous value a caller could pass rather
+than the safest.
 
 ## The allocation budget
 
@@ -58,7 +63,8 @@ starts from zero. There is no sentinel for "unlimited" -- pass `u64::MAX`.
 | `SETQUAD`, `ADDQUAD`, `EXCLUDE`, `IMPLIES` | 48 bytes per coefficient |
 | `ONEHOTR`, `ONEHOTC`, `EQUALITY`, `ATLEAST`, `ATLEASTW` | worst-case expansion: one linear term per variable and one quadratic term per pair |
 | `REDUCE` | one auxiliary variable, three quadratic terms, one linear term |
-| `ITER` (slice copied into the loop frame) | 8 bytes per element |
+| `ITER` on a `vec<int>` (slice copied into the loop frame) | 8 bytes per element |
+| `ITER` on a `vec<xqmx>` (slice copied into the loop frame) | one whole-model copy per element -- see below |
 
 Models store their coefficients sparsely, so a declared model size costs
 nothing immediately; it is charged because every consumer of the model -- the
@@ -72,14 +78,23 @@ storage is charged as `VECPUSH` and `SLACK` create it.
 `ITER` copies the slice it iterates into its loop frame, and a loop frame is
 released only by `NEXT`. A back-edge that re-enters an `ITER` without reaching
 its `NEXT` therefore accumulates copies, which is why the copy is charged.
-What the budget does *not* cover is the loop frame itself: such a program still
-grows the loop stack by one frame per execution, bounded only by the step
-limit.
+The loop frame itself is not charged, but it is bounded: the loop stack is
+capped at 8,192 frames and a program that grows it past that fails with
+`LoopStackOverflow`.
+
+An element of a `vec<xqmx>` is charged the whole-model copy rate, because
+cloning a model clones its coefficient maps: 8 bytes per declared variable
+plus 32 per live linear coefficient and 48 per live quadratic one. That is
+exactly what the allocator and the coefficient writes charged to build the
+model in the first place, and it is the same number wherever the copy
+happens -- through an `ITER`, or through `INPUT`/`OUTPUT` copying a whole
+register across the host boundary. A model does not get cheaper by being
+duplicated through one opcode rather than another.
 
 The charge schedule is defined over program-visible quantities -- variables
 declared, elements appended, coefficients written -- rather than over either
 interpreter's internal representation. The Python reference interpreter
-charges the identical rates via `Executor.execute(..., memory_limit=...)`,
+charges the same rates via `Executor.execute(..., memory_limit=...)`,
 raising `xqvm_py.errors.MemoryLimitExceeded`, so both implementations reject
 the same programs at the same instruction having charged the same bytes.
 `xquad.vm.VM.set_memory_limit()` sets it on either backend and
@@ -101,7 +116,8 @@ which disassembles the program and points at the failing instruction.
 | `IncompatibleType` | Type mismatch reported without register context |
 | `UnsetRegister` | `LOAD` or `OUTPUT` on a register that was never written, or was `DROP`ped |
 | `DivisionByZero` | `DIV` or `MOD` with divisor 0 |
-| `IndexOutOfBounds` | Vector access with an invalid index |
+| `ArithmeticOverflow` | An `i64` operation left the signed 64-bit range. Every operation the VM performs on a program's behalf is checked, intermediates included, so a computation whose mathematical answer is representable still faults when a partial result is not |
+| `IndexOutOfBounds` | An index operand outside what it addresses: a vec index, a coefficient index against the model's declared size, or a grid row or column against the extent `RESIZE` declared |
 | `NoActiveLoop` | `NEXT`, `LVAL`, or `LIDX` with no active loop |
 | `BadJumpTarget` | Jump target lands outside the bytecode buffer |
 | `InvalidLabel` | `JUMP`/`JUMPI` references a label id the id-to-offset scan never resolved |
@@ -114,7 +130,9 @@ which disassembles the program and points at the failing instruction.
 | `StepLimitExceeded` | Execution exceeded the configured step limit |
 | `MemoryLimitExceeded` | An allocating instruction exceeded the configured allocation budget |
 | `InvalidShift` | `SHL`/`SHR` shift amount outside `[0, 64)` |
-| `InvalidGridDimensions` | `RESIZE` with rows or cols <= 0 |
+| `InvalidGridDimensions` | `RESIZE` with rows or cols <= 0, `RESIZE` with `rows * cols` past the register's declared size, or a grid-reading opcode on a register with no grid |
+| `InvalidAllocation` | An allocator given a size that is not an allocation: negative, or too large for the executing target to address |
+| `LoopStackOverflow` | `RANGE`/`ITER` nesting past 8,192 frames |
 | `InvalidDiscreteK` | `XQMX`/`XSMX` called with `k < 2` -- at `k = 1` the signed `[-k, k-1]` domain is `{-1, 0}`, which degenerates to a binary choice `BQMX` already covers |
 | `UnmatchedLoop` | A `RANGE`/`ITER` skip-forward scan reached the end of the stream without a matching `NEXT` |
 | `TraceFailed` | A tracer callback returned an error (for example an I/O write failure) |
@@ -145,5 +163,9 @@ the VM:
 | Program size | `MaxProgramSize` | Maximum bytecode byte length accepted by `submit_program` |
 | Calldata and output count | `MaxCalldata` | Shared bound on both the calldata vector and the output-slot vector |
 
-The fixture applies no step-limit override, so the VM's default of
-10,000,000 steps applies inside it.
+`submit_program` takes the step budget as an extrinsic argument rather
+than reading a pallet constant, so a caller names the bound the VM may
+spend. The bound is exact, and a `step_limit` of `0` fails rather than
+succeeding vacuously. The fixture sets no allocation budget, so the VM's
+1 GiB default applies -- far too generous for a runtime that has to price
+what it admits. See [Substrate Pallet](../embedding/pallet.md).

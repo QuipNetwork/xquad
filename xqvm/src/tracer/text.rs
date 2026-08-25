@@ -78,6 +78,10 @@ fn fmt_stack(stack: &[i64]) -> String {
     if stack.len() <= MAX_STACK_DISPLAY {
         format!("{stack:?}")
     } else {
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "the `else` arm runs only when `stack.len() > MAX_STACK_DISPLAY`"
+        )]
         let skip = stack.len() - MAX_STACK_DISPLAY;
         let top = stack.get(skip..).unwrap_or_default();
         format!("[...{skip} more, {}]", fmt_stack_elems(top))

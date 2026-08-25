@@ -17,15 +17,21 @@ The Rust implementation of the header is
 | 0..4 | 4 bytes | Magic | The ASCII bytes `XQBC` |
 | 4 | 1 byte | Version | Format version, currently `0x01` |
 | 5 | 1 byte | `input_slots` | Count of `INPUT` instructions in the program (calldata arity) |
-| 6 | 1 byte | `output_slots` | Count of `OUTPUT` instructions (minimum output-slot count) |
+| 6 | 1 byte | `output_slots` | Count of `OUTPUT` instructions in the program |
 | 7..11 | 4 bytes | `code_len` | Byte length of the instruction stream, `u32` big-endian |
 | 11..15 | 4 bytes | `crc32` | CRC-32/ISO-HDLC checksum of the instruction stream, `u32` big-endian |
 | 15+ | -- | Instruction stream | Raw opcode and operand bytes |
 
-`input_slots` and `output_slots` are informational: a decoder may use them to
-pre-size calldata and output-slot arrays without scanning the instruction
-stream, but nothing enforces that a program's `INPUT`/`OUTPUT` instructions
-actually match the header's counts. Both counts saturate at 255 (`u8::MAX`):
+`input_slots` and `output_slots` are informational and are not validated by
+the decoder. Each counts *instructions* of that kind in the stream. Neither
+is a slot count: a program with three `OUTPUT` instructions that all write
+slot 0 records `output_slots = 3` against a required slot count of 1, and a
+program with one `OUTPUT` inside a loop that writes slots 0 through 9
+records `output_slots = 1` against a required count of 10. **Neither byte
+can therefore be used to pre-size a calldata or output-slot array.** The
+host fixes both counts before the run -- `Vm::set_calldata` and
+`Vm::set_output_slots` -- and a slot outside them raises `CallDataIndex` or
+`OutputIndex` at run time. Both counts saturate at 255 (`u8::MAX`):
 a program with 300 `INPUT` instructions still encodes `input_slots` as 255,
 and there is no error path for the overflow. The count is also best-effort
 in another sense -- it is produced by walking the instruction stream and

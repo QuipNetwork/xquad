@@ -96,11 +96,10 @@ does not raise an error; it produces a model where each thing still picks
 exactly one position, but nothing stops two things from picking the same
 one. That looser rule is [Assignment](assignment.md). The other failure
 is structural rather than semantic: `ONEHOTR`/`ONEHOTC` read grid
-dimensions from `RESIZE`, and on a model with no grid set, both loops run
-zero times and the constraint is silently absent on the Rust VM --
-[High-Level Constraints](../xqvm/instructions/constraints.md) calls this
-out as the single most expensive mistake in that instruction family, since
-neither `xquad verify` nor `xquad run` catches it. The Python reference
-VM (`xqvm_py`) does not share that silence: it raises `ValueError`
-instead, so which symptom you see depends on `--interpreter`.
+dimensions from `RESIZE`, so a model with no grid set has no row or
+column for them to constrain. Both raise `InvalidGridDimensions` at the
+instruction that needed the grid, on either interpreter -- see
+[High-Level Constraints](../xqvm/instructions/constraints.md). `xquad
+verify` does not catch it, since grid dimensions are runtime values, so
+the failure surfaces when the encoder runs rather than when it compiles.
 

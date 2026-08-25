@@ -62,27 +62,39 @@ that share no state.
 ### Step limits
 
 `Session.set_step_limit(n)` caps how many instructions a run may execute
-before `run()` raises. `set_step_limit(0)` does not mean unlimited: `0`
-is falsy, so `Session` never forwards it to the interpreter, and the
-Rust VM's own built-in limit of 10,000,000 steps stays in force instead.
-`Session` offers no way to turn the limit off entirely; it can only
-raise it by passing a larger `n`.
+before `run()` raises. The limit is exact: `0` permits no instructions at
+all. A fresh `Session` starts at `xquad.vm.DEFAULT_STEP_LIMIT`, which is
+10,000,000. `None` is the only unbounded spelling, and a caller has to
+write it -- unbounded execution is asked for, never inherited.
 
 ```python
 session = program.session(output_slots=1)
 session.set_calldata([1, 2])
+assert "step_limit=10000000" in repr(session)
+
 session.set_step_limit(3)
 try:
     session.run()
 except RuntimeError as e:
     assert "StepLimitExceeded" in str(e)
 
-# 0 leaves the interpreter's 10,000,000-step default in place -- this
-# program needs 11 steps, well under that, so it succeeds for a
-# different reason than "unlimited".
+# 0 is not a sentinel for "unlimited" -- it executes nothing, so this
+# 11-step program fails at its first instruction.
 session.set_step_limit(0)
+try:
+    session.run()
+except RuntimeError as e:
+    assert "StepLimitExceeded" in str(e)
+
+# None removes the bound. A program that never halts will not return,
+# and it does not take SIGALRM: the GIL is held inside the Rust run.
+session.set_step_limit(None)
+assert "step_limit=unlimited" in repr(session)
 assert dict(session.run().outputs) == {0: 3}
 ```
+
+A budget that exactly covers the program succeeds. This one needs 11
+steps, so `set_step_limit(11)` runs it and `set_step_limit(10)` does not.
 
 ## Loading bytecode directly
 

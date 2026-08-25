@@ -1,14 +1,21 @@
-; rowsum_overflow: a row whose coefficients sum past i64::MAX must raise.
+; rowsum_overflow: a row whose partial sum leaves the i64 range must raise.
 ;
-; linear = [i64::MAX, 1] on a 1x2 grid: the partial sum after the second
-; column is 2^63, not representable, so ROWSUM raises ArithmeticOverflow
-; rather than wrapping (SPEC.md overflow rule on coefficient reductions).
+; linear = [i64::MAX, 1, -1] on a 1x3 grid. The partial sum after the
+; second column is 2^63, which is not representable, so ROWSUM raises
+; ArithmeticOverflow (SPEC.md's overflow rule on coefficient reductions).
+;
+; Three columns rather than two, and a third term that brings the exact
+; total back inside the range, so the vector discriminates: a wrapping
+; implementation pushes i64::MAX -- the exactly correct total -- and
+; HALTs. The same program is the only thing pinning the ascending
+; flat-index accumulation order ISA.md makes normative, because folding
+; the same row in descending order never leaves the range.
 
-PUSH 2
+PUSH 3
 BQMX r0
 
 PUSH 1           ; rows
-PUSH 2           ; cols
+PUSH 3           ; cols
 RESIZE r0
 
 PUSH 0
@@ -16,6 +23,9 @@ PUSH 9223372036854775807
 SETLINE r0
 PUSH 1
 PUSH 1
+SETLINE r0
+PUSH 2
+PUSH -1
 SETLINE r0
 
 PUSH 0           ; row

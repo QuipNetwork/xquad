@@ -101,13 +101,20 @@ class Tracer:
             self._buffer.append(event)
 
     def on_halt(self, executor: Any) -> None:
-        """Record halt event with final state summary, flush buffered output."""
+        """Record halt event with final state summary, flush buffered output.
+
+        The count emitted is `outputs_written`, not `output_slots`.
+        `len(state.output)` is how many slots the run actually wrote;
+        `MachineState.output_slots` is how many the host reserved. Emitting
+        the first under the second's name made a trace read as though a
+        program had reserved what it happened to fill.
+        """
         state = executor.state
         event = {
             "halt": True,
             "final_stack": list(state.stack),
             "final_registers": len(state.registers),
-            "output_slots": len(state.output),
+            "outputs_written": len(state.output),
         }
         self.events.append(event)
 
@@ -216,7 +223,7 @@ def _event_columns(event: dict[str, Any], verbosity: int) -> tuple[str, str, str
         halt_line = (
             f"halt: stack_depth={len(event['final_stack'])}, "
             f"registers={event['final_registers']}, "
-            f"outputs={event['output_slots']}"
+            f"outputs_written={event['outputs_written']}"
         )
         return ("", halt_line, "")
 

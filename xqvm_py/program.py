@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .errors import InvalidOpcode, TruncatedInstruction
 from .opcodes import Opcode
 
 
@@ -156,12 +157,10 @@ def program_from_bytecode(bytecode: bytes, name: str = "") -> Program:
         opcode_byte = code[pos]
         opcode = Opcode.from_code(opcode_byte)
         if opcode is None:
-            raise ValueError(f"unknown opcode 0x{opcode_byte:02X} at byte offset {pos}")
+            raise InvalidOpcode(f"0x{opcode_byte:02X} at byte offset {pos}")
         n = opcode.meta.operand_count
         if pos + 1 + n > len(code):
-            raise ValueError(
-                f"truncated operands for {opcode.name} at byte offset {pos}: need {n} bytes, have {len(code) - pos - 1}"
-            )
+            raise TruncatedInstruction(pos, n, len(code) - pos - 1)
         operands = tuple(code[pos + 1 : pos + 1 + n])
         instructions.append(Instruction(opcode, operands))
         pos += 1 + n

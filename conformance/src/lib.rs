@@ -21,7 +21,8 @@
 //! the form `<category>/<name>/` containing:
 //!
 //! - `program.xqasm` — assembly source (canonical, human-readable).
-//! - `inputs.json` — `{"calldata": [i64, ...]}`.
+//! - `inputs.json` — `{"calldata": [i64|null, ...]}`, where `null` is a
+//!   slot the host left unset.
 //! - `expected.json` — either `{"outputs": [i64|null, ...], "final_stack":
 //!   [i64, ...]}` for a program that runs to completion, or `{"error":
 //!   "<FAULT>"}` for one that must fault. See `conformance/README.md` for
@@ -72,20 +73,42 @@ struct PyError {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Inputs {
     /// Calldata values exposed to `INPUT` instructions in slot order.
+    ///
+    /// `null` is a slot the host fixed but left unset -- in range for
+    /// `INPUT`, and copied into the register as unset. It is spelled here
+    /// rather than left out because leaving it out would shorten the slot
+    /// space and move the `CallDataIndex` bound, which is precisely the
+    /// divergence these vectors exist to catch.
     #[serde(default)]
-    pub calldata: Vec<i64>,
+    pub calldata: Vec<Option<i64>>,
     /// Number of output slots; defaults to 16 to match `xquad run`.
     #[serde(default = "default_output_slots")]
     pub output_slots: usize,
-    /// Step budget for the run. `None` leaves each implementation on its
-    /// own default, which is what every vector that is not specifically
-    /// exercising the budget wants.
-    #[serde(default)]
-    pub step_limit: Option<u64>,
+    /// Step budget for the run, applied to both runners.
+    ///
+    /// Both implementations now default to `DEFAULT_STEP_LIMIT`, but they
+    /// did not always: `xqvm_py`'s `--step-limit` was unbounded, so
+    /// leaving the field out gave the two runners different budgets and a
+    /// runaway program hung the Python runner until the CI job timed out
+    /// instead of failing as a divergence. The harness resolves one
+    /// explicit budget here and passes it to both, so a vector's step
+    /// budget stays a property of the vector rather than of whichever
+    /// default each runner happens to carry.
+    #[serde(default = "default_step_limit")]
+    pub step_limit: u64,
 }
 
 const fn default_output_slots() -> usize {
     16
+}
+
+/// The harness-wide step budget for a vector that does not name one.
+///
+/// Is `xqvm::DEFAULT_STEP_LIMIT`, rather than a literal restating it, so a
+/// vector that is not about the budget behaves exactly as `xquad run`
+/// would and cannot drift from the VM it is testing.
+const fn default_step_limit() -> u64 {
+    xqvm::DEFAULT_STEP_LIMIT
 }
 
 /// Implementation-neutral identity of a VM fault.
@@ -151,6 +174,10 @@ pub enum Fault {
     XqmxMode,
     /// A tracer refused a step.
     TraceFailed,
+    /// An allocator was handed a size that is not an allocation.
+    InvalidAllocation,
+    /// Loop nesting exceeded its depth limit.
+    LoopStackOverflow,
 }
 
 /// Parsed form of `expected.json`.
@@ -291,7 +318,7 @@ pub fn run_rust(vector: &Vector) -> Result<Outcome, String> {
         .calldata
         .iter()
         .copied()
-        .map(RegVal::Int)
+        .map(|v| v.map_or(RegVal::Unset, RegVal::Int))
         .collect();
 
     let outcome = run_rust_program(&program, &calldata, &vector.inputs);
@@ -321,9 +348,7 @@ fn run_rust_program(
     let _ = vm
         .set_calldata(calldata.to_vec())
         .set_output_slots(inputs.output_slots);
-    if let Some(limit) = inputs.step_limit {
-        let _ = vm.set_step_limit(limit);
-    }
+    let _ = vm.set_step_limit(inputs.step_limit);
 
     if let Err(e) = vm.run(program) {
         return Outcome::Failure {
@@ -380,6 +405,8 @@ fn fault_from_rust(error: &xqvm::Error) -> Fault {
         E::InvalidGridDimensions { .. } => Fault::InvalidGridDimensions,
         E::InvalidDiscreteK { .. } => Fault::InvalidDiscreteK,
         E::TraceFailed { .. } => Fault::TraceFailed,
+        E::InvalidAllocation { .. } => Fault::InvalidAllocation,
+        E::LoopStackOverflow { .. } => Fault::LoopStackOverflow,
     }
 }
 
@@ -397,6 +424,7 @@ fn fault_from_python(class_name: &str) -> Result<Fault, String> {
         "RegisterNotFound" => Ok(Fault::UnsetRegister),
         "DivisionByZero" => Ok(Fault::DivisionByZero),
         "OutputIndex" => Ok(Fault::OutputIndex),
+        "CallDataIndex" => Ok(Fault::CallDataIndex),
         "InvalidGridDimensions" => Ok(Fault::InvalidGridDimensions),
         "ArithmeticOverflow" => Ok(Fault::ArithmeticOverflow),
         "IndexOutOfBounds" => Ok(Fault::IndexOutOfBounds),
@@ -405,6 +433,13 @@ fn fault_from_python(class_name: &str) -> Result<Fault, String> {
         "StepLimitExceeded" => Ok(Fault::StepLimitExceeded),
         "MemoryLimitExceeded" => Ok(Fault::MemoryLimitExceeded),
         "XQMXModeError" => Ok(Fault::XqmxMode),
+        "InvalidAllocation" => Ok(Fault::InvalidAllocation),
+        "InvalidDiscreteK" => Ok(Fault::InvalidDiscreteK),
+        "InvalidShift" => Ok(Fault::InvalidShift),
+        "SizeMismatch" => Ok(Fault::SizeMismatch),
+        "VecLengthMismatch" => Ok(Fault::VecLengthMismatch),
+        "TruncatedInstruction" => Ok(Fault::TruncatedInstruction),
+        "LoopStackOverflow" => Ok(Fault::LoopStackOverflow),
         other => Err(format!(
             "python raised {other}, which the conformance harness does not \
              map to a fault identity; extend fault_from_python in \
@@ -485,10 +520,8 @@ fn run_python_file(
             "--inputs",
         ])
         .arg(vector.dir.join("inputs.json"))
-        .args(["--outputs", &vector.inputs.output_slots.to_string()]);
-    if let Some(limit) = vector.inputs.step_limit {
-        let _ = command.args(["--step-limit", &limit.to_string()]);
-    }
+        .args(["--outputs", &vector.inputs.output_slots.to_string()])
+        .args(["--step-limit", &vector.inputs.step_limit.to_string()]);
     let output = command
         .arg(program_path)
         .current_dir(repo_root)

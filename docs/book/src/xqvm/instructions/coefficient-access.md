@@ -3,7 +3,7 @@
 Read and write the linear (bias) and quadratic (coupling) terms of the
 Hamiltonian
 
-$$H(x) = \sum_i \text{linear}[i] \cdot x_i + \sum_{i < j} \text{quadratic}[i, j] \cdot x_i \cdot x_j$$
+$$H(x) = \sum_i \text{linear}[i] \cdot x_i + \sum_{i \le j} \text{quadratic}[i, j] \cdot x_i \cdot x_j$$
 
 that a [Model](allocators.md) accumulates. Byte values, operand layouts and
 stack effects are in the
@@ -42,7 +42,7 @@ coupling terms to read or write.
 All three linear instructions bounds-check the popped index `i` against the
 register's declared size (`model.size` or `sample.values.len()`) and error
 `IndexOutOfBounds` if `i` is negative or at least `size`: `GETLINE r0` for
-`i = 99` on a 4-variable model fails with `vec index 99 out of bounds (len
+`i = 99` on a 4-variable model fails with `index 99 out of bounds (len
 4)`, even though the coefficient map holds no fixed-size backing array; the
 size bound comes from the model's declared variable count, not from the map
 itself.
