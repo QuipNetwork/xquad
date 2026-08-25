@@ -90,10 +90,20 @@ verify:rust:
 # so check-commit-messages saw the title as a commit and applied the
 # grammar. Disabling the train removed the only pipeline that ever saw
 # it: the MR pipeline runs before the squash commit exists, and the
-# post-merge main pipeline resolves `merge-base(origin/main, HEAD)` to
-# HEAD and finds an empty range. A bad title now reaches main, where
+# post-merge main pipeline resolved `merge-base(origin/main, HEAD)` to
+# HEAD and found an empty range. A bad title reached main, where
 # cliff.toml's `filter_unconventional = true` drops it from the
 # release notes silently rather than loudly.
+#
+# That empty range on main is no longer a dead end: it is what puts
+# check-commit-messages into landed mode, where it checks what the
+# push put on main -- for a merge, the squash commit carrying the
+# title (see that script's "Landed mode" header section). The two
+# checks are not redundant. check-mr-title is prevention and runs
+# while the title is still cheap to fix; the landed check is
+# detection, and covers the one case prevention cannot -- a title
+# edited after the last push, which GitLab never rechecks because it
+# starts pipelines on push, not on title edits.
 #
 # It needs no rule of its own despite this job running on every
 # pipeline: off an MR pipeline $CI_MERGE_REQUEST_TITLE is unset, and
@@ -151,11 +161,13 @@ verify:rust:
 #   * A push to main: $CI_COMMIT_REF_NAME is `main`, so GitLab's own
 #     checkout fetches `origin/main` as exactly the commit under test.
 #     `merge-base(origin/main, HEAD)` is then HEAD itself, so both
-#     scripts see an empty commit range and exit 0 ("no commits in
-#     range" / "no VM-semantics layer touched") rather than erroring.
-#     Safe by construction, and this is the leg the MR's own pipeline
-#     cannot exercise (an MR pipeline never runs as a main push), so it
-#     is reasoned through here rather than proven by a green check.
+#     scripts see an empty commit range. check-atomic-spec-mr exits 0
+#     there ("no VM-semantics layer touched"); check-commit-messages
+#     treats it as the cue to check what the push landed, which is the
+#     only pipeline that ever sees a squash commit's subject. This is
+#     the leg an MR's own pipeline cannot exercise (an MR pipeline
+#     never runs as a main push), so scripts/tests/ covers it instead
+#     of it being reasoned through here and proven by nothing.
 #   * A branch push before an MR exists: GitLab's default fetch only
 #     retrieves the ref under test, not `main`, so `origin/main` is not
 #     guaranteed to resolve -- whether it happens to be present depends
@@ -164,6 +176,10 @@ verify:rust:
 #     `git fetch origin main` below closes that gap deterministically:
 #     it is a no-op in both cases above (origin/main already correct
 #     or already unneeded) and only does real work in this third case.
+#     A branch pushed before it has commits of its own is the same
+#     commit as main, so its range is empty by the same route -- but
+#     $CI_COMMIT_BRANCH is not `main`, and check-commit-messages tests
+#     that before it goes looking at what the branch did not push.
 verify:policy:
     stage: verify
     extends: .rust-tools

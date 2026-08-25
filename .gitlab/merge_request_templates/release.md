@@ -7,6 +7,11 @@
 ## Pre-flight checklist
 
 - [ ] Branch is named `release/vX.Y.Z` (required for auto-tagging)
+- [ ] MR title is `release: vX.Y.Z` -- squash-on-merge makes the title the
+      subject of the commit that lands on `main`, so it is checked against
+      the commit grammar by `verify:policy`
+- [ ] Title set before the final push -- GitLab does not start a pipeline
+      on a title edit, so a title changed afterwards is not rechecked here
 - [ ] Workspace version bumped in all `Cargo.toml` manifests
 - [ ] Workspace version bumped in all `pyproject.toml` manifests
 - [ ] `release:validate` is green on this MR's pipeline

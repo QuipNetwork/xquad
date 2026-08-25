@@ -24,6 +24,10 @@
 #   - Locally: BASE_REF = $(git merge-base origin/main HEAD),
 #     HEAD_REF = HEAD.
 #
+# When that merge-base default produces an empty range on main, the
+# script checks what the last push landed there instead of exiting.
+# See "Landed mode" below.
+#
 # HEAD is the wrong head ref in a merged-result pipeline. There $HEAD
 # is the source merged into the target, so BASE_REF..HEAD holds the
 # branch's own commits plus every commit the target accumulated since
@@ -47,6 +51,68 @@
 # which cuts the range to exactly the commits the merge request
 # authored.
 #
+# Landed mode -- an empty merge-base range on main is where the squash
+# commit finally gets checked.
+#
+# squash_option is `always` and squash_commit_template is %{title}, so
+# every merge puts the merge request title on main as an authored
+# commit subject. GitLab starts pipelines on push, not on title edits,
+# so the title scripts/check-mr-title.sh checked on the last pipeline
+# is not necessarily the title that merges: edit it after the final
+# push and the bad subject lands on main, where cliff.toml's
+# `filter_unconventional` drops it from the release notes without a
+# word. Silent is the part worth fixing; the entry is simply missing
+# from a version's notes and nothing anywhere says why.
+#
+# On a main pipeline BASE_REF falls through to
+# `git merge-base origin/main HEAD`, which resolves to HEAD, so the
+# range is empty and this guard used to exit 0 having read nothing.
+# That empty range is now the trigger, subject to two conditions.
+#
+# First, the range has to be one this script guessed at. An explicit
+# BASE/HEAD argument and $CI_MERGE_REQUEST_DIFF_BASE_SHA each name a
+# range somebody asked about, and an empty one is an answer rather
+# than a cue to go looking elsewhere. That is also what keeps merge
+# request pipelines out of landed mode, where the tip is a commit the
+# merge request does not own.
+#
+# Second, the ref has to be main. Emptiness alone does not say the run
+# is looking at main after a merge: a branch cut from main and pushed
+# before it has any commits of its own is the same commit as main, so
+# `merge-base(origin/main, HEAD)` is HEAD there too. Its branch
+# pipeline -- .gitlab-ci.yml starts one for any branch with no open
+# merge request -- and a local `make preflight-policy` would otherwise
+# both go red over main's history, the exact failure the paragraphs
+# above exist to prevent. Nothing about the commit separates the two
+# cases; only the ref does, which is what REF_NAME is for. Tag
+# pipelines are excluded by the same test and lose nothing:
+# release:auto-tag tags a commit whose main pipeline already checked
+# it.
+#
+# What gets checked is the push, not the tip. $CI_COMMIT_BEFORE_SHA is
+# the tip main had before the push, so $CI_COMMIT_BEFORE_SHA..HEAD is
+# exactly what the push introduced: the merge commit plus its squash
+# commit for a merge, or every commit of a direct push -- branch
+# protection allows those, and taking only the tip would check one
+# subject out of however many landed. Off CI nothing records what the
+# last pull brought in, so the fallback is the tip's non-first parents
+# (with squash-on-merge, the one squash commit carrying the title) or
+# the tip itself when it has none. That fallback under-reports a
+# multi-commit pull, which is tolerable for a local preview of what
+# the main pipeline will say and intolerable for the pipeline itself.
+#
+# The push range does not reopen the objection to HEAD^1..HEAD, which
+# would pull in the whole branch side and re-run the grammar over
+# history nobody can fix any more. A commit reachable from an older
+# main is reachable from $CI_COMMIT_BEFORE_SHA and so is excluded by
+# construction; the range holds only commits new to main. For a
+# merge-commit merge the branch's own commits are in it, and those are
+# the commits that merge request's own pipeline already checked.
+#
+# Detection, not prevention: the commit is on main by the time this
+# runs. scripts/check-mr-title.sh is still the check that stops a bad
+# title from landing; this one stops it from landing quietly.
+#
 # Exit codes:
 #   0  -- every non-merge commit in the range passes
 #   1  -- at least one commit fails the grammar
@@ -60,11 +126,19 @@ source "${SCRIPT_DIR}/commit-grammar.sh"
 
 # --- Argument / environment resolution -------------------------------------
 
+# Which of the three sources BASE_REF came from decides what an empty
+# range means later, so the answer is recorded rather than collapsed
+# into the value. `arg` and `ci` name a range somebody asked about;
+# `merge-base` is this script guessing, and only the guess is allowed
+# to fall back to tip mode.
 BASE_REF="${1:-}"
+BASE_SOURCE="arg"
 if [[ -z "${BASE_REF}" ]]; then
     BASE_REF="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}"
+    BASE_SOURCE="ci"
 fi
 if [[ -z "${BASE_REF}" ]]; then
+    BASE_SOURCE="merge-base"
     if ! BASE_REF="$(git merge-base origin/main HEAD 2>/dev/null)"; then
         echo "error: could not derive BASE_REF (no arg, no CI var, no origin/main)" >&2
         exit 2
@@ -103,14 +177,75 @@ if ! git rev-parse --verify "${HEAD_REF}^{commit}" >/dev/null 2>&1; then
     exit 2
 fi
 
-# --- Walk the range and validate each commit --------------------------------
+# Which ref this run is checking, as opposed to which commit. HEAD_REF
+# cannot answer that: a branch cut from main and pushed before it has
+# commits of its own is the same commit as main, and only the ref name
+# tells the two apart. Landed mode below turns on it, and the failure
+# message names it.
+#
+# $CI_COMMIT_BRANCH comes first because GitLab checks out a detached
+# HEAD, where symbolic-ref finds nothing. It is unset on tag and merge
+# request pipelines, which is the answer landed mode wants for both.
+# Off CI it is the checked-out branch, or empty on a detached HEAD --
+# also the wanted answer, since a detached HEAD is not main.
+REF_NAME="${CI_COMMIT_BRANCH:-$(git symbolic-ref --quiet --short HEAD || true)}"
+
+# --- Select the commits to validate -----------------------------------------
+
+# The commits a ref introduces on its own: the non-first parents of a
+# merge commit, or the ref itself when it has none. One line of output
+# per commit, the shape the range walk below already reads.
+tip_commits() {
+    local ref="$1" parents
+    read -ra parents <<< "$(git log -1 --format=%P "${ref}")"
+    if [[ "${#parents[@]}" -ge 2 ]]; then
+        printf '%s\n' "${parents[@]:1}"
+    else
+        git rev-parse "${ref}"
+    fi
+}
+
+# What the last push put on the branch. $CI_COMMIT_BEFORE_SHA is the
+# tip the branch had beforehand, so the range is exactly the new
+# commits -- the merge commit plus its squash commit for a merge, or
+# every commit of a direct push, which taking only the tip would cut
+# to one.
+#
+# GitLab sets that variable to all-zeros on a branch's first pipeline
+# and in merge request pipelines, and a variable naming a commit is a
+# separate fact from the clone having fetched it, so both are tested
+# before the range is trusted. Off CI the variable does not exist at
+# all. Every one of those falls back to tip_commits, as does a range
+# that comes back empty (a force-push backwards, or an overridden
+# HEAD_REF): this only runs on main, where checking the tip is always
+# legitimate, just not always sufficient.
+landed_commits() {
+    local before="${CI_COMMIT_BEFORE_SHA:-}" range=""
+    if [[ -n "${before}" && ! "${before}" =~ ^0+$ ]] \
+        && git rev-parse --verify "${before}^{commit}" >/dev/null 2>&1; then
+        range="$(git rev-list --reverse "${before}..${HEAD_REF}")"
+    fi
+    if [[ -n "${range}" ]]; then
+        printf '%s\n' "${range}"
+    else
+        tip_commits "${HEAD_REF}"
+    fi
+}
 
 commits="$(git rev-list --reverse "${BASE_REF}..${HEAD_REF}")"
+landed_mode=0
 
 if [[ -z "${commits}" ]]; then
-    echo "guard: no commits in ${BASE_REF}..${HEAD_REF}"
-    exit 0
+    if [[ "${BASE_SOURCE}" != "merge-base" || "${REF_NAME}" != "main" ]]; then
+        echo "guard: no commits in ${BASE_REF}..${HEAD_REF}"
+        exit 0
+    fi
+    landed_mode=1
+    commits="$(landed_commits)"
+    echo "guard: ${BASE_REF}..${HEAD_REF} is empty -- checking what the last push put on ${REF_NAME}"
 fi
+
+# --- Walk the range and validate each commit --------------------------------
 
 checked=0
 skipped=0
@@ -157,6 +292,30 @@ echo ""
 echo "guard: ${checked} checked, ${skipped} merge commit(s) skipped, ${failed} failed"
 
 if [[ "${failed}" -gt 0 ]]; then
+    # A landed-mode failure has no rebase waiting at the end of it: the
+    # commit is already on main, usually as the squash commit of a
+    # merge request whose title was edited after its last pipeline. Say
+    # what the finding costs and what to do about it, rather than
+    # leaving a reader to work out why the guard is reporting a commit
+    # they cannot amend.
+    #
+    # OUTPUT=/dev/stdout on the preview: changelog-release defaults to
+    # writing CHANGELOG.md, and a reader following this hint has
+    # trouble enough without an unasked-for file at the end of it.
+    if [[ "${landed_mode}" -eq 1 ]]; then
+        if [[ "${failed}" -eq 1 ]]; then
+            subject_phrase="This commit is"
+        else
+            subject_phrase="These ${failed} commits are"
+        fi
+        echo "" >&2
+        echo "  ${subject_phrase} already on ${REF_NAME} and cannot be amended." >&2
+        echo "  A subject that failed the grammar is dropped from the release" >&2
+        echo "  notes too, by cliff.toml's filter_unconventional, and just as" >&2
+        echo "  quietly: expect the gap in" >&2
+        echo "  'make changelog-release VERSION=vX.Y.Z STRIP=all OUTPUT=/dev/stdout'" >&2
+        echo "  and add the entry by hand on the GitLab Release page." >&2
+    fi
     exit 1
 fi
 
