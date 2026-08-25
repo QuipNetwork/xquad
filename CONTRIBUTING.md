@@ -212,7 +212,14 @@ silently skipped for contributors who do not have one.
 
   GitLab starts pipelines on push, not on title edits, so a title changed
   after your last push is not rechecked. Retitle before pushing rather
-  than after.
+  than after. A title that slips through that way is caught after the
+  merge instead: `verify:policy` on `main` finds an empty commit range
+  and checks what the push landed there, which for a merge is the
+  squash commit carrying the title
+  (`scripts/check-commit-messages.sh`, "Landed mode"). That is
+  detection only -- the subject is on `main` by then, and a subject
+  that failed the grammar has already been dropped from the release
+  notes.
 
   To try a title before pushing:
   `bash scripts/check-mr-title.sh 'feat(xqvm): add an opcode'`

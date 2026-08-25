@@ -163,6 +163,16 @@ pipelines on push, not on title edits. A title changed after the last
 push is not rechecked, so retitle before your final push rather than
 after.
 
+If one slips through anyway, the `main` pipeline catches it after the
+merge. `verify:policy` finds an empty commit range there and checks
+what the push landed instead, which for a merge is the squash commit
+carrying the title, so a bad subject fails loudly within minutes. It is
+only a detection: the commit is on `main` and cannot be amended, and a
+subject that fails the grammar is dropped from the rendered notes by
+`filter_unconventional`. Expect the gap when previewing with
+`make changelog-release VERSION=vX.Y.Z STRIP=all OUTPUT=/dev/stdout`,
+and add the entry by hand on the GitLab Release page.
+
 Open the MR targeting `main`. Both @kleczkowski and @meganathanmanish
 must approve. After approval, merge using any strategy — squash and
 merge commit are both supported. `release:auto-tag` detects the merged
