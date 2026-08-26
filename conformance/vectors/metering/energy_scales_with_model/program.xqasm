@@ -1,0 +1,34 @@
+; energy_scales_with_model (QUI-1056): pins the step cost of an ENERGY walk
+; over a model whose coefficients the program itself wrote.
+;
+; A 4-variable binary model gets four SETLINE writes (13 steps each, per
+; spec/xqvm/METERING.md's COEFF_WRITE_STEPS), a matching 4-element sample
+; (1 step per element via SAMPLE_COPY_STEPS), and one ENERGY over both
+; (model_eval_steps = sample_len*SAMPLE_COPY_STEPS + terms*MODEL_TERM_STEPS).
+; This vector asserts both implementations charge the same total for that
+; walk, not just that they agree on the resulting energy.
+
+PUSH 4
+BQMX r0
+
+PUSH 0
+PUSH 1
+SETLINE r0
+PUSH 1
+PUSH 2
+SETLINE r0
+PUSH 2
+PUSH 3
+SETLINE r0
+PUSH 3
+PUSH 4
+SETLINE r0
+
+PUSH 4
+BSMX r1
+
+ENERGY r0 r1
+STOW r2
+PUSH 0
+OUTPUT r2
+HALT

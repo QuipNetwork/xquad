@@ -18,6 +18,17 @@ performs one focused pass over a [`Program`] and maps failures to a
 [`VerifierError`]. A [`Verifier`] runs phases sequentially, stopping at the
 first failure.
 
+Verification bounds what a program can do structurally -- reachable jump
+targets, well-typed registers, a balanced stack -- it does not predict what
+a run will cost. A program's step count, like its memory allocation, is
+data-dependent: it depends on values that only exist once calldata is bound
+and the program actually runs (loop trip counts, vector lengths, the sizes
+of models a program builds for itself), none of which the verifier's static
+analysis has access to. A program can therefore pass verification and still
+exhaust the step budget (`StepLimitExceeded`, see `spec/xqvm/METERING.md`)
+or the allocation budget (`MemoryLimitExceeded`) at runtime; catching either
+is the step limit's and the memory limit's job, not the verifier's.
+
 The `scan` function is the shared kernel for Phase 1: it makes one linear pass
 over the instruction bytes, builds the jump table, and returns the first
 structural, jump-target, or loop-nesting violation. `Program::new` calls it to

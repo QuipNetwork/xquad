@@ -26,7 +26,10 @@
 //! - `expected.json` — either `{"outputs": [i64|null, ...], "final_stack":
 //!   [i64, ...]}` for a program that runs to completion, or `{"error":
 //!   "<FAULT>"}` for one that must fault. See `conformance/README.md` for
-//!   the fault vocabulary and how each implementation maps onto it.
+//!   the fault vocabulary and how each implementation maps onto it. A
+//!   successful vector may add an optional `"steps": u64` asserting the
+//!   exact metered execution cost (`spec/xqvm/METERING.md`); a vector that
+//!   omits it asserts nothing about cost.
 //!
 //! The harness assembles `program.xqasm` in-process for every run.
 //! Encoding correctness is owned by the `xqasm` crate's own test suite,
@@ -57,6 +60,10 @@ struct PyOut {
     outputs: Option<Vec<Option<serde_json::Value>>>,
     #[serde(default)]
     final_stack: Vec<serde_json::Value>,
+    /// Steps metered by the run, per `spec/xqvm/METERING.md`. Always
+    /// present for a successful run's JSON, but `Option` keeps the type
+    /// resilient to a stdout shape that omits it.
+    steps: Option<u64>,
     error: Option<PyError>,
 }
 
@@ -194,6 +201,9 @@ pub enum Expected {
         outputs: Vec<Option<i64>>,
         /// Expected residual stack contents after HALT.
         final_stack: Vec<i64>,
+        /// Expected step count, per `spec/xqvm/METERING.md`. `None` when
+        /// the vector asserts nothing about cost.
+        steps: Option<u64>,
     },
     /// The program must fault with this identity.
     Failure {
@@ -211,6 +221,8 @@ struct RawExpected {
     outputs: Option<Vec<Option<i64>>>,
     #[serde(default)]
     final_stack: Vec<i64>,
+    #[serde(default)]
+    steps: Option<u64>,
     error: Option<Fault>,
 }
 
@@ -230,6 +242,7 @@ impl<'de> Deserialize<'de> for Expected {
             (Some(outputs), None) => Ok(Self::Success {
                 outputs,
                 final_stack: raw.final_stack,
+                steps: raw.steps,
             }),
             (None, Some(error)) => Ok(Self::Failure { error }),
             (None, None) => Err(D::Error::custom(
@@ -250,6 +263,8 @@ pub enum Outcome {
         outputs: Vec<Option<i64>>,
         /// Residual stack contents after HALT.
         final_stack: Vec<i64>,
+        /// Steps metered by the run, per `spec/xqvm/METERING.md`.
+        steps: u64,
     },
     /// The program faulted.
     Failure {
@@ -370,6 +385,7 @@ fn run_rust_program(
     Outcome::Success {
         outputs,
         final_stack,
+        steps: vm.steps(),
     }
 }
 
@@ -563,9 +579,14 @@ fn run_python_file(
         .filter_map(|v| v.as_i64())
         .collect();
 
+    let steps = parsed
+        .steps
+        .ok_or_else(|| format!("python stdout reported outputs but no steps\nstdout: {stdout}"))?;
+
     Ok(Outcome::Success {
         outputs,
         final_stack,
+        steps,
     })
 }
 
@@ -593,13 +614,16 @@ pub fn check(actual: &Outcome, expected: &Expected) -> Result<(), String> {
             Outcome::Success {
                 outputs,
                 final_stack,
+                steps,
             },
             Expected::Success {
                 outputs: exp_outputs,
                 final_stack: exp_stack,
+                steps: exp_steps,
             },
         ) => {
-            if outputs == exp_outputs && final_stack == exp_stack {
+            let steps_match = exp_steps.is_none_or(|exp_steps| *steps == exp_steps);
+            if outputs == exp_outputs && final_stack == exp_stack && steps_match {
                 return Ok(());
             }
             if outputs != exp_outputs {
@@ -612,6 +636,14 @@ pub fn check(actual: &Outcome, expected: &Expected) -> Result<(), String> {
                 let _ = writeln!(
                     msg,
                     "  final_stack:\n    expected: {exp_stack:?}\n    actual:   {final_stack:?}"
+                );
+            }
+            if let Some(exp_steps) = exp_steps
+                && *steps != *exp_steps
+            {
+                let _ = writeln!(
+                    msg,
+                    "  steps:\n    expected: {exp_steps}\n    actual:   {steps}"
                 );
             }
         }
@@ -637,6 +669,7 @@ pub fn check(actual: &Outcome, expected: &Expected) -> Result<(), String> {
             Outcome::Success {
                 outputs,
                 final_stack,
+                ..
             },
             Expected::Failure { error },
         ) => {
@@ -669,6 +702,22 @@ mod tests {
             Expected::Success {
                 outputs: vec![Some(7)],
                 final_stack: vec![],
+                steps: None,
+            }
+        );
+    }
+
+    #[test]
+    fn expected_parses_a_success_vector_with_steps() {
+        let parsed: Expected =
+            serde_json::from_str(r#"{"outputs": [7], "final_stack": [], "steps": 42}"#)
+                .expect("parse");
+        assert_eq!(
+            parsed,
+            Expected::Success {
+                outputs: vec![Some(7)],
+                final_stack: vec![],
+                steps: Some(42),
             }
         );
     }
@@ -721,6 +770,7 @@ mod tests {
         let expected = Expected::Success {
             outputs: vec![Some(1)],
             final_stack: vec![],
+            steps: None,
         };
         let err = check(&actual, &expected).expect_err("mismatch");
         assert!(err.contains("DIVISION_BY_ZERO"), "got: {err}");
@@ -731,12 +781,47 @@ mod tests {
         let actual = Outcome::Success {
             outputs: vec![Some(1)],
             final_stack: vec![],
+            steps: 3,
         };
         let expected = Expected::Failure {
             error: Fault::StepLimitExceeded,
         };
         let err = check(&actual, &expected).expect_err("mismatch");
         assert!(err.contains("STEP_LIMIT_EXCEEDED"), "got: {err}");
+    }
+
+    #[test]
+    fn check_ignores_steps_when_the_vector_omits_them() {
+        let actual = Outcome::Success {
+            outputs: vec![Some(1)],
+            final_stack: vec![],
+            steps: 999,
+        };
+        let expected = Expected::Success {
+            outputs: vec![Some(1)],
+            final_stack: vec![],
+            steps: None,
+        };
+        check(&actual, &expected).expect("steps are not asserted when the vector omits them");
+    }
+
+    #[test]
+    fn check_rejects_a_step_count_mismatch() {
+        let actual = Outcome::Success {
+            outputs: vec![Some(1)],
+            final_stack: vec![],
+            steps: 5,
+        };
+        let expected = Expected::Success {
+            outputs: vec![Some(1)],
+            final_stack: vec![],
+            steps: Some(6),
+        };
+        let err = check(&actual, &expected).expect_err("mismatch");
+        assert!(
+            err.contains("expected: 6") && err.contains("actual:   5"),
+            "got: {err}"
+        );
     }
 
     #[test]

@@ -292,17 +292,15 @@ def row_indices(xqmx: XQMX, row: int) -> list[int]:
 
     For a grid with `cols` columns, row `r` contains indices [r*cols, (r+1)*cols).
 
-    Raises the typed errors the Rust VM raises for the same faults, so the
-    conformance harness can map them: `InvalidGridDimensions` for an
-    ungridded XQMX, `IndexOutOfBounds` for a row outside `[0, rows)`.
+    Validates through `grid_row_extent`, which is where the row rules are
+    stated: `InvalidGridDimensions` for an ungridded XQMX,
+    `IndexOutOfBounds` for a row outside `[0, rows)`. Both are the typed
+    errors the Rust VM raises for the same faults, so the conformance
+    harness can map them.
     """
-    if xqmx.rows == 0 or xqmx.cols == 0:
-        raise InvalidGridDimensions(xqmx.rows, xqmx.cols)
-    if row < 0 or row >= xqmx.rows:
-        raise IndexOutOfBounds(row, xqmx.rows)
-
-    start = row * xqmx.cols
-    return list(range(start, start + xqmx.cols))
+    cols = grid_row_extent(xqmx, row)
+    start = row * cols
+    return list(range(start, start + cols))
 
 
 def col_indices(xqmx: XQMX, col: int) -> list[int]:
@@ -311,15 +309,44 @@ def col_indices(xqmx: XQMX, col: int) -> list[int]:
 
     For a grid with `cols` columns, column `c` contains indices [c, c+cols, c+2*cols, ...].
 
-    Raises like `row_indices`: `InvalidGridDimensions` for an ungridded
-    XQMX, `IndexOutOfBounds` for a column outside `[0, cols)`.
+    Validates through `grid_col_extent`, the column counterpart:
+    `InvalidGridDimensions` for an ungridded XQMX, `IndexOutOfBounds` for a
+    column outside `[0, cols)`.
+    """
+    rows = grid_col_extent(xqmx, col)
+    return [col + r * xqmx.cols for r in range(rows)]
+
+
+def grid_row_extent(xqmx: XQMX, row: int) -> int:
+    """
+    Validate `row` against the grid and return the number of cells a row
+    scan will touch, without materialising anything.
+
+    ROWSUM and ROWFIND walk `cols` cells over an extent the program chose,
+    so the executor has to charge the step budget between validating the
+    operand and doing the walk (QUI-1056). This is the only place the row
+    rules are written down -- `row_indices` calls it rather than repeating
+    them -- so charging changes what a program is billed and never which
+    error it sees.
+    """
+    if xqmx.rows == 0 or xqmx.cols == 0:
+        raise InvalidGridDimensions(xqmx.rows, xqmx.cols)
+    if row < 0 or row >= xqmx.rows:
+        raise IndexOutOfBounds(row, xqmx.rows)
+    return xqmx.cols
+
+
+def grid_col_extent(xqmx: XQMX, col: int) -> int:
+    """
+    Validate `col` and return the number of cells a column scan will touch.
+    The column counterpart of `grid_row_extent`, and likewise the only
+    statement of the column rules: `col_indices` calls it.
     """
     if xqmx.rows == 0 or xqmx.cols == 0:
         raise InvalidGridDimensions(xqmx.rows, xqmx.cols)
     if col < 0 or col >= xqmx.cols:
         raise IndexOutOfBounds(col, xqmx.cols)
-
-    return [col + r * xqmx.cols for r in range(xqmx.rows)]
+    return xqmx.rows
 
 
 def row_sum(xqmx: XQMX, row: int) -> int:

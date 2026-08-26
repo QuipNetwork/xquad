@@ -1,0 +1,55 @@
+; grid_scan_scales_with_extent (QUI-1056): pins the step cost of the four
+; grid scans, whose work scales with an extent the program chooses.
+;
+; A 12-variable model is gridded 3x4, so a row scan touches 4 cells and a
+; column scan touches 3. Each cell is charged GRID_CELL_STEPS (3), per
+; spec/xqvm/METERING.md. The two shapes are exercised in the same program
+; so a divergence in either axis shows up as a single step-count mismatch.
+;
+; ROWFIND searches for a value the row does not hold, so the scan runs to
+; the end; COLFIND searches for one the column holds in its first cell, so
+; the scan short-circuits. Both are charged for their full extent, and this
+; vector is what makes that normative rather than incidental.
+
+PUSH 12
+BQMX r0
+
+PUSH 0
+PUSH 7
+SETLINE r0
+
+PUSH 3
+PUSH 4
+RESIZE r0
+
+; row 0 spans cells 0..4 -- 4 * 3 = 12 steps on top of the base cost.
+PUSH 0
+ROWSUM r0
+STOW r1
+
+; column 0 spans cells 0, 4, 8 -- 3 * 3 = 9 steps on top of the base cost.
+PUSH 0
+COLSUM r0
+STOW r2
+
+; scans all 4 cells of row 0 and finds nothing: charged 12, returns -1.
+PUSH 0
+PUSH 99
+ROWFIND r0
+STOW r3
+
+; matches at the first of column 0's 3 cells: still charged 9, returns 0.
+PUSH 0
+PUSH 7
+COLFIND r0
+STOW r4
+
+PUSH 0
+OUTPUT r1
+PUSH 1
+OUTPUT r2
+PUSH 2
+OUTPUT r3
+PUSH 3
+OUTPUT r4
+HALT

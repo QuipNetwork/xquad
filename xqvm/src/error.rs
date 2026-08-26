@@ -174,9 +174,23 @@ pub enum Error {
         b: usize,
     },
 
-    /// Execution exceeded the configured step limit.
-    #[error("step limit of {limit} exceeded")]
-    StepLimitExceeded { limit: u64 },
+    /// Execution exceeded the configured step budget.
+    ///
+    /// `requested` is the charge that could not be paid: `1` for the base
+    /// cost every instruction pays before dispatch, or the extra units an
+    /// opcode asked for before doing work whose size the program controls.
+    /// `pos` is absent only for the base charge, which is levied before the
+    /// instruction is decoded.
+    #[error(
+        "step charge of {requested} exceeds the step limit of {limit} \
+         ({used} steps already charged)"
+    )]
+    StepLimitExceeded {
+        pos: Option<usize>,
+        requested: u64,
+        used: u64,
+        limit: u64,
+    },
 
     /// An allocating instruction asked for more memory than the remaining
     /// allocation budget allows. Distinct from [`Error::StepLimitExceeded`]
@@ -314,14 +328,13 @@ impl Error {
             | Self::MemoryLimitExceeded { pos, .. }
             | Self::InvalidAllocation { pos, .. }
             | Self::IndexOutOfBounds { pos, .. } => Some(*pos),
-            Self::ArithmeticOverflow { pos } => *pos,
+            Self::ArithmeticOverflow { pos } | Self::StepLimitExceeded { pos, .. } => *pos,
             Self::RegisterType { .. }
             | Self::IncompatibleType(_)
             | Self::CallDataIndex { .. }
             | Self::OutputIndex { .. }
             | Self::SizeMismatch { .. }
-            | Self::VecLengthMismatch { .. }
-            | Self::StepLimitExceeded { .. } => None,
+            | Self::VecLengthMismatch { .. } => None,
         }
     }
 }

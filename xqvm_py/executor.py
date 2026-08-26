@@ -43,6 +43,17 @@ from .errors import (
     TypeMismatch,
     VecLengthMismatch,
 )
+from .metering import (
+    BASE_STEPS,
+    COEFF_WRITE_STEPS,
+    ELEMENT_COPY_STEPS,
+    GRID_CELL_STEPS,
+    SAMPLE_COPY_STEPS,
+    _saturating,
+    equality_expansion_steps,
+    model_eval_steps,
+    value_copy_steps,
+)
 from .opcodes import Opcode
 from .program import Instruction, Program
 from .state import MachineState, check_i64
@@ -57,7 +68,10 @@ from .xqmx import (
     expand_implies,
     expand_onehot,
     expand_reduce,
+    grid_col_extent,
+    grid_row_extent,
     require_model_mode,
+    require_sample_mode,
     row_find,
     row_indices,
 )
@@ -168,6 +182,10 @@ class Executor:
         self.tracer = tracer
         self._memory_limit = DEFAULT_MEMORY_LIMIT
         self._memory_used = 0
+        # `execute()` overwrites this, but `step()` is public and can be
+        # driven directly, and any opcode that charges reads it. Unlimited
+        # until a caller says otherwise.
+        self._step_limit: int | None = None
         self._dispatch = self._build_dispatch_table()
 
     def _build_dispatch_table(self) -> dict[Opcode, Callable[[Instruction], None]]:
@@ -317,6 +335,7 @@ class Executor:
         self.program = program
         self._memory_limit = memory_limit
         self._memory_used = 0
+        self._step_limit = step_limit
 
         if input_data:
             for slot, value in input_data.items():
@@ -345,9 +364,8 @@ class Executor:
             self.state.jc.define_target(target_id, pc)
 
         while not self.state.halted and self.state.pc < len(program):
-            if step_limit is not None and self.state.steps >= step_limit:
-                raise StepLimitExceeded(step_limit)
-            self.state.steps += 1
+            self._charge_steps(BASE_STEPS, step_limit)
+            self.state.instructions += 1
             self.step()
 
         return dict(self.state.output)
@@ -356,6 +374,11 @@ class Executor:
     def steps(self) -> int:
         """Total steps executed since the last `execute()` call."""
         return self.state.steps
+
+    @property
+    def instructions(self) -> int:
+        """Total instructions dispatched since the last `execute()` call."""
+        return self.state.instructions
 
     @property
     def memory_used(self) -> int:
@@ -381,6 +404,24 @@ class Executor:
         if total > self._memory_limit:
             raise MemoryLimitExceeded(nbytes, self._memory_used, self._memory_limit)
         self._memory_used = total
+
+    def _charge_steps(self, units: int, limit: int | None = None) -> None:
+        """Charge `units` of execution against the step budget.
+
+        Callers charge *before* they do the work, so an instruction that
+        cannot pay does none of it -- the same discipline as `_charge`.
+
+        The running total is clamped the way Rust's `u64` counter saturates
+        (`charge_steps_at`'s `self.steps.saturating_add(units)`): Python
+        integers do not overflow on their own, so without this an
+        unbounded `step_limit` would let the two VMs' `steps` diverge on a
+        program large enough to cross `u64::MAX`.
+        """
+        limit = self._step_limit if limit is None else limit
+        total = _saturating(self.state.steps + units)
+        if limit is not None and total > limit:
+            raise StepLimitExceeded(limit, requested=units, used=self.state.steps)
+        self.state.steps = total
 
     def _charge_variables(self, count: int) -> None:
         """Charge for `count` XQMX variables. Negative counts clamp to zero."""
@@ -470,6 +511,14 @@ class Executor:
         """
         if xqmx.is_model():
             self._charge(nbytes)
+
+    def _charge_coefficient_steps(self, xqmx: XQMX) -> None:
+        """Charge the step cost of one coefficient write into `xqmx`, if it
+        is a model. The byte twin is `_charge_coefficient`; the reasoning
+        about samples and repeated writes is identical.
+        """
+        if xqmx.is_model():
+            self._charge_steps(COEFF_WRITE_STEPS)
 
     def step(self) -> bool:
         """
@@ -610,12 +659,21 @@ class Executor:
         self.state.jc.push_loop_range(self.state.pc + 1, start, count)
 
     def _skip_to_matching_next(self) -> None:
-        """Scan forward to the matching NEXT, skipping the loop body."""
+        """Scan forward to the matching NEXT, skipping the loop body.
+
+        Every instruction the scan consumes pays `BASE_STEPS`, exactly as a
+        dispatched one does: the scan is O(body length) work the program
+        chose to buy by opening an empty loop, and leaving it free lets a
+        hot loop rent an unmetered walk over the bytecode (QUI-1056). The
+        skipped instructions are metered but not dispatched, so they do not
+        count towards `instructions`.
+        """
         from .errors import LoopError
 
         depth = 1
         scan_pc = self.state.pc + 1
         while scan_pc < len(self.program):
+            self._charge_steps(BASE_STEPS)
             scan_instr = self.program[scan_pc]
             if scan_instr.opcode in (Opcode.RANGE, Opcode.ITER):
                 depth += 1
@@ -650,6 +708,17 @@ class Executor:
         # costs what its models hold. One model copy is measured the same
         # way wherever it happens -- here, at OUTPUT, and at INPUT.
         self._charge(sum(self._value_bytes(vec.get(i)) for i in range(start_idx, end_idx)))
+        if vec.element_type.kind == "xqmx":
+            # Cloning a model clones its coefficient maps, so charge for
+            # what each one actually holds rather than per element. Rust's
+            # twin fold saturates at every accumulation, not just the
+            # total, so the running sum is clamped here the same way.
+            step_cost = 0
+            for i in range(start_idx, end_idx):
+                step_cost = _saturating(step_cost + value_copy_steps(vec.get(i)))
+        else:
+            step_cost = (end_idx - start_idx) * ELEMENT_COPY_STEPS
+        self._charge_steps(step_cost)
         # Store current PC + 1 as the loop target (next instruction)
         self.state.jc.push_loop_iter(self.state.pc + 1, vec, start_idx, end_idx)
 
@@ -670,6 +739,9 @@ class Executor:
         """LVAL: Copy current loop value to register."""
         reg = instr.operands[0]
         value = self.state.jc.current_loop_value()
+        # Cloning an XQMX loop value clones its coefficient maps -- O(model)
+        # work for one dispatch (QUI-1056). Charge before the copy below.
+        self._charge_steps(value_copy_steps(value))
         self.state.set_register(reg, value)
 
     def _runner_LIDX(self, instr: Instruction) -> None:
@@ -731,6 +803,10 @@ class Executor:
         if isinstance(value, int) and not isinstance(value, bool):
             check_i64(value, f"INPUT slot {slot}")
         self._charge_clone(value)
+        # Cloning a model clones its coefficient maps -- O(model) work for
+        # one dispatch, so the step meter pays for the same copy the byte
+        # budget does (QUI-1056).
+        self._charge_steps(value_copy_steps(value))
         if value is None:
             # An in-range slot the host left unset copies unset into the
             # register, which is what `exec_input` does when the calldata
@@ -763,6 +839,10 @@ class Executor:
         # cannot change what is charged.
         value = self.state.registers.get(reg)
         self._charge_clone(value)
+        # Cloning a model clones its coefficient maps -- O(model) work for
+        # one dispatch, so the step meter pays for the same copy the byte
+        # budget does (QUI-1056).
+        self._charge_steps(value_copy_steps(value))
         if reg not in self.state.registers:
             raise RegisterNotFound(reg)
         # The slot bound is checked here rather than left to `set_output`, so
@@ -985,6 +1065,7 @@ class Executor:
         """BSMX: Create binary sample XQMX."""
         reg = instr.operands[0]
         size = self._allocation_size(self.state.pop())
+        self._charge_steps(max(size, 0) * SAMPLE_COPY_STEPS)
         xqmx = XQMX.binary_sample(size)
         self.state.set_register(reg, xqmx)
 
@@ -992,6 +1073,7 @@ class Executor:
         """SSMX: Create spin sample XQMX."""
         reg = instr.operands[0]
         size = self._allocation_size(self.state.pop())
+        self._charge_steps(max(size, 0) * SAMPLE_COPY_STEPS)
         xqmx = XQMX.spin_sample(size)
         self.state.set_register(reg, xqmx)
 
@@ -1003,6 +1085,7 @@ class Executor:
         if k < 2:
             raise InvalidDiscreteK(k)
         size = self._allocation_size(size)
+        self._charge_steps(max(size, 0) * SAMPLE_COPY_STEPS)
         xqmx = XQMX.discrete_sample(size, k)
         self.state.set_register(reg, xqmx)
 
@@ -1059,6 +1142,7 @@ class Executor:
         # Both loops below run once per bit position in `capacity`; charge
         # for the entries before creating them.
         self._charge(capacity.bit_length() * 2 * VEC_ELEMENT_BYTES)
+        self._charge_steps(capacity.bit_length() * 2 * ELEMENT_COPY_STEPS)
         # Two passes, not one interleaved pass, matching `exec_slack`: the
         # whole index sequence is appended before the whole coefficient
         # sequence. The distinction is only observable when `indices` and
@@ -1094,6 +1178,7 @@ class Executor:
         xqmx = self._get_register_as_xqmx(reg)
         value, index = self.state.pop_n(2)
         self._charge_coefficient(xqmx, LINEAR_ENTRY_BYTES)
+        self._charge_coefficient_steps(xqmx)
         xqmx.set_linear(index, value)
 
     def _runner_ADDLINE(self, instr: Instruction) -> None:
@@ -1102,6 +1187,7 @@ class Executor:
         xqmx = self._get_register_as_xqmx(reg)
         delta, index = self.state.pop_n(2)
         self._charge_coefficient(xqmx, LINEAR_ENTRY_BYTES)
+        self._charge_coefficient_steps(xqmx)
         xqmx.add_linear(index, delta)
 
     def _runner_GETQUAD(self, instr: Instruction) -> None:
@@ -1118,6 +1204,7 @@ class Executor:
         xqmx = self._get_register_as_xqmx(reg)
         value, j, i = self.state.pop_n(3)
         self._charge_coefficient(xqmx, QUAD_ENTRY_BYTES)
+        self._charge_coefficient_steps(xqmx)
         xqmx.set_quadratic(i, j, value)
 
     def _runner_ADDQUAD(self, instr: Instruction) -> None:
@@ -1126,6 +1213,7 @@ class Executor:
         xqmx = self._get_register_as_xqmx(reg)
         delta, j, i = self.state.pop_n(3)
         self._charge_coefficient(xqmx, QUAD_ENTRY_BYTES)
+        self._charge_coefficient_steps(xqmx)
         xqmx.add_quadratic(i, j, delta)
 
     def _runner_IDXGRID(self, instr: Instruction) -> None:
@@ -1186,6 +1274,11 @@ class Executor:
         reg = instr.operands[0]
         xqmx = self._get_register_as_xqmx(reg)
         value, row = self.state.pop_n(2)
+        # The scan is one lookup per cell over a program-controlled extent,
+        # so charge for the whole row before walking it (QUI-1056). Charged
+        # after the operand check, so an out-of-range row still faults for
+        # the reason it did before metering existed.
+        self._charge_steps(grid_row_extent(xqmx, row) * GRID_CELL_STEPS)
         col = row_find(xqmx, row, value)
         self.state.push(col)
 
@@ -1194,6 +1287,8 @@ class Executor:
         reg = instr.operands[0]
         xqmx = self._get_register_as_xqmx(reg)
         value, col = self.state.pop_n(2)
+        # One lookup per cell over a program-controlled extent. See ROWFIND.
+        self._charge_steps(grid_col_extent(xqmx, col) * GRID_CELL_STEPS)
         row = col_find(xqmx, col, value)
         self.state.push(row)
 
@@ -1202,6 +1297,8 @@ class Executor:
         reg = instr.operands[0]
         xqmx = self._get_register_as_xqmx(reg)
         row = self.state.pop()
+        # One lookup per cell over a program-controlled extent. See ROWFIND.
+        self._charge_steps(grid_row_extent(xqmx, row) * GRID_CELL_STEPS)
         total = xqmx_row_sum(xqmx, row)
         self.state.push(total)
 
@@ -1210,6 +1307,8 @@ class Executor:
         reg = instr.operands[0]
         xqmx = self._get_register_as_xqmx(reg)
         col = self.state.pop()
+        # One lookup per cell over a program-controlled extent. See ROWFIND.
+        self._charge_steps(grid_col_extent(xqmx, col) * GRID_CELL_STEPS)
         total = xqmx_col_sum(xqmx, col)
         self.state.push(total)
 
@@ -1226,6 +1325,7 @@ class Executor:
         # term per pair of columns, so ONEHOTR costs O(cols^2) entries in one
         # step -- and RESIZE takes cols straight off the value stack.
         self._charge_equality_expansion(model.cols)
+        self._charge_steps(equality_expansion_steps(model.cols))
         indices = row_indices(model, row)
         expand_onehot(model, indices, penalty)
 
@@ -1240,6 +1340,7 @@ class Executor:
 
         # O(rows^2) entries in one step; see ONEHOTR.
         self._charge_equality_expansion(model.rows)
+        self._charge_steps(equality_expansion_steps(model.rows))
         indices = col_indices(model, col)
         expand_onehot(model, indices, penalty)
 
@@ -1249,6 +1350,8 @@ class Executor:
         model = self._get_register_as_xqmx(reg)
         penalty, j, i = self.state.pop_n(3)
         self._charge_coefficient(model, QUAD_ENTRY_BYTES)
+        # One quadratic coefficient written, priced like any other write.
+        self._charge_steps(COEFF_WRITE_STEPS)
         expand_exclude(model, i, j, penalty)
 
     def _runner_IMPLIES(self, instr: Instruction) -> None:
@@ -1257,6 +1360,8 @@ class Executor:
         model = self._get_register_as_xqmx(reg)
         penalty, j, i = self.state.pop_n(3)
         self._charge_coefficient(model, LINEAR_ENTRY_BYTES + QUAD_ENTRY_BYTES)
+        # One linear and one quadratic coefficient written.
+        self._charge_steps(2 * COEFF_WRITE_STEPS)
         expand_implies(model, i, j, penalty)
 
     def _runner_EQUALITY(self, instr: Instruction) -> None:
@@ -1278,6 +1383,7 @@ class Executor:
             self._charge_variables(needed - model.size)
             model.size = max(model.size, needed)
         self._charge_equality_expansion(len(indices))
+        self._charge_steps(equality_expansion_steps(len(indices)))
         expand_equality(model, indices, coeffs, target, penalty)
 
     def _runner_ATLEAST(self, instr: Instruction) -> None:
@@ -1298,6 +1404,7 @@ class Executor:
         # in the total term count. Charge for both before either happens.
         self._charge_variables(num_slacks)
         self._charge_equality_expansion(n + num_slacks)
+        self._charge_steps(equality_expansion_steps(n + num_slacks))
         if num_slacks == 0:
             expand_equality(model, orig_indices, [1] * n, k, penalty)
             return
@@ -1334,6 +1441,7 @@ class Executor:
         num_slacks = max_excess.bit_length() if max_excess > 0 else 0
         self._charge_variables(num_slacks)
         self._charge_equality_expansion(n + num_slacks)
+        self._charge_steps(equality_expansion_steps(n + num_slacks))
         if num_slacks == 0:
             expand_equality(model, orig_indices, weights, k, penalty)
             return
@@ -1352,6 +1460,8 @@ class Executor:
         # terms and one linear term.
         self._charge_variables(1)
         self._charge(3 * QUAD_ENTRY_BYTES + LINEAR_ENTRY_BYTES)
+        # Three quadratic and one linear coefficient written.
+        self._charge_steps(4 * COEFF_WRITE_STEPS)
         w = expand_reduce(model, var_a, var_b, p_aux)
         self.state.push(w)
 
@@ -1359,7 +1469,25 @@ class Executor:
         """ENERGY: Compute energy of sample against model."""
         model_reg = instr.operands[0]
         sample_reg = instr.operands[1]
+        # Each register is validated completely -- XQMX-ness and then mode
+        # -- before the next one is looked at, in operand order. Rust's
+        # `RegVal` makes model and sample distinct variants, so its single
+        # match per register decides both questions at once; here they are
+        # two calls and the interleaving is what makes the two VMs agree.
+        # Validating XQMX-ness of both registers first would fault on the
+        # sample register for `ENERGY r0 r1` with a sample-mode XQMX in `r0`
+        # and an int in `r1`, where the model register's mode error is the
+        # conforming outcome. The order is normative -- see
+        # `spec/xqvm/METERING.md` (Conformance).
         model = self._get_register_as_xqmx(model_reg)
+        require_model_mode(model, "ENERGY (model)")
         sample = self._get_register_as_xqmx(sample_reg)
+        require_sample_mode(sample, "ENERGY (sample)")
+        # Both halves of this are O(model): the sample is copied out of its
+        # register and every coefficient is accumulated. Charge for both
+        # before either happens (QUI-1056), and only after both registers
+        # have passed validation.
+        terms = len(model.linear) + len(model.quadratic)
+        self._charge_steps(model_eval_steps(sample.size, terms))
         energy = compute_energy(model, sample)
         self.state.push(energy)

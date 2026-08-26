@@ -1,0 +1,36 @@
+; empty_loop_skip_scan (QUI-1056): pins the step cost of skipping an empty
+; loop body.
+;
+; A RANGE with count = 0 does not enter its body. Both implementations
+; instead scan forward through the instruction stream, tracking nesting
+; depth, until they reach the matching NEXT -- work that is O(body length)
+; and that spec/xqvm/METERING.md charges BASE_STEPS per instruction
+; consumed. The body here nests a second (never-executed) RANGE/NEXT pair
+; so the scan's depth tracking is exercised too.
+;
+; Steps:
+;   dispatched: PUSH 0, PUSH 0, RANGE, PUSH 7, HALT       = 5 * BASE_STEPS
+;   skipped:    NOP, PUSH 1, PUSH 1, RANGE, NOP, NEXT,
+;               NOP, NEXT                                 = 8 * BASE_STEPS
+;   total:                                                  13
+;
+; The eight skipped instructions are metered but never dispatched, so they
+; do not appear in the instruction count. The final stack holds only the
+; sentinel 7: had the body run, the nested RANGE's two operands would have
+; been consumed and its loop frame entered instead.
+
+PUSH 0         ; start
+PUSH 0         ; count = 0 -- the loop body is skipped
+RANGE
+
+NOP
+PUSH 1
+PUSH 1
+RANGE          ; nested opener the scan must count as depth+1
+NOP
+NEXT           ; closes the nested opener, not the outer one
+NOP
+NEXT           ; the matching NEXT the scan stops at
+
+PUSH 7
+HALT

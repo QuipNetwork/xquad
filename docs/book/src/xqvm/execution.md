@@ -49,16 +49,17 @@ Each decoded instruction yields:
 
 ## Step Counting
 
-One step is one instruction fetched and dispatched. Every instruction
-costs one step and none costs more: `NOP`, `TARGET` and `HALT` are steps,
-an instruction reached by a jump or a loop back-edge is a step each time,
-and an instruction that faults has been charged before it faults. The
-forward scan of the empty-loop skip is not metered; the instructions it
-passes over are never fetched for execution.
-
-A configurable step limit (default: 10,000,000) bounds runaway programs.
-When the counter reaches it, execution stops with `StepLimitExceeded` and
-the fetched instruction does not run.
+The VM maintains two counters, not one. `instructions` counts dispatches: it
+increments once per instruction, regardless of what that instruction does.
+`steps` counts metered cost units: every instruction charges a base cost
+before dispatch, and opcodes whose work scales with data the program
+controls -- evaluating a model, expanding a constraint, copying a register
+that holds a model -- charge more before they do that work. A step is not an
+instruction; see [`spec/xqvm/METERING.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/METERING.md)
+for the full cost model. A configurable step limit (default: 10,000,000)
+prevents runaway programs by bounding `steps`, not `instructions`. When a
+charge does not fit the remaining budget, execution stops with a
+`StepLimitExceeded` error.
 
 ```rust
 let mut vm = Vm::new();
@@ -73,16 +74,19 @@ rather than the safest -- the wrong way round for anything taking a limit
 from untrusted input. There is no sentinel now: `set_unlimited_steps()`
 is how a caller opts out, and it has to be written.
 
-The step counter is accessible after execution via `vm.steps()`, and it
-is reset to zero at the start of every run. For a `HALT`-terminated
-program it reports the exact number of instructions executed, since the
-loop breaks right after dispatching `HALT`. A program that runs off the
-end of the instruction stream without a `HALT` reports the same exact
-count: reaching the end is not a step, so the probe that finds nothing is
-never charged. Both implementations count this way, so a program that
-runs off the end having executed exactly `limit` instructions succeeds on
-either, and a program with no instructions at all succeeds under a budget
-of `0`.
+Both counters are accessible after execution: `vm.steps()` returns the
+metered cost total, `vm.instructions()` returns the dispatch count.
+`instructions()` reports the exact number of instructions dispatched, whether
+the program ends at a `HALT` or by running off the end of the instruction
+stream: the loop probes for the next instruction before it counts anything,
+so the fetch that finds nothing and breaks the loop is never counted.
+`xqvm_py`'s executor has the same loop shape, so the two interpreters report
+the same count for the same program.
+
+One exception is worth knowing: when a loop opener skips an empty body, the
+scan forward to the matching `NEXT` charges `steps` for each instruction it
+consumes but does not dispatch them, so those instructions are metered
+without being counted in `instructions()`.
 
 ## Allocation Accounting
 
