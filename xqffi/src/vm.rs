@@ -230,7 +230,11 @@ impl PyVm {
         let _ = self.inner.set_output_slots(n);
     }
 
-    /// Set the instruction-step limit (safety cap against runaway loops).
+    /// Set the step limit (safety cap against runaway loops).
+    ///
+    /// A step is a metered cost unit, not an instruction: every instruction
+    /// charges a base cost before dispatch, and opcodes whose work scales
+    /// with program-controlled data charge more. See `spec/xqvm/METERING.md`.
     ///
     /// Exact: `0` permits no instructions. Use `set_unlimited_steps()` for an
     /// unbounded run.
@@ -285,9 +289,18 @@ impl PyVm {
         self.inner.stack().to_vec()
     }
 
-    /// Total steps executed since construction (or the last `reset`).
+    /// Total steps charged since construction (or the last `reset`).
     fn steps(&self) -> u64 {
         self.inner.steps()
+    }
+
+    /// Total instructions dispatched by the last run.
+    ///
+    /// Distinct from `steps()`, which counts metered cost units: an opcode
+    /// whose work scales with the program's own data charges more than one
+    /// step for one dispatch. See `spec/xqvm/METERING.md`.
+    fn instructions(&self) -> u64 {
+        self.inner.instructions()
     }
 
     /// Reset internal VM state so the instance can be reused.

@@ -12,6 +12,7 @@
         test-quip test-quip-sign test-quip-e2e \
         test-cuda test-qpu test-metal \
         opcode-parity opcode-parity-rs opcode-parity-py \
+        metering-parity \
         conformance conformance-rs conformance-py \
         example-smoke \
         build-docs regen-docs regen-docs-opcodes regen-docs-examples \
@@ -88,7 +89,7 @@ test-rust: test-unit-rs test-integ-rs test-doc
 
 test-python: test-py
 
-check-parity: opcode-parity conformance example-smoke
+check-parity: opcode-parity conformance example-smoke metering-parity
 
 # Both are alpine, handwritten-docs checks -- no uv, no generation, no
 # mdbook. Kept apart from check-docs-generated (which needs uv) so the two
@@ -516,6 +517,13 @@ opcode-parity-rs:
 # than the tree it just tested.
 opcode-parity-py: deps-py
 	uv run --no-sync python scripts/check-opcode-parity.py
+
+# Cross-checks the step-cost constants across xqvm/src/metering.rs,
+# xqvm_py/metering.py, and spec/xqvm/METERING.md -- the same "generated
+# code vs. handwritten mirror vs. spec table" shape as opcode-parity-py,
+# for the metering constants instead of the opcode table.
+metering-parity: deps-py
+	uv run --no-sync python scripts/check-metering-parity.py
 
 conformance: conformance-rs conformance-py
 

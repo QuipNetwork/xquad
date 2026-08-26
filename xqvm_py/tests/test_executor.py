@@ -40,6 +40,7 @@ from xqvm_py.errors import (
 from xqvm_py.executor import DEFAULT_MEMORY_LIMIT, VEC_ELEMENT_BYTES, Executor
 from xqvm_py.opcodes import Opcode
 from xqvm_py.program import Instruction, make_program, run_program
+from xqvm_py.program import program_from_xqasm as assemble
 from xqvm_py.state import I64_MAX, I64_MIN, MachineState
 from xqvm_py.vector import Vec
 from xqvm_py.xqmx import XQMX
@@ -3114,6 +3115,249 @@ class TestStepLimit:
         )
         ex.execute(program, step_limit=10)
         assert ex.state.halted is True
+
+    def test_energy_charges_for_the_model_it_evaluates(self):
+        """ENERGY walks every coefficient; one step for that is QUI-1056."""
+        from xqvm_py.metering import (
+            BASE_STEPS,
+            COEFF_WRITE_STEPS,
+            MODEL_TERM_STEPS,
+            SAMPLE_COPY_STEPS,
+        )
+
+        def steps_for(terms: int) -> int:
+            source = [f"PUSH {terms}", "BQMX r0"]
+            for i in range(terms):
+                source += [f"PUSH {i}", "PUSH 1", "SETLINE r0"]
+            source += [f"PUSH {terms}", "BSMX r1", "ENERGY r0 r1", "HALT"]
+            ex = Executor()
+            ex.execute(assemble("\n".join(source)))
+            return ex.steps
+
+        # Mirrors `xqvm/tests/integration.rs::energy_charges_for_the_model_it_evaluates`:
+        # four more setup instructions' worth of coefficient writes, four
+        # more sample elements charged when BSMX fills the buffer, four more
+        # sample elements to copy during ENERGY's own read, four more terms
+        # to accumulate.
+        delta = steps_for(8) - steps_for(4)
+        assert delta == (
+            4 * (3 * BASE_STEPS + COEFF_WRITE_STEPS)
+            + 4 * SAMPLE_COPY_STEPS
+            + 4 * SAMPLE_COPY_STEPS
+            + 4 * MODEL_TERM_STEPS
+        )
+
+    def test_grid_scan_charges_for_its_extent(self):
+        """A row scan walks `cols` cells; one step for that is QUI-1056."""
+        from xqvm_py.metering import GRID_CELL_STEPS
+
+        def steps_for(cols: int) -> int:
+            source = [
+                f"PUSH {cols}",
+                "BQMX r0",
+                "PUSH 1",
+                f"PUSH {cols}",
+                "RESIZE r0",
+                "PUSH 0",
+                "ROWSUM r0",
+                "HALT",
+            ]
+            ex = Executor()
+            ex.execute(assemble("\n".join(source)))
+            return ex.steps
+
+        # Mirrors `xqvm/tests/integration.rs::a_grid_scan_charges_for_its_extent`.
+        # Instruction count is identical between the two runs, so the whole
+        # difference is the scan charge.
+        assert steps_for(64) - steps_for(4) == 60 * GRID_CELL_STEPS
+
+    def test_grid_scan_is_refused_before_it_walks_the_grid(self):
+        """The charge lands before the scan, so a program that cannot pay
+        does no work -- the same discipline the allocation budget uses."""
+        from xqvm_py.errors import StepLimitExceeded
+        from xqvm_py.metering import GRID_CELL_STEPS
+
+        cols = 4096
+        source = [
+            f"PUSH {cols}",
+            "BQMX r0",
+            "PUSH 1",
+            f"PUSH {cols}",
+            "RESIZE r0",
+            "PUSH 0",
+            "ROWSUM r0",
+            "HALT",
+        ]
+        ex = Executor()
+        with pytest.raises(StepLimitExceeded) as excinfo:
+            ex.execute(assemble("\n".join(source)), step_limit=64)
+        # The refused charge is the whole row, not a partial walk.
+        assert excinfo.value.requested == cols * GRID_CELL_STEPS
+        assert excinfo.value.limit == 64
+
+    def test_grid_scan_charges_nothing_extra_for_a_bad_operand(self):
+        """Validation precedes the charge, so an out-of-range row faults for
+        its own reason and is billed only the base cost of the dispatch."""
+        from xqvm_py.metering import BASE_STEPS
+
+        source = [
+            "PUSH 8",
+            "BQMX r0",
+            "PUSH 2",
+            "PUSH 4",
+            "RESIZE r0",
+            "PUSH 99",
+            "ROWSUM r0",
+            "HALT",
+        ]
+        ex = Executor()
+        with pytest.raises(IndexOutOfBounds):
+            ex.execute(assemble("\n".join(source)))
+        # Seven dispatches, none charging beyond the base cost: the ROWSUM
+        # faulted before its scan charge landed.
+        assert ex.steps == 7 * BASE_STEPS
+
+    def test_energy_validates_its_model_register_before_its_sample_register(self):
+        """`ENERGY r0 r1` validates r0 completely -- XQMX-ness and mode --
+        before it looks at r1, per spec/xqvm/METERING.md (Conformance).
+
+        With a sample-mode XQMX in r0 and an int in r1, both registers are
+        ill-typed. Checking XQMX-ness across both operands before checking
+        either one's mode would fault on r1; the conforming fault is r0's.
+        """
+        ex = Executor()
+        with pytest.raises(XQMXModeError) as excinfo:
+            ex.execute(assemble("PUSH 4\nBSMX r0\nPUSH 5\nSTOW r1\nENERGY r0 r1\nHALT"))
+        assert "ENERGY (model)" in str(excinfo.value)
+
+    def test_instructions_and_steps_are_separate_counters(self):
+        ex = Executor()
+        ex.execute(assemble("PUSH 2\nBQMX r0\nPUSH 0\nPUSH 3\nSETLINE r0\nHALT"))
+        assert ex.instructions == 6
+        assert ex.steps > ex.instructions
+
+    def test_charge_steps_saturates_rather_than_overflowing(self):
+        """Python ints don't overflow on their own, so an unlimited step
+        budget could let the stored total grow past what Rust's `u64`
+        counter would report for the same program -- exactly the
+        divergence `_saturating` in `xqvm_py/metering.py` exists to
+        prevent. Mirrors `expansion_saturates_rather_than_wrapping` in
+        `xqvm/src/metering.rs`, but at the counter itself rather than at
+        one cost formula.
+        """
+        from xqvm_py.metering import U64_MAX
+
+        # Explicitly unlimited: `execute` defaults to DEFAULT_STEP_LIMIT, and
+        # this test is about the stored total saturating, not the budget.
+        ex = Executor()
+        ex.execute(assemble("HALT"), step_limit=None)
+        ex._charge_steps(U64_MAX)
+        ex._charge_steps(U64_MAX)
+        assert ex.steps == U64_MAX
+
+    def test_step_can_be_driven_directly_by_a_charging_opcode(self):
+        """`step()` is public, so `_step_limit` must exist before `execute()`.
+
+        Any opcode reaching `_charge_steps` without a limit argument reads
+        `self._step_limit`; before QUI-1056 only `execute()` set it, so
+        driving `step()` by hand raised AttributeError instead of an
+        XQVMError. PUSH and HALT charge nothing, which is why the existing
+        direct-`step()` test missed it -- this one uses SETLINE, which does.
+        """
+        from xqvm_py.metering import COEFF_WRITE_STEPS
+
+        ex = Executor()
+        ex.program = assemble("PUSH 2\nBQMX r0\nPUSH 0\nPUSH 3\nSETLINE r0\nHALT")
+        for _ in range(5):
+            assert ex.step() is True
+        assert ex.steps == COEFF_WRITE_STEPS
+        assert ex.step() is False
+
+    def test_skipping_an_empty_loop_charges_for_the_scan(self):
+        """A skipped loop body is still decoded, one instruction at a time.
+
+        RANGE with count <= 0 scans forward to the matching NEXT; that scan
+        is O(body length), so every instruction it consumes pays BASE_STEPS
+        (QUI-1056). Mirrors
+        `xqvm/tests/integration.rs::skipping_an_empty_loop_charges_for_the_scan`.
+        """
+        from xqvm_py.metering import BASE_STEPS
+
+        def steps_for(body: int) -> int:
+            source = ["PUSH 0", "PUSH 0", "RANGE"]
+            source += ["NOP"] * body
+            source += ["NEXT", "HALT"]
+            ex = Executor()
+            ex.execute(assemble("\n".join(source)))
+            return ex.steps
+
+        # PUSH, PUSH, RANGE and HALT are dispatched; the NEXT is consumed by
+        # the scan.
+        assert steps_for(0) == 5 * BASE_STEPS
+        assert steps_for(64) - steps_for(0) == 64 * BASE_STEPS
+
+    def test_a_skipped_body_is_metered_but_not_dispatched(self):
+        """The scan charges steps without dispatching, so the two counters
+        part company by exactly the number of instructions it consumed.
+        """
+        source = ["PUSH 0", "PUSH 0", "RANGE"] + ["NOP"] * 10 + ["NEXT", "HALT"]
+        ex = Executor()
+        ex.execute(assemble("\n".join(source)))
+        assert ex.instructions == 4
+        assert ex.steps == 4 + 11
+
+    def test_a_skip_scan_that_cannot_pay_does_not_finish(self):
+        """The scan charges before it decodes, so a program that cannot pay
+        for the whole scan is refused partway through.
+        """
+        from xqvm_py.errors import StepLimitExceeded
+
+        source = ["PUSH 0", "PUSH 0", "RANGE"] + ["NOP"] * 100 + ["NEXT", "HALT"]
+        ex = Executor()
+        with pytest.raises(StepLimitExceeded):
+            ex.execute(assemble("\n".join(source)), step_limit=10)
+
+    def test_constraint_helpers_pay_for_the_coefficients_they_write(self):
+        """EXCLUDE writes one quadratic term, IMPLIES a linear and a
+        quadratic, REDUCE three quadratics and a linear -- each priced at the
+        same COEFF_WRITE_STEPS a bare SETQUAD pays (QUI-1056). Mirrors
+        `constraint_helpers_pay_for_the_coefficients_they_write` in
+        `xqvm/tests/integration.rs`.
+        """
+        from xqvm_py.metering import BASE_STEPS, COEFF_WRITE_STEPS
+
+        def steps_for(*body: str) -> int:
+            ex = Executor()
+            ex.execute(assemble("\n".join(["PUSH 8", "BQMX r0", *body, "HALT"])))
+            return ex.steps
+
+        baseline = steps_for()
+        # Three PUSHes plus the constraint opcode's own dispatch.
+        dispatch = 4 * BASE_STEPS
+
+        exclude = steps_for("PUSH 0", "PUSH 1", "PUSH 5", "EXCLUDE r0")
+        assert exclude - baseline == dispatch + COEFF_WRITE_STEPS
+
+        implies = steps_for("PUSH 0", "PUSH 1", "PUSH 5", "IMPLIES r0")
+        assert implies - baseline == dispatch + 2 * COEFF_WRITE_STEPS
+
+        reduce_ = steps_for("PUSH 0", "PUSH 1", "PUSH 5", "REDUCE r0")
+        assert reduce_ - baseline == dispatch + 4 * COEFF_WRITE_STEPS
+
+    def test_copying_a_vec_costs_the_sum_over_its_elements(self):
+        """`value_copy_steps` on a vec recurses per element, so a vec of
+        samples is charged the same here as ITER charges copying the same
+        elements one at a time (QUI-1056).
+        """
+        from xqvm_py.metering import SAMPLE_COPY_STEPS, value_copy_steps
+        from xqvm_py.vector import Vec, VecElem
+        from xqvm_py.xqmx import XQMX
+
+        vec = Vec(VecElem("xqmx"))
+        for _ in range(3):
+            vec.push(XQMX.binary_sample(4))
+        assert value_copy_steps(vec) == sum(value_copy_steps(vec.get(i)) for i in range(3))
+        assert value_copy_steps(vec) == 3 * 4 * SAMPLE_COPY_STEPS
 
 
 class TestCalldataChargeParity:

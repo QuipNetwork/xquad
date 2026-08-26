@@ -1,0 +1,21 @@
+; onehot_expansion (QUI-1056): pins the step cost of a single ONEHOTR over
+; a 4-column grid row.
+;
+; ONEHOTR charges equality_expansion_steps(cols) before it expands the
+; one-hot constraint (spec/xqvm/METERING.md): for cols=4 that is
+; (4 + pairs(4)) * COEFF_WRITE_STEPS = (4 + 6) * 13 = 130 steps, on top of
+; each instruction's own BASE_STEPS. This vector asserts both
+; implementations charge the same total for that expansion, independent
+; of how many map entries the expansion actually writes.
+
+PUSH 4
+BQMX r0
+
+PUSH 1
+PUSH 4
+RESIZE r0
+
+PUSH 0
+PUSH 2
+ONEHOTR r0
+HALT

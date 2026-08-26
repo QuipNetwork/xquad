@@ -200,6 +200,10 @@ class MachineState:
     input_slots: int = 0
     halted: bool = False
     steps: int = 0
+    #: Number of instructions dispatched. Distinct from `steps`: every
+    #: instruction dispatches once, but some charge more than `BASE_STEPS`
+    #: for the data-scaling work they do (QUI-1056).
+    instructions: int = 0
 
     # === Stack Operations ===
 
@@ -332,6 +336,7 @@ class MachineState:
         self.input_slots = 0
         self.halted = False
         self.steps = 0
+        self.instructions = 0
 
     def snapshot(self) -> dict[str, Any]:
         """Create a snapshot of current state for debugging."""

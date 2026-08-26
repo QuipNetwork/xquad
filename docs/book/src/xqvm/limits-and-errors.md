@@ -24,7 +24,7 @@ this reason.
 
 | Limit | Library default | Method | VM error when exceeded |
 |---|---|---|---|
-| Step count | 10,000,000 | `Vm::set_step_limit(n)` / `Vm::set_unlimited_steps()` | `StepLimitExceeded` |
+| Step budget | 10,000,000 | `Vm::set_step_limit(n)` / `Vm::set_unlimited_steps()` | `StepLimitExceeded` |
 | Allocation budget | 1 GiB | `Vm::set_memory_limit(bytes)` | `MemoryLimitExceeded` |
 | Calldata slots | 0 | `Vm::set_calldata(vec)` | `CallDataIndex` |
 | Output slots | 0 | `Vm::set_output_slots(n)` | `OutputIndex` |
@@ -40,6 +40,20 @@ all, not unlimited ones. To remove the bound, call
 it by default. Until 0.4.0 `0` was the sentinel for "unlimited", which
 made a zero budget the most dangerous value a caller could pass rather
 than the safest.
+
+## The step budget
+
+A step is a unit of metered execution cost, not an instruction: every
+instruction charges a base cost before dispatch, and opcodes whose work
+scales with data the program controls -- evaluating a model, expanding a
+constraint, copying a register that holds a model -- charge more before
+they do that work. An instruction that cannot pay the charge fails with
+`StepLimitExceeded` and does none of the work it would have charged for.
+`Vm::steps()` reports the metered total; `Vm::instructions()` reports the
+plain dispatch count, which is always less than or equal to `steps()`. See
+[`spec/xqvm/METERING.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/METERING.md)
+for the full cost model, including the per-opcode charges and the
+constants they use.
 
 ## The allocation budget
 
@@ -127,7 +141,7 @@ which disassembles the program and points at the failing instruction.
 | `OutputIndex` | `OUTPUT` index out of range |
 | `SizeMismatch` | `ENERGY` sample length does not match model size |
 | `VecLengthMismatch` | Two parallel vectors used together (for example `EQUALITY`'s indices and coefficients) have different lengths |
-| `StepLimitExceeded` | Execution exceeded the configured step limit |
+| `StepLimitExceeded` | A step charge could not be paid: `"step charge of {requested} exceeds the step limit of {limit} ({used} steps already charged)"`, where `requested` is `1` for the base per-instruction cost or the larger charge an opcode asked for before doing data-scaled work |
 | `MemoryLimitExceeded` | An allocating instruction exceeded the configured allocation budget |
 | `InvalidShift` | `SHL`/`SHR` shift amount outside `[0, 64)` |
 | `InvalidGridDimensions` | `RESIZE` with rows or cols <= 0, `RESIZE` with `rows * cols` past the register's declared size, or a grid-reading opcode on a register with no grid |

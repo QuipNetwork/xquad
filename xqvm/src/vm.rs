@@ -45,6 +45,11 @@ use crate::bytecode::{Instruction, InstructionStream, Program, Register};
 use crate::opcodes;
 
 use crate::error::Error;
+use crate::metering;
+use crate::metering::{
+    COEFF_WRITE_STEPS, ELEMENT_COPY_STEPS, GRID_CELL_STEPS, SAMPLE_COPY_STEPS,
+    equality_expansion_steps, model_eval_steps, value_copy_steps, widen,
+};
 use crate::model::{Domain, XqmxModel, XqmxSample};
 use crate::tracer::{NoopTracer, StepState, Tracer};
 use crate::value::RegVal;
@@ -328,6 +333,10 @@ pub struct Vm {
     outputs: Vec<RegVal>,
     step_limit: u64,
     steps: u64,
+    /// Instructions dispatched by the last run. Distinct from `steps`, which
+    /// counts metered cost units: an opcode whose work scales with the
+    /// program's own data charges more than one step for one dispatch.
+    instructions: u64,
     memory_limit: u64,
     memory_used: u64,
 }
@@ -353,6 +362,7 @@ impl Vm {
             outputs: Vec::new(),
             step_limit: DEFAULT_STEP_LIMIT,
             steps: 0,
+            instructions: 0,
             memory_limit: DEFAULT_MEMORY_LIMIT,
             memory_used: 0,
         }
@@ -521,6 +531,15 @@ impl Vm {
         self.steps
     }
 
+    /// Return the number of instructions dispatched by the last
+    /// [`run`](Self::run) call.
+    ///
+    /// Distinct from [`steps`](Self::steps): a tracer numbers instructions,
+    /// an embedder prices steps. See `spec/xqvm/METERING.md`.
+    pub fn instructions(&self) -> u64 {
+        self.instructions
+    }
+
     /// Reset the VM to its initial state.
     ///
     /// Restores everything a run touches to the state a freshly-constructed
@@ -566,6 +585,7 @@ impl Vm {
         self.calldata.clear();
         self.outputs.clear();
         self.steps = 0;
+        self.instructions = 0;
         self.memory_used = 0;
     }
 
@@ -605,6 +625,7 @@ impl Vm {
         let mut stream = InstructionStream::from_program(program);
         let table = program.jump_table();
         self.steps = 0;
+        self.instructions = 0;
         self.memory_used = 0;
 
         // Probe for the next instruction before charging: the limit bounds
@@ -613,12 +634,8 @@ impl Vm {
         // succeeds, and `steps()` never counts the probe. This is the Python
         // VM's loop shape (`while pc < len`).
         while let Some(item) = stream.next_instruction() {
-            if self.steps >= self.step_limit {
-                return Err(Error::StepLimitExceeded {
-                    limit: self.step_limit,
-                });
-            }
-            self.steps += 1;
+            self.charge_steps_base()?;
+            self.instructions += 1;
             let (pos, _label, instr) = item.map_err(Error::from)?;
 
             let result = if T::ENABLED {
@@ -654,7 +671,7 @@ impl Vm {
 
                 let state = StepState {
                     pos,
-                    step: self.steps,
+                    step: self.instructions,
                     instruction: &instr,
                     stack: &self.stack,
                     read_regs: &read_regs,
@@ -694,11 +711,20 @@ impl Vm {
                     reason = "one `depth` step per instruction scanned, and the stream is bounded by `spec/xqvm/ENCODING.md`'s u32 `code_len`; the decrement runs only while `depth >= 1` because reaching 0 breaks"
                 )]
                 StepResult::SkipLoop => {
+                    // Skipping an empty loop body decodes forward through the
+                    // instruction stream to the matching NEXT. That scan is
+                    // O(body length) work the program chose to buy, so every
+                    // instruction it consumes pays `BASE_STEPS` just as a
+                    // dispatched one does. Charged before the instruction is
+                    // decoded, matching the main loop. Skipped instructions
+                    // are metered but not dispatched, so they are not counted
+                    // in `instructions()` (QUI-1056).
                     let mut depth: u32 = 1;
                     loop {
                         let Some(item) = stream.next_instruction() else {
                             return Err(Error::UnmatchedLoop { pos });
                         };
+                        self.charge_steps_base()?;
                         let (_scan_pos, _label, scan_instr) = item.map_err(Error::from)?;
                         match scan_instr {
                             Instruction::Range {} | Instruction::Iter { .. } => depth += 1,
@@ -776,6 +802,36 @@ impl Vm {
             return Err(Error::StackOverflow { pos });
         }
         self.stack.push(v);
+        Ok(())
+    }
+
+    /// Charge `units` of execution against the step budget.
+    ///
+    /// Callers charge *before* they do the work, so an instruction that
+    /// cannot pay does none of it -- the same discipline as [`charge`], and
+    /// for the same reason: the budget is a bound on what a program can make
+    /// the host do, which is worth nothing if the work happens first.
+    fn charge_steps(&mut self, pos: usize, units: u64) -> Result<(), Error> {
+        self.charge_steps_at(Some(pos), units)
+    }
+
+    /// Charge the base cost every instruction pays before dispatch. Levied
+    /// before the instruction is decoded, so it carries no position.
+    fn charge_steps_base(&mut self) -> Result<(), Error> {
+        self.charge_steps_at(None, metering::BASE_STEPS)
+    }
+
+    fn charge_steps_at(&mut self, pos: Option<usize>, units: u64) -> Result<(), Error> {
+        let total = self.steps.saturating_add(units);
+        if total > self.step_limit {
+            return Err(Error::StepLimitExceeded {
+                pos,
+                requested: units,
+                used: self.steps,
+                limit: self.step_limit,
+            });
+        }
+        self.steps = total;
         Ok(())
     }
 
@@ -859,6 +915,16 @@ impl Vm {
     /// output-and-overwrite loop cannot spend more than the budget in total.
     fn charge_clone(&mut self, pos: usize, bytes: u64) -> Result<(), Error> {
         self.charge(pos, bytes)
+    }
+
+    /// Charge the step cost of one coefficient write into `reg`, but only
+    /// when `reg` holds a model. The byte twin is [`charge_coefficient`];
+    /// the reasoning about samples and repeated writes is identical.
+    fn charge_coefficient_steps(&mut self, pos: usize, reg: Register) -> Result<(), Error> {
+        if matches!(self.reg(reg), RegVal::Model(_)) {
+            self.charge_steps(pos, COEFF_WRITE_STEPS)?;
+        }
+        Ok(())
     }
 
     /// Charge the worst-case cost of an equality expansion over `n` terms.
@@ -1047,6 +1113,34 @@ impl Vm {
     }
 
     fn exec_l_val(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
+        // `LVAL` for an `Xqmx` element clones a model out of the loop frame,
+        // and cloning a model clones its coefficient maps. Compute that cost
+        // in a scoped pre-pass -- reading only the term counts, not cloning
+        // anything -- so the charge lands before the actual clone below
+        // rather than after it (QUI-1056).
+        let copy_cost = {
+            let frame = self.loop_stack.last().ok_or(Error::NoActiveLoop { pos })?;
+            match &frame.kind {
+                LoopKind::Range { .. } => 0u64,
+                LoopKind::Iter {
+                    elements, index, ..
+                } => match elements {
+                    IterElements::Int(_) => 0u64,
+                    IterElements::Xqmx(v) => {
+                        let idx = *index;
+                        let m = v.get(idx).ok_or(Error::IndexOutOfBounds {
+                            pos,
+                            index: i64::try_from(idx).unwrap_or(i64::MAX),
+                            len: v.len(),
+                        })?;
+                        widen(m.linear_len().saturating_add(m.quadratic_len()))
+                            .saturating_mul(COEFF_WRITE_STEPS)
+                    }
+                },
+            }
+        };
+        self.charge_steps(pos, copy_cost)?;
+
         let frame = self.loop_stack.last().ok_or(Error::NoActiveLoop { pos })?;
         match &frame.kind {
             LoopKind::Range { current, .. } => {
@@ -1151,6 +1245,7 @@ impl Vm {
                 let len = v.len();
                 let (start_offset, range) = resolve_iter_slice(pos, start, end, len)?;
                 self.charge_variables(pos, range.len())?;
+                self.charge_steps(pos, widen(range.len()).saturating_mul(ELEMENT_COPY_STEPS))?;
                 let v = self
                     .reg(reg)
                     .as_vec_int()
@@ -1176,12 +1271,19 @@ impl Vm {
                 // copy: the same number `OUTPUT` and `INPUT` charge, so a
                 // model does not get cheaper by being copied through a loop
                 // header instead of a register.
-                let cost = v
+                let (cost, step_cost) = v
                     .get(range.clone())
                     .unwrap_or_else(|| unreachable!("resolve_iter_slice already validated"))
                     .iter()
-                    .fold(0u64, |acc, m| acc.saturating_add(model_bytes(m)));
+                    .fold((0u64, 0u64), |(bytes, steps), m| {
+                        let terms = widen(m.linear_len().saturating_add(m.quadratic_len()));
+                        (
+                            bytes.saturating_add(model_bytes(m)),
+                            steps.saturating_add(terms.saturating_mul(COEFF_WRITE_STEPS)),
+                        )
+                    });
                 self.charge(pos, cost)?;
+                self.charge_steps(pos, step_cost)?;
                 let RegVal::VecXqmx(v) = self.reg(reg) else {
                     unreachable!("register still holds the vec just matched")
                 };
@@ -1313,13 +1415,17 @@ impl Vm {
             })?;
         // Charge before the clone: a calldata entry the host supplied is
         // duplicated into the register file, and the copy is as real as an
-        // allocation the program made itself.
-        let bytes = regval_bytes(
-            self.calldata
-                .get(usize_idx)
-                .unwrap_or_else(|| unreachable!("usize_idx < calldata.len() checked above")),
-        );
+        // allocation the program made itself. Calldata can hold a model, and
+        // cloning one clones its coefficient maps, so the step meter pays for
+        // the same copy the byte budget does (QUI-1056).
+        let entry = self
+            .calldata
+            .get(usize_idx)
+            .unwrap_or_else(|| unreachable!("usize_idx < calldata.len() checked above"));
+        let bytes = regval_bytes(entry);
+        let copy_cost = value_copy_steps(entry);
         self.charge_clone(pos, bytes)?;
+        self.charge_steps(pos, copy_cost)?;
         let val = self
             .calldata
             .get(usize_idx)
@@ -1366,7 +1472,11 @@ impl Vm {
         // register is 0, so an unset register still charges nothing and
         // still faults.
         let bytes = regval_bytes(self.reg(reg));
+        // A register can hold a model, and cloning one clones its coefficient
+        // maps -- O(model) work for one dispatch (QUI-1056).
+        let copy_cost = value_copy_steps(self.reg(reg));
         self.charge_clone(pos, bytes)?;
+        self.charge_steps(pos, copy_cost)?;
         if matches!(self.reg(reg), RegVal::Unset) {
             return Err(Error::UnsetRegister {
                 pos,
@@ -1713,6 +1823,7 @@ impl Vm {
     fn exec_bsmx(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let size = self.pop(pos)?;
         let size = self.allocation_size(pos, size)?;
+        self.charge_steps(pos, widen(size).saturating_mul(SAMPLE_COPY_STEPS))?;
         *self.reg_mut(reg) = RegVal::Sample(XqmxSample::new(Domain::Binary, vec![0; size]));
         Ok(StepResult::Continue)
     }
@@ -1720,6 +1831,7 @@ impl Vm {
     fn exec_ssmx(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let size = self.pop(pos)?;
         let size = self.allocation_size(pos, size)?;
+        self.charge_steps(pos, widen(size).saturating_mul(SAMPLE_COPY_STEPS))?;
         *self.reg_mut(reg) = RegVal::Sample(XqmxSample::new(Domain::Spin, vec![-1; size]));
         Ok(StepResult::Continue)
     }
@@ -1731,6 +1843,7 @@ impl Vm {
             return Err(Error::InvalidDiscreteK { pos, k });
         }
         let size = self.allocation_size(pos, size)?;
+        self.charge_steps(pos, widen(size).saturating_mul(SAMPLE_COPY_STEPS))?;
         *self.reg_mut(reg) = RegVal::Sample(XqmxSample::new(Domain::Discrete(k), vec![0; size]));
         Ok(StepResult::Continue)
     }
@@ -1887,6 +2000,10 @@ impl Vm {
         // most 63 iterations each; charge for the entries they will append.
         let entries = u64::from(i64::BITS - capacity.leading_zeros());
         self.charge(pos, entries.saturating_mul(2 * VEC_ELEMENT_BYTES))?;
+        self.charge_steps(
+            pos,
+            entries.saturating_mul(2).saturating_mul(ELEMENT_COPY_STEPS),
+        )?;
         // Append index entries to the indices register.
         {
             let vec = self
@@ -1998,6 +2115,7 @@ impl Vm {
         let val = self.pop(pos)?;
         let i = self.pop(pos)?;
         self.charge_coefficient(pos, reg, LINEAR_ENTRY_BYTES)?;
+        self.charge_coefficient_steps(pos, reg)?;
         let mut grid = self
             .reg_mut(reg)
             .as_xqmx_grid_mut()
@@ -2027,6 +2145,7 @@ impl Vm {
         let delta = self.pop(pos)?;
         let i = self.pop(pos)?;
         self.charge_coefficient(pos, reg, LINEAR_ENTRY_BYTES)?;
+        self.charge_coefficient_steps(pos, reg)?;
         let mut grid = self
             .reg_mut(reg)
             .as_xqmx_grid_mut()
@@ -2079,6 +2198,7 @@ impl Vm {
         let j = self.pop(pos)?;
         let i = self.pop(pos)?;
         self.charge_coefficient(pos, reg, QUAD_ENTRY_BYTES)?;
+        self.charge_coefficient_steps(pos, reg)?;
         let m = self
             .reg_mut(reg)
             .as_model_mut()
@@ -2106,6 +2226,7 @@ impl Vm {
         let j = self.pop(pos)?;
         let i = self.pop(pos)?;
         self.charge_coefficient(pos, reg, QUAD_ENTRY_BYTES)?;
+        self.charge_coefficient_steps(pos, reg)?;
         let m = self
             .reg_mut(reg)
             .as_model_mut()
@@ -2168,6 +2289,32 @@ impl Vm {
         }
         grid.set_grid(usize_rows, usize_cols);
         Ok(StepResult::Continue)
+    }
+
+    /// Validate `reg` as a grid and copy out `(rows, cols, size)`, ending the
+    /// borrow on `self` so the caller can charge the step budget before it
+    /// scans. `ROWSUM`, `COLSUM`, `ROWFIND` and `COLFIND` all walk an extent
+    /// the program chose, so the charge has to land between the validation
+    /// and the walk (QUI-1056), and the borrow checker will not let a live
+    /// `XqmxGridRef` span it.
+    fn grid_dims(&self, reg: Register) -> Result<(usize, usize, usize), Error> {
+        let grid = self
+            .reg(reg)
+            .as_xqmx_grid()
+            .map_err(|e| Error::RegisterType {
+                reg: reg.slot(),
+                expected: "model|sample",
+                got: e.actual.kind_name(),
+            })?;
+        Ok((grid.rows(), grid.cols(), grid.size()))
+    }
+
+    /// Re-acquire a grid that [`Vm::grid_dims`] has already validated in this
+    /// same dispatch. Nothing between the two can change the register.
+    fn grid_checked(&self, reg: Register) -> crate::value::XqmxGridRef<'_> {
+        self.reg(reg)
+            .as_xqmx_grid()
+            .unwrap_or_else(|_| unreachable!("register type checked by grid_dims"))
     }
 
     /// Validate a grid-addressed opcode's row operand and return it as a
@@ -2257,16 +2404,14 @@ impl Vm {
     fn exec_row_find(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let value = self.pop(pos)?;
         let row = self.pop(pos)?;
-        let grid = self
-            .reg(reg)
-            .as_xqmx_grid()
-            .map_err(|e| Error::RegisterType {
-                reg: reg.slot(),
-                expected: "model|sample",
-                got: e.actual.kind_name(),
-            })?;
-        let cols = grid.cols();
-        let usize_row = Self::grid_row_index(pos, grid.rows(), cols, grid.size(), row)?;
+        let (rows, cols, size) = self.grid_dims(reg)?;
+        let usize_row = Self::grid_row_index(pos, rows, cols, size, row)?;
+        // The scan below is O(cols) sparse lookups and `cols` is
+        // program-controlled, so charge for the whole row before walking it
+        // (QUI-1056). Charged after the index check so an out-of-range row
+        // faults for the same reason it did before metering existed.
+        self.charge_steps(pos, widen(cols).saturating_mul(GRID_CELL_STEPS))?;
+        let grid = self.grid_checked(reg);
         // grid_row_index guarantees rows*cols fits usize and is within size,
         // and that usize_row is in range, so row addressing cannot overflow.
         let row_start = usize_row * cols;
@@ -2285,17 +2430,12 @@ impl Vm {
     fn exec_col_find(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let value = self.pop(pos)?;
         let col = self.pop(pos)?;
-        let grid = self
-            .reg(reg)
-            .as_xqmx_grid()
-            .map_err(|e| Error::RegisterType {
-                reg: reg.slot(),
-                expected: "model|sample",
-                got: e.actual.kind_name(),
-            })?;
-        let rows = grid.rows();
-        let cols = grid.cols();
-        let usize_col = Self::grid_col_index(pos, rows, cols, grid.size(), col)?;
+        let (rows, cols, size) = self.grid_dims(reg)?;
+        let usize_col = Self::grid_col_index(pos, rows, cols, size, col)?;
+        // O(rows) sparse lookups over a program-controlled extent; charged
+        // before the walk, after the index check. See ROWFIND.
+        self.charge_steps(pos, widen(rows).saturating_mul(GRID_CELL_STEPS))?;
+        let grid = self.grid_checked(reg);
         // rows ≤ i64::MAX (validated via exec_resize); try_from never fails.
         let result = (0..rows)
             .find(|&row| grid.linear(row * cols + usize_col) == value)
@@ -2310,16 +2450,12 @@ impl Vm {
     )]
     fn exec_row_sum(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let row = self.pop(pos)?;
-        let grid = self
-            .reg(reg)
-            .as_xqmx_grid()
-            .map_err(|e| Error::RegisterType {
-                reg: reg.slot(),
-                expected: "model|sample",
-                got: e.actual.kind_name(),
-            })?;
-        let cols = grid.cols();
-        let usize_row = Self::grid_row_index(pos, grid.rows(), cols, grid.size(), row)?;
+        let (rows, cols, size) = self.grid_dims(reg)?;
+        let usize_row = Self::grid_row_index(pos, rows, cols, size, row)?;
+        // O(cols) sparse lookups over a program-controlled extent; charged
+        // before the walk, after the index check. See ROWFIND.
+        self.charge_steps(pos, widen(cols).saturating_mul(GRID_CELL_STEPS))?;
+        let grid = self.grid_checked(reg);
         // grid_row_index guarantees rows*cols fits usize and is within size,
         // and that usize_row is in range, so row addressing cannot overflow.
         let row_start = usize_row * cols;
@@ -2339,17 +2475,12 @@ impl Vm {
     )]
     fn exec_col_sum(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let col = self.pop(pos)?;
-        let grid = self
-            .reg(reg)
-            .as_xqmx_grid()
-            .map_err(|e| Error::RegisterType {
-                reg: reg.slot(),
-                expected: "model|sample",
-                got: e.actual.kind_name(),
-            })?;
-        let rows = grid.rows();
-        let cols = grid.cols();
-        let usize_col = Self::grid_col_index(pos, rows, cols, grid.size(), col)?;
+        let (rows, cols, size) = self.grid_dims(reg)?;
+        let usize_col = Self::grid_col_index(pos, rows, cols, size, col)?;
+        // O(rows) sparse lookups over a program-controlled extent; charged
+        // before the walk, after the index check. See ROWFIND.
+        self.charge_steps(pos, widen(rows).saturating_mul(GRID_CELL_STEPS))?;
+        let grid = self.grid_checked(reg);
         // Checked like ROWSUM: partial sums are normative, and
         // grid_col_index keeps the column addressing in range.
         let sum = (0..rows).try_fold(0i64, |acc, r| {
@@ -2379,6 +2510,7 @@ impl Vm {
             _ => 0,
         };
         self.charge_equality_expansion(pos, cols)?;
+        self.charge_steps(pos, equality_expansion_steps(widen(cols)))?;
         let m = self
             .reg_mut(reg)
             .as_model_mut()
@@ -2431,6 +2563,7 @@ impl Vm {
             _ => 0,
         };
         self.charge_equality_expansion(pos, rows)?;
+        self.charge_steps(pos, equality_expansion_steps(widen(rows)))?;
         let m = self
             .reg_mut(reg)
             .as_model_mut()
@@ -2468,6 +2601,8 @@ impl Vm {
         let j = self.pop(pos)?;
         let i = self.pop(pos)?;
         self.charge(pos, QUAD_ENTRY_BYTES)?;
+        // One quadratic coefficient written, priced like any other write.
+        self.charge_steps(pos, COEFF_WRITE_STEPS)?;
         let m = self
             .reg_mut(reg)
             .as_model_mut()
@@ -2496,6 +2631,8 @@ impl Vm {
         let j = self.pop(pos)?;
         let i = self.pop(pos)?;
         self.charge(pos, LINEAR_ENTRY_BYTES + QUAD_ENTRY_BYTES)?;
+        // One linear and one quadratic coefficient written.
+        self.charge_steps(pos, 2 * COEFF_WRITE_STEPS)?;
         let m = self
             .reg_mut(reg)
             .as_model_mut()
@@ -2572,6 +2709,7 @@ impl Vm {
             .unwrap_or(0);
         self.charge_variables(pos, needed.saturating_sub(current_size))?;
         self.charge_equality_expansion(pos, idx_vec.len())?;
+        self.charge_steps(pos, equality_expansion_steps(widen(idx_vec.len())))?;
         let m = self
             .reg_mut(model)
             .as_model_mut()
@@ -2633,6 +2771,10 @@ impl Vm {
         // in the total term count. Charge for both before either happens.
         self.charge_variables(pos, num_slacks)?;
         self.charge_equality_expansion(pos, n.saturating_add(num_slacks))?;
+        self.charge_steps(
+            pos,
+            equality_expansion_steps(widen(n.saturating_add(num_slacks))),
+        )?;
         let m = self
             .reg_mut(model)
             .as_model_mut()
@@ -2725,6 +2867,10 @@ impl Vm {
         };
         self.charge_variables(pos, num_slacks)?;
         self.charge_equality_expansion(pos, n.saturating_add(num_slacks))?;
+        self.charge_steps(
+            pos,
+            equality_expansion_steps(widen(n.saturating_add(num_slacks))),
+        )?;
         let m = self
             .reg_mut(model)
             .as_model_mut()
@@ -2759,6 +2905,8 @@ impl Vm {
         // terms and one linear term.
         self.charge_variables(pos, 1)?;
         self.charge(pos, 3 * QUAD_ENTRY_BYTES + LINEAR_ENTRY_BYTES)?;
+        // Three quadratic and one linear coefficient written.
+        self.charge_steps(pos, 4 * COEFF_WRITE_STEPS)?;
         let m = self
             .reg_mut(model)
             .as_model_mut()
@@ -2806,8 +2954,27 @@ impl Vm {
         // passed in the sample slot is rejected -- that "model-as-sample"
         // shortcut existed only in xq-rs and produced different programs
         // from xq-py for the same source.
-        let sample_values: Vec<i64> = match self.reg(sample) {
-            RegVal::Sample(s) => s.values.clone(),
+        //
+        // Both halves of this are O(model): the sample is copied out of its
+        // register and every coefficient is accumulated. Charge for both
+        // before either happens, or a program can buy an arbitrarily large
+        // model walk for one step (QUI-1056).
+        // The model register is checked before the sample register, in
+        // operand order, so that a program holding the wrong type in both
+        // sees the same error here as it does from the Python VM. The order
+        // is normative -- see `spec/xqvm/METERING.md` (Conformance).
+        let terms = match self.reg(model) {
+            RegVal::Model(m) => m.linear_len().saturating_add(m.quadratic_len()),
+            other => {
+                return Err(Error::RegisterType {
+                    reg: model.slot(),
+                    expected: "model",
+                    got: other.kind().kind_name(),
+                });
+            }
+        };
+        let sample_len = match self.reg(sample) {
+            RegVal::Sample(s) => s.values.len(),
             other => {
                 return Err(Error::RegisterType {
                     reg: sample.slot(),
@@ -2816,15 +2983,13 @@ impl Vm {
                 });
             }
         };
-        let m = match self.reg(model) {
-            RegVal::Model(m) => m,
-            other => {
-                return Err(Error::RegisterType {
-                    reg: model.slot(),
-                    expected: "model",
-                    got: other.kind().kind_name(),
-                });
-            }
+        self.charge_steps(pos, model_eval_steps(widen(sample_len), widen(terms)))?;
+        let sample_values: Vec<i64> = match self.reg(sample) {
+            RegVal::Sample(s) => s.values.clone(),
+            _ => unreachable!("sample register type checked above"),
+        };
+        let RegVal::Model(m) = self.reg(model) else {
+            unreachable!("model register type checked above")
         };
         let energy = m.energy(&sample_values).map_err(at_pos(pos))?;
         self.push_stack(energy, pos)?;

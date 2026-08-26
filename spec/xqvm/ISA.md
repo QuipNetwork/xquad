@@ -13,6 +13,7 @@ The following conventions are used throughout this section to describe opcode be
 - Assignments use `←` (register write) and `→` (stack push).
 - **Boolean representation** — `0` is false, any non-zero value is true. Boolean-producing opcodes always push `0` or `1`.
 - **Error names** are fault identities from [SPEC.md](SPEC.md#faults). An implementation spells them in its own language; the identity is what conformance compares. Where a row records that the two current implementations raise different identities for the same program, that is a recorded divergence rather than a licence.
+- **Step cost** is not a per-row property of this table. Every opcode charges at least the base dispatch cost; opcodes whose additional cost scales with program-controlled data are listed, with their formulas, in [METERING.md](METERING.md).
 
 ## Control Flow
 

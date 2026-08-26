@@ -3257,3 +3257,390 @@ fn output_to_a_negative_slot_raises() {
         "expected OutputIndex, got {err:?}"
     );
 }
+// ---------------------------------------------------------------------------
+// Metering (QUI-1056)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn instructions_and_steps_agree_when_every_opcode_costs_base() {
+    // 100 NOPs and a HALT: nothing here charges beyond the base cost, so the
+    // metered count and the dispatch ordinal are the same number.
+    let mut b = InstructionBuilder::new();
+    for _ in 0..100 {
+        b.emit_nop();
+    }
+    b.emit_halt();
+    let bytecode = b.build().expect("builder build");
+
+    let mut vm = Vm::new();
+    vm.set_unlimited_steps();
+    vm.run(&bytecode).expect("runs to HALT");
+    assert_eq!(vm.steps(), 101);
+    assert_eq!(vm.instructions(), 101);
+}
+
+#[test]
+fn step_limit_error_reports_the_refused_charge() {
+    let mut b = InstructionBuilder::new();
+    b.emit_push(1).emit_push(2).emit_add();
+    let bytecode = b.build().expect("builder build");
+
+    let mut vm = Vm::new();
+    vm.set_step_limit(2);
+    let err = vm.run(&bytecode).expect_err("two steps is one too few");
+    let Error::StepLimitExceeded {
+        requested,
+        used,
+        limit,
+        ..
+    } = err
+    else {
+        panic!("expected StepLimitExceeded, got {err:?}");
+    };
+    assert_eq!(requested, 1, "the base charge is what was refused");
+    assert_eq!(used, 2);
+    assert_eq!(limit, 2);
+}
+
+#[test]
+fn a_grid_scan_charges_for_its_extent() {
+    // Two grids of different width, scanned identically. If ROWSUM still
+    // cost one step the two runs would cost the same, which is the bug: a
+    // register declared with the whole allocation budget can be gridded as
+    // a single row, so an uncharged scan buys unbounded work per step.
+    fn steps_for(cols: i64) -> u64 {
+        let mut b = InstructionBuilder::new();
+        b.emit_push(cols).emit_bqmx(Register(0));
+        b.emit_push(1).emit_push(cols).emit_resize(Register(0));
+        b.emit_push(0).emit_row_sum(Register(0)).emit_halt();
+        let bytecode = b.build().expect("builder build");
+
+        let mut vm = Vm::new();
+        vm.set_unlimited_steps();
+        vm.run(&bytecode).expect("vm run");
+        vm.steps()
+    }
+
+    let narrow = steps_for(4);
+    let wide = steps_for(64);
+
+    // Instruction count is identical between the two runs -- only the
+    // declared width differs -- so the whole difference is the scan charge.
+    assert_eq!(wide - narrow, 60 * xqvm::metering::GRID_CELL_STEPS);
+}
+
+#[test]
+fn a_grid_scan_is_refused_before_it_walks_the_grid() {
+    // The charge lands before the scan, so a program that cannot pay does
+    // no work at all -- the same discipline the allocation budget uses.
+    let cols = 4_096i64;
+    let mut b = InstructionBuilder::new();
+    b.emit_push(cols).emit_bqmx(Register(0));
+    b.emit_push(1).emit_push(cols).emit_resize(Register(0));
+    b.emit_push(0).emit_row_sum(Register(0)).emit_halt();
+    let bytecode = b.build().expect("builder build");
+
+    // Enough for every instruction's base cost and nothing like enough for
+    // the scan, so the ROWSUM itself is what gets refused.
+    let mut vm = Vm::new();
+    vm.set_step_limit(64);
+    let err = vm.run(&bytecode).expect_err("the scan is unaffordable");
+    let Error::StepLimitExceeded {
+        requested, limit, ..
+    } = err
+    else {
+        panic!("expected StepLimitExceeded, got {err:?}");
+    };
+    assert_eq!(
+        requested,
+        u64::try_from(cols).unwrap() * xqvm::metering::GRID_CELL_STEPS,
+        "the refused charge is the whole row, not a partial walk"
+    );
+    assert_eq!(limit, 64);
+}
+
+#[test]
+fn a_grid_scan_charges_nothing_extra_for_a_bad_operand() {
+    // Validation precedes the charge, so an out-of-range row still faults
+    // for its own reason and is billed only the base cost of the dispatch.
+    let mut b = InstructionBuilder::new();
+    b.emit_push(8).emit_bqmx(Register(0));
+    b.emit_push(2).emit_push(4).emit_resize(Register(0));
+    b.emit_push(99).emit_row_sum(Register(0)).emit_halt();
+    let bytecode = b.build().expect("builder build");
+
+    let mut vm = Vm::new();
+    vm.set_unlimited_steps();
+    let err = vm
+        .run(&bytecode)
+        .expect_err("row 99 is outside a 2-row grid");
+    assert!(
+        matches!(err, Error::IndexOutOfBounds { .. }),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
+    // Seven dispatches, none of which charge beyond the base cost: the
+    // ROWSUM faulted before its scan charge landed.
+    assert_eq!(vm.steps(), 7 * xqvm::metering::BASE_STEPS);
+}
+
+#[test]
+fn energy_charges_for_the_model_it_evaluates() {
+    // Two models of different size, evaluated identically. If ENERGY still
+    // cost one step the two runs would cost the same, which is the bug.
+    fn steps_for(terms: i64) -> u64 {
+        let mut b = InstructionBuilder::new();
+        b.emit_push(terms).emit_bqmx(Register(0));
+        for i in 0..terms {
+            b.emit_push(i).emit_push(1).emit_set_line(Register(0));
+        }
+        b.emit_push(terms).emit_bsmx(Register(1));
+        b.emit_energy(Register(0), Register(1)).emit_halt();
+        let bytecode = b.build().expect("builder build");
+
+        let mut vm = Vm::new();
+        vm.set_unlimited_steps();
+        vm.run(&bytecode).expect("vm run");
+        vm.steps()
+    }
+
+    let small = steps_for(4);
+    let large = steps_for(8);
+    assert!(
+        large > small,
+        "a bigger model must cost more: {large} vs {small}"
+    );
+
+    // Exactly the modelled amount: four more setup instructions' worth of
+    // coefficient writes, four more sample elements charged when BSMX fills
+    // the buffer, four more sample elements to copy during ENERGY's own
+    // read, four more terms to accumulate.
+    assert_eq!(
+        large - small,
+        4 * (3 * xqvm::metering::BASE_STEPS + xqvm::metering::COEFF_WRITE_STEPS)
+            + 4 * xqvm::metering::SAMPLE_COPY_STEPS
+            + 4 * xqvm::metering::SAMPLE_COPY_STEPS
+            + 4 * xqvm::metering::MODEL_TERM_STEPS
+    );
+}
+
+#[test]
+fn onehot_charges_for_the_expansion_it_writes() {
+    // ONEHOTR writes one linear term per column and one quadratic term per
+    // pair of columns. Doubling the columns roughly quadruples the work, and
+    // the step count has to see it.
+    fn steps_for(cols: i64) -> u64 {
+        let mut b = InstructionBuilder::new();
+        b.emit_push(cols).emit_bqmx(Register(0));
+        b.emit_push(1).emit_push(cols).emit_resize(Register(0));
+        b.emit_push(0).emit_push(5).emit_one_hot_r(Register(0));
+        b.emit_halt();
+        let bytecode = b.build().expect("builder build");
+
+        let mut vm = Vm::new();
+        vm.set_unlimited_steps();
+        vm.run(&bytecode).expect("vm run");
+        vm.steps()
+    }
+
+    use xqvm::metering::equality_expansion_steps;
+    let four = steps_for(4);
+    let eight = steps_for(8);
+    assert_eq!(
+        eight - four,
+        equality_expansion_steps(8) - equality_expansion_steps(4),
+        "the whole difference is the expansion: {eight} vs {four}"
+    );
+}
+
+#[test]
+fn a_coefficient_write_costs_more_than_a_nop() {
+    // SETLINE inserts into a sparse map. Pricing it at a NOP is what let the
+    // flat per-step weight be wrong (QUI-1056).
+    let mut b = InstructionBuilder::new();
+    b.emit_push(2).emit_bqmx(Register(0));
+    b.emit_push(0).emit_push(3).emit_set_line(Register(0));
+    b.emit_halt();
+    let bytecode = b.build().expect("builder build");
+
+    let mut vm = Vm::new();
+    vm.set_unlimited_steps();
+    vm.run(&bytecode).expect("vm run");
+
+    // PUSH, BQMX, PUSH, PUSH, SETLINE, HALT = 6 dispatches.
+    assert_eq!(vm.instructions(), 6);
+    assert_eq!(
+        vm.steps(),
+        6 * xqvm::metering::BASE_STEPS + xqvm::metering::COEFF_WRITE_STEPS
+    );
+}
+
+#[test]
+fn allocating_a_sample_costs_its_length() {
+    // BSMX fills a buffer of `size`. One step for an arbitrarily long fill is
+    // the same unbounded-work-per-step bug as ENERGY (QUI-1056).
+    fn steps_for(size: i64) -> u64 {
+        let mut b = InstructionBuilder::new();
+        b.emit_push(size).emit_bsmx(Register(0)).emit_halt();
+        let bytecode = b.build().expect("builder build");
+
+        let mut vm = Vm::new();
+        vm.set_unlimited_steps();
+        vm.run(&bytecode).expect("vm run");
+        vm.steps()
+    }
+
+    assert_eq!(
+        steps_for(1_000) - steps_for(0),
+        1_000 * xqvm::metering::SAMPLE_COPY_STEPS
+    );
+}
+
+#[test]
+fn reading_a_model_out_of_a_register_costs_its_coefficients() {
+    // OUTPUT clones the register wholesale, and a register can hold a model.
+    fn steps_for(terms: i64) -> u64 {
+        let mut b = InstructionBuilder::new();
+        b.emit_push(terms.max(1)).emit_bqmx(Register(0));
+        for i in 0..terms {
+            b.emit_push(i).emit_push(1).emit_set_line(Register(0));
+        }
+        b.emit_push(0).emit_output(Register(0)).emit_halt();
+        let bytecode = b.build().expect("builder build");
+
+        let mut vm = Vm::new();
+        vm.set_unlimited_steps();
+        vm.set_output_slots(1);
+        vm.run(&bytecode).expect("vm run");
+        vm.steps()
+    }
+
+    let extra_terms = 8;
+    let per_term_setup = 3 * xqvm::metering::BASE_STEPS + xqvm::metering::COEFF_WRITE_STEPS;
+    assert_eq!(
+        steps_for(extra_terms) - steps_for(0),
+        u64::try_from(extra_terms).expect("small") * per_term_setup
+            // the OUTPUT clone now carries the model's coefficients too
+            + u64::try_from(extra_terms).expect("small") * xqvm::metering::COEFF_WRITE_STEPS
+    );
+}
+
+#[test]
+fn skipping_an_empty_loop_charges_for_the_scan() {
+    // A RANGE with count <= 0 does not enter its body; the run loop decodes
+    // forward to the matching NEXT instead. That scan is O(body length), so
+    // every instruction it consumes pays BASE_STEPS -- otherwise an
+    // empty-bodied loop in a hot path rents an unmetered walk over the
+    // deployed bytecode (QUI-1056).
+    fn steps_for(body: usize) -> u64 {
+        let mut b = InstructionBuilder::new();
+        b.emit_push(0).emit_push(0).emit_range();
+        for _ in 0..body {
+            b.emit_nop();
+        }
+        b.emit_next().emit_halt();
+        let bytecode = b.build().expect("builder build");
+
+        let mut vm = Vm::new();
+        vm.set_unlimited_steps();
+        vm.run(&bytecode).expect("vm run");
+        vm.steps()
+    }
+
+    // Four dispatched instructions (PUSH, PUSH, RANGE, HALT) plus the NEXT
+    // the scan consumes, plus one per body instruction.
+    assert_eq!(steps_for(0), 5 * xqvm::metering::BASE_STEPS);
+    assert_eq!(
+        steps_for(64) - steps_for(0),
+        64 * xqvm::metering::BASE_STEPS
+    );
+}
+
+#[test]
+fn a_skipped_body_is_metered_but_not_dispatched() {
+    // The scan charges steps without dispatching, so `steps()` outruns
+    // `instructions()` by exactly the number of instructions it consumed.
+    let mut b = InstructionBuilder::new();
+    b.emit_push(0).emit_push(0).emit_range();
+    for _ in 0..10 {
+        b.emit_nop();
+    }
+    b.emit_next().emit_halt();
+    let bytecode = b.build().expect("builder build");
+
+    let mut vm = Vm::new();
+    vm.set_unlimited_steps();
+    vm.run(&bytecode).expect("vm run");
+    assert_eq!(vm.instructions(), 4, "PUSH, PUSH, RANGE, HALT");
+    assert_eq!(vm.steps(), 4 + 11, "the ten NOPs and the NEXT are metered");
+}
+
+#[test]
+fn a_skip_scan_that_cannot_pay_does_not_finish() {
+    // The scan charges before it decodes, so a program that cannot pay for
+    // the whole scan is refused partway through rather than completing it.
+    let mut b = InstructionBuilder::new();
+    b.emit_push(0).emit_push(0).emit_range();
+    for _ in 0..100 {
+        b.emit_nop();
+    }
+    b.emit_next().emit_halt();
+    let bytecode = b.build().expect("builder build");
+
+    let mut vm = Vm::new();
+    vm.set_step_limit(10);
+    let err = vm.run(&bytecode).expect_err("the scan outruns the budget");
+    assert!(
+        matches!(err, Error::StepLimitExceeded { .. }),
+        "expected StepLimitExceeded, got {err:?}"
+    );
+}
+
+#[test]
+fn constraint_helpers_pay_for_the_coefficients_they_write() {
+    // EXCLUDE writes one quadratic term, IMPLIES a linear and a quadratic,
+    // REDUCE three quadratics and a linear. Each is priced at the same
+    // COEFF_WRITE_STEPS a bare SETQUAD pays (QUI-1056).
+    fn steps_for(emit: impl FnOnce(&mut InstructionBuilder)) -> u64 {
+        let mut b = InstructionBuilder::new();
+        b.emit_push(8).emit_bqmx(Register(0));
+        emit(&mut b);
+        b.emit_halt();
+        let bytecode = b.build().expect("builder build");
+
+        let mut vm = Vm::new();
+        vm.set_unlimited_steps();
+        vm.run(&bytecode).expect("vm run");
+        vm.steps()
+    }
+
+    let baseline = steps_for(|_| {});
+    // Three PUSHes plus the constraint opcode's own dispatch.
+    let dispatch = 4 * xqvm::metering::BASE_STEPS;
+    let coeff = xqvm::metering::COEFF_WRITE_STEPS;
+
+    let exclude = steps_for(|b| {
+        b.emit_push(0)
+            .emit_push(1)
+            .emit_push(5)
+            .emit_exclude(Register(0));
+    });
+    assert_eq!(exclude - baseline, dispatch + coeff);
+
+    let implies = steps_for(|b| {
+        b.emit_push(0)
+            .emit_push(1)
+            .emit_push(5)
+            .emit_implies(Register(0));
+    });
+    assert_eq!(implies - baseline, dispatch + 2 * coeff);
+
+    let reduce = steps_for(|b| {
+        b.emit_push(0)
+            .emit_push(1)
+            .emit_push(5)
+            // REDUCE's operand is named `model`, so the builder macro does
+            // not generate an `emit_reduce`; encode it directly.
+            .emit(Instruction::Reduce { model: Register(0) });
+    });
+    assert_eq!(reduce - baseline, dispatch + 4 * coeff);
+}

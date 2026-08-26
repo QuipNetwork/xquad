@@ -87,6 +87,9 @@ pub mod bytecode;
 pub use bytecode::codec;
 // Interpreter layer.
 mod error;
+
+/// Execution cost units and the functions that count them (no_std-compatible).
+pub mod metering;
 mod model;
 pub mod tracer;
 mod value;

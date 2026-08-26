@@ -262,11 +262,19 @@ class InvalidGridDimensions(XQVMError):
 
 
 class StepLimitExceeded(XQVMError):
-    """Raised when execution runs past its step budget."""
+    """Raised when execution runs past its step budget.
 
-    def __init__(self, limit: int):
+    All three quantities are required. The charge site is the only place
+    that can know them, and a default would render a message that
+    contradicts itself -- a `requested` of 0 reads as a charge of nothing
+    exceeding a non-empty budget.
+    """
+
+    def __init__(self, limit: int, requested: int, used: int):
         self.limit = limit
-        super().__init__(f"Step limit exceeded: execution exceeded {limit} steps")
+        self.requested = requested
+        self.used = used
+        super().__init__(f"step charge of {requested} exceeds the step limit of {limit} ({used} steps already charged)")
 
 
 class TargetNotFound(XQVMError):

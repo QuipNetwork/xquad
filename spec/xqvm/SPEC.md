@@ -97,24 +97,25 @@ Programs execute independently with no shared state. Communication occurs only t
 | Register slots | 256 (r0–r255) | 8-bit addressing. |
 | Target IDs | 0–65535 | `u8` via `JUMP1`/`JUMPI1`, `u16` big-endian via `JUMP2`/`JUMPI2`. Sequential assignment during pre-scan. |
 | Loop nesting | 8192 (2^13) | `LoopStackOverflow` if exceeded. A `RANGE` or `ITER` that would push a frame past the cap raises and pushes nothing. The bound mirrors the stack-depth cap: a loop frame is a per-run allocation the program controls, so leaving it uncapped leaves one growth path outside every budget. |
-| Step budget | Host-supplied | Bounds the instructions one run may execute; `StepLimitExceeded` when exhausted. See [Step budget](#step-budget). |
+| Step budget | Host-supplied | Bounds the work one run may do, counted in steps rather than instructions; `StepLimitExceeded` when exhausted. See [Step budget](#step-budget) and [METERING.md](METERING.md). |
 | Allocation budget | Host-supplied | Bounds the bytes one run may ask the host to allocate; `MemoryLimitExceeded` when exhausted. See [Allocation budget](#allocation-budget). |
 | XQMX size | Bounded by the allocation budget | No fixed spec limit. A size that is not an allocation -- negative, or larger than the executing target can address -- raises `InvalidAllocation`; a size that is an allocation but does not fit the remaining budget raises `MemoryLimitExceeded`. |
 | Program length | Implementation-defined | No spec limit. |
 
 ### Step budget
 
-Execution is bounded by a **step budget**: a maximum number of instructions one run may execute, fixed by the host before the run starts. A host may leave it unbounded; how that is spelled is an interface question rather than a semantic one.
+Execution is bounded by a **step budget**: a maximum number of steps one run may consume, fixed by the host before the run starts. A host may leave it unbounded; how that is spelled is an interface question rather than a semantic one.
 
 The budget is normative rather than an implementation convenience. An embedder that meters execution -- the Substrate pallet pre-charges a caller for the requested limit, refunds the difference, and publishes the number consumed -- prices a quantity that has to be defined here, or two conforming implementations charge a caller differently for the same program.
 
-- **One step is one instruction fetched from the instruction stream and dispatched.** Every instruction costs one step and none costs more: `NOP`, `TARGET` and `HALT` are steps, an instruction reached by a jump or a loop back-edge is a step each time it is reached, and an instruction that faults has been charged before it faults.
-- **The budget is tested after the fetch and before the dispatch.** If the counter has already reached the limit, the run raises `StepLimitExceeded` and the fetched instruction does not execute.
-- **Reaching the end of the instruction stream is not a step.** The fetch that finds no instruction ends the run before the budget is consulted, so a program that runs off the end having executed exactly `limit` instructions succeeds rather than raising. A program with no instructions therefore runs successfully under a budget of `0`; a program with one instruction does not.
-- **The forward scan of the empty-loop skip is not metered.** The instructions the scan passes over (see [Empty-loop skip](ISA.md#control-flow)) are not fetched for execution and are not steps. That scan is bounded by the length of the program rather than by the budget.
-- **The counter is per run.** It is zero at the start of every run and holds the number of steps executed when the run ends, whether it ended by `HALT`, by end of stream, or by a fault.
+- **A step is a unit of work, not an instruction.** Every instruction charges a base cost before dispatch, and the opcodes whose work scales with data the program controls charge additional units before doing that work. What each opcode charges, and when, is specified in [METERING.md](METERING.md), which is normative and is the only place the cost model is stated.
+- **The budget is tested before the charge lands.** An instruction whose charge would carry the counter past the limit raises `StepLimitExceeded` and does not execute -- so a run can be refused while its consumed count is still below the limit, whenever the refused charge is larger than the remaining budget. `NOP`, `TARGET` and `HALT` charge the base cost like any other instruction; an instruction reached by a jump or a loop back-edge charges each time it is reached; and an instruction that faults has been charged before it faults.
+- **Reaching the end of the instruction stream is not a step.** The fetch that finds no instruction ends the run before anything is charged, so a program that runs off the end having spent exactly `limit` steps succeeds rather than raising. A program with no instructions therefore runs successfully under a budget of `0`; a program with one instruction does not.
+- **The counter is per run.** It is zero at the start of every run and holds the number of steps consumed when the run ends, whether it ended by `HALT`, by end of stream, or by a fault.
 
-Error: `StepLimitExceeded`, naming the limit that was reached.
+The step counter is distinct from the instruction count an implementation may expose for tracing. Steps are the metered quantity an embedder prices; the instruction count is the dispatch ordinal. They are equal only for a program whose instructions all charge exactly the base cost.
+
+Error: `StepLimitExceeded`, naming the limit, the charge that was refused, and the steps already consumed.
 
 ### Allocation budget
 
@@ -241,3 +242,4 @@ Bytecode verification phases, error semantics, composable architecture, and per-
 
 - **[../xqsa/SPEC.md](../xqsa/SPEC.md)** -- solver adapter interface. Defines how external solvers plug into the pipeline between encoder and verifier execution.
 - **[../xqcp/SPEC.md](../xqcp/SPEC.md)** -- constraint-programming DSL. Compiles high-level problem descriptions into the three XQVM programs (encoder, verifier, decoder).
+- **[METERING.md](METERING.md)** -- step metering. Defines the step budget's cost units, the per-opcode charges, and the constants a conforming implementation must share with the Rust and Python VMs.
