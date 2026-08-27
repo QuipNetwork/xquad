@@ -63,6 +63,15 @@ FRAME pallet that embeds `xqvm` inside a runtime as an integration gate, not
 a production deployment path. It is a real, CI-tested example of a `no_std`
 embedder, and the one currently in this repository.
 
+## On-Chain: Which Opcodes a Chain May Admit
+
+[On-Chain Admissibility](admissibility.md) answers which of the 93 opcodes a
+runtime embedding `xqvm` may accept from an untrusted account. The answer is
+all of them, because chain compatibility is a property of the instruction set
+rather than a per-embedder decision; the page states the bar an opcode has to
+clear, where each half of it is enforced, what every family charges, and
+which parts of that boundary the tree does not yet enforce.
+
 ## Checking an Implementation Against the Spec
 
 [Conformance](conformance.md) covers the harness that holds the Rust `xqvm`
