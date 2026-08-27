@@ -99,6 +99,7 @@
 - [Embedding Overview](embedding/README.md)
 - [Builder API](embedding/builder-api.md)
 - [Pallet Fixture](embedding/pallet.md)
+- [On-Chain Admissibility](embedding/admissibility.md)
 - [Conformance](embedding/conformance.md)
 
 # Appendix

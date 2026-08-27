@@ -52,6 +52,35 @@
 //! the case the budget exists to prevent. Leaving the default in place
 //! would have left the pre-pay claim above true of steps only.
 //!
+//! # Admissibility
+//!
+//! All 93 XQVM opcodes are admissible on chain, including the model and
+//! sample allocators, the vec containers, and the constraint builders. That
+//! is a property of the instruction set rather than a decision each runtime
+//! makes: on-chain verifiable deterministic execution is what the VM is
+//! for, so an operation that cannot be metered and specified never becomes
+//! an opcode in the first place. The bar is stated in the book, under
+//! "On-Chain Admissibility" -- integer arithmetic only, no host state, a
+//! fixed iteration order, allocation and per-instruction work both charged
+//! against a budget before they happen -- the step budget prices work
+//! rather than dispatches, per `spec/xqvm/METERING.md` -- and behaviour
+//! specified in `spec/xqvm/` with a conformance vector covering it,
+//! failure paths included. The same page records the parts of that bar the
+//! tree does not yet enforce.
+//!
+//! A production runtime enforces the bar in two places: `verifier::verify`
+//! before it stores or runs a program, and `Vm::set_memory_limit` plus
+//! `Vm::set_step_limit` before it executes one. A static opcode allowlist
+//! is deliberately not part of the design -- the denied set is empty by
+//! construction, so there is nothing for one to scan for.
+//!
+//! This fixture does only the second of those. It sets both budgets, from
+//! the caller's arguments under the `Config` caps, but it never calls
+//! `verifier::verify` -- it decodes and runs -- and it charges a fixed
+//! placeholder weight rather than a benchmarked one. That is adequate for
+//! an integration gate running trusted bytecode in tests, and is not a
+//! template for a runtime that admits bytecode from an untrusted account.
+//!
 //! # Running the fixture
 //!
 //! ```sh

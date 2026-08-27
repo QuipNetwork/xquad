@@ -10,7 +10,10 @@ declared in
 [`Cargo.toml`](https://gitlab.com/quip.network/xquad/-/blob/main/Cargo.toml),
 because it pulls in a heavy polkadot-sdk git dependency.
 Treat this chapter as a reference integration and a fixture to build on,
-not as a supported deployment path with its own release cycle.
+not as a supported deployment path with its own release cycle. Which
+opcodes a runtime that embeds the VM may admit, and what it has to enforce
+to admit them, is stated separately in
+[On-Chain Admissibility](admissibility.md).
 
 CI still runs it, and blocks on it. `test:substrate` in
 [`.gitlab/ci/test.yml`](https://gitlab.com/quip.network/xquad/-/blob/main/.gitlab/ci/test.yml)
@@ -128,8 +131,17 @@ fault the pallet can report as `ExecutionFailed`. A caller-supplied
 allocation a reportable dispatch error. The mock sets the cap to the
 VM's own 1 GiB so that only the caller's ability to name something
 smaller is under test; a production runtime sets it to a figure its
-heap can actually honour. Off-chain, produce the bytecode however you
-like; the assembler CLI is `xquad asm`.
+heap can actually honour.
+
+What the fixture does not do is call `xqvm::verifier::verify`: it
+decodes the bytecode and runs it, so every static check the verifier
+performs is skipped, and the faults those checks would have caught
+surface at runtime as `ExecutionFailed` instead. A production pallet
+must verify before it executes, for the reasons set out in
+[On-Chain Admissibility](admissibility.md).
+
+Off-chain, produce the bytecode however you like; the assembler CLI is
+`xquad asm`.
 
 The cargo profile the runtime is built with is a second default an
 operator must not inherit without reading it. Do not compile the runtime
