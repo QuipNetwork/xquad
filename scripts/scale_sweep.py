@@ -196,7 +196,8 @@ def measure_point(adapter: Adapter, backend_name: str, solver_name: str, n: int,
 
         stage = "encode"
         t0 = time.perf_counter()
-        model = _run_vm(backend, adapter.build_calldata(n, aux), 1, programs.encoder)[0]
+        calldata = adapter.build_calldata(n, aux)
+        model = _run_vm(backend, calldata, 1, programs.encoder)[0]
         stages["encode"] = time.perf_counter() - t0
 
         stage = "solve"
@@ -206,7 +207,7 @@ def measure_point(adapter: Adapter, backend_name: str, solver_name: str, n: int,
 
         stage = "verify"
         t0 = time.perf_counter()
-        energy, valid = _run_vm(backend, [model, sample, n], 2, programs.verifier)
+        energy, valid = _run_vm(backend, [*calldata, model, sample], 2, programs.verifier)
         stages["verify"] = time.perf_counter() - t0
 
         stage = "decode"

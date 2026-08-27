@@ -1,0 +1,26 @@
+; atleastw_length_mismatch_beats_sample_mode: the vecs are compared before
+; the model register is discriminated.
+;
+; The ATLEAST case one directory over, on the other half of the same
+; ordering: exec_at_least_w resolves both vec operands and compares their
+; lengths before it reaches the register, so a sample in r0 with mismatched
+; vecs raises VecLengthMismatch. xqvm_py checked the mode first and raised
+; XqmxMode, which is a rule that had not fired yet on the other VM.
+;
+; ISA.md's ATLEASTW row says "both implementations raise VecLengthMismatch
+; otherwise". This vector is what holds it to that unconditionally, rather
+; than only when the model register already holds a model.
+
+PUSH 4
+BSMX r0          ; a sample, not a model
+
+VEC r2
+PUSH 1
+VECPUSH r2       ; indices has 1 entry
+
+VEC r3           ; coeffs has 0
+
+PUSH 0           ; k
+PUSH 1           ; penalty
+ATLEASTW r0 r2 r3
+HALT

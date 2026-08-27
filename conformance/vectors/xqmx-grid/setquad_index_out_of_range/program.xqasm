@@ -1,0 +1,19 @@
+; setquad_index_out_of_range: an out-of-range quadratic write must raise.
+;
+; spec/xqvm/ISA.md's SETQUAD row already said "Error: IndexOutOfBounds if
+; indices out of range [0, size)" and the Rust VM did not do it: the write
+; landed in the sparse map and the program halted clean, leaving a
+; 4-variable model carrying a coefficient on variable 9. xqvm_py raised.
+;
+; The out-of-range operand is i here and j in getquad_index_out_of_range, so
+; the pair covers both sides. Neither index equals the other and neither
+; equals the size, so nothing passes by coincidence.
+
+PUSH 4
+BQMX r0
+
+PUSH 9           ; i, past the extent
+PUSH 1           ; j, in range
+PUSH 7           ; value
+SETQUAD r0
+HALT

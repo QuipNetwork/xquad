@@ -118,15 +118,15 @@ for this random instance, but nothing in the model would reject a sample
 that satisfied fewer -- there is no `valid` check tied to clause
 satisfaction, because there is no constraint to check.
 
-Building `portfolio_opt`'s own budget-violating sample -- all four assets
-selected against a budget of `3` -- and running it through the generated
-verifier gives `valid: 1` as well, because `portfolio_opt`'s budget is an
-`EQUALITY` call, one of the constraint shapes
-[Verification](../running/verification.md#the-generated-verifiers-valid-flag-does-not-check-every-constraint)
-already names as unchecked, hard or soft alike. `valid` is not a proxy
-for "every hard rule held"; decode the sample and check the rule directly,
-the way [Constraints](../modelling/constraints.md#enumerate-the-failure-not-the-intuition)
-covers.
+The `valid` flag draws exactly this line. A hard constraint is an
+`apply_*` call, and the generated verifier emits one check per call:
+`portfolio_opt`'s budget is an `apply_equality`, so a sample selecting all
+four assets against a budget of `3` comes back `valid: 0`. Max-3-SAT's
+clauses are objective terms, so nothing in its verifier looks at them and
+a sample satisfying two clauses is as `valid` as one satisfying eight. If
+a rule must hold, declare it as a constraint;
+[Verification](../running/verification.md#what-the-generated-verifiers-valid-flag-covers)
+says what `valid` then covers.
 
 ## Cost in Variables
 

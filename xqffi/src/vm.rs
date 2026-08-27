@@ -304,6 +304,20 @@ impl PyVm {
     }
 
     /// Reset internal VM state so the instance can be reused.
+    ///
+    /// Clears everything a run touches: the value stack, the registers,
+    /// the loop stack, the step and memory counters, the output slots,
+    /// the calldata and the outputs themselves. The two budgets
+    /// (`set_step_limit`, `set_memory_limit`) are settings rather than run
+    /// state and survive.
+    ///
+    /// The calldata and the output slots being cleared is what a caller
+    /// has to act on: a host that resets and runs again must call
+    /// `set_calldata` and `set_output_slots` again too, exactly as it does
+    /// after construction. Skipping them runs the next program against no
+    /// calldata and zero output slots, which is a wrong answer rather than
+    /// an error. `xquad.vm.VM` reinstalls both on every run, so this is
+    /// reachable only from this class directly.
     fn reset(&mut self) {
         self.inner.reset();
     }

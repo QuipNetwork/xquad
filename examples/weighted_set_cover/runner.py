@@ -151,7 +151,7 @@ def run(
         sys.exit(1)
 
     vm = VM(backend=backend)
-    vm.set_calldata([model, sample, num_sets])
+    vm.set_calldata([num_elements, num_sets, flat_covers, caps, demands, costs, model, sample])
     vm.set_output_slots(2)
     vm.run(programs.verifier)
     outs = vm.outputs()

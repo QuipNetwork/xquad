@@ -1,0 +1,16 @@
+; getline_negative_index: the other half of the same bound.
+;
+; The two halves are reached by different code on the Rust VM -- the usize
+; conversion rejects this one and the extent comparison rejects
+; getline_index_out_of_range's -- so both are pinned. They must report the
+; same identity, and both must report the raw operand rather than whatever
+; the conversion produced.
+;
+; xqvm_py returned 0 here too: a dict lookup on a negative key simply misses.
+
+PUSH 4
+BQMX r0
+
+PUSH -1
+GETLINE r0
+HALT

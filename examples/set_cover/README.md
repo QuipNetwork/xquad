@@ -26,7 +26,7 @@ ATLEAST then enforces that at least one covering set is selected.
 2. **Assemble** -- `.xqasm` text to bytecode via `xquad.asm`
 3. **Encode** -- run encoder on chosen XQVM to produce the XQMX model
 4. **Sample** -- solver runs SA/QPU/GPU over the model
-5. **Verify** -- verifier computes energy and checks the sample is binary. It does not check the coverage constraints: see [the generated verifier's `valid` flag](../../docs/book/src/running/verification.md#the-generated-verifiers-valid-flag-does-not-check-every-constraint)
+5. **Verify** -- verifier checks the sample is binary and that every element is covered, then computes energy
 6. **Decode** -- decoder extracts the selected sets
 
 ## Usage

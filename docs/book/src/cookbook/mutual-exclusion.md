@@ -28,18 +28,19 @@ with problem.range(0, num_edges) as e:
 ```
 
 Running `examples/graph_coloring/runner.py --seed 1 --interpreter rust`
-(5 nodes, 3 colours, 6 edges) returns `colors: [2, 0, 2, 2, 0]`, `is_valid: true`,
-`energy: -1000` -- every one of the six edges checked by hand connects two
-nodes with different colours. The default `--seed 42` instance is worth
-running too, for what it shows rather than what it proves: with the same
-`--n 5 --colors 3` defaults, that seed's random edges happen to form a
-4-clique among nodes `{0, 2, 3, 4}` (every pair among them is an edge), and
-a 4-clique has no valid 3-colouring at all -- `is_valid: false`, `energy:
--800`, and no adjustment to `EXCLUDE`'s penalty weight changes that.
-`EXCLUDE` enforces a rule; it can only enforce a colouring that exists.
-Re-running with `--colors 4` on the identical seed-42 graph succeeds
-(`is_valid: true`, `energy: -1000`), confirming the instance itself, not
-the encoding, was the obstacle.
+(5 nodes, 4 colours, 6 edges) returns `colors: [0, 1, 0, 0, 2]`,
+`is_valid: true`, `energy: -1000` -- every one of the six edges checked by
+hand connects two nodes with different colours.
+
+Forcing the default `--seed 42` instance down to `--colors 3` shows what
+`EXCLUDE` can and cannot do. That seed's random edges form a 4-clique among
+nodes `{0, 2, 3, 4}`, every pair among them an edge, and a 4-clique has no
+3-colouring at all. The run reports `is_valid: false`, `energy: -800`, and
+`valid: 0`; no adjustment to `EXCLUDE`'s penalty weight changes that.
+`EXCLUDE` enforces a rule, and it can only enforce a colouring that exists.
+The colour count defaults to `4` for exactly this reason. Note that the
+generated verifier's `valid` agrees with the runner's own `is_valid` here:
+it checks each `EXCLUDE` against the sample directly.
 
 ## The Same Rule, Encoded Without `EXCLUDE`
 

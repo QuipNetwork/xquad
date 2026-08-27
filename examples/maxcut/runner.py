@@ -123,7 +123,7 @@ def run(
         sys.exit(1)
 
     vm = VM(backend=backend)
-    vm.set_calldata([model, sample, n])
+    vm.set_calldata([n, flat, model, sample])
     vm.set_output_slots(2)
     vm.run(programs.verifier)
     outs = vm.outputs()

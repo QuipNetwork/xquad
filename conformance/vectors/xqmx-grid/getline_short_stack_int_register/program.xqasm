@@ -1,0 +1,21 @@
+; getline_short_stack_int_register: GETLINE pops its index before it reads
+; its register, so an empty stack raises StackUnderflow even though the
+; register would also have been rejected.
+;
+; spec/xqvm/SPEC.md's error-precedence rule makes operand pops first within
+; every instruction. Twenty-two runners in xqvm_py resolved the register
+; first, so programs of this shape raised TYPE_MISMATCH there and
+; STACK_UNDERFLOW on the Rust VM. Both VMs rejected them, but the Faults
+; table makes the identity normative, so two names for one program is a
+; divergence.
+;
+; GETLINE stands for the whole family here; xqvm_py's own suite covers all
+; twenty-two off the opcode table. The register is filled from calldata
+; rather than left unset for the reason iter_short_stack_int_register gives:
+; an unset register would raise UNSET_REGISTER on both VMs and would not
+; discriminate the order.
+
+PUSH 0
+INPUT r0         ; r0 = 5, an int
+GETLINE r0       ; nothing on the stack for it to pop
+HALT

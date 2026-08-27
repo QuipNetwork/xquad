@@ -1,0 +1,21 @@
+; exclude_index_out_of_range: EXCLUDE writes a coefficient and must bound it.
+;
+; ISA.md placed no bound on these indices, so neither VM contradicted it and
+; the divergence was unpinnable until the spec said which behaviour was
+; right. It now says IndexOutOfBounds, for consistency with every other
+; model-writing opcode, and this vector is what holds both VMs to it.
+;
+; The failure this removes is the expensive one: the Rust VM inserted
+; quad(2, 100) on a model whose variables are 0..4, so the mutual-exclusion
+; constraint the program asked for was attached to a variable that does not
+; exist. It constrained nothing, the model solved cleanly, and nothing in the
+; output distinguished it from a correct run.
+
+PUSH 4
+BQMX r0
+
+PUSH 2           ; i, in range
+PUSH 100         ; j, far past the extent
+PUSH 1           ; penalty
+EXCLUDE r0
+HALT

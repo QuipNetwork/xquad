@@ -261,10 +261,10 @@ model = enc_session.run().outputs[0]
 # A hand-picked sample -- items 1, 2, 3 selected, no solver involved.
 sample = XqmxSample("binary", values=[0, 1, 1, 1, 0, 0, 0, 0])
 
-# Verifier: model + sample + N in, (energy, valid) out.
+# Verifier: the encoder's own inputs, then model and sample; (energy, valid) out.
 verifier = Program.from_source(programs.verifier)
 ver_session = verifier.session(output_slots=2)
-ver_session.set_calldata([model, sample, n])
+ver_session.set_calldata([n, weights, values, capacity, model, sample])
 ver_result = ver_session.run()
 energy, valid = ver_result.outputs[0], ver_result.outputs[1]
 
@@ -274,14 +274,20 @@ dec_session = decoder.session(output_slots=1)
 dec_session.set_calldata([sample, n])
 selected = dec_session.run().outputs[0]
 
-assert (energy, valid, selected) == (-4817, 1, [0, 1, 1, 1])
+assert (energy, valid, selected) == (-4817, 0, [0, 1, 1, 1])
 ```
 
-Items 1, 2 and 3 weigh `3 + 4 + 5 = 12` against a capacity of `8` -- this
-sample violates the capacity constraint, and the verifier reports it valid
-anyway. That is not a bug in this pipeline;
-[Verification](verification.md#the-generated-verifiers-valid-flag-does-not-check-every-constraint)
-explains why the generated verifier's `valid` flag cannot catch it. Each
+Items 1, 2 and 3 weigh `3 + 4 + 5 = 12` against a capacity of `8`, so the
+sample violates the capacity constraint and `valid` comes back `0`.
+`energy` is still computed: `ENERGY` recomputes the objective whatever the
+sample's feasibility, so the two outputs answer different questions. Swap
+in `[1, 1, 0, 0, 0, 0, 0, 0]` -- items 0 and 1, weighing `5` -- and the same
+run gives `(-5507, 1)`.
+[Verification](verification.md#what-the-generated-verifiers-valid-flag-covers)
+says what `valid` covers.
+
+The verifier takes the encoder's calldata because it replays the encoder to
+rebuild the constraint data, then appends the model and the sample. Each
 program's own `.set_calldata` order and `.set_output_slots` count are fixed
 by what it was compiled from -- [Compiling](../modelling/compiling.md#the-calldata-and-output-contract)
 has the full table. A real pipeline replaces the hand-picked `sample` above

@@ -1,0 +1,19 @@
+; getquad_index_out_of_range: a quadratic read past the extent must raise.
+;
+; Both VMs used to answer 0 here, so this is the one vector in the group that
+; pins a decision rather than closing a divergence. A GETQUAD that reads back
+; 0 from a pair SETQUAD refuses would leave one instruction family
+; disagreeing with itself about which variables exist, so the read is bounded
+; like the write. spec/xqvm/ISA.md's coefficient-access precondition states
+; it for the whole section.
+;
+; The pair is asymmetric and only j is out of range, so a check written
+; against i alone fails here rather than passing by symmetry.
+
+PUSH 4
+BQMX r0
+
+PUSH 1           ; i, in range
+PUSH 9           ; j, past the extent
+GETQUAD r0
+HALT

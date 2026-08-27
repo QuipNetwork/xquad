@@ -646,6 +646,29 @@ class Problem:
 
     # -- Compilation --------------------------------------------------------
 
+    def verifier_calldata(self) -> list[str]:
+        """Name the verifier program's calldata slots, in order.
+
+        The verifier replays the encoder, so it needs the encoder's own
+        inputs -- in declaration order -- followed by the model and the
+        sample.  A host can zip this against its own values rather than
+        reconstructing the order from the problem definition.
+
+        # Examples
+
+        ```python
+        problem = Problem("knapsack")
+        n = problem.input("n", Types.Int)
+        weights = problem.input("weights", Types.Vec)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+
+        assert problem.verifier_calldata() == ["n", "weights", "model", "sample"]
+        ```
+        """
+        from .compiler import verifier_calldata_layout
+
+        return verifier_calldata_layout(self)
+
     def compile(self) -> CompiledPrograms:
         """Compile the problem into three .xqasm program strings.
 

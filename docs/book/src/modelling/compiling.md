@@ -116,16 +116,26 @@ input at `r0`, cols at `r1`, model at `r2`. Going past `r255` raises
 
 ## What `compile_verifier` and `compile_decoder` Do
 
-The verifier and the decoder do not reuse the encoder's register numbers --
-each compiler function starts its own fixed layout. The verifier always
-puts the model on `r0`, the sample on `r1`, `N` on `r2`, and writes `energy`
-and `valid` to `r4` and `r3`. It picks its validity check from
-`Problem._constraints`, the constraint-only action list every `apply_*` call
-also appends to independently of the objective/constraint partition above:
-a `ROWSUM` loop if any `onehot_row` constraint was applied, a `COLSUM` loop
-for `onehot_col`, or a binary domain check (every value is `0` or `1`) if
-neither was. Knapsack applies neither, so its verifier -- 32 instructions,
-shown in full below -- falls through to the binary check:
+The verifier replays the encoder. A constraint's operands -- the index and
+coefficient vectors an `apply_equality` was handed -- are register handles,
+not data: those vectors are built by `VECPUSH` instructions that run inside
+the encoder at VM runtime, often nested in loops. A separate program with
+its own register file cannot inherit them. So the verifier re-executes the
+encoder's inputs, loops, stows, branches and vector construction, drops
+every model mutation, and emits a check of the sample in place of each
+constraint, at the same point in the stream. Its register and vector state
+at each constraint site is then identical to the encoder's.
+
+That is why the verifier keeps the encoder's register numbers instead of
+starting a fixed layout of its own, and why it takes the encoder's
+calldata. It claims eight registers above the encoder's high-water mark:
+the sample, the `valid` flag, `energy`, the model's declared size, a
+weighted-sum accumulator, an `ITER` position, an element, and a counter
+tracking the index each `REDUCE` would have allocated. Going past `r255`
+raises `RuntimeError` at compile time.
+
+Knapsack's encoder stops at `r11`, so its verifier's sample lands on `r12`
+and its `valid` flag on `r13`:
 
 ```asm
 ; === Inputs ===
@@ -135,18 +145,28 @@ PUSH 1
 INPUT r1
 PUSH 2
 INPUT r2
+PUSH 3
+INPUT r3
+PUSH 4
+INPUT r4
+PUSH 5
+INPUT r12
+
+; === Model shape ===
+LOAD r0
+STOW r15
 
 ; === Validity checks ===
 PUSH 1
-STOW r3
+STOW r13
 
-; Check all variables are binary
+; Check every declared variable is in the model's domain
 PUSH 0
-LOAD r2
+LOAD r15
 RANGE
-  LVAL r10
-  LOAD r10
-  GETLINE r1
+  LVAL r17
+  LOAD r17
+  GETLINE r12
   COPY
   PUSH 0
   EQ
@@ -154,32 +174,87 @@ RANGE
   PUSH 1
   EQ
   OR
-  LOAD r3
+  LOAD r13
   AND
-  STOW r3
+  STOW r13
 NEXT
 
+; === Objective (replayed for state, not for energy) ===
+PUSH 0
+LOAD r0
+RANGE
+  LVAL r5
+  LOAD r5
+  VECGET r2
+  STOW r6
+NEXT
+VEC r7
+VEC r8
+PUSH 0
+LOAD r0
+RANGE
+  LVAL r9
+  LOAD r9
+  VECPUSH r7
+  LOAD r9
+  VECGET r1
+  VECPUSH r8
+NEXT
+
+; === Constraints ===
+PUSH 0
+STOW r16
+PUSH 0
+VECLEN r7
+ITER r7
+  LIDX r17
+  LVAL r18
+  LOAD r17
+  VECGET r8
+  LOAD r18
+  GETLINE r12
+  MUL
+  LOAD r16
+  ADD
+  STOW r16
+NEXT
+LOAD r16
+LOAD r3
+LTE
+LOAD r13
+AND
+STOW r13
+
 ; === Energy ===
-ENERGY r0 r1
-STOW r4
+ENERGY r4 r12
+STOW r14
 
 ; === Output ===
 PUSH 0
-OUTPUT r4
+OUTPUT r14
 PUSH 1
-OUTPUT r3
+OUTPUT r13
 HALT
 ```
 
-Whether the capacity constraint holds is not checked here at all -- a
-binary-domain check only confirms every sample value is `0` or `1`, not that
-the weighted sum obeys the capacity. `ENERGY` still recomputes the true
-Hamiltonian independently of whatever produced the sample, so a solution
-that violates capacity reports a high energy (see
-[Constraints](constraints.md#choosing-a-penalty-weight)) rather than being
-flagged invalid; nothing in the verifier's fixed layout adds a dedicated
-check for `equality`, `atleast` or `atleastw` constraints the way it does
-for one-hot.
+Three things in that listing are worth reading closely. The model is
+`INPUT` into `r4`, the register the *encoder* allocated it to, so replayed
+references resolve without a renumbering pass; `BQMX` is skipped, but the
+size expression is replayed and stowed because the domain check needs the
+bound. The objective loop stowing `r6` has no effect on the outcome and
+runs anyway -- a later constraint could read that register, and the replay
+does not try to work out which stows matter. And the capacity check reads
+`LTE`, not `EQ`: knapsack builds its constraint with `slack()` followed by
+`apply_equality`, and a slack-extended equality is an inequality over the
+real variables. The `SLACK` instruction is not replayed, so `r7` and `r8`
+hold the four item entries and no slack entries.
+
+The domain check runs to the model's *declared* size, `r15`, replayed from
+`define_model`. Slack and `REDUCE` auxiliary variables live past that size
+and are not domain-checked. A `SPIN` model is checked against `-1` and `+1`
+instead of `0` and `1`; the binary-only constraint kinds -- `onehot_row`,
+`onehot_col`, `exclude`, `implies` -- raise at compile time on a spin model
+rather than emit a check that does not mean anything there.
 
 The decoder puts the sample on `r0` and `N` on `r1`, then emits one block
 per `problem.output()` call, each starting with `VECI` to allocate the
@@ -224,20 +299,25 @@ compiled from, and a host has to match them exactly:
 | Program | Calldata (in order) | Outputs |
 | --- | --- | --- |
 | Encoder | One entry per `problem.input()` call, in call order | Slot `0`: the model |
-| Verifier | Model, sample, `N` | Slot `0`: energy, slot `1`: valid |
+| Verifier | One entry per `problem.input()` call, in call order, then the model, then the sample | Slot `0`: energy, slot `1`: valid |
 | Decoder | Sample, `N` | One slot per `problem.output()` call, in declaration order |
 
 `examples/knapsack/runner.py`'s `run()` function drives exactly this
 contract: `vm.set_calldata([n, weights, values, capacity])` and
 `vm.set_output_slots(1)` before the encoder, matching the four
 `problem.input()` calls in `build_problem()` in order and the encoder's
-one output slot; `vm.set_calldata([model, sample, n])` and
-`vm.set_output_slots(2)` before the verifier; `vm.set_calldata([sample, n])`
+one output slot; `vm.set_calldata([n, weights, values, capacity, model, sample])`
+and `vm.set_output_slots(2)` before the verifier; `vm.set_calldata([sample, n])`
 and `vm.set_output_slots(1)` before the decoder. The output slot count
 defaults to `0`; running a program that executes `OUTPUT` against a slot
 that was never allocated raises `OutputIndex` (see
 [Limits and Errors](../xqvm/limits-and-errors.md)), on either
 interpreter.
+
+`Problem.verifier_calldata()` returns that order as a list of names --
+`["num_items", "weights", "values", "capacity", "model", "sample"]` for
+knapsack -- so a host can zip its own values against it rather than
+rebuilding the order from the problem definition.
 
 ## Inspecting the Emitted Assembly
 

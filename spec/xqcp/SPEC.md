@@ -25,8 +25,9 @@ Each XQCP program compiles to three independent XQVM programs:
 - Outputs the model on slot 0
 
 **Verifier** -- validates a solution and computes its energy.
-- Fixed input layout: model (r0), sample (r1), N (r2)
-- Checks validity based on the constraints the encoder applied
+- Input layout: the encoder's own inputs in declaration order, then the model, then the sample
+- Replays the encoder's action stream to rebuild the constraint data, which lives in registers at VM runtime rather than in the model
+- Emits one check per constraint the encoder applied, plus a domain check over every declared variable
 - Computes Hamiltonian energy via the `ENERGY` opcode
 - Outputs energy (slot 0) and valid flag (slot 1)
 

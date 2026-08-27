@@ -44,12 +44,18 @@ parameter_types! {
     /// when no host names one. Every fixture program runs in far fewer
     /// steps, so the cap is only ever reached by a call that is trying to.
     pub const MaxStepLimit: u64 = 10_000_000;
+    /// 1 GiB, the budget `Vm::new()` installs when no host names one, so
+    /// the cap changes nothing a fixture program can reach and only the
+    /// caller's ability to name a smaller one is under test. A real
+    /// runtime sets this to something its heap can actually honour.
+    pub const MaxMemoryLimit: u64 = 1 << 30;
 }
 
 impl pallet_xqvm::Config for Test {
     type MaxProgramSize = MaxProgramSize;
     type MaxCalldata = MaxCalldata;
     type MaxStepLimit = MaxStepLimit;
+    type MaxMemoryLimit = MaxMemoryLimit;
 }
 
 /// Build a `TestExternalities` with block number 1 initialised.

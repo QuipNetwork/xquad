@@ -16,39 +16,41 @@ both are wanted.
 
 ## Recognising the Row-Only Shape
 
-`examples/bin_packing/` assigns each item to exactly one bin -- an
-`EQUALITY` constraint per item, unit coefficients, target `1`, over that
-item's row of the \\(N \times B\\) grid ([Bin
+`examples/bin_packing/` assigns each item to exactly one bin -- one
+`ONEHOTR` per item row of its grid ([Bin
 Packing](../examples/bin_packing.md), `examples/bin_packing/runner.py`):
 
 ```python
 # Assignment constraint: each item i must go in exactly one bin
-# sum_b x[i,b] = 1  for each i
 with problem.range(0, num_items) as i:
-    row_indices = problem.vec()
-    row_coeffs = problem.vec()
-    with problem.range(0, num_bins_in) as b:
-        row_indices.push(i * num_bins_in + b)
-        row_coeffs.push(1)
-    problem.model.apply_equality(row_indices, row_coeffs, 1, 200)
+    problem.model.apply_onehot_row(i, 200)
 ```
 
-`EQUALITY` with unit coefficients and target `1` over one row is the same
-constraint `ONEHOTR` applies directly --
+`ONEHOTR` is the special case of `EQUALITY` with \\(a_k = 1\\) and
+\\(b = 1\\), which
 [High-Level Constraints](../xqvm/instructions/constraints.md#equality-model-indices-coeffs)
-states `ONEHOTR`/`ONEHOTC` are the special case of `EQUALITY` with
-\\(a_k = 1\\) and \\(b = 1\\). This loop is a by-hand `ONEHOTR`: the model is
-defined with both `rows` and `cols` set (`num_items` and `num_bins_in`), so
-`apply_onehot_row` would have expressed the same constraint. Bin packing
-just writes it out by hand instead of calling it.
+states directly. Writing it by hand -- a `vec()` pair per row, an index and
+a `1` pushed per column, then `apply_equality(indices, coeffs, 1, 200)` --
+expresses the same constraint and costs a loop and two vectors per row. The
+model here is defined with both `rows` and `cols` set, so `apply_onehot_row`
+applies and the hand-rolled form buys nothing.
 
-Running `examples/bin_packing/runner.py --seed 42 --interpreter rust`
-(4 items, 3 bins, capacity `5`, sizes `[1, 2, 1, 1]`) decodes to
-`assignment: [0, 2, 0, 1]` -- item 0 in bin 0, item 1 in bin 2, item 2 in
-bin 0, item 3 in bin 1. Every item appears in exactly one bin, which is
-what the row constraint above guarantees; nothing here guarantees every
-bin gets used or that bins fill evenly, since there is no column
-constraint pushing in that direction.
+Bin packing's grid has one row more than it has items. Rows `0..N-1` are
+the assignment cells; the extra row `N` holds one indicator variable per
+bin, and `apply_implies((i, b), (num_items, b), 200)` opens bin `b` as soon
+as any item lands in it. That indicator row is what lets the objective
+count bins: a bias spread over the assignment cells would sum to `N` on
+every feasible packing, because each item lands in exactly one bin, so it
+could not tell a one-bin packing from a three-bin one.
+
+Running `examples/bin_packing/runner.py --seed 42` (4 items, 3 bins,
+capacity `5`, sizes `[1, 2, 1, 1]`) decodes to `assignment: [2, 2, 2, 2]`
+-- all four items in bin 2, total size `5` against a capacity of `5`. The
+`rust` interpreter returns `[0, 0, 0, 0]` instead: which single bin gets
+used is a tie, and the two interpreters break it differently. Every item
+appears in exactly one bin, which is what the row constraint guarantees;
+nothing requires a bin to be used, and the bin-count objective pushes the
+other way.
 
 Bin packing composes this row-assignment pattern with a second, unrelated
 one -- each bin's contents must not exceed its capacity, encoded with

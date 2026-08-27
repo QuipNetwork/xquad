@@ -179,6 +179,23 @@ class TestLinearCoefficients:
         with pytest.raises(IndexOutOfBounds):
             binary_model.set_linear(-1, 1)
 
+    def test_get_linear_index_bounds(self, binary_model):
+        """Reads are bounded like writes, not answered with 0.
+
+        get_linear used to return 0 for any index, so a program reading
+        past the declared size halted here and raised IndexOutOfBounds on
+        the Rust VM. test_get_linear_default reads index 5 of this same
+        size-10 model and gets 0, so the bound being pinned is the declared
+        size and not merely the absence of an entry.
+        """
+        with pytest.raises(IndexOutOfBounds):
+            binary_model.get_linear(100)
+
+    def test_get_linear_negative_index(self, binary_model):
+        """The negative half of the same bound."""
+        with pytest.raises(IndexOutOfBounds):
+            binary_model.get_linear(-1)
+
 
 class TestQuadraticCoefficients:
     """Tests for quadratic coefficient operations."""
@@ -220,6 +237,35 @@ class TestQuadraticCoefficients:
         """Out of bounds indices raise IndexOutOfBounds."""
         with pytest.raises(IndexOutOfBounds):
             binary_model.set_quadratic(0, 100, 1)
+
+    def test_get_quadratic_index_bounds(self, binary_model):
+        """get_quadratic is bounded like set_quadratic.
+
+        Returning 0 for a pair set_quadratic refuses left the instruction
+        family disagreeing with itself about which variables exist.
+        """
+        with pytest.raises(IndexOutOfBounds):
+            binary_model.get_quadratic(0, 100)
+
+    def test_get_quadratic_negative_index(self, binary_model):
+        """The negative half of the same bound."""
+        with pytest.raises(IndexOutOfBounds):
+            binary_model.get_quadratic(-1, 0)
+
+    def test_quadratic_bounds_are_checked_before_normalisation(self, binary_model):
+        """Both operands out of range: the raised index is i, not min(i, j).
+
+        The check runs ahead of the i > j swap, so the diagnostic names the
+        operand the caller supplied rather than whichever one sorted lower.
+        Matches bounded_index's ordering in xqvm/src/vm.rs.
+        """
+        with pytest.raises(IndexOutOfBounds) as excinfo:
+            binary_model.set_quadratic(100, 50, 1)
+        assert excinfo.value.index == 100
+
+        with pytest.raises(IndexOutOfBounds) as excinfo:
+            binary_model.get_quadratic(100, 50)
+        assert excinfo.value.index == 100
 
     def test_quadratic_same_index_allowed(self, binary_model):
         """Same index (i == j) may be allowed depending on implementation."""

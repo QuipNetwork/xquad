@@ -1,0 +1,17 @@
+; addquad_index_out_of_range: ADDQUAD carries the same bound as SETQUAD.
+;
+; Separate from setquad_index_out_of_range because the two reach the model
+; through different methods -- add_quad accumulates onto whatever is already
+; there -- and the missing check was duplicated rather than shared.
+;
+; j is exactly at the extent, the off-by-one, where the SETQUAD vector uses a
+; value well past it.
+
+PUSH 4
+BQMX r0
+
+PUSH 1           ; i, in range
+PUSH 4           ; j == size
+PUSH 7           ; delta
+ADDQUAD r0
+HALT

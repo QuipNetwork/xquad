@@ -28,7 +28,7 @@ Slack variable indices start at num_nodes and are allocated one per edge.
 2. **Assemble** -- `.xqasm` text to bytecode via `xquad.asm`
 3. **Encode** -- run encoder on chosen XQVM to produce the XQMX model
 4. **Sample** -- solver runs SA/QPU/GPU over the model
-5. **Verify** -- verifier computes energy and checks the sample is binary. It does not check the independence constraints: see [the generated verifier's `valid` flag](../../docs/book/src/running/verification.md#the-generated-verifiers-valid-flag-does-not-check-every-constraint)
+5. **Verify** -- verifier checks the sample is binary and that the independence constraints hold, then computes energy
 6. **Decode** -- decoder extracts the selected nodes
 
 ## Usage

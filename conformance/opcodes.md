@@ -176,12 +176,12 @@ Total: **93 opcodes**.
 
 | Code | Mnemonic | Operands | Stack | Description |
 |------|----------|----------|-------|-------------|
-| `0x60` | `GETLINE` | `reg: Register` | `1 → 1` | Pop i; push `linear[i]` from the register's model (0 if absent), or a sample's assignment at i; `xquad verify` requires a model. |
+| `0x60` | `GETLINE` | `reg: Register` | `1 → 1` | Pop i; push `linear[i]` from the register's model, or a sample's assignment at i; raises IndexOutOfBounds outside [0, size); `xquad verify` requires a model. |
 | `0x61` | `SETLINE` | `reg: Register` | `2 → 0` | Pop value and i; set `linear[i]` in the register's model, or a sample's assignment at i; `xquad verify` requires a model. |
 | `0x62` | `ADDLINE` | `reg: Register` | `2 → 0` | Pop delta and i; add delta to `linear[i]` in the register's model, or a sample's assignment at i; `xquad verify` requires a model. |
-| `0x63` | `GETQUAD` | `reg: Register` | `2 → 1` | Pop j and i; push `quadratic[i, j]` from the register's model (0 if absent). |
-| `0x64` | `SETQUAD` | `reg: Register` | `3 → 0` | Pop value, j, and i; set `quadratic[i, j]` in the register's model. |
-| `0x65` | `ADDQUAD` | `reg: Register` | `3 → 0` | Pop delta, j, and i; add delta to `quadratic[i, j]` in the register's model. |
+| `0x63` | `GETQUAD` | `reg: Register` | `2 → 1` | Pop j and i; push `quadratic[i, j]` from the register's model; raises IndexOutOfBounds outside [0, size). |
+| `0x64` | `SETQUAD` | `reg: Register` | `3 → 0` | Pop value, j, and i; set `quadratic[i, j]` in the register's model; raises IndexOutOfBounds outside [0, size). |
+| `0x65` | `ADDQUAD` | `reg: Register` | `3 → 0` | Pop delta, j, and i; add delta to `quadratic[i, j]` in the register's model; raises IndexOutOfBounds outside [0, size). |
 
 ---
 
@@ -203,8 +203,8 @@ Total: **93 opcodes**.
 |------|----------|----------|-------|-------------|
 | `0x70` | `ONEHOTR` | `reg: Register` | `2 → 0` | Pop penalty and row; add a one-hot constraint over the grid row. |
 | `0x71` | `ONEHOTC` | `reg: Register` | `2 → 0` | Pop penalty and col; add a one-hot constraint over the grid column. |
-| `0x72` | `EXCLUDE` | `reg: Register` | `3 → 0` | Pop penalty, j, and i; add a mutual-exclusion constraint between variables i and j. |
-| `0x73` | `IMPLIES` | `reg: Register` | `3 → 0` | Pop penalty, j, and i; add an implication constraint from variable i to variable j. |
+| `0x72` | `EXCLUDE` | `reg: Register` | `3 → 0` | Pop penalty, j, and i; add a mutual-exclusion constraint between variables i and j; raises IndexOutOfBounds outside [0, size). |
+| `0x73` | `IMPLIES` | `reg: Register` | `3 → 0` | Pop penalty, j, and i; add an implication constraint from variable i to variable j; raises IndexOutOfBounds outside [0, size). |
 | `0x74` | `EQUALITY` | `model: Register`, `indices: Register`, `coeffs: Register` | `2 → 0` | Pop penalty and target; expand weighted equality constraint into QUBO terms on a model. |
 | `0x75` | `ATLEAST` | `model: Register`, `indices: Register` | `2 → 0` | Pop penalty and k; allocate slack variables and apply at-least-k constraint. |
 | `0x76` | `ATLEASTW` | `model: Register`, `indices: Register`, `coeffs: Register` | `2 → 0` | Pop penalty and k; allocate slack variables and apply weighted at-least-k constraint. |

@@ -224,13 +224,6 @@ so both arms inherit it.
 
 ## What passing verification does not guarantee
 
-<!-- xquad:defect QUI-1062 -->
-> **Known issue.** The bytecode verifier passes programs that fault at runtime: the
-> net-delta stack scan cannot see an operand-ordering error, so a stack underflow
-> can pass verification. Treat a verification pass as a static check, not a
-> guarantee that the program runs to completion. Report problems at the
-> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
-
 A pass means every phase's static checks succeeded. It does not mean the
 program runs to completion. The stack-depth phase reasons about each basic
 block's *net* effect, so an instruction that pops more operands than it
@@ -301,33 +294,26 @@ verifier program does not verify a program in the bytecode-verifier sense,
 and running `xquad verify` against the verifier program's `.xqasm` text
 does not check whether a sample is a good answer.
 
-## The generated verifier's `valid` flag does not check every constraint
+## What the generated verifier's `valid` flag covers
 
-<!-- xquad:defect QUI-1062 -->
-> **Known issue.** The generated solution verifier emits a row-sum check only for
-> `onehot_row` and a column-sum check only for `onehot_col`, and otherwise checks only
-> domain membership, so a sample violating any other constraint kind can still report
-> `valid = 1`. Check feasibility in the host for problems built from other constraint
-> kinds, rather than trusting the `valid` flag. Report problems at the
-> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+`valid` is the conjunction of one check per constraint the problem
+declared, plus a domain check over every declared variable. A sample that
+violates an `onehot_row`, `onehot_col`, `equality`, `inequality`,
+`atleast`, `atleastw`, `exclude`, `implies`, or the Rosenberg auxiliary a
+`reduce()` allocated, comes back `valid = 0`.
+[Compiling](../modelling/compiling.md#what-compile_verifier-and-compile_decoder-do)
+shows how each check is emitted.
 
-The verifier program's `valid` output checks the sample's domain, plus a
-row- or column-sum check when the problem used `onehot_row` or
-`onehot_col`. [Compiling](../modelling/compiling.md#what-compile_verifier-and-compile_decoder-do)
-describes exactly how `compile_verifier` picks between these three shapes.
-A problem built only from `EQUALITY`, `ATLEAST`, `ATLEASTW`, `EXCLUDE`, or
-`IMPLIES` constraints gets a verifier whose `valid` check never touches
-them -- domain membership is the only thing tested, so an infeasible
-sample can still read `valid = 1`.
+The checks are over the variables the problem declared, not over the
+encoding. `slack()` extends an equality's index vector with the encoder's
+own variables; the verifier checks that constraint as `sum <= bound` over
+the real variables and leaves the slack bits unconstrained. Checking the
+expanded form instead would report `valid = 0` for a feasible sample whose
+slack bits a solver happened to leave inconsistent, which on a settlement
+path means refusing to pay for a correct answer.
 
-[Running Programs](./#a-complete-run-across-three-programs) runs
-this end to end on the knapsack example: a sample selecting items that
-weigh `12` against a capacity of `8` -- an infeasible selection -- still
-comes back `valid = 1`, because knapsack's only constraint is `EQUALITY`
-and the verifier's binary-domain check has no way to see the capacity
-violation. `ENERGY` still recomputes the true objective independently of
-the sample's origin, so the *energy* on an infeasible sample is typically
-worse than a feasible one's -- but nothing marks the sample invalid on that
-basis. Do not treat `valid = 1` from a generated verifier as proof a sample
-satisfies every constraint the problem declared; it proves only what that
-problem's specific `valid` check happens to test.
+Two things `valid = 1` does not claim. The domain check runs to the
+model's *declared* size, so slack and `REDUCE` auxiliaries allocated past
+that size are not domain-checked. And `valid` says nothing about
+optimality: `ENERGY` recomputes the objective independently of where the
+sample came from, and a feasible sample can still be a poor one.

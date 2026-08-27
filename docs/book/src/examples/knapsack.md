@@ -36,7 +36,7 @@ EQUALITY then adds the penalty term `P*(sum(a_k*x_k) - W)^2` to the QUBO.
 2. **Assemble** -- `.xqasm` text to bytecode via `xquad.asm`
 3. **Encode** -- run encoder on chosen XQVM to produce the XQMX model
 4. **Sample** -- solver runs SA/QPU/GPU over the model
-5. **Verify** -- verifier computes energy and checks the sample is binary. It does not check the capacity constraint: see [the generated verifier's `valid` flag](../running/verification.md#the-generated-verifiers-valid-flag-does-not-check-every-constraint)
+5. **Verify** -- verifier checks the sample is binary and that the capacity constraint holds, then computes energy
 6. **Decode** -- decoder extracts the item selection
 
 ## Usage

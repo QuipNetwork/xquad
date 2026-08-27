@@ -39,24 +39,32 @@ equivalent at either level and rejects a `Sample` register with
 `RegisterType` ("expected model, got sample"), since a sample has no
 coupling terms to read or write.
 
-All three linear instructions bounds-check the popped index `i` against the
+## Every Index Is Bounds-Checked
+
+All six instructions bounds-check their popped indices against the
 register's declared size (`model.size` or `sample.values.len()`) and error
-`IndexOutOfBounds` if `i` is negative or at least `size`: `GETLINE r0` for
-`i = 99` on a 4-variable model fails with `index 99 out of bounds (len
-4)`, even though the coefficient map holds no fixed-size backing array; the
+`IndexOutOfBounds` if an index is negative or at least `size`: `GETLINE r0`
+for `i = 99` on a 4-variable model fails with `index 99 out of bounds (len
+4)`, even though the coefficient map holds no fixed-size backing array. The
 size bound comes from the model's declared variable count, not from the map
-itself.
+itself, which is why an absent in-range coefficient reads as `0` while a
+read past the end raises.
 
-## Quadratic Access Is Not Bounds-Checked
+Reads are bounded exactly as writes are. `GETQUAD r0` for `(i, j) = (99,
+100)` on a 4-variable model raises rather than answering `0`, because a
+`GETQUAD` that reads back `0` from a pair `SETQUAD` refuses would leave the
+family disagreeing with itself about which variables exist.
 
-`GETQUAD`, `SETQUAD` and `ADDQUAD` check only that `i` and `j` are
-non-negative; neither is checked against `model.size`. `GETQUAD r0` for
-`(i, j) = (99, 100)` on a 4-variable model returns `0` rather than
-erroring, and `SETQUAD`/`ADDQUAD` at the same out-of-range pair succeed
-and grow the sparse map, rather than being rejected the way `SETLINE` at
-an out-of-range index would be. Nothing in this instruction family
-enforces that a quadratic key stays inside the variable count a
-`BQMX`/`SQMX`/`XQMX` call declared; that is the caller's responsibility.
+`SETQUAD` and `ADDQUAD` check `i` before `j`, and both before the `i > j`
+normalisation below, so the reported index is the operand the program
+supplied rather than whichever one sorted lower.
+
+The same bound covers `EXCLUDE` and `IMPLIES`, which write coefficients
+through the same surfaces. Nothing in either family can put a coefficient
+outside the variable count a `BQMX`/`SQMX`/`XQMX` call declared: an
+unbounded write would grow the sparse map and leave the model carrying a
+constraint over variables that do not exist, which still solves cleanly and
+answers wrongly.
 
 ## Sparse Storage
 
