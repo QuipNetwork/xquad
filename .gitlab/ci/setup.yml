@@ -77,9 +77,20 @@
 #
 # The three hardware:* jobs still have no run data -- they run only on
 # protected refs and have never executed. Their values are deliberate
-# guesses with cold-start headroom (driver and kernel warmup for cuda, a
-# real network round-trip to a D-Wave QPU for qpu, local Apple Silicon
-# execution for metal). Revisit once real timings exist.
+# guesses with cold-start headroom for what is specific to each (driver
+# and kernel warmup for cuda, a real network round-trip to a D-Wave QPU
+# for qpu, local Apple Silicon execution for metal) plus, since QUI-1191,
+# a cold cargo fetch and a full xqvm + xqasm + pyo3 compile that all three
+# now carry: scripts/run-hardware-tests.sh rebuilds xqffi's cdylib on
+# every run, which is the whole point of that change. That put cuda and
+# qpu at 45m and metal at 30m, the lower value reflecting that metal alone
+# has neither queueing nor driver warmup underneath the compile.
+#
+# The compile lands on top of the cold-cache regime described above rather
+# than replacing it, and hardware:qpu is the worst case in the fleet: its
+# `[linux, x86_64]` tags match three runners, so with no shared cache
+# server its cargo cache hits roughly one run in three. Revisit all three
+# once real timings exist.
 #
 # Scope note (post-QUI-1002): `release.yml` used to keep its own three
 # anchors (`.setup-python-publish`, `.on-release-tag`, `.on-pr-or-push`)
@@ -317,9 +328,12 @@
 
 # Hardware-backed solver jobs (hardware:cuda / hardware:qpu /
 # hardware:metal). Shares the protected-ref rule common to all three --
-# see hardware.yml's header for why -- and gets uv onto PATH; each job
-# runs its own `uv sync --extra <solver>` afterward, so this template
-# stops at the plain `uv` fragment (no sync).
+# see hardware.yml's header for why -- and gets uv onto PATH. It stops at
+# the plain `uv` fragment because no job installs anything in its
+# before_script: each `script:` is a single `make -k test-<kind>`, and
+# scripts/run-hardware-tests.sh behind it owns the whole sequence (sync the
+# solver extra, rebuild xqffi through maturin, probe the device, run
+# pytest).
 #
 # Before QUI-1001 Phase C2, none of the three jobs had a cache entry at
 # all -- they set UV_CACHE_DIR but nothing covered that path, so each
@@ -328,22 +342,56 @@
 #
 # The cache key PREFIX is `hw-$CI_JOB_NAME`, not a shared key:
 # hardware:metal runs on a macOS runner while hardware:cuda /
-# hardware:qpu run on Linux, and
-# `.uv-cache/` holds built wheels -- including the maturin-built xqffi
-# cdylib. A single shared key would let a Darwin archive poison the Linux
-# jobs (or vice versa). Per-job-name prefixing keeps each job's cache in
-# its own bucket even though all three hash the same uv.lock/pyproject.toml.
+# hardware:qpu run on Linux, and BOTH entries below hold host-specific
+# build output -- `.uv-cache/` holds built wheels including the
+# maturin-built xqffi cdylib, and `target/` holds Rust object files for
+# whichever host compiled them. A single shared key would let a Darwin
+# archive poison the Linux jobs (or vice versa). Per-job-name prefixing
+# keeps each job's cache in its own bucket even though all three hash the
+# same uv.lock/pyproject.toml and the same Cargo.lock.
 #
-# Only `.uv-cache/` is cached here, deliberately never `.venv/`: each job
-# runs `uv sync --extra <solver>` with a *different* extra, so a cached
-# venv from one job's sync would be the wrong environment for another's --
-# don't "simplify" this back to matching `.python`'s two paths.
+# The cargo entry exists because `cache:` REPLACES the root `default:`
+# cache wholesale rather than adding to it: until QUI-1191 these three
+# jobs restored no `target/`, no `.cargo/registry/` and no `.cargo/git/`
+# at all. That cost nothing while they only ran pytest out of a prebuilt
+# uv cache. It became the dominant cost the moment
+# scripts/run-hardware-tests.sh started rebuilding xqffi's cdylib through
+# maturin, which is a real compile of xqvm + xqasm + pyo3 on every run.
+#
+# Note this key deliberately does NOT reuse the root default's hash-only
+# Cargo.lock key. That one is project-wide and shared with verify:rust /
+# test:rust, and reusing it here is precisely the Darwin-poisons-Linux
+# hazard above. The price is that these three never inherit main's warm
+# cargo cache and cold-start on their first pipeline after any Cargo.lock
+# bump -- accepted, because a wrong-host `target/` is a corrupted build,
+# not a slow one.
+#
+# Expect this entry to MISS often, and size the timeouts for that rather
+# than for the hit. Per the "Job timeouts" section above the fleet has no
+# shared cache server, so an entry is local to whichever runner wrote it
+# and only hits when the job lands on that same machine again. How often
+# that happens is a property of each job's tags: hardware:metal has one
+# macOS box and so is reliably warm after its first run; hardware:cuda's
+# `cuda` tag matches two runners; hardware:qpu's bare `[linux, x86_64]`
+# matches three, so roughly two runs in three pay the full cold build AND
+# upload a fresh `target/` archive the next run elsewhere will not read.
+#
+# That is a weak cache, not a useless one -- the hits are real and cost
+# nothing to collect -- but it is why the compile has to fit inside each
+# job's timeout unaided. Do not let this entry's existence talk a future
+# reader into tightening those limits.
+#
+# On the uv side only `.uv-cache/` is cached, deliberately never `.venv/`:
+# each job syncs a *different* extra, so a cached venv from one job's sync
+# would be the wrong environment for another's -- don't "simplify" this
+# back to matching `.python`'s two paths.
 #
 # CACHE WRITERS: the `hw-$CI_JOB_NAME` prefix means hardware:cuda,
 # hardware:qpu and hardware:metal each own an entirely separate cache slot
-# -- there is no other job sharing any one of these three keys, so each job
-# is necessarily the sole writer of its own and none of them can become
-# `policy: pull` without that job's cache going permanently unpopulated.
+# -- there is no other job sharing any one of these keys, so each job is
+# necessarily the sole writer of BOTH of its own entries and neither can
+# become `policy: pull` without that job's cache going permanently
+# unpopulated.
 .hardware:
     rules:
         - if: $CI_COMMIT_REF_PROTECTED == "true"
@@ -357,6 +405,14 @@
                   - pyproject.toml
           paths:
               - .uv-cache/
+        - key:
+              prefix: "hw-$CI_JOB_NAME"
+              files:
+                  - Cargo.lock
+          paths:
+              - .cargo/registry/
+              - .cargo/git/
+              - target/
 
 # ---------------------------------------------------------------------------
 # Dependency gating

@@ -474,16 +474,29 @@ test-quip-e2e:
 # Real-hardware xqsa solver tests -- CUDA, D-Wave QPU, Apple Metal -- each
 # exercising the encode -> solve -> verify -> decode pipeline against an
 # actual device rather than the mocked unit tests in `make test-py`. Each
-# delegates to scripts/run-hardware-tests.sh <kind>, which preflights the
-# device/token before running (hard-erroring on a missing GPU or API token
-# rather than letting the tests skip themselves quietly) and treats a
+# delegates to scripts/run-hardware-tests.sh <kind>, which syncs that
+# solver's extra, rebuilds xqffi's cdylib through maturin (a plain `uv sync`
+# reinstalls it from uv's editable-wheel cache, which is stale whenever only
+# Rust sources changed -- the same trap deps-py above documents), preflights
+# the device/token before running (hard-erroring on a missing GPU or API
+# token rather than letting the tests skip themselves quietly) and treats a
 # pytest "collected zero tests" result as a failure rather than a hollow
 # pass; see that script for the full rationale.
+#
+# These three are NOT `deps-py` prerequisites and must not become them.
+# deps-py's `uv sync` carries no extra, so ordered before the script it
+# would rebuild xqffi and then have the script's own `uv sync --extra
+# <solver>` reinstall the stale one straight back over it, and ordered after
+# it would prune the extra. The rebuild has to sit between the extra-bearing
+# sync and pytest, which is why it lives in the script rather than being
+# reused from deps-py.
 #
 # Opt-in and deliberately NOT part of `make test` / preflight, same policy
 # as test-quip-sign / test-quip-e2e above: each needs a real GPU, a D-Wave
 # API token, or an Apple Silicon host with Metal available, so they are
-# driven by a dedicated CI runner (.gitlab/ci/hardware.yml) or by hand.
+# driven by a dedicated CI runner (.gitlab/ci/hardware.yml, whose three jobs
+# now invoke these very targets rather than calling pytest directly) or by
+# hand.
 # No test-hardware aggregate: unlike test-quip (sign + e2e both run
 # against the same devnet from any machine), no single environment has a
 # GPU, a D-Wave token and Metal all at once, so bundling all three behind
