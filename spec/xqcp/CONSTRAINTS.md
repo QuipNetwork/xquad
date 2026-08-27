@@ -150,12 +150,11 @@ XQCP does not perform these expansions itself -- it emits the high-level opcodes
 ## Constraint Tracking
 
 All constraint methods append to two lists:
-1. `Problem._actions` -- the main action sequence (used by all three compiler passes)
-2. `Problem._constraints` -- constraint-only subset (used by the verifier compiler to select the appropriate validity check)
+1. `Problem._actions` -- the main action sequence, walked by all three compiler passes
+2. `Problem._constraints` -- a constraint-only subset, kept for inspection
 
-The verifier compiler inspects `_constraints` to decide which validity check to emit:
-- If any `onehot_row` constraint exists: emit `ROWSUM` loop
-- If any `onehot_col` constraint exists: emit `COLSUM` loop
-- If no onehot constraints exist: emit binary domain check (each variable is 0 or 1)
+The verifier compiler walks `_actions`, not `_constraints`: it replays the encoder's control flow and emits one check per constraint at that constraint's own position in the stream, so a constraint declared inside a loop is checked once per iteration. `reduce` is in `_actions` but deliberately not in `_constraints` -- it is a structural transformation rather than a domain constraint -- and the verifier checks its auxiliary anyway.
+
+A domain check over every declared variable is always emitted, gated on the model's domain.
 
 See [COMPILER.md](COMPILER.md) for the full verifier generation algorithm.

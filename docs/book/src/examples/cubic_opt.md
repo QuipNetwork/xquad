@@ -33,7 +33,7 @@ Each cubic term `(i, j, k, c)` is degree-reduced to quadratic via:
 2. **Assemble** -- `.xqasm` text to bytecode via `xquad.asm`
 3. **Encode** -- run encoder on chosen XQVM to produce the XQMX model
 4. **Sample** -- solver runs SA/QPU/GPU over the model
-5. **Verify** -- verifier computes energy and checks the sample is binary; the Rosenberg REDUCE terms are not checked
+5. **Verify** -- verifier checks the sample is binary and that each Rosenberg REDUCE auxiliary equals the product it stands for, then computes energy
 6. **Decode** -- decoder extracts the variable assignment
 
 ## Usage

@@ -971,6 +971,215 @@ fn getline_absent_returns_zero() {
     assert_eq!(vm.stack(), &[0]);
 }
 
+// --- Index bounds -----------------------------------------------------------
+//
+// The linear trio has always bounded its index against the register's
+// declared size; the quadratic trio and the two pairwise constraints only
+// rejected negatives, so any non-negative i64 was accepted and the write
+// landed in the sparse map. `xqvm_py` bounded all of them, so every program
+// below used to halt clean here and raise there.
+//
+// Read and write are bounded alike: `GETQUAD` returning 0 for an index the
+// matching `SETQUAD` refuses would leave one family disagreeing with itself
+// about which variables exist.
+//
+// Every pair below is asymmetric, and each test puts the out-of-range operand
+// on a different side, so a check written against the wrong operand fails
+// rather than passing by symmetry.
+
+#[test]
+fn get_line_index_past_size_raises() {
+    // The declared size is the bound, not the extent of the sparse map:
+    // `getline_absent_returns_zero` reads index 3 of the same model and gets
+    // 0, so this pins the size and not merely the absence of an entry.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bqmx(Register(0));
+        b.emit_push(4).emit_get_line(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::IndexOutOfBounds {
+                index: 4,
+                len: 4,
+                ..
+            }
+        ),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
+}
+
+#[test]
+fn get_quad_index_past_size_raises() {
+    // Push order is i then j, so the out-of-range operand here is j.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bqmx(Register(0));
+        b.emit_push(1).emit_push(9).emit_get_quad(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::IndexOutOfBounds {
+                index: 9,
+                len: 4,
+                ..
+            }
+        ),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
+}
+
+#[test]
+fn set_quad_index_past_size_raises() {
+    // Push order is i, j, val. The write used to land: a size-4 model came
+    // out holding quad[1, 9], and a later ENERGY against a size-4 sample
+    // then failed with SizeMismatch far from the instruction at fault.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bqmx(Register(0));
+        b.emit_push(1)
+            .emit_push(9)
+            .emit_push(7)
+            .emit_set_quad(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::IndexOutOfBounds {
+                index: 9,
+                len: 4,
+                ..
+            }
+        ),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
+}
+
+#[test]
+fn add_quad_index_past_size_raises() {
+    // i out of range and j inside it, the mirror of the SETQUAD case above.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bqmx(Register(0));
+        b.emit_push(9)
+            .emit_push(1)
+            .emit_push(7)
+            .emit_add_quad(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::IndexOutOfBounds {
+                index: 9,
+                len: 4,
+                ..
+            }
+        ),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
+}
+
+#[test]
+fn set_quad_reports_i_before_j() {
+    // Both operands are out of range, so this pins which one the diagnostic
+    // names. The check runs before the i > j normalisation, so the reported
+    // index is the operand the program supplied rather than whichever one
+    // sorted lower.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bqmx(Register(0));
+        b.emit_push(11)
+            .emit_push(9)
+            .emit_push(7)
+            .emit_set_quad(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(err, Error::IndexOutOfBounds { index: 11, .. }),
+        "expected IndexOutOfBounds with index=11, got {err:?}"
+    );
+}
+
+#[test]
+fn set_quad_negative_index_raises() {
+    // The negative half of the same bound. It was already rejected, by the
+    // usize conversion rather than the comparison, and both halves must
+    // report the same identity and the same raw operand.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bqmx(Register(0));
+        b.emit_push(1)
+            .emit_push(-1)
+            .emit_push(7)
+            .emit_set_quad(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::IndexOutOfBounds {
+                index: -1,
+                len: 4,
+                ..
+            }
+        ),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
+}
+
+#[test]
+fn exclude_index_past_size_raises() {
+    // Push order is i, j, penalty. EXCLUDE writes one quadratic coefficient
+    // and inherited the same missing bound: the constraint was attached to a
+    // variable outside the model, so it constrained nothing and the model
+    // still solved cleanly.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bqmx(Register(0));
+        b.emit_push(2)
+            .emit_push(100)
+            .emit_push(1)
+            .emit_exclude(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::IndexOutOfBounds {
+                index: 100,
+                len: 4,
+                ..
+            }
+        ),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
+}
+
+#[test]
+fn implies_index_past_size_raises() {
+    // IMPLIES writes a linear term at i and a quadratic one at (i, j), so it
+    // is the case where an unbounded index reaches both surfaces. i is the
+    // out-of-range operand here, the one the linear write uses.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bqmx(Register(0));
+        b.emit_push(100)
+            .emit_push(2)
+            .emit_push(1)
+            .emit_implies(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::IndexOutOfBounds {
+                index: 100,
+                len: 4,
+                ..
+            }
+        ),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // ENERGY computation
 // ---------------------------------------------------------------------------

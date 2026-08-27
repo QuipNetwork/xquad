@@ -60,6 +60,6 @@ Solvers that impose additional constraints beyond domain validation (e.g. GPU me
 | Model in SAMPLE mode | `_validate_model()` raises `ValueError` |
 | Hardware failure | `solve()` raises implementation-specific exception |
 | No sample produced | `solve()` raises implementation-specific exception |
-| Bad sample (high energy, constraint violations) | `solve()` returns `SolverResult` normally; verifier's `valid` flag distinguishes good from bad |
+| Bad sample (high energy, constraint violations) | `solve()` returns `SolverResult` normally; the verifier's `valid` flag reports feasibility and its `energy` output reports quality |
 
 The key distinction: solver failures (hardware, embedding, timeout with no result) are exceptions. Bad-quality solutions are valid `SolverResult` values -- the verifier handles quality assessment.

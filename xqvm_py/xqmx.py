@@ -176,14 +176,31 @@ class XQMX:
         """Check if this is a sample (vs model)."""
         return self.mode == XQMXMode.SAMPLE
 
+    def _check_index(self, i: int) -> None:
+        """Raise unless ``i`` addresses one of this xqmx's declared variables.
+
+        The bound is the declared size, not the extent of any backing store.
+        A model holds its coefficients sparsely, so an unbounded write would
+        land in the map and grow the model past the count its allocator
+        declared: the program then carries a constraint over variables that
+        do not exist, and still solves cleanly.
+
+        Reads are bounded the same way writes are. Returning 0 for an index
+        the matching setter refuses would leave one instruction family
+        disagreeing with itself about which variables exist. The Rust VM
+        bounds both through ``bounded_index`` in ``xqvm/src/vm.rs``.
+        """
+        if i < 0 or i >= self.size:
+            raise IndexOutOfBounds(i, self.size)
+
     def get_linear(self, i: int) -> int:
         """Get linear coefficient/value for variable i."""
+        self._check_index(i)
         return self.linear.get(i, 0)
 
     def set_linear(self, i: int, value: int) -> None:
         """Set linear coefficient/value for variable i."""
-        if i < 0 or i >= self.size:
-            raise IndexOutOfBounds(i, self.size)
+        self._check_index(i)
 
         check_i64(value, f"linear[{i}]")
         if value == 0:
@@ -193,8 +210,7 @@ class XQMX:
 
     def add_linear(self, i: int, delta: int) -> None:
         """Add to linear coefficient for variable i."""
-        if i < 0 or i >= self.size:
-            raise IndexOutOfBounds(i, self.size)
+        self._check_index(i)
 
         current = self.linear.get(i, 0)
         new_value = check_i64(current + delta, f"linear[{i}]")
@@ -206,16 +222,20 @@ class XQMX:
 
     def get_quadratic(self, i: int, j: int) -> int:
         """Get quadratic coefficient for variables i, j."""
+        # Both operands are checked before the swap below, so the raised
+        # index names the operand the program supplied rather than
+        # whichever one sorted lower.
+        self._check_index(i)
+        self._check_index(j)
+
         if i > j:
             i, j = j, i
         return self.quadratic.get((i, j), 0)
 
     def set_quadratic(self, i: int, j: int, value: int) -> None:
         """Set quadratic coefficient for variables i, j."""
-        if i < 0 or i >= self.size:
-            raise IndexOutOfBounds(i, self.size)
-        if j < 0 or j >= self.size:
-            raise IndexOutOfBounds(j, self.size)
+        self._check_index(i)
+        self._check_index(j)
 
         if i > j:
             i, j = j, i
@@ -228,10 +248,8 @@ class XQMX:
 
     def add_quadratic(self, i: int, j: int, delta: int) -> None:
         """Add to quadratic coefficient for variables i, j."""
-        if i < 0 or i >= self.size:
-            raise IndexOutOfBounds(i, self.size)
-        if j < 0 or j >= self.size:
-            raise IndexOutOfBounds(j, self.size)
+        self._check_index(i)
+        self._check_index(j)
 
         if i > j:
             i, j = j, i

@@ -36,23 +36,32 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Problem, Types
+from xquad.cp import Problem, Types, xq_bitlen
 from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
 from xquad.types import XQMX, Vec, XQMXDomain
 from xquad.vm import VM, VMBackend
 
+# Energy charged per bin the packing opens. Small next to the constraint
+# penalties, so it only ever breaks ties between feasible packings.
+BIN_COST = 10
+
 
 def build_problem(n: int, num_bins: int, sizes: list[int], capacity: int) -> Problem:
-    """Construct a Bin Packing QUBO via EQUALITY and SLACK + EQUALITY.
+    """Construct a Bin Packing QUBO via ONEHOTR, IMPLIES and SLACK + EQUALITY.
 
     Decision variables x[i,b] = x[i*B + b] in {0,1}: item i in bin b.
-    Model size = N * B (2D layout with N rows and B columns).
+    Indicator variables y[b] = x[N*B + b] in {0,1}: bin b holds something.
+    The model is a 2D grid of N+1 rows by B columns: rows 0..N-1 are the
+    item assignments, and the extra row N holds the per-bin indicators.
 
-    Assignment constraint per item i: sum_b x[i,b] = 1  (EQUALITY, coeffs=1)
-    Capacity constraint per bin b: sum_i s_i * x[i,b] <= C  (SLACK + EQUALITY)
-    Objective: minimise total bins used = sum_b y_b, where y_b = max_i x[i,b].
-    A soft proxy: add a small positive bias to linear[i*B+b] to penalise
-    unnecessary bin usage.
+    Assignment constraint per item i: sum_b x[i,b] = 1  (ONEHOTR)
+    Linking constraint per (i, b):    x[i,b] -> y[b]    (IMPLIES)
+    Capacity constraint per bin b:    sum_i s_i * x[i,b] <= C  (SLACK + EQUALITY)
+    Objective: minimise the number of bins used, sum_b y[b].
+
+    The indicator row is what makes the objective discriminate: a uniform
+    bias over the assignment cells would be identically N on every feasible
+    packing, because each item lands in exactly one bin.
     """
     problem = Problem("BinPacking")
 
@@ -61,41 +70,41 @@ def build_problem(n: int, num_bins: int, sizes: list[int], capacity: int) -> Pro
     sizes_in = problem.input("sizes", type=Types.Vec)
     capacity_in = problem.input("capacity", type=Types.Int)
 
-    # Model size = N * B  (2D: rows=items, cols=bins)
+    # Model size = (N + 1) * B  (2D: N item rows plus one indicator row, B columns)
     problem.define_model(
-        size=num_items * num_bins_in,
+        size=(num_items + 1) * num_bins_in,
         domain=XQMXDomain.BINARY,
-        rows=num_items,
+        rows=num_items + 1,
         cols=num_bins_in,
     )
 
-    # Small penalty to prefer fewer bins (objective proxy)
-    with problem.range(0, num_items) as i:
-        with problem.range(0, num_bins_in) as b:
-            problem.model.linear[i, b].add(1)
+    # Objective: every bin the packing opens costs BIN_COST.
+    with problem.range(0, num_bins_in) as b:
+        problem.model.linear[num_items, b].add(BIN_COST)
 
     # Assignment constraint: each item i must go in exactly one bin
-    # sum_b x[i,b] = 1  for each i
     with problem.range(0, num_items) as i:
-        row_indices = problem.vec()
-        row_coeffs = problem.vec()
+        problem.model.apply_onehot_row(i, 200)
+
+    # Linking constraint: using bin b for any item opens bin b
+    with problem.range(0, num_items) as i:
         with problem.range(0, num_bins_in) as b:
-            row_indices.push(i * num_bins_in + b)
-            row_coeffs.push(1)
-        problem.model.apply_equality(row_indices, row_coeffs, 1, 200)
+            problem.model.apply_implies((i, b), (num_items, b), 200)
 
     # Capacity constraint: sum_i s_i * x[i,b] <= C  for each bin b
+    slack_width = problem.stow("slack_width", xq_bitlen(capacity_in))
+    model_vars = problem.stow("model_vars", (num_items + 1) * num_bins_in)
     with problem.range(0, num_bins_in) as b:
         col_indices = problem.vec()
         col_coeffs = problem.vec()
         with problem.range(0, num_items) as i:
             col_indices.push(i * num_bins_in + b)
             col_coeffs.push(sizes_in.get(i))
-        # Slack variables start at current model size (N*B)
-        problem.slack(col_indices, col_coeffs, num_items * num_bins_in, capacity_in)
+        # Each bin gets its own slack block, past every model variable.
+        problem.slack(col_indices, col_coeffs, model_vars + b * slack_width, capacity_in)
         problem.model.apply_equality(col_indices, col_coeffs, capacity_in, 100)
 
-    # Stow total variable count so the decoder sees a single N reference
+    # Stow the assignment cell count so the decoder sees a single N reference
     total_vars = problem.stow("total_vars", num_items * num_bins_in)
 
     # Output: assignment matrix as flat vec [x[0,0], x[0,1], ..., x[N-1,B-1]]
@@ -145,7 +154,7 @@ def run(
         sys.exit(1)
 
     vm = VM(backend=backend)
-    vm.set_calldata([model, sample, n * num_bins])
+    vm.set_calldata([n, num_bins, sizes, capacity, model, sample])
     vm.set_output_slots(2)
     vm.run(programs.verifier)
     outs = vm.outputs()

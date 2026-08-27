@@ -501,6 +501,30 @@ class Executor:
         """
         self._charge(self._value_bytes(value))
 
+    def _peek_model_size(self, slot: int) -> int:
+        """Model size for a charge basis, without discriminating the register.
+
+        Mirrors exec_equality's `match self.reg(model) { RegVal::Model(m) =>
+        m.size, _ => 0 }`. The charge is computed before the register is
+        discriminated, so a slot holding a sample, an int, or nothing at all
+        contributes nothing to it and falls through to the type error the
+        charge precedes. Reading through `get_register` instead would raise
+        RegisterNotFound here and pre-empt a charge the Rust VM takes.
+        """
+        value = self.state.registers.get(slot)
+        return value.size if isinstance(value, XQMX) and value.is_model() else 0
+
+    def _get_register_as_model(self, slot: int, operation: str) -> XQMX:
+        """Get a register value, ensuring it's an xqmx in MODEL mode.
+
+        The counterpart of Rust's `as_model_mut()`, and like it the last
+        thing the high-level constraint runners do before they expand: the
+        vec operands and the allocation charge both come first.
+        """
+        xqmx = self._get_register_as_xqmx(slot)
+        require_model_mode(xqmx, operation)
+        return xqmx
+
     def _charge_coefficient(self, xqmx: XQMX, nbytes: int) -> None:
         """Charge for one coefficient written into `xqmx`, if it is a model.
 
@@ -1092,16 +1116,16 @@ class Executor:
     def _runner_VECPUSH(self, instr: Instruction) -> None:
         """VECPUSH: Push value onto vec (infers/validates type)."""
         reg = instr.operands[0]
-        vec = self._get_register_as_vec(reg)
         value = self.state.pop()
         self._charge(VEC_ELEMENT_BYTES)
+        vec = self._get_register_as_vec(reg)
         vec.push(value)
 
     def _runner_VECGET(self, instr: Instruction) -> None:
         """VECGET: Get vec[index]."""
         reg = instr.operands[0]
-        vec = self._get_register_as_vec(reg)
         index = self.state.pop()
+        vec = self._get_register_as_vec(reg)
         value = vec.get(index)
         if isinstance(value, int):
             self.state.push(value)
@@ -1111,8 +1135,8 @@ class Executor:
     def _runner_VECSET(self, instr: Instruction) -> None:
         """VECSET: Set vec[index] = value."""
         reg = instr.operands[0]
-        vec = self._get_register_as_vec(reg)
         value, index = self.state.pop_n(2)
+        vec = self._get_register_as_vec(reg)
         vec.set(index, value)
 
     def _runner_VECLEN(self, instr: Instruction) -> None:
@@ -1167,16 +1191,16 @@ class Executor:
     def _runner_GETLINE(self, instr: Instruction) -> None:
         """GETLINE: Get linear coefficient."""
         reg = instr.operands[0]
-        xqmx = self._get_register_as_xqmx(reg)
         index = self.state.pop()
+        xqmx = self._get_register_as_xqmx(reg)
         value = xqmx.get_linear(index)
         self.state.push(value)
 
     def _runner_SETLINE(self, instr: Instruction) -> None:
         """SETLINE: Set linear coefficient."""
         reg = instr.operands[0]
-        xqmx = self._get_register_as_xqmx(reg)
         value, index = self.state.pop_n(2)
+        xqmx = self._get_register_as_xqmx(reg)
         self._charge_coefficient(xqmx, LINEAR_ENTRY_BYTES)
         self._charge_coefficient_steps(xqmx)
         xqmx.set_linear(index, value)
@@ -1184,8 +1208,8 @@ class Executor:
     def _runner_ADDLINE(self, instr: Instruction) -> None:
         """ADDLINE: Add to linear coefficient."""
         reg = instr.operands[0]
-        xqmx = self._get_register_as_xqmx(reg)
         delta, index = self.state.pop_n(2)
+        xqmx = self._get_register_as_xqmx(reg)
         self._charge_coefficient(xqmx, LINEAR_ENTRY_BYTES)
         self._charge_coefficient_steps(xqmx)
         xqmx.add_linear(index, delta)
@@ -1193,16 +1217,16 @@ class Executor:
     def _runner_GETQUAD(self, instr: Instruction) -> None:
         """GETQUAD: Get quadratic coefficient."""
         reg = instr.operands[0]
-        xqmx = self._get_register_as_xqmx(reg)
         j, i = self.state.pop_n(2)
+        xqmx = self._get_register_as_xqmx(reg)
         value = xqmx.get_quadratic(i, j)
         self.state.push(value)
 
     def _runner_SETQUAD(self, instr: Instruction) -> None:
         """SETQUAD: Set quadratic coefficient."""
         reg = instr.operands[0]
-        xqmx = self._get_register_as_xqmx(reg)
         value, j, i = self.state.pop_n(3)
+        xqmx = self._get_register_as_xqmx(reg)
         self._charge_coefficient(xqmx, QUAD_ENTRY_BYTES)
         self._charge_coefficient_steps(xqmx)
         xqmx.set_quadratic(i, j, value)
@@ -1210,8 +1234,8 @@ class Executor:
     def _runner_ADDQUAD(self, instr: Instruction) -> None:
         """ADDQUAD: Add to quadratic coefficient."""
         reg = instr.operands[0]
-        xqmx = self._get_register_as_xqmx(reg)
         delta, j, i = self.state.pop_n(3)
+        xqmx = self._get_register_as_xqmx(reg)
         self._charge_coefficient(xqmx, QUAD_ENTRY_BYTES)
         self._charge_coefficient_steps(xqmx)
         xqmx.add_quadratic(i, j, delta)
@@ -1248,8 +1272,8 @@ class Executor:
     def _runner_RESIZE(self, instr: Instruction) -> None:
         """RESIZE: Set grid dimensions."""
         reg = instr.operands[0]
-        xqmx = self._get_register_as_xqmx(reg)
         cols, rows = self.state.pop_n(2)
+        xqmx = self._get_register_as_xqmx(reg)
         # A non-positive extent is not a grid. Assigning it unconditionally
         # left the model degenerate, which is how a grid reached the state
         # ONEHOTR and ONEHOTC reject.
@@ -1272,8 +1296,8 @@ class Executor:
     def _runner_ROWFIND(self, instr: Instruction) -> None:
         """ROWFIND: Find first col where row has value."""
         reg = instr.operands[0]
-        xqmx = self._get_register_as_xqmx(reg)
         value, row = self.state.pop_n(2)
+        xqmx = self._get_register_as_xqmx(reg)
         # The scan is one lookup per cell over a program-controlled extent,
         # so charge for the whole row before walking it (QUI-1056). Charged
         # after the operand check, so an out-of-range row still faults for
@@ -1285,8 +1309,8 @@ class Executor:
     def _runner_COLFIND(self, instr: Instruction) -> None:
         """COLFIND: Find first row where col has value."""
         reg = instr.operands[0]
-        xqmx = self._get_register_as_xqmx(reg)
         value, col = self.state.pop_n(2)
+        xqmx = self._get_register_as_xqmx(reg)
         # One lookup per cell over a program-controlled extent. See ROWFIND.
         self._charge_steps(grid_col_extent(xqmx, col) * GRID_CELL_STEPS)
         row = col_find(xqmx, col, value)
@@ -1295,8 +1319,8 @@ class Executor:
     def _runner_ROWSUM(self, instr: Instruction) -> None:
         """ROWSUM: Sum all values in row."""
         reg = instr.operands[0]
-        xqmx = self._get_register_as_xqmx(reg)
         row = self.state.pop()
+        xqmx = self._get_register_as_xqmx(reg)
         # One lookup per cell over a program-controlled extent. See ROWFIND.
         self._charge_steps(grid_row_extent(xqmx, row) * GRID_CELL_STEPS)
         total = xqmx_row_sum(xqmx, row)
@@ -1305,8 +1329,8 @@ class Executor:
     def _runner_COLSUM(self, instr: Instruction) -> None:
         """COLSUM: Sum all values in column."""
         reg = instr.operands[0]
-        xqmx = self._get_register_as_xqmx(reg)
         col = self.state.pop()
+        xqmx = self._get_register_as_xqmx(reg)
         # One lookup per cell over a program-controlled extent. See ROWFIND.
         self._charge_steps(grid_col_extent(xqmx, col) * GRID_CELL_STEPS)
         total = xqmx_col_sum(xqmx, col)
@@ -1315,8 +1339,8 @@ class Executor:
     def _runner_ONEHOTR(self, instr: Instruction) -> None:
         """ONEHOTR: Add one-hot constraint for row."""
         reg = instr.operands[0]
-        model = self._get_register_as_xqmx(reg)
         penalty, row = self.state.pop_n(2)
+        model = self._get_register_as_xqmx(reg)
 
         if model.rows == 0 or model.cols == 0:
             raise InvalidGridDimensions(model.rows, model.cols)
@@ -1332,8 +1356,8 @@ class Executor:
     def _runner_ONEHOTC(self, instr: Instruction) -> None:
         """ONEHOTC: Add one-hot constraint for column."""
         reg = instr.operands[0]
-        model = self._get_register_as_xqmx(reg)
         penalty, col = self.state.pop_n(2)
+        model = self._get_register_as_xqmx(reg)
 
         if model.rows == 0 or model.cols == 0:
             raise InvalidGridDimensions(model.rows, model.cols)
@@ -1347,21 +1371,25 @@ class Executor:
     def _runner_EXCLUDE(self, instr: Instruction) -> None:
         """EXCLUDE: Add exclusion constraint with penalty."""
         reg = instr.operands[0]
-        model = self._get_register_as_xqmx(reg)
         penalty, j, i = self.state.pop_n(3)
-        self._charge_coefficient(model, QUAD_ENTRY_BYTES)
+        # Charged unconditionally and before the register is discriminated,
+        # matching exec_exclude: EXCLUDE requires a model, so the charge is
+        # never mode-dependent the way SETLINE's is.
+        self._charge(QUAD_ENTRY_BYTES)
         # One quadratic coefficient written, priced like any other write.
         self._charge_steps(COEFF_WRITE_STEPS)
+        model = self._get_register_as_xqmx(reg)
         expand_exclude(model, i, j, penalty)
 
     def _runner_IMPLIES(self, instr: Instruction) -> None:
         """IMPLIES: Add implication constraint with penalty."""
         reg = instr.operands[0]
-        model = self._get_register_as_xqmx(reg)
         penalty, j, i = self.state.pop_n(3)
-        self._charge_coefficient(model, LINEAR_ENTRY_BYTES + QUAD_ENTRY_BYTES)
+        # Unconditional and ahead of the discrimination; see EXCLUDE.
+        self._charge(LINEAR_ENTRY_BYTES + QUAD_ENTRY_BYTES)
         # One linear and one quadratic coefficient written.
         self._charge_steps(2 * COEFF_WRITE_STEPS)
+        model = self._get_register_as_xqmx(reg)
         expand_implies(model, i, j, penalty)
 
     def _runner_EQUALITY(self, instr: Instruction) -> None:
@@ -1369,31 +1397,43 @@ class Executor:
         model_reg = instr.operands[0]
         indices_reg = instr.operands[1]
         coeffs_reg = instr.operands[2]
-        model = self._get_register_as_xqmx(model_reg)
+        penalty, target = self.state.pop_n(2)
         indices_vec = self._get_register_as_vec(indices_reg)
         coeffs_vec = self._get_register_as_vec(coeffs_reg)
-        penalty, target = self.state.pop_n(2)
+        # exec_equality compares the two lengths before it charges and before
+        # it discriminates the model register, so a mismatch is
+        # VecLengthMismatch whatever that register holds and whatever the
+        # budget has left. Reaching the comparison through expand_equality
+        # instead put both ahead of it, and 200 indices against an empty
+        # coeffs vec answered MemoryLimitExceeded here where Rust had
+        # already returned VecLengthMismatch.
+        if indices_vec.length != coeffs_vec.length:
+            raise VecLengthMismatch("indices", indices_vec.length, "coeffs", coeffs_vec.length)
         indices = [indices_vec.get(i) for i in range(indices_vec.length)]
         coeffs = [coeffs_vec.get(i) for i in range(coeffs_vec.length)]
         # The expansion is quadratic in the number of terms, and EQUALITY
         # also grows the model to cover the largest index it was handed --
-        # both from vec contents the program controls.
-        if indices:
-            needed = max(indices) + 1
-            self._charge_variables(needed - model.size)
-            model.size = max(model.size, needed)
+        # both from vec contents the program controls. The charge basis comes
+        # from a peek rather than the resolved register: Rust charges before
+        # it discriminates, so an unset or wrong-typed slot is charged
+        # against a size of zero and faults after the budget, not before it.
+        needed = max(indices) + 1 if indices else 0
+        self._charge_variables(needed - self._peek_model_size(model_reg))
         self._charge_equality_expansion(len(indices))
         self._charge_steps(equality_expansion_steps(len(indices)))
+        # Resolved last, and before the size is grown: Rust never touches the
+        # model until `as_model_mut()` has succeeded, so a sample must not be
+        # left resized by a call that goes on to reject it.
+        model = self._get_register_as_model(model_reg, "EQUALITY")
+        model.size = max(model.size, needed)
         expand_equality(model, indices, coeffs, target, penalty)
 
     def _runner_ATLEAST(self, instr: Instruction) -> None:
         """ATLEAST: At-least-k constraint with slack variables."""
         model_reg = instr.operands[0]
         indices_reg = instr.operands[1]
-        model = self._get_register_as_xqmx(model_reg)
-        indices_vec = self._get_register_as_vec(indices_reg)
         penalty, k = self.state.pop_n(2)
-        require_model_mode(model, "ATLEAST")
+        indices_vec = self._get_register_as_vec(indices_reg)
         n = indices_vec.length
         if k <= 0 or k > n:
             raise IndexOutOfBounds(k, n)
@@ -1405,6 +1445,8 @@ class Executor:
         self._charge_variables(num_slacks)
         self._charge_equality_expansion(n + num_slacks)
         self._charge_steps(equality_expansion_steps(n + num_slacks))
+        # Discriminated last, after the charge; see EQUALITY.
+        model = self._get_register_as_model(model_reg, "ATLEAST")
         if num_slacks == 0:
             expand_equality(model, orig_indices, [1] * n, k, penalty)
             return
@@ -1419,11 +1461,9 @@ class Executor:
         model_reg = instr.operands[0]
         indices_reg = instr.operands[1]
         coeffs_reg = instr.operands[2]
-        model = self._get_register_as_xqmx(model_reg)
+        penalty, k = self.state.pop_n(2)
         indices_vec = self._get_register_as_vec(indices_reg)
         coeffs_vec = self._get_register_as_vec(coeffs_reg)
-        penalty, k = self.state.pop_n(2)
-        require_model_mode(model, "ATLEASTW")
         n = indices_vec.length
         if n != coeffs_vec.length:
             raise VecLengthMismatch("indices", n, "coeffs", coeffs_vec.length)
@@ -1442,6 +1482,8 @@ class Executor:
         self._charge_variables(num_slacks)
         self._charge_equality_expansion(n + num_slacks)
         self._charge_steps(equality_expansion_steps(n + num_slacks))
+        # Discriminated last, after the charge; see EQUALITY.
+        model = self._get_register_as_model(model_reg, "ATLEASTW")
         if num_slacks == 0:
             expand_equality(model, orig_indices, weights, k, penalty)
             return
@@ -1454,7 +1496,6 @@ class Executor:
     def _runner_REDUCE(self, instr: Instruction) -> None:
         """REDUCE: Rosenberg degree reduction."""
         model_reg = instr.operands[0]
-        model = self._get_register_as_xqmx(model_reg)
         p_aux, var_b, var_a = self.state.pop_n(3)
         # Rosenberg reduction adds one auxiliary variable, three quadratic
         # terms and one linear term.
@@ -1462,6 +1503,7 @@ class Executor:
         self._charge(3 * QUAD_ENTRY_BYTES + LINEAR_ENTRY_BYTES)
         # Three quadratic and one linear coefficient written.
         self._charge_steps(4 * COEFF_WRITE_STEPS)
+        model = self._get_register_as_xqmx(model_reg)
         w = expand_reduce(model, var_a, var_b, p_aux)
         self.state.push(w)
 

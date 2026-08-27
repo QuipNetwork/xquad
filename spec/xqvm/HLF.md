@@ -48,6 +48,8 @@ quad[i, j]   += 2 × penalty      for each pair i < j in indices
 
 ## `EXCLUDE` Expansion
 
+Both indices are range-checked against `model.size` before either delta is applied, in the order the operands were supplied, and one outside `[0, model.size)` raises `IndexOutOfBounds`. The rule is the one [ISA.md](ISA.md#xqmx-coefficient-access) states for the coefficient opcodes, and it applies here for the same reason: this expansion writes a coefficient, and a coefficient over a variable the allocator never declared is a constraint that constrains nothing.
+
 Penalise `x_i = 1` and `x_j = 1` simultaneously:
 
 ```
@@ -55,6 +57,8 @@ quad[i, j] += penalty
 ```
 
 ## `IMPLIES` Expansion
+
+Both indices are range-checked exactly as `EXCLUDE`'s are, before either delta is applied. `IMPLIES` writes to the linear surface as well as the quadratic one, so an unbounded `i` would reach both.
 
 Penalise `x_i = 1` with `x_j = 0` (implication `x_i → x_j`):
 
@@ -157,7 +161,7 @@ E = Σ_i linear_model[i] × x_sample[i]
   + Σ_{i<=j} quad_model[i,j] × x_sample[i] × x_sample[j]
 ```
 
-Where `x_sample[i] = sample.values[i]` (the variable assignment). Error if `model.size != sample.size`: `xqvm_py` raises `ValueError`, the Rust `xqvm` VM raises `SizeMismatch`.
+Where `x_sample[i] = sample.values[i]` (the variable assignment). Error: `SizeMismatch` if `model.size != sample.size`.
 
 ### Term grouping
 

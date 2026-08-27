@@ -147,7 +147,7 @@ def run(
         sys.exit(1)
 
     vm = VM(backend=backend)
-    vm.set_calldata([model, sample, n])
+    vm.set_calldata([n, num_colors, m, flat_edges, model, sample])
     vm.set_output_slots(2)
     vm.run(programs.verifier)
     outs = vm.outputs()
@@ -169,7 +169,7 @@ def run(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Graph Coloring end-to-end XQuad pipeline example")
     parser.add_argument("--n", type=int, default=5, help="Number of nodes (default: 5)")
-    parser.add_argument("--colors", type=int, default=3, help="Number of colors (default: 3)")
+    parser.add_argument("--colors", type=int, default=4, help="Number of colors (default: 4)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     parser.add_argument(
         "--interpreter",
@@ -193,6 +193,9 @@ def main() -> int:
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
+    # A G(n, 0.5) graph on 5 nodes routinely contains a K4 -- the default seed's
+    # does -- so 3 colours would make the canonical instance unsatisfiable and
+    # the verifier would correctly report valid = 0.
     edges = [(i, j) for i in range(args.n) for j in range(i + 1, args.n) if rng.random() < 0.5]
 
     problem = build_problem(args.n, args.colors, edges)

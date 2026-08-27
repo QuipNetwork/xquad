@@ -18,8 +18,8 @@
 //! Integration tests for `pallet-xqvm`.
 
 use crate::mock::{
-    new_test_ext, MaxCalldata, MaxProgramSize, MaxStepLimit, RuntimeEvent, RuntimeOrigin, Test,
-    XqvmPallet,
+    new_test_ext, MaxCalldata, MaxMemoryLimit, MaxProgramSize, MaxStepLimit, RuntimeEvent,
+    RuntimeOrigin, Test, XqvmPallet,
 };
 use crate::{Event, StoredProgram};
 use frame_support::{assert_noop, assert_ok, BoundedVec};
@@ -44,6 +44,14 @@ fn bounded_calldata(vals: Vec<i64>) -> BoundedVec<i64, MaxCalldata> {
 /// Generous enough that no program here reaches it, and named so the
 /// zero-budget test below reads as the deliberate contrast it is.
 const AMPLE_STEPS: u64 = 1_000;
+
+/// Allocation budget for a test that is not about the budget.
+///
+/// 1 MiB: more than any fixture program allocates and far less than the
+/// 1 GiB `Vm::new()` installs, so every call site passing it is also a
+/// standing demonstration that naming a smaller budget is what the
+/// argument is for.
+const AMPLE_MEMORY: u64 = 1 << 20;
 
 /// Output-slot count for a test that is not about the slot count.
 ///
@@ -76,6 +84,7 @@ fn arithmetic_program_emits_output() {
             bounded_calldata(vec![]),
             AMPLE_SLOTS,
             AMPLE_STEPS,
+            AMPLE_MEMORY,
         ));
 
         let events: Vec<_> = frame_system::Pallet::<Test>::events()
@@ -119,6 +128,7 @@ fn calldata_passthrough_roundtrip() {
             bounded_calldata(vec![42]),
             AMPLE_SLOTS,
             AMPLE_STEPS,
+            AMPLE_MEMORY,
         ));
 
         let outputs = frame_system::Pallet::<Test>::events()
@@ -157,6 +167,7 @@ fn two_calldata_values_summed() {
             bounded_calldata(vec![10, 20]),
             AMPLE_SLOTS,
             AMPLE_STEPS,
+            AMPLE_MEMORY,
         ));
 
         let outputs = frame_system::Pallet::<Test>::events()
@@ -191,6 +202,7 @@ fn invalid_bytecode_returns_error() {
                 bounded_calldata(vec![]),
                 AMPLE_SLOTS,
                 AMPLE_STEPS,
+                AMPLE_MEMORY,
             ),
             crate::Error::<Test>::BytecodeInvalid,
         );
@@ -212,6 +224,7 @@ fn stack_underflow_returns_execution_failed() {
                 bounded_calldata(vec![]),
                 AMPLE_SLOTS,
                 AMPLE_STEPS,
+                AMPLE_MEMORY,
             ),
             crate::Error::<Test>::ExecutionFailed,
         );
@@ -233,6 +246,7 @@ fn unsigned_origin_rejected() {
                 bounded_calldata(vec![]),
                 AMPLE_SLOTS,
                 AMPLE_STEPS,
+                AMPLE_MEMORY,
             ),
             sp_runtime::traits::BadOrigin,
         );
@@ -266,6 +280,7 @@ fn zero_step_budget_returns_execution_failed() {
                 bounded_calldata(vec![]),
                 AMPLE_SLOTS,
                 0,
+                AMPLE_MEMORY,
             ),
             crate::Error::<Test>::ExecutionFailed,
         );
@@ -297,6 +312,96 @@ fn a_budget_below_the_program_length_returns_execution_failed() {
                 bounded_calldata(vec![]),
                 AMPLE_SLOTS,
                 5,
+                AMPLE_MEMORY,
+            ),
+            crate::Error::<Test>::ExecutionFailed,
+        );
+    });
+}
+
+/// A budget above `MaxMemoryLimit` is refused rather than granted.
+#[test]
+fn a_memory_budget_above_the_cap_returns_memory_limit_too_large() {
+    // The counterpart to the step-budget cap below, and refused for the
+    // same reason: a fixed weight cannot price an unbounded allocation.
+    // The program halts in seven steps and allocates nothing, so the cap
+    // is the only thing that can reject it.
+    new_test_ext().execute_with(|| {
+        let bytecode = build_bytecode(|b| {
+            b.emit_push(3)
+                .emit_push(4)
+                .emit_add()
+                .emit_stow(Register(0))
+                .emit_push(0)
+                .emit_output(Register(0))
+                .emit_halt();
+        });
+
+        assert_noop!(
+            XqvmPallet::submit_program(
+                RuntimeOrigin::signed(1),
+                bytecode,
+                bounded_calldata(vec![]),
+                AMPLE_SLOTS,
+                AMPLE_STEPS,
+                u64::MAX,
+            ),
+            crate::Error::<Test>::MemoryLimitTooLarge,
+        );
+    });
+}
+
+/// The memory cap is inclusive, like the step cap.
+#[test]
+fn a_memory_budget_exactly_at_the_cap_is_accepted() {
+    new_test_ext().execute_with(|| {
+        let bytecode = build_bytecode(|b| {
+            b.emit_push(3)
+                .emit_push(4)
+                .emit_add()
+                .emit_stow(Register(0))
+                .emit_push(0)
+                .emit_output(Register(0))
+                .emit_halt();
+        });
+
+        assert_ok!(XqvmPallet::submit_program(
+            RuntimeOrigin::signed(1),
+            bytecode,
+            bounded_calldata(vec![]),
+            AMPLE_SLOTS,
+            AMPLE_STEPS,
+            MaxMemoryLimit::get(),
+        ));
+    });
+}
+
+/// A budget the program outgrows is a reportable fault, not a trap.
+#[test]
+fn a_memory_budget_shorter_than_the_program_returns_execution_failed() {
+    // The case the argument exists for. `BQMX` is charged its declared
+    // size before it allocates, so a 4 KiB budget refuses a model that
+    // wants far more and the VM returns MemoryLimitExceeded, which the
+    // pallet reports as ExecutionFailed.
+    //
+    // Left at the VM's 1 GiB default this program would instead be
+    // admitted, and inside a Wasm runtime the allocation would exhaust the
+    // heap and trap the whole execution rather than returning a fault the
+    // pallet can map. That is the difference between this test passing and
+    // there being no argument to pass.
+    new_test_ext().execute_with(|| {
+        let bytecode = build_bytecode(|b| {
+            b.emit_push(1 << 20).emit_bqmx(Register(0)).emit_halt();
+        });
+
+        assert_noop!(
+            XqvmPallet::submit_program(
+                RuntimeOrigin::signed(1),
+                bytecode,
+                bounded_calldata(vec![]),
+                AMPLE_SLOTS,
+                AMPLE_STEPS,
+                4096,
             ),
             crate::Error::<Test>::ExecutionFailed,
         );
@@ -330,6 +435,7 @@ fn a_step_budget_above_the_cap_returns_step_limit_too_large() {
                 bounded_calldata(vec![]),
                 AMPLE_SLOTS,
                 u64::MAX,
+                AMPLE_MEMORY,
             ),
             crate::Error::<Test>::StepLimitTooLarge,
         );
@@ -359,6 +465,7 @@ fn a_step_budget_exactly_at_the_cap_is_accepted() {
             bounded_calldata(vec![]),
             AMPLE_SLOTS,
             MaxStepLimit::get(),
+            AMPLE_MEMORY,
         ));
     });
 }
@@ -386,6 +493,7 @@ fn one_output_in_a_loop_writes_a_slot_per_iteration() {
             bounded_calldata(vec![]),
             2,
             AMPLE_STEPS,
+            AMPLE_MEMORY,
         ));
 
         let outputs: Vec<_> = frame_system::Pallet::<Test>::events()
@@ -423,6 +531,7 @@ fn the_header_instruction_count_is_too_small_for_a_looping_output() {
                 bounded_calldata(vec![]),
                 1,
                 AMPLE_STEPS,
+                AMPLE_MEMORY,
             ),
             crate::Error::<Test>::ExecutionFailed,
         );
@@ -440,6 +549,7 @@ fn an_output_slot_count_above_the_cap_is_rejected() {
                 bounded_calldata(vec![]),
                 MaxCalldata::get() + 1,
                 AMPLE_STEPS,
+                AMPLE_MEMORY,
             ),
             crate::Error::<Test>::OutputSlotsTooLarge,
         );

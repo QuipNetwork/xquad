@@ -3415,3 +3415,225 @@ class TestCalldataChargeParity:
         ex = Executor()
         with pytest.raises(TypeMismatch):
             ex._value_bytes(object())
+
+
+# ---------------------------------------------------------------------------
+# Error precedence
+# ---------------------------------------------------------------------------
+
+# Every opcode that names a register and also pops. spec/xqvm/SPEC.md states
+# the order normatively: "operand pops happen first (StackUnderflow), then the
+# allocation charge, then type and range validation."
+#
+# All twenty-two resolved their register before popping, so a short stack plus
+# a wrong-typed register raised TypeMismatch here and StackUnderflow on the
+# Rust VM. Both VMs rejected the program, but the Faults table makes the
+# identity itself normative, so two names for one program is a divergence.
+#
+# Driven off the opcode table rather than a hand-written list: an opcode added
+# to this family is covered without anyone remembering to add it here.
+_REGISTER_AND_POP_OPCODES = [
+    Opcode.VECPUSH,
+    Opcode.VECGET,
+    Opcode.VECSET,
+    Opcode.GETLINE,
+    Opcode.SETLINE,
+    Opcode.ADDLINE,
+    Opcode.GETQUAD,
+    Opcode.SETQUAD,
+    Opcode.ADDQUAD,
+    Opcode.RESIZE,
+    Opcode.ROWFIND,
+    Opcode.COLFIND,
+    Opcode.ROWSUM,
+    Opcode.COLSUM,
+    Opcode.ONEHOTR,
+    Opcode.ONEHOTC,
+    Opcode.EXCLUDE,
+    Opcode.IMPLIES,
+    Opcode.EQUALITY,
+    Opcode.ATLEAST,
+    Opcode.ATLEASTW,
+    Opcode.REDUCE,
+]
+
+
+def _int_registers_and_stack(opcode, pops):
+    """Build a program whose registers hold ints and whose stack holds `pops`.
+
+    Every register operand is stowed an int, so the opcode's type check must
+    fail whenever it is reached.
+    """
+    meta = opcode.meta
+    instructions = []
+    for reg in range(meta.operand_count):
+        instructions += [
+            Instruction(Opcode.PUSH1, (5,)),
+            Instruction(Opcode.STOW, (reg,)),
+        ]
+    instructions += [Instruction(Opcode.PUSH1, (1,))] * pops
+    instructions += [
+        Instruction(opcode, tuple(range(meta.operand_count))),
+        Instruction(Opcode.HALT),
+    ]
+    return make_program(instructions)
+
+
+class TestErrorPrecedence:
+    """The pops come first, then the charge, then type and range validation."""
+
+    @pytest.mark.parametrize("opcode", _REGISTER_AND_POP_OPCODES, ids=lambda o: o.name)
+    def test_a_short_stack_beats_a_wrong_typed_register(self, opcode):
+        """StackUnderflow, not TypeMismatch, for one operand too few."""
+        prog = _int_registers_and_stack(opcode, opcode.meta.stack_pop - 1)
+        with pytest.raises(StackUnderflow):
+            Executor().execute(prog)
+
+    @pytest.mark.parametrize("opcode", _REGISTER_AND_POP_OPCODES, ids=lambda o: o.name)
+    def test_the_pops_are_satisfied_before_the_register_is_read(self, opcode):
+        """With the stack full, the same programs reach the type check.
+
+        The companion to the case above: it pins that the reordering moved
+        the pops ahead of the resolution rather than removing the check.
+        MemoryLimitExceeded is the correct answer for the four opcodes that
+        charge unconditionally before discriminating the register, which is
+        the second clause of the same precedence rule.
+        """
+        prog = _int_registers_and_stack(opcode, opcode.meta.stack_pop)
+        with pytest.raises((TypeMismatch, MemoryLimitExceeded)):
+            Executor().execute(prog)
+
+
+# The three HLF runners that take a model register and one or two vec
+# registers resolve their operands in a different order from the Rust VM.
+# `xqvm/src/vm.rs` resolves the vec operands and validates their shape and
+# range *before* it charges the allocation budget, and discriminates the
+# model register *last*, after the charge -- `exec_equality` even reads the
+# model's size for the charge basis through a peek that does not
+# discriminate the register (`RegVal::Model(m) => m.size, _ => 0`). Putting
+# the model register first meant whatever fault it would raise pre-empted
+# the vec rule Rust fires first, so one program had two names.
+#
+# `_int_registers_and_stack` above cannot reach any of this: it stows an int
+# in every register operand including the vec ones, so it never gets past
+# the first resolution. These cases are written out instead.
+
+
+def _vec_of(reg, count):
+    """Instructions allocating vec `reg` and appending `count` ones."""
+    return [Instruction(Opcode.VEC, (reg,))] + [
+        Instruction(Opcode.PUSH1, (1,)),
+        Instruction(Opcode.VECPUSH, (reg,)),
+    ] * count
+
+
+class TestConstraintCheckOrder:
+    """EQUALITY, ATLEAST and ATLEASTW check their vecs before their model."""
+
+    def test_equality_length_mismatch_beats_the_charge(self):
+        """A mismatch outranks a budget the expansion could not pay.
+
+        200 indices against no coeffs costs 961600 bytes to expand, so
+        charging first answered MemoryLimitExceeded where the Rust VM had
+        already returned VecLengthMismatch.
+        """
+        prog = make_program(
+            [Instruction(Opcode.PUSH1, (4,)), Instruction(Opcode.BQMX, (0,))]
+            + _vec_of(2, 200)
+            + _vec_of(3, 0)
+            + [
+                Instruction(Opcode.PUSH1, (0,)),  # target
+                Instruction(Opcode.PUSH1, (1,)),  # penalty
+                Instruction(Opcode.EQUALITY, (0, 2, 3)),
+                Instruction(Opcode.HALT),
+            ]
+        )
+        with pytest.raises(VecLengthMismatch):
+            Executor().execute(prog, memory_limit=20000)
+
+    def test_equality_length_mismatch_beats_the_model_type(self):
+        """A mismatch outranks an int in the model register."""
+        prog = make_program(
+            [Instruction(Opcode.PUSH1, (0,)), Instruction(Opcode.STOW, (0,))]
+            + _vec_of(2, 1)
+            + _vec_of(3, 0)
+            + [
+                Instruction(Opcode.PUSH1, (0,)),
+                Instruction(Opcode.PUSH1, (1,)),
+                Instruction(Opcode.EQUALITY, (0, 2, 3)),
+                Instruction(Opcode.HALT),
+            ]
+        )
+        with pytest.raises(VecLengthMismatch):
+            Executor().execute(prog)
+
+    def test_equality_charges_before_it_reads_an_unset_model(self):
+        """The charge outranks an unset model register.
+
+        Rust's charge basis comes from a peek that returns 0 for a slot
+        holding no model at all, so the budget is spent before the register
+        is discriminated. Reading the slot through `get_register` instead
+        raised RegisterNotFound and pre-empted a charge Rust takes.
+        """
+        prog = make_program(
+            _vec_of(2, 200)
+            + _vec_of(3, 200)
+            + [
+                Instruction(Opcode.PUSH1, (0,)),
+                Instruction(Opcode.PUSH1, (1,)),
+                Instruction(Opcode.EQUALITY, (0, 2, 3)),
+                Instruction(Opcode.HALT),
+            ]
+        )
+        with pytest.raises(MemoryLimitExceeded):
+            Executor().execute(prog, memory_limit=20000)
+
+    def test_atleast_k_range_beats_the_register_mode(self):
+        """`k` is range-checked before the model register is discriminated.
+
+        `exec_at_least` never reaches its register check for k = 0, so the
+        disagreement was over which rule fired rather than what to call the
+        mode fault -- outside SPEC.md's XqmxMode carve-out.
+        """
+        prog = make_program(
+            [Instruction(Opcode.PUSH1, (4,)), Instruction(Opcode.BSMX, (0,))]
+            + _vec_of(2, 1)
+            + [
+                Instruction(Opcode.PUSH1, (0,)),  # k
+                Instruction(Opcode.PUSH1, (1,)),  # penalty
+                Instruction(Opcode.ATLEAST, (0, 2)),
+                Instruction(Opcode.HALT),
+            ]
+        )
+        with pytest.raises(IndexOutOfBounds):
+            Executor().execute(prog)
+
+    def test_atleast_charges_before_it_reads_an_unset_model(self):
+        """The charge outranks an unset model register; see EQUALITY."""
+        prog = make_program(
+            _vec_of(2, 200)
+            + [
+                Instruction(Opcode.PUSH1, (1,)),
+                Instruction(Opcode.PUSH1, (1,)),
+                Instruction(Opcode.ATLEAST, (0, 2)),
+                Instruction(Opcode.HALT),
+            ]
+        )
+        with pytest.raises(MemoryLimitExceeded):
+            Executor().execute(prog, memory_limit=20000)
+
+    def test_atleastw_length_mismatch_beats_the_register_mode(self):
+        """The vec lengths are compared before the model is discriminated."""
+        prog = make_program(
+            [Instruction(Opcode.PUSH1, (4,)), Instruction(Opcode.BSMX, (0,))]
+            + _vec_of(2, 1)
+            + _vec_of(3, 0)
+            + [
+                Instruction(Opcode.PUSH1, (0,)),
+                Instruction(Opcode.PUSH1, (1,)),
+                Instruction(Opcode.ATLEASTW, (0, 2, 3)),
+                Instruction(Opcode.HALT),
+            ]
+        )
+        with pytest.raises(VecLengthMismatch):
+            Executor().execute(prog)

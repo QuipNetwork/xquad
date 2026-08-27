@@ -63,7 +63,7 @@ decodes to a different answer even though both are equally correct.
 default seed and so return identical decoded results either way;
 `graph_coloring`, `bin_packing`, `set_cover`, and `max3sat` do not --
 running `examples/graph_coloring/runner.py --seed 1` gives
-`colors: [2, 0, 2, 1, 0]` on `python` and `colors: [2, 0, 2, 2, 0]` on
+`colors: [2, 1, 2, 2, 1]` on `python` and `colors: [0, 1, 0, 0, 2]` on
 `rust`, both at the same `energy` and both `valid`.
 
 ## Adapting an Example
@@ -144,8 +144,8 @@ terminals landed where they were pinned.
 ## Telling a Variant Wrong from a Variant Different
 
 `valid` alone does not catch a modelling mistake here: Max-Cut and this
-variant both declare no constraint the verifier checks, so `valid`
-reports only that every sample value is `0` or `1` -- see
+variant both declare no constraints, so `valid` reports only that every
+sample value is `0` or `1` -- see
 [Constraints](../modelling/constraints.md) for what a verifier's
 built-in check does and does not cover. `energy` is not a safe single
 number either. Get the terminal bias backwards --

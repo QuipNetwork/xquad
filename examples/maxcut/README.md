@@ -26,7 +26,7 @@ of edges crossing the partition.
 2. **Assemble** -- `.xqasm` text to bytecode via `xquad.asm`
 3. **Encode** -- run encoder on chosen XQVM to produce the XQMX model
 4. **Sample** -- solver runs SA/QPU/GPU over the model
-5. **Verify** -- verifier computes energy and checks the sample is binary; this problem declares no constraints for it to check
+5. **Verify** -- verifier checks the sample is binary, then computes energy; this problem declares no constraints for it to check
 6. **Decode** -- decoder extracts the 2-colour partition
 
 ## Usage

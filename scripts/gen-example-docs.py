@@ -62,9 +62,6 @@ LINK_MAP = {
     (
         "../../docs/book/src/modelling/constraints.md#choosing-a-penalty-weight"
     ): "../modelling/constraints.md#choosing-a-penalty-weight",
-    (
-        "../../docs/book/src/running/verification.md#the-generated-verifiers-valid-flag-does-not-check-every-constraint"
-    ): "../running/verification.md#the-generated-verifiers-valid-flag-does-not-check-every-constraint",
 }
 SOLVER_SECTION_REPLACEMENT = [
     "Solver selection and install extras are the same for every example: see",

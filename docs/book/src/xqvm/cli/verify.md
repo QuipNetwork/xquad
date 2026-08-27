@@ -69,13 +69,6 @@ may surface the next.
 
 ## Passing verification is not a runtime guarantee
 
-<!-- xquad:defect QUI-1062 -->
-> **Known issue.** The bytecode verifier passes programs that fault at runtime: the
-> net-delta stack scan cannot see an operand-ordering error, so a stack underflow
-> can pass verification. Treat a verification pass as a static check, not a
-> guarantee that the program runs to completion. Report problems at the
-> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
-
 Verification is a set of static, per-basic-block checks. The stack-depth
 phase sees each block's *net* stack effect, so an instruction that pops
 more operands than it pushes has its pop requirement absorbed by earlier

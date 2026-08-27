@@ -445,12 +445,12 @@ opcodes:
   # XQMX Coefficient Access (0x60-0x65)
   # ------------------------------------------------------------------------
 
-  - {code: 0x60, mnemonic: GETLINE, variant: GetLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 1, stack_push: 1, doc: "Pop i; push `linear[i]` from the register's model (0 if absent), or a sample's assignment at i; `xquad verify` requires a model."}
+  - {code: 0x60, mnemonic: GETLINE, variant: GetLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 1, stack_push: 1, doc: "Pop i; push `linear[i]` from the register's model, or a sample's assignment at i; raises IndexOutOfBounds outside [0, size); `xquad verify` requires a model."}
   - {code: 0x61, mnemonic: SETLINE, variant: SetLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop value and i; set `linear[i]` in the register's model, or a sample's assignment at i; `xquad verify` requires a model."}
   - {code: 0x62, mnemonic: ADDLINE, variant: AddLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop delta and i; add delta to `linear[i]` in the register's model, or a sample's assignment at i; `xquad verify` requires a model."}
-  - {code: 0x63, mnemonic: GETQUAD, variant: GetQuad, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 1, doc: "Pop j and i; push `quadratic[i, j]` from the register's model (0 if absent)."}
-  - {code: 0x64, mnemonic: SETQUAD, variant: SetQuad, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop value, j, and i; set `quadratic[i, j]` in the register's model."}
-  - {code: 0x65, mnemonic: ADDQUAD, variant: AddQuad, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop delta, j, and i; add delta to `quadratic[i, j]` in the register's model."}
+  - {code: 0x63, mnemonic: GETQUAD, variant: GetQuad, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 1, doc: "Pop j and i; push `quadratic[i, j]` from the register's model; raises IndexOutOfBounds outside [0, size)."}
+  - {code: 0x64, mnemonic: SETQUAD, variant: SetQuad, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop value, j, and i; set `quadratic[i, j]` in the register's model; raises IndexOutOfBounds outside [0, size)."}
+  - {code: 0x65, mnemonic: ADDQUAD, variant: AddQuad, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop delta, j, and i; add delta to `quadratic[i, j]` in the register's model; raises IndexOutOfBounds outside [0, size)."}
 
   # ------------------------------------------------------------------------
   # XQMX Grid (0x66-0x6A)
@@ -468,8 +468,8 @@ opcodes:
 
   - {code: 0x70, mnemonic: ONEHOTR, variant: OneHotR, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop penalty and row; add a one-hot constraint over the grid row."}
   - {code: 0x71, mnemonic: ONEHOTC, variant: OneHotC, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop penalty and col; add a one-hot constraint over the grid column."}
-  - {code: 0x72, mnemonic: EXCLUDE, variant: Exclude, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop penalty, j, and i; add a mutual-exclusion constraint between variables i and j."}
-  - {code: 0x73, mnemonic: IMPLIES, variant: Implies, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop penalty, j, and i; add an implication constraint from variable i to variable j."}
+  - {code: 0x72, mnemonic: EXCLUDE, variant: Exclude, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop penalty, j, and i; add a mutual-exclusion constraint between variables i and j; raises IndexOutOfBounds outside [0, size)."}
+  - {code: 0x73, mnemonic: IMPLIES, variant: Implies, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop penalty, j, and i; add an implication constraint from variable i to variable j; raises IndexOutOfBounds outside [0, size)."}
 
   - code: 0x74
     mnemonic: EQUALITY

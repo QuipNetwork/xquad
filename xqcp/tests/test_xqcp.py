@@ -19,6 +19,8 @@
 Tests for the constraint programming DSL (xqvm.cp).
 """
 
+import pytest
+
 from xqcp import CompiledPrograms, Problem, Types, xq_triu
 from xqvm_py import XQMXDomain
 
@@ -174,8 +176,6 @@ class TestLifecycleGuards:
     """Tests for Problem lifecycle ordering enforcement."""
 
     def test_input_after_define_model_raises(self) -> None:
-        import pytest
-
         problem = Problem("guard")
         problem.define_model(size=4, domain=XQMXDomain.BINARY)
         with pytest.raises(RuntimeError, match="input.*before.*define_model"):
@@ -310,7 +310,7 @@ class TestTSPPipeline:
         # --- Run verifier ---
         ver_prog = program_from_xqasm(programs.verifier)
         ver_ex = Executor()
-        ver_ex.execute(ver_prog, {0: model, 1: sample, 2: n}, output_slots=16)
+        ver_ex.execute(ver_prog, {0: n, 1: dist_vec, 2: model, 3: sample}, output_slots=16)
         energy = ver_ex.state.output[0]
         valid = ver_ex.state.output[1]
 
@@ -394,8 +394,10 @@ class TestTSPPipeline:
         assert hw_model.quadratic == cp_model.quadratic
 
         # --- Run both verifiers ---
+        # The hand-written verifier keeps the old three-slot contract; the
+        # generated one replays the encoder, so it takes the encoder's inputs.
         hw_s = run(hw_ver, {0: hw_model, 1: sample, 2: n})
-        cp_s = run(cp_ver, {0: cp_model, 1: sample, 2: n})
+        cp_s = run(cp_ver, {0: n, 1: dist_vec, 2: cp_model, 3: sample})
         assert hw_s.output[0] == cp_s.output[0]  # energy
         assert hw_s.output[1] == cp_s.output[1]  # valid
 
@@ -548,7 +550,7 @@ class TestMaxCutPipeline:
         sample.linear[3] = 1
 
         # Verifier
-        ver_s = run(ver, {0: model, 1: sample, 2: n})
+        ver_s = run(ver, {0: n, 1: edge_vec, 2: model, 3: sample})
         _energy = ver_s.output[0]
         valid = ver_s.output[1]
         assert valid == 1
@@ -606,8 +608,10 @@ class TestMaxCutPipeline:
         assert hw_model.quadratic == cp_model.quadratic
 
         # --- Compare verifiers ---
+        # The hand-written verifier keeps the old three-slot contract; the
+        # generated one replays the encoder, so it takes the encoder's inputs.
         hw_s = run(hw_ver, {0: hw_model, 1: sample, 2: n})
-        cp_s = run(cp_ver, {0: cp_model, 1: sample, 2: n})
+        cp_s = run(cp_ver, {0: n, 1: edge_vec, 2: cp_model, 3: sample})
         assert hw_s.output[0] == cp_s.output[0]  # energy
         assert hw_s.output[1] == cp_s.output[1]  # valid
 
@@ -665,8 +669,6 @@ class TestPostCompilationVerification:
         assert programs.decoder in captured
 
     def test_verification_error_names_failing_program(self) -> None:
-        import pytest
-
         import xqffi.verifier as xfv
 
         original = xfv.verify_source
@@ -680,3 +682,433 @@ class TestPostCompilationVerification:
                 build_tsp_problem().compile()
         finally:
             xfv.verify_source = original  # type: ignore[method-assign]
+
+
+# ---------------------------------------------------------------------------
+# Helpers: exercising a generated verifier against a chosen sample
+# ---------------------------------------------------------------------------
+
+
+def _run_program(source: str, inputs: dict[int, object]) -> object:
+    """Execute an .xqasm program on the Python reference VM."""
+    from xqvm_py import Executor, program_from_xqasm
+
+    executor = Executor()
+    executor.execute(program_from_xqasm(source), inputs, output_slots=16)
+    return executor.state
+
+
+def _encode(programs: CompiledPrograms, calldata: list[object]) -> object:
+    """Run the encoder and return the model it built."""
+    return _run_program(programs.encoder, dict(enumerate(calldata))).output[0]
+
+
+def _verify(
+    programs: CompiledPrograms,
+    calldata: list[object],
+    model: object,
+    values: dict[int, int],
+    *,
+    spin: bool = False,
+) -> int:
+    """Run the verifier over a sample and return its validity flag.
+
+    The sample inherits the model's size and grid, as a solver's would.
+    """
+    from xqvm_py import XQMX
+
+    build = XQMX.spin_sample if spin else XQMX.binary_sample
+    sample = build(model.size, rows=model.rows, cols=model.cols)
+    for index, value in values.items():
+        sample.linear[index] = value
+
+    inputs = dict(enumerate([*calldata, model, sample]))
+    return _run_program(programs.verifier, inputs).output[1]
+
+
+def _ones(*indices: int) -> dict[int, int]:
+    """A sample assignment setting exactly the given variables."""
+    return {index: 1 for index in indices}
+
+
+# ---------------------------------------------------------------------------
+# Per-constraint-kind verifier checks
+# ---------------------------------------------------------------------------
+
+
+class TestVerifierChecksEveryConstraint:
+    """Each constraint kind must reject a sample that violates it.
+
+    Before QUI-1062 the generated verifier checked one-hot rows and
+    columns only, so a sample violating any other constraint still
+    reported ``valid = 1``.
+    """
+
+    def test_equality(self) -> None:
+        """sum(x) == target, exactly."""
+        problem = Problem("Equality")
+        n = problem.input("n", type=Types.Int)
+        target = problem.input("target", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+
+        indices = problem.vec()
+        coeffs = problem.vec()
+        with problem.range(0, n) as i:
+            indices.push(i)
+            coeffs.push(1)
+        problem.model.apply_equality(indices, coeffs, target, 100)
+
+        programs = problem.compile()
+        calldata = [4, 2]
+        model = _encode(programs, calldata)
+
+        assert _verify(programs, calldata, model, _ones(0, 1)) == 1
+        assert _verify(programs, calldata, model, _ones(0, 1, 2)) == 0
+        assert _verify(programs, calldata, model, _ones(0)) == 0
+
+    def test_equality_over_slack_checks_a_bound(self) -> None:
+        """A SLACK-extended equality is an inequality over the real variables."""
+        problem = Problem("SlackEquality")
+        n = problem.input("n", type=Types.Int)
+        capacity = problem.input("capacity", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+
+        indices = problem.vec()
+        coeffs = problem.vec()
+        with problem.range(0, n) as i:
+            indices.push(i)
+            coeffs.push(i + 1)
+        problem.slack(indices, coeffs, n, capacity)
+        problem.model.apply_equality(indices, coeffs, capacity, 100)
+
+        programs = problem.compile()
+        calldata = [4, 5]
+        model = _encode(programs, calldata)
+
+        # Weights are 1, 2, 3, 4 and the bound is 5.
+        assert _verify(programs, calldata, model, _ones(0, 3)) == 1  # 1 + 4
+        assert _verify(programs, calldata, model, _ones(0)) == 1  # under the bound
+        assert _verify(programs, calldata, model, _ones(2, 3)) == 0  # 3 + 4
+
+    def test_inequality_bounds_by_capacity_not_target(self) -> None:
+        """apply_inequality's bound is its capacity; target is the slack start."""
+        problem = Problem("Inequality")
+        n = problem.input("n", type=Types.Int)
+        capacity = problem.input("capacity", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+
+        indices = problem.vec()
+        coeffs = problem.vec()
+        with problem.range(0, n) as i:
+            indices.push(i)
+            coeffs.push(i + 1)
+        problem.model.apply_inequality(indices, coeffs, n, capacity, 100)
+
+        programs = problem.compile()
+        calldata = [4, 5]
+        model = _encode(programs, calldata)
+
+        assert _verify(programs, calldata, model, _ones(0, 3)) == 1  # 1 + 4
+        assert _verify(programs, calldata, model, _ones(2, 3)) == 0  # 3 + 4
+
+    def test_equality_after_an_inequality_checks_a_bound(self) -> None:
+        """An inequality's SLACK extends the pair for the equality after it.
+
+        `_emit_inequality` composes SLACK and EQUALITY over one vec pair, so
+        an `apply_equality` over the same two registers with no intervening
+        `vec()` runs against slack-extended vectors in the encoder. The
+        verifier rebuilds them without the slack entries, so it has to check
+        that second constraint as `<=` too. Checking it as `==` rejected
+        samples the encoder's model accepts.
+
+        `_scan_slack_equalities` keyed only on `kind == "slack"` and never on
+        `"inequality"`, so this composition was the one path it missed.
+        """
+        problem = Problem("InequalityThenEquality")
+        n = problem.input("n", type=Types.Int)
+        capacity = problem.input("capacity", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+
+        indices = problem.vec()
+        coeffs = problem.vec()
+        with problem.range(0, n) as i:
+            indices.push(i)
+            coeffs.push(i + 1)
+        problem.model.apply_inequality(indices, coeffs, n, capacity, 100)
+        problem.model.apply_equality(indices, coeffs, capacity, 100)
+
+        programs = problem.compile()
+        calldata = [4, 5]
+        model = _encode(programs, calldata)
+
+        # Weights are 1, 2, 3, 4 and the bound is 5. Both constraints are
+        # bounds over the real variables, so anything at or under 5 is valid.
+        assert _verify(programs, calldata, model, _ones(0, 3)) == 1  # 1 + 4
+        assert _verify(programs, calldata, model, _ones(0)) == 1  # 1, under
+        assert _verify(programs, calldata, model, _ones(2, 3)) == 0  # 3 + 4
+
+    def test_atleast(self) -> None:
+        """At least k of the indexed variables must be set."""
+        problem = Problem("AtLeast")
+        n = problem.input("n", type=Types.Int)
+        k = problem.input("k", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+
+        indices = problem.vec()
+        with problem.range(0, n) as i:
+            indices.push(i)
+        problem.model.apply_atleast(indices, k, 100)
+
+        programs = problem.compile()
+        calldata = [4, 2]
+        model = _encode(programs, calldata)
+
+        assert _verify(programs, calldata, model, _ones(0, 2)) == 1
+        assert _verify(programs, calldata, model, _ones(0, 1, 2)) == 1
+        assert _verify(programs, calldata, model, _ones(1)) == 0
+
+    def test_atleastw(self) -> None:
+        """The weighted sum must reach k."""
+        problem = Problem("AtLeastW")
+        n = problem.input("n", type=Types.Int)
+        k = problem.input("k", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+
+        indices = problem.vec()
+        coeffs = problem.vec()
+        with problem.range(0, n) as i:
+            indices.push(i)
+            coeffs.push(i + 1)
+        problem.model.apply_atleastw(indices, coeffs, k, 100)
+
+        programs = problem.compile()
+        calldata = [4, 5]
+        model = _encode(programs, calldata)
+
+        assert _verify(programs, calldata, model, _ones(1, 3)) == 1  # 2 + 4
+        assert _verify(programs, calldata, model, _ones(0, 1)) == 0  # 1 + 2
+
+    def test_exclude(self) -> None:
+        """Two mutually exclusive variables cannot both be set."""
+        problem = Problem("Exclude")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.model.apply_exclude(0, 1, 100)
+
+        programs = problem.compile()
+        calldata = [4]
+        model = _encode(programs, calldata)
+
+        assert _verify(programs, calldata, model, _ones(0)) == 1
+        assert _verify(programs, calldata, model, _ones(1, 2)) == 1
+        assert _verify(programs, calldata, model, _ones(0, 1)) == 0
+
+    def test_implies(self) -> None:
+        """Setting a forces b."""
+        problem = Problem("Implies")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.model.apply_implies(0, 1, 100)
+
+        programs = problem.compile()
+        calldata = [4]
+        model = _encode(programs, calldata)
+
+        assert _verify(programs, calldata, model, _ones(0, 1)) == 1
+        assert _verify(programs, calldata, model, _ones(1)) == 1
+        assert _verify(programs, calldata, model, _ones(0)) == 0
+
+    def test_onehot_row_and_col(self) -> None:
+        """Every row and column of the grid must sum to one."""
+        problem = Problem("OneHot")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n * n, domain=XQMXDomain.BINARY, rows=n, cols=n)
+        with problem.range(0, n) as i:
+            problem.model.apply_onehot_row(i, 100)
+        with problem.range(0, n) as j:
+            problem.model.apply_onehot_col(j, 100)
+
+        programs = problem.compile()
+        calldata = [3]
+        model = _encode(programs, calldata)
+
+        assert _verify(programs, calldata, model, _ones(0, 4, 8)) == 1  # identity
+        assert _verify(programs, calldata, model, _ones(0, 4)) == 0  # row 2 empty
+        assert _verify(programs, calldata, model, _ones(0, 1, 4, 8)) == 0  # row 0 twice
+
+    def test_reduce_auxiliary(self) -> None:
+        """A Rosenberg auxiliary must equal the product it stands for."""
+        problem = Problem("Reduce")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        aux = problem.model.reduce(0, 1, 100)
+        problem.model.linear[aux].add(-1)
+
+        programs = problem.compile()
+        calldata = [3]
+        model = _encode(programs, calldata)
+        assert model.size == 4  # three declared plus one auxiliary
+
+        assert _verify(programs, calldata, model, _ones(0, 1, 3)) == 1  # 1 * 1 == 1
+        assert _verify(programs, calldata, model, _ones(0)) == 1  # 1 * 0 == 0
+        assert _verify(programs, calldata, model, _ones(0, 1)) == 0  # aux left at 0
+        assert _verify(programs, calldata, model, _ones(3)) == 0  # aux set for nothing
+
+    def test_chained_reduce_tracks_each_auxiliary(self) -> None:
+        """Chained reductions land on consecutive auxiliary indices."""
+        problem = Problem("ChainedReduce")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        first = problem.model.reduce(0, 1, 100)
+        second = problem.model.reduce(first, 2, 100)
+        problem.model.linear[second].add(-1)
+
+        programs = problem.compile()
+        calldata = [3]
+        model = _encode(programs, calldata)
+        assert model.size == 5
+
+        # x0 = x1 = x2 = 1, so both auxiliaries must be 1.
+        assert _verify(programs, calldata, model, _ones(0, 1, 2, 3, 4)) == 1
+        assert _verify(programs, calldata, model, _ones(0, 1, 2, 3)) == 0
+
+    def test_binary_domain_is_always_checked(self) -> None:
+        """A non-binary entry fails even when the problem declares one-hots."""
+        problem = Problem("Domain")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n * n, domain=XQMXDomain.BINARY, rows=n, cols=n)
+        with problem.range(0, n) as i:
+            problem.model.apply_onehot_row(i, 100)
+
+        programs = problem.compile()
+        calldata = [2]
+        model = _encode(programs, calldata)
+
+        assert _verify(programs, calldata, model, {0: 1, 3: 1}) == 1
+        # Row sums still come to 1 each, but the entries are not 0/1.
+        assert _verify(programs, calldata, model, {0: 2, 1: -1, 3: 1}) == 0
+
+    def test_spin_domain_admits_plus_and_minus_one(self) -> None:
+        """A spin model is checked against -1/+1, not 0/1."""
+        problem = Problem("Spin")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.SPIN)
+        problem.model.linear[0].add(1)
+
+        programs = problem.compile()
+        calldata = [3]
+        model = _encode(programs, calldata)
+
+        assert _verify(programs, calldata, model, {0: 1, 1: -1}, spin=True) == 1
+        assert _verify(programs, calldata, model, {0: 0}, spin=True) == 0
+
+    def test_check_lands_inside_the_loop_that_declared_it(self) -> None:
+        """A constraint declared in a loop is checked once per iteration."""
+        problem = Problem("PerIteration")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n * n, domain=XQMXDomain.BINARY, rows=n, cols=n)
+
+        # One at-least-1 constraint per row, each over its own fresh vectors.
+        with problem.range(0, n) as row:
+            indices = problem.vec()
+            with problem.range(0, n) as col:
+                indices.push(row * n + col)
+            problem.model.apply_atleast(indices, 1, 100)
+
+        programs = problem.compile()
+        calldata = [3]
+        model = _encode(programs, calldata)
+
+        assert _verify(programs, calldata, model, _ones(0, 3, 6)) == 1
+        assert _verify(programs, calldata, model, _ones(0, 3)) == 0  # row 2 empty
+
+
+# ---------------------------------------------------------------------------
+# Verifier compile-time guards
+# ---------------------------------------------------------------------------
+
+
+class TestVerifierGuards:
+    """Cases the verifier refuses to compile rather than mis-check."""
+
+    def test_calldata_layout_is_the_encoder_inputs_then_model_and_sample(self) -> None:
+        problem = Problem("Layout")
+        problem.input("n", type=Types.Int)
+        problem.input("weights", type=Types.Vec)
+        problem.define_model(size=4, domain=XQMXDomain.BINARY)
+
+        assert problem.verifier_calldata() == ["n", "weights", "model", "sample"]
+
+    def test_model_coefficient_read_is_rejected(self) -> None:
+        """The encoder reads a partial model where the verifier reads a whole one."""
+        problem = Problem("CoefficientRead")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.model.linear[0].add(5)
+        problem.stow("bias", problem.model.linear[0])
+        problem.model.apply_exclude(0, 1, 100)
+
+        with pytest.raises(RuntimeError, match="model coefficient"):
+            problem.compile()
+
+    def test_inequality_slack_crossing_a_scope_is_rejected(self) -> None:
+        """An inequality's slack binds its consumer to the same scope.
+
+        The guard already covered a bare `slack()`; an `inequality()` leaves
+        the vectors extended the same way, so an `apply_equality()` in an
+        outer scope has the same problem: the verifier cannot tell how many
+        entries of the rebuilt index vector the loop's slack accounted for.
+        """
+        problem = Problem("InequalityScope")
+        n = problem.input("n", type=Types.Int)
+        capacity = problem.input("capacity", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+
+        indices = problem.vec()
+        coeffs = problem.vec()
+        with problem.range(0, 2):
+            problem.model.apply_inequality(indices, coeffs, n, capacity, 100)
+        problem.model.apply_equality(indices, coeffs, capacity, 100)
+
+        with pytest.raises(RuntimeError, match="same loop or branch scope"):
+            problem.compile()
+
+    def test_binary_only_constraint_on_a_spin_model_is_rejected(self) -> None:
+        problem = Problem("SpinExclude")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.SPIN)
+        problem.model.apply_exclude(0, 1, 100)
+
+        with pytest.raises(RuntimeError, match="no checkable meaning"):
+            problem.compile()
+
+    def test_growing_constraint_alongside_a_reduce_is_rejected(self) -> None:
+        """ATLEAST grows the model, so the REDUCE shadow counter drifts."""
+        problem = Problem("GrowBesideReduce")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+
+        with problem.range(0, n) as i:
+            indices = problem.vec()
+            indices.push(i)
+            problem.model.apply_atleast(indices, 1, 100)
+            aux = problem.model.reduce(0, 1, 100)
+            problem.model.linear[aux].add(-1)
+
+        with pytest.raises(RuntimeError, match="grows the model"):
+            problem.compile()
+
+    def test_a_reduce_hoisted_above_a_growing_constraint_compiles(self) -> None:
+        """Objective blocks are emitted first, so this reduce runs first."""
+        problem = Problem("ReduceThenGrow")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+
+        indices = problem.vec()
+        with problem.range(0, n) as i:
+            indices.push(i)
+        problem.model.apply_atleast(indices, 1, 100)
+        aux = problem.model.reduce(0, 1, 100)
+        problem.model.linear[aux].add(-1)
+
+        assert "ENERGY" in problem.compile().verifier

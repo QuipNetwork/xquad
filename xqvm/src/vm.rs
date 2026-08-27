@@ -176,6 +176,36 @@ fn resolve_iter_slice(
     Ok((start_us, start_us..end_us))
 }
 
+/// Convert a stack-supplied index to `usize` and bound it against `len`.
+///
+/// Every opcode that addresses one variable of an `xqmx` takes the index off
+/// the value stack as an `i64`, so both ends of the range have to be tested:
+/// the conversion rejects a negative index and the comparison rejects one at
+/// or past the register's declared variable count. Both report the raw `i64`
+/// the program supplied rather than the converted value, so the diagnostic
+/// names the operand rather than its narrowing.
+///
+/// The bound is the declared size, not the capacity of any backing store. A
+/// model holds its coefficients sparsely, so an unbounded write would land in
+/// the map and grow the model past the count its allocator declared: the
+/// program then carries a constraint over variables that do not exist, and
+/// still solves cleanly.
+fn bounded_index(pos: usize, raw: i64, len: usize) -> Result<usize, Error> {
+    let idx = usize::try_from(raw).map_err(|_| Error::IndexOutOfBounds {
+        pos,
+        index: raw,
+        len,
+    })?;
+    if idx >= len {
+        return Err(Error::IndexOutOfBounds {
+            pos,
+            index: raw,
+            len,
+        });
+    }
+    Ok(idx)
+}
+
 /// Sign-extend a big-endian byte slice (1..=8 bytes) to `i64`.
 #[expect(
     clippy::arithmetic_side_effects,
@@ -256,11 +286,10 @@ const LINEAR_ENTRY_BYTES: u64 = 32;
 /// index pair rather than a single index.
 const QUAD_ENTRY_BYTES: u64 = 48;
 
-/// Bytes charged for one model's fixed header when `ITER` copies a
-/// `vec<xqmx>`, on top of the entries the model actually holds.
+/// Bytes an equality expansion over `n` terms is charged, worst case.
 ///
-/// Worst-case number of coefficient entries an equality expansion over `n`
-/// terms writes: `n` linear terms and one quadratic term per unordered pair.
+/// The count it prices is `n` linear terms and one quadratic term per
+/// unordered pair, each at its own rate.
 ///
 /// Saturating throughout, so an `n` large enough to overflow the arithmetic
 /// yields `u64::MAX` and is rejected by the budget rather than wrapping into a
@@ -2095,18 +2124,7 @@ impl Vm {
                 got: e.actual.kind_name(),
             })?;
         let size = grid.size();
-        let usize_i = usize::try_from(i).map_err(|_| Error::IndexOutOfBounds {
-            pos,
-            index: i,
-            len: size,
-        })?;
-        if usize_i >= size {
-            return Err(Error::IndexOutOfBounds {
-                pos,
-                index: i,
-                len: size,
-            });
-        }
+        let usize_i = bounded_index(pos, i, size)?;
         self.push_stack(grid.linear(usize_i), pos)?;
         Ok(StepResult::Continue)
     }
@@ -2125,18 +2143,7 @@ impl Vm {
                 got: e.actual.kind_name(),
             })?;
         let size = grid.size();
-        let usize_i = usize::try_from(i).map_err(|_| Error::IndexOutOfBounds {
-            pos,
-            index: i,
-            len: size,
-        })?;
-        if usize_i >= size {
-            return Err(Error::IndexOutOfBounds {
-                pos,
-                index: i,
-                len: size,
-            });
-        }
+        let usize_i = bounded_index(pos, i, size)?;
         grid.linear_set(usize_i, val);
         Ok(StepResult::Continue)
     }
@@ -2155,18 +2162,7 @@ impl Vm {
                 got: e.actual.kind_name(),
             })?;
         let size = grid.size();
-        let usize_i = usize::try_from(i).map_err(|_| Error::IndexOutOfBounds {
-            pos,
-            index: i,
-            len: size,
-        })?;
-        if usize_i >= size {
-            return Err(Error::IndexOutOfBounds {
-                pos,
-                index: i,
-                len: size,
-            });
-        }
+        let usize_i = bounded_index(pos, i, size)?;
         grid.linear_add(usize_i, delta).map_err(at_pos(pos))?;
         Ok(StepResult::Continue)
     }
@@ -2179,16 +2175,8 @@ impl Vm {
             expected: "model",
             got: e.actual.kind_name(),
         })?;
-        let usize_i = usize::try_from(i).map_err(|_| Error::IndexOutOfBounds {
-            pos,
-            index: i,
-            len: m.size,
-        })?;
-        let usize_j = usize::try_from(j).map_err(|_| Error::IndexOutOfBounds {
-            pos,
-            index: j,
-            len: m.size,
-        })?;
+        let usize_i = bounded_index(pos, i, m.size)?;
+        let usize_j = bounded_index(pos, j, m.size)?;
         self.push_stack(m.get_quad(usize_i, usize_j), pos)?;
         Ok(StepResult::Continue)
     }
@@ -2207,16 +2195,8 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
-        let usize_i = usize::try_from(i).map_err(|_| Error::IndexOutOfBounds {
-            pos,
-            index: i,
-            len: m.size,
-        })?;
-        let usize_j = usize::try_from(j).map_err(|_| Error::IndexOutOfBounds {
-            pos,
-            index: j,
-            len: m.size,
-        })?;
+        let usize_i = bounded_index(pos, i, m.size)?;
+        let usize_j = bounded_index(pos, j, m.size)?;
         m.set_quad(usize_i, usize_j, val);
         Ok(StepResult::Continue)
     }
@@ -2235,16 +2215,8 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
-        let usize_i = usize::try_from(i).map_err(|_| Error::IndexOutOfBounds {
-            pos,
-            index: i,
-            len: m.size,
-        })?;
-        let usize_j = usize::try_from(j).map_err(|_| Error::IndexOutOfBounds {
-            pos,
-            index: j,
-            len: m.size,
-        })?;
+        let usize_i = bounded_index(pos, i, m.size)?;
+        let usize_j = bounded_index(pos, j, m.size)?;
         m.add_quad(usize_i, usize_j, delta).map_err(at_pos(pos))?;
         Ok(StepResult::Continue)
     }
@@ -2612,16 +2584,8 @@ impl Vm {
                 got: e.actual.kind_name(),
             })?;
         // Penalise x_i * x_j = 1 (mutual exclusion).
-        let i_idx = usize::try_from(i).map_err(|_| Error::IndexOutOfBounds {
-            pos,
-            index: i,
-            len: m.size,
-        })?;
-        let j_idx = usize::try_from(j).map_err(|_| Error::IndexOutOfBounds {
-            pos,
-            index: j,
-            len: m.size,
-        })?;
+        let i_idx = bounded_index(pos, i, m.size)?;
+        let j_idx = bounded_index(pos, j, m.size)?;
         m.add_quad(i_idx, j_idx, penalty).map_err(at_pos(pos))?;
         Ok(StepResult::Continue)
     }
@@ -2642,16 +2606,8 @@ impl Vm {
                 got: e.actual.kind_name(),
             })?;
         // Penalise x_i=1, x_j=0: penalty * x_i * (1 - x_j) = penalty*x_i - penalty*x_i*x_j.
-        let i_idx = usize::try_from(i).map_err(|_| Error::IndexOutOfBounds {
-            pos,
-            index: i,
-            len: m.size,
-        })?;
-        let j_idx = usize::try_from(j).map_err(|_| Error::IndexOutOfBounds {
-            pos,
-            index: j,
-            len: m.size,
-        })?;
+        let i_idx = bounded_index(pos, i, m.size)?;
+        let j_idx = bounded_index(pos, j, m.size)?;
         let neg_penalty = checked(penalty.checked_neg(), pos)?;
         m.add_linear(i_idx, penalty).map_err(at_pos(pos))?;
         m.add_quad(i_idx, j_idx, neg_penalty).map_err(at_pos(pos))?;

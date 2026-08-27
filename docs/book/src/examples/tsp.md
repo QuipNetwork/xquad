@@ -78,7 +78,7 @@ under Usage below, an invalid grid scores `-770`, below `40` of the
 2. **Assemble** -- `.xqasm` text to bytecode via `xquad.asm`
 3. **Encode** -- run encoder on chosen XQVM to produce the XQMX model
 4. **Sample** -- solver runs SA/QPU/GPU over the model
-5. **Verify** -- verifier checks one-hot row/column constraints and computes energy
+5. **Verify** -- verifier checks the sample is binary and the one-hot row and column constraints, then computes energy
 6. **Decode** -- decoder extracts the tour as a sequence of city indices
 
 Steps 3-6 are three independent XQVM programs plus a solver call in between,

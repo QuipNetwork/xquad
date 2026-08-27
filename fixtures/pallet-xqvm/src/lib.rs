@@ -25,22 +25,32 @@
 //! # What it does
 //!
 //! A single dispatchable `submit_program` accepts raw XQBC bytecode, a
-//! vector of `i64` calldata values and a step budget, runs the program
-//! through the VM, and emits a `ProgramExecuted` event carrying the
-//! integer output slots.
+//! vector of `i64` calldata values and the VM's two budgets, runs the
+//! program through the VM, and emits a `ProgramExecuted` event carrying
+//! the integer output slots.
 //!
-//! The step budget is an extrinsic argument rather than a constant
-//! because that is the shape the real pallet has to take: what a caller
+//! Both budgets are extrinsic arguments rather than constants because
+//! that is the shape the real pallet has to take: what a caller
 //! pre-pays for is what the VM may spend. The fixture is the in-repo
 //! stand-in for the threat model, so a budget the caller cannot name is
 //! a threat model the fixture cannot express.
 //!
 //! A caller-named budget is only half of that claim. The other half is
-//! `Config::MaxStepLimit`, which caps what the caller may name: the
-//! extrinsic's weight is a fixed constant, so without a cap a caller
-//! buys `u64::MAX` steps of execution at the price of one. The bound is
-//! what makes the constant weight defensible in a fixture; a production
-//! pallet benchmarks the weight against the budget instead.
+//! the pair of caps, `Config::MaxStepLimit` and `Config::MaxMemoryLimit`,
+//! which bound what the caller may name: the extrinsic's weight is a
+//! fixed constant, so without them a caller buys `u64::MAX` steps and a
+//! gigabyte of allocation at the price of one. The bounds are what make
+//! the constant weight defensible in a fixture; a production pallet
+//! benchmarks the weight against the budgets instead.
+//!
+//! The allocation budget matters here in a way it does not off-chain.
+//! `Vm::new` installs a 1 GiB default, and a runtime heap is far below
+//! that, so a program that allocates a few hundred megabytes exhausts
+//! the heap long before it exhausts the budget. Inside a Wasm runtime a
+//! failed allocation traps the whole execution rather than returning a
+//! fault the pallet can report as `Error::ExecutionFailed`, and that is
+//! the case the budget exists to prevent. Leaving the default in place
+//! would have left the pre-pay claim above true of steps only.
 //!
 //! # Running the fixture
 //!
@@ -82,6 +92,16 @@ pub mod pallet {
         /// caller sets that themselves.
         #[pallet::constant]
         type MaxStepLimit: Get<u64>;
+
+        /// Largest allocation budget a caller may ask `submit_program` for.
+        ///
+        /// The counterpart to `MaxStepLimit` for the VM's other budget. A
+        /// runtime should set this well below the heap it actually has:
+        /// the budget is what turns an over-large allocation into a
+        /// reportable fault instead of a trap that takes the whole
+        /// execution with it.
+        #[pallet::constant]
+        type MaxMemoryLimit: Get<u64>;
     }
 
     #[pallet::pallet]
@@ -114,6 +134,8 @@ pub mod pallet {
         OutputOverflow,
         /// The requested step budget exceeds `MaxStepLimit`.
         StepLimitTooLarge,
+        /// The requested allocation budget exceeds `MaxMemoryLimit`.
+        MemoryLimitTooLarge,
         /// The requested output-slot count exceeds `MaxCalldata`.
         OutputSlotsTooLarge,
     }
@@ -144,6 +166,11 @@ pub mod pallet {
         ///   vacuously. It may not exceed [`Config::MaxStepLimit`]: the
         ///   weight below is a constant, so an unbounded budget would let a
         ///   caller buy arbitrary execution at a fixed price.
+        /// - `memory_limit`: the bytes the run may allocate. It may not
+        ///   exceed [`Config::MaxMemoryLimit`]. Naming it is what keeps an
+        ///   over-large allocation a reportable
+        ///   [`Error::ExecutionFailed`]; left at the VM's 1 GiB default it
+        ///   would instead exhaust a runtime heap and trap.
         ///
         /// # Events
         ///
@@ -155,6 +182,7 @@ pub mod pallet {
         /// - [`Error::ExecutionFailed`] -- the VM faulted at runtime.
         /// - [`Error::OutputOverflow`] -- output count exceeds `MaxCalldata`.
         /// - [`Error::StepLimitTooLarge`] -- `step_limit` exceeds `MaxStepLimit`.
+        /// - [`Error::MemoryLimitTooLarge`] -- `memory_limit` exceeds `MaxMemoryLimit`.
         /// - [`Error::OutputSlotsTooLarge`] -- `output_slots` exceeds `MaxCalldata`.
         #[pallet::call_index(0)]
         // Fixture-only placeholder weight; production pallets must provide benchmarked weights.
@@ -165,6 +193,7 @@ pub mod pallet {
             calldata: BoundedVec<i64, T::MaxCalldata>,
             output_slots: u32,
             step_limit: u64,
+            memory_limit: u64,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
 
@@ -173,6 +202,10 @@ pub mod pallet {
             ensure!(
                 step_limit <= T::MaxStepLimit::get(),
                 Error::<T>::StepLimitTooLarge
+            );
+            ensure!(
+                memory_limit <= T::MaxMemoryLimit::get(),
+                Error::<T>::MemoryLimitTooLarge
             );
             ensure!(
                 output_slots <= T::MaxCalldata::get(),
@@ -200,6 +233,7 @@ pub mod pallet {
             vm.set_calldata(calldata_regs);
             vm.set_output_slots(output_count);
             vm.set_step_limit(step_limit);
+            vm.set_memory_limit(memory_limit);
             vm.run(&program).map_err(|_| Error::<T>::ExecutionFailed)?;
 
             let int_outputs: Vec<i64> = vm

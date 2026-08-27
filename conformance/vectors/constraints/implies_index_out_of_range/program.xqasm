@@ -1,0 +1,16 @@
+; implies_index_out_of_range: the same bound on the opcode that writes both
+; surfaces.
+;
+; IMPLIES adds a linear term at i and a quadratic one at (i, j), so an
+; unbounded i reached the linear map as well as the quadratic one -- the case
+; EXCLUDE cannot cover. i is therefore the out-of-range operand here, where
+; exclude_index_out_of_range puts it on j.
+
+PUSH 4
+BQMX r0
+
+PUSH 100         ; i, far past the extent
+PUSH 2           ; j, in range
+PUSH 1           ; penalty
+IMPLIES r0
+HALT

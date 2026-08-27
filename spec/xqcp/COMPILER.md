@@ -108,63 +108,114 @@ When `size = N * N` (detected as `BinOp("MUL", RegLoad(r), RegLoad(r))` where bo
 
 ## Verifier Compilation
 
-The verifier uses a fixed register layout:
+The verifier replays the encoder's action stream. Constraint operands are `VecRef` register handles, not data: the index and coefficient vectors exist only once the encoder's `VECPUSH` instructions have run at VM runtime, frequently inside loops and branches. A separate program cannot inherit that state, so the verifier re-executes the structural half of the encoder and substitutes a sample check for each constraint.
+
+### Replay Rules
+
+Actions fall into three groups.
+
+**Replayed verbatim.** `input`, `range_start`/`range_end`, `iter_start`/`iter_end`, `stow`, `vec_alloc`, `vec_push`, `branch`. These reconstruct the register and vector state the encoder had.
+
+**Skipped.** `add_linear`, `add_quadratic`, `set_linear`, `set_quadratic`, `slack`. The verifier is handed a finished model and must not mutate it. Skipping `slack` is what leaves the index and coefficient vectors holding only the user's own variables.
+
+**Replaced by a check.** `onehot_row`, `onehot_col`, `equality`, `inequality`, `atleast`, `atleastw`, `exclude`, `implies`, `reduce`. Each is emitted at the same point in the stream, so a constraint declared inside a loop is checked once per iteration.
+
+The body is replayed in encoder order: `_partition_body` splits top-level blocks into an objective section and a constraint section, and both compilers emit objective first. The invariant is that the verifier's register and vector state at each constraint site equals the encoder's.
+
+### Calldata Contract
+
+| Slot | Contents |
+|------|----------|
+| `0 .. k-1` | One per `problem.input()`, in declaration order; slot index equals register index |
+| `k` | The model, `INPUT` into the encoder's own model register |
+| `k+1` | The sample |
+
+Appending rather than prepending keeps the replayed `PUSH {reg}; INPUT r{reg}` preamble identical to the encoder's. `Problem.verifier_calldata()` returns the slot names.
+
+### Register Layout
+
+The verifier keeps the encoder's register numbers and claims eight registers above the encoder's high-water mark (`Problem._alloc._next`, read without mutating -- `compile()` runs all three compilers over one `Problem`, so allocating through the shared counter would make compilation non-idempotent). `base + 7 > 255` raises at compile time.
 
 | Register | Purpose |
 |----------|---------|
-| `r0` | Model (XQMX, MODEL mode) |
-| `r1` | Sample (XQMX, SAMPLE mode) |
-| `r2` | N (problem size parameter) |
-| `r3` | Valid flag (int, output) |
-| `r4` | Energy (int, output) |
+| `base+0` | Sample (XQMX, SAMPLE mode), from calldata slot `k+1` |
+| `base+1` | Valid flag (int, output slot 1) |
+| `base+2` | Energy (int, output slot 0) |
+| `base+3` | Declared model size: domain-check bound and REDUCE counter seed |
+| `base+4` | Weighted-sum accumulator |
+| `base+5` | `LIDX` position, and the domain check's loop variable |
+| `base+6` | `LVAL` element |
+| `base+7` | REDUCE shadow counter |
 
-### Validity Check Selection
+A constraint action is a leaf, so no two checks ever nest and the accumulator and loop registers are safely single-instance. Each is written before it is read inside its own block, so neither the bytecode verifier's type-state phase nor its must-init phase sees a read-before-write, even for a check inside a branch arm.
 
-The verifier compiler inspects `Problem._constraints` to decide which validity check to emit:
+### Model Shape
 
-**Case 1: onehot_row constraints present**
+`BQMX`/`SQMX`/`RESIZE` are skipped. The `size_expr` is replayed and stowed into `base+3`, and for a 2D model the `cols_expr` is replayed and stowed into the encoder's own `cols_reg` so that `IDXGRID` resolves for 2D `exclude` and `implies` checks.
 
-Emit a `ROWSUM` loop:
+### Check Semantics
+
+Checks are over the variables the user declared. Slack and `ATLEAST`/`ATLEASTW` auxiliaries are encoding artefacts and stay unconstrained: checking the expanded penalty form would report `valid = 0` for a feasible sample whose slack bits a solver left inconsistent.
+
+| Constraint | Check |
+|------------|-------|
+| `equality(idx, coef, b)` | `sum(coef[k] * sample[idx[k]]) == b` |
+| `equality` preceded by `slack` on the same vecs | `sum(coef[k] * sample[idx[k]]) <= b` |
+| `inequality` | `sum(coef[k] * sample[idx[k]]) <= capacity`. The bound is `capacity`; `target` is the slack start index |
+| `atleast(idx, k)` | `sum(sample[idx[j]]) >= k` |
+| `atleastw(idx, coef, k)` | `sum(coef[j] * sample[idx[j]]) >= k` |
+| `exclude(a, b)` | `sample[a] * sample[b] == 0` |
+| `implies(a, b)` | `sample[a] <= sample[b]` |
+| `onehot_row` / `onehot_col` | `ROWSUM`/`COLSUM` on the sample `== 1`, at the constraint site |
+| `reduce(a, b) -> w` | `sample[w] == sample[a] * sample[b]` |
+
+Every check emitter is net-zero on the stack and initialises its accumulator before the loop or branch that feeds it. The weighted-sum core, shared by `equality`, `inequality` and `atleastw`:
+
 ```
-PUSH 1
-STOW r{valid}
 PUSH 0
-LOAD r{N}
-RANGE
-  LVAL r{loop}
-  LOAD r{loop}
-  ROWSUM r{sample}
-  PUSH 1
-  EQ
-  LOAD r{valid}
-  AND
-  STOW r{valid}
+STOW r{acc}
+PUSH 0
+VECLEN r{indices}
+ITER r{indices}
+  LIDX r{pos}
+  LVAL r{elem}
+  LOAD r{pos}
+  VECGET r{coeffs}
+  LOAD r{elem}
+  GETLINE r{sample}
+  MUL
+  LOAD r{acc}
+  ADD
+  STOW r{acc}
 NEXT
+LOAD r{acc}
+{bound}
+EQ                      ; or LTE / GTE
+LOAD r{valid}
+AND
+STOW r{valid}
 ```
 
-**Case 2: onehot_col constraints present**
+`atleast` drops the `LIDX`/`VECGET` pair. An empty index vector is safe: `ITER` skips a body whose slice is empty, leaving the accumulator at zero.
 
-Emit a `COLSUM` loop (same structure as ROWSUM but using `COLSUM`).
+### Domain Check
 
-Both ROWSUM and COLSUM loops may be emitted if both constraint types are present.
+Always emitted, gated on the model's domain, and bounded by the model's *declared* size rather than a caller-supplied value. Slack and auxiliary variables past that size are not domain-checked.
 
-**Case 3: no onehot constraints**
-
-Emit a binary domain check:
 ```
 PUSH 1
 STOW r{valid}
 PUSH 0
-{size_expr}
+LOAD r{size}
 RANGE
   LVAL r{loop}
   LOAD r{loop}
   GETLINE r{sample}
-  DUP
-  PUSH 0
+  COPY
+  PUSH {low}            ; 0 for BINARY, -1 for SPIN
   EQ
   SWAP
-  PUSH 1
+  PUSH {high}           ; 1 for both
   EQ
   OR
   LOAD r{valid}
@@ -172,6 +223,30 @@ RANGE
   STOW r{valid}
 NEXT
 ```
+
+### Slack Detection
+
+A prepass walks the same flattened stream the emitter walks, descending into loop bodies and every branch arm while carrying a scope path, and keys a map on `(indices.reg, coeffs.reg)`:
+
+- `vec_alloc` for register R clears every key containing R. This is the only reset, and it is what makes per-iteration vectors work.
+- `slack` sets the key.
+- `equality` consults the key; if present it emits `LTE` instead of `EQ`.
+
+The key is never cleared on consume: two equalities over one slack-extended vector pair are both inequalities in the encoder. A `slack` and the `equality` consuming it in different loop or branch scopes raises at compile time.
+
+### REDUCE Shadow Counter
+
+`reduce` is in `_actions` but deliberately not in `_constraints`. The VM allocates its auxiliary at `model.size` when `REDUCE` executes; the verifier must not run `REDUCE`, so it tracks the same index in a counter seeded from the declared size before any loop. At each `reduce` site it reads the counter as the auxiliary index, stows it into the encoder's own `stow_reg` so a chained `reduce()` resolves, then increments. Because the replay follows the encoder's control flow instruction for instruction, the counter tracks `model.size` through loops, skipped empty loops and branch arms with no static trip-count analysis.
+
+The counter is correct only while nothing else grows the model first. Growing actions are `atleast`, `atleastw`, every `inequality` and every slack-extended `equality`. Compilation raises unless every growing action appears after every `reduce` in flattened order and shares no enclosing loop or branch arm with one.
+
+### Rejected Programs
+
+Three cases raise at compile time rather than emit a check that would be wrong:
+
+- **Model-coefficient reads.** `model.linear[i]` and `model.quadratic[i, j]` as reads emit `GETLINE`/`GETQUAD` against the model register. In the encoder those read a partially built model; in the verifier the register holds the finished one from calldata. Anything derived from such a read differs between the two programs with no error.
+- **Binary-only constraints on a non-binary model.** `onehot_row`, `onehot_col`, `exclude` and `implies` have no meaning over `SPIN` variables.
+- **Register exhaustion.** The eight verifier registers would pass `r255`.
 
 ### Energy and Output
 

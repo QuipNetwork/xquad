@@ -1,0 +1,27 @@
+; equality_length_mismatch_beats_model_type: the vecs are compared before
+; the model register is discriminated.
+;
+; exec_equality resolves both vec operands, compares their lengths, and only
+; then charges and reaches `as_model_mut()`. xqvm_py resolved the model
+; register first, so an int in r0 answered TypeMismatch here and
+; VecLengthMismatch there -- one program with two fault identities, which
+; spec/xqvm/SPEC.md's Faults table makes a divergence rather than a
+; formatting difference.
+;
+; r0 deliberately holds an int rather than a sample: a sample would put the
+; disagreement inside SPEC.md's XqmxMode carve-out and prove nothing about
+; the ordering. An int is outside it, so this vector pins the rule.
+
+PUSH 0
+STOW r0          ; r0 is an int, not a model
+
+VEC r2
+PUSH 1
+VECPUSH r2       ; indices has 1 entry
+
+VEC r3           ; coeffs has 0
+
+PUSH 0           ; target
+PUSH 1           ; penalty
+EQUALITY r0 r2 r3
+HALT

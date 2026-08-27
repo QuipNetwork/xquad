@@ -25,7 +25,7 @@ XQSA solver.solve(model) --> SolverResult(sample, energy, timing, metadata)
     |
     v
 Verifier (.xqasm)
-    |  XQVM executes verifier(model, sample, N)
+    |  XQVM executes verifier(encoder inputs..., model, sample)
     v
 (energy, valid)
     |

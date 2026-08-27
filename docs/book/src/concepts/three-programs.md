@@ -49,12 +49,14 @@ the model, on slot 0. This is "a program whose job is to construct a
 model" -- running it does not solve anything, it only builds the thing a
 solver will minimise.
 
-**Verifier.** Takes a fixed input layout -- model, sample, and variable
-count `N` -- and checks whether the sample satisfies the constraints the
+**Verifier.** Takes the encoder's own inputs, then the model and the
+sample, and checks whether the sample satisfies every constraint the
 encoder applied, then computes the sample's energy with the `ENERGY`
-opcode. It outputs `(energy, valid)`. This is how a compiled sample's
-quality gets checked independently of whatever backend produced it, when
-the problem has constraints for it to check.
+opcode. It outputs `(energy, valid)`. It needs the encoder's inputs
+because it replays the encoder to rebuild the constraint data, which lives
+in registers at VM runtime rather than in the model. This is how a
+sample's feasibility gets checked independently of whatever backend
+produced it.
 
 **Decoder.** Takes a sample and `N`, and extracts the answer in the
 problem's own terms -- a tour, a partition, a set of selected items --
@@ -75,7 +77,7 @@ what a bad solution actually looks like.
 ## A Concrete Run
 
 `examples/maxcut/runner.py` is exactly this shape. Max-Cut declares no
-constraints, so its verifier's constraint check is empty: the loop under
+constraints, so its verifier has none to check: the loop under
 `; === Validity checks ===` in the compiled verifier only confirms each
 sample value is 0 or 1. The `ENERGY` recomputation still runs and is real
 independent verification -- the energy the verifier reports is computed
@@ -87,8 +89,8 @@ the VM:
 1. `vm.run(programs.encoder)` with calldata `[n, flat_edges]` and one
    [output slot](../xqvm/io.md), producing an `XQMX` model.
 2. `solver.solve(model)`, entirely outside the VM, producing a sample.
-3. `vm.run(programs.verifier)` with calldata `[model, sample, n]` and two
-   output slots, producing `(energy, valid)`.
+3. `vm.run(programs.verifier)` with calldata `[n, flat_edges, model, sample]`
+   and two output slots, producing `(energy, valid)`.
 4. `vm.run(programs.decoder)` with calldata `[sample, n]` and one output
    slot, producing the decoded partition.
 

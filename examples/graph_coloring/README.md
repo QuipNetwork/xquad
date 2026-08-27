@@ -7,7 +7,7 @@ adjacent nodes share the same color (proper C-coloring).
 
 - **Input**: number of nodes N, number of colors C, edge list
 - **Model**: N*C binary variables in an N x C grid. `x[v,c] = 1` if node v gets color c.
-- **Objective**: none. The problem is pure constraint satisfaction: a colouring is scored only by its constraint violations. A valid C-colouring scores `-penalty * N`, not `0`, because XQMX has no constant-term field and each satisfied ONEHOTR stores `-penalty` rather than `0`. That is `-1000` at the `--n 5`, penalty `200` defaults. See [Constraints](../../docs/book/src/modelling/constraints.md#why-the-reported-energy-is-not-just--total_value).
+- **Objective**: none. The problem is pure constraint satisfaction: a colouring is scored only by its constraint violations. A valid C-colouring scores `-penalty * N`, not `0`, because XQMX has no constant-term field and each satisfied ONEHOTR stores `-penalty` rather than `0`. That is `-1000` at the `--n 5`, penalty `200` defaults. The colour count defaults to `4` because a G(5, 0.5) graph routinely contains a 4-clique -- the default seed's does -- and a 4-clique has no 3-colouring, so `--colors 3` would make the canonical instance unsatisfiable. See [Constraints](../../docs/book/src/modelling/constraints.md#why-the-reported-energy-is-not-just--total_value).
 - **Constraints**:
   - One-hot per node: `sum_c x[v,c] = 1` (ONEHOTR, penalty 200)
   - Exclusion per (edge, color): `x[u,c] + x[v,c] <= 1` (EXCLUDE, penalty 200)
@@ -33,20 +33,20 @@ IDXGRID: `u * num_colors + c` and `v * num_colors + c`.
 2. **Assemble** -- `.xqasm` text to bytecode via `xquad.asm`
 3. **Encode** -- run encoder on chosen XQVM to produce the XQMX model
 4. **Sample** -- solver runs SA/QPU/GPU over the model
-5. **Verify** -- verifier checks the one-hot row sums and computes energy. It does not check the exclusion constraints: see [the generated verifier's `valid` flag](../../docs/book/src/running/verification.md#the-generated-verifiers-valid-flag-does-not-check-every-constraint)
+5. **Verify** -- verifier checks the sample is binary, the one-hot row sums, and the per-edge exclusions, then computes energy
 6. **Decode** -- decoder extracts the color assignment per node
 
 ## Usage
 
 ```sh
 uv run python examples/graph_coloring/runner.py --seed 42
-uv run python examples/graph_coloring/runner.py --n 6 --colors 3 --interpreter rust
+uv run python examples/graph_coloring/runner.py --n 6 --colors 4 --interpreter rust
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--n` | `5` | Number of nodes |
-| `--colors` | `3` | Number of colors |
+| `--colors` | `4` | Number of colors |
 | `--solver` | `dwave-cpu` | Solver backend (see Choosing a solver) |
 | `--interpreter` | `python` | XQVM backend: `python` or `rust` |
 | `--seed` | `42` | Random seed |

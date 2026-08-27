@@ -126,7 +126,7 @@ def _run_maxcut(programs, n: int, edges, solver) -> tuple[int, int]:
     result = solver.solve(model)
 
     vm = VM(backend=VMBackend.PYTHON)
-    vm.set_calldata([model, result.sample, n])
+    vm.set_calldata([n, flat, model, result.sample])
     vm.set_output_slots(2)
     vm.run(programs.verifier)
     outs = vm.outputs()
@@ -182,7 +182,7 @@ def _run_tsp(programs, n: int, distances, solver) -> tuple[int, int]:
     result = solver.solve(model)
 
     vm = VM(backend=VMBackend.PYTHON)
-    vm.set_calldata([model, result.sample, n])
+    vm.set_calldata([n, distances, model, result.sample])
     vm.set_output_slots(2)
     vm.run(programs.verifier)
     outs = vm.outputs()

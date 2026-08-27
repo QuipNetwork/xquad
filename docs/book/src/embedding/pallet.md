@@ -73,6 +73,7 @@ pub fn submit_program(
     calldata: BoundedVec<i64, T::MaxCalldata>,
     output_slots: u32,
     step_limit: u64,
+    memory_limit: u64,
 ) -> DispatchResult
 ```
 
@@ -82,6 +83,7 @@ pub fn submit_program(
 | `calldata` | `BoundedVec<i64, T::MaxCalldata>` | Integer values injected as `RegVal::Int` into the VM's calldata slots, in order. |
 | `output_slots` | `u32` | Output slots to reserve. The caller declares its own arity; see step 3. May not exceed `MaxCalldata`. |
 | `step_limit` | `u64` | Instructions the run may execute. The bound is exact: `0` executes nothing and the call fails with `ExecutionFailed` rather than succeeding vacuously. |
+| `memory_limit` | `u64` | Bytes the run may allocate. Charged before each allocation, so an over-large one returns `ExecutionFailed` instead of reaching the allocator. |
 
 Decode, execute, store, in that order:
 
@@ -101,7 +103,7 @@ Decode, execute, store, in that order:
    [the bytecode format](../xqvm/bytecode-format.md), which states that
    neither header count may be used to pre-size a slot array.
 4. Build a fresh `Vm`, set the calldata, the output-slot count and the
-   caller's `step_limit`, and run the program. Any VM fault returns
+   caller's two budgets, and run the program. Any VM fault returns
    `Error::ExecutionFailed`; the pallet does not distinguish which fault
    occurred, so a budget exhausted one instruction short of `HALT` is
    indistinguishable from a decode-clean program that divided by zero.
@@ -112,19 +114,22 @@ Decode, execute, store, in that order:
    emit `Event::ProgramExecuted { who, outputs }`.
 
 There is no separate store-then-execute split and no program lookup by
-hash. The step budget is an extrinsic argument rather than a pallet
-constant because that is the shape the real pallet has to take: what a
-caller pre-pays for is what the VM may spend, and a budget the caller
-cannot name is a threat model the fixture cannot express.
+hash. Both budgets are extrinsic arguments rather than pallet constants
+because that is the shape the real pallet has to take: what a caller
+pre-pays for is what the VM may spend, and a budget the caller cannot
+name is a threat model the fixture cannot express.
 
-The allocation budget has no such argument. The fixture never calls
-`set_memory_limit`, so the VM's 1 GiB default applies, which is far too
-generous for a runtime that has to price what it admits -- inside a
-wasm32 runtime the heap gives out long before the budget does, and the
-allocator traps the whole execution instead of returning a fault the
-pallet can report. A production pallet should set and price a much
-smaller budget. Off-chain, produce the bytecode however you like; the
-assembler CLI is `xquad asm`.
+The allocation budget is the one that has to be named on-chain rather
+than inherited. `Vm::new()` installs 1 GiB, which is far more than a
+wasm32 runtime heap, so the heap gives out long before the budget does
+and the allocator traps the whole execution instead of returning a
+fault the pallet can report as `ExecutionFailed`. A caller-supplied
+`memory_limit`, capped by `MaxMemoryLimit`, is what keeps an over-large
+allocation a reportable dispatch error. The mock sets the cap to the
+VM's own 1 GiB so that only the caller's ability to name something
+smaller is under test; a production runtime sets it to a figure its
+heap can actually honour. Off-chain, produce the bytecode however you
+like; the assembler CLI is `xquad asm`.
 
 The cargo profile the runtime is built with is a second default an
 operator must not inherit without reading it. Do not compile the runtime
@@ -167,11 +172,12 @@ it.
 | `ExecutionFailed` | The VM faulted at runtime -- stack underflow, an unresolved jump, or any other `xqvm::Error` variant, all mapped to this one case. |
 | `OutputOverflow` | The program produced more `Int` outputs than `MaxCalldata` allows. |
 | `StepLimitTooLarge` | `step_limit` exceeds `MaxStepLimit`. Checked before the decode, so an over-budget request never pays to parse the program it would have run. |
+| `MemoryLimitTooLarge` | `memory_limit` exceeds `MaxMemoryLimit`. Checked before the decode, for the same reason. |
 | `OutputSlotsTooLarge` | `output_slots` exceeds `MaxCalldata`. |
 
 ## What the Fixture's Tests Check
 
-`fixtures/pallet-xqvm/src/tests.rs` covers four groups, thirteen tests in
+`fixtures/pallet-xqvm/src/tests.rs` covers five groups, sixteen tests in
 all:
 
 - **Happy paths** -- an arithmetic program with no calldata, a calldata
@@ -180,14 +186,19 @@ all:
   `ExecutionFailed`, and an unsigned origin rejected by `ensure_signed`.
 - **The step budget** -- a request above `MaxStepLimit`, one exactly at
   it, a zero budget, and a budget shorter than the program.
+- **The allocation budget** -- a request above `MaxMemoryLimit`, one
+  exactly at it, and a budget a `BQMX` outgrows. The third is the one
+  the argument exists for: it fails outright if `submit_program` stops
+  calling `set_memory_limit`, which is how the gap this closes went
+  unnoticed.
 - **The output-slot count** -- one `OUTPUT` inside a loop writing a slot
   per iteration, the same program with the count the header byte would
   have supplied, and a count above `MaxCalldata`. The middle test asserts
   `program.output_slots() == 1` directly, so the pair records what that
   header byte is and is not good for.
 
-Running `make test-substrate-fixture` against this tree passes fifteen:
-the thirteen above plus two FRAME-generated checks, a genesis-config
+Running `make test-substrate-fixture` against this tree passes eighteen:
+the sixteen above plus two FRAME-generated checks, a genesis-config
 build and a `construct_runtime!` integrity test.
 
 ## Calldata Limitations

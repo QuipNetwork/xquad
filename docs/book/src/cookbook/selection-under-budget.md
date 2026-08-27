@@ -81,13 +81,13 @@ not just larger coefficients.
 `examples/bin_packing/` repeats this exact `SLACK` + `EQUALITY` shape once
 per bin, for a per-bin capacity rather than a single global one -- see
 [Assignment](assignment.md), which covers the rest of that problem's
-structure. Its `start_index` argument to `SLACK` is the same fixed
-`num_items * num_bins` on every bin's iteration rather than a value that
-advances past each bin's own slack allocation, so the slack variables the
-different bins' capacity constraints reach for end up shared rather than
-distinct. Copying this block as a per-bin template needs that start index
-to advance; the capacity-constraint shape itself, in isolation, is the
-same one this page covers.
+structure. Its `start_index` argument to `SLACK` advances per bin --
+`model_vars + b * xq_bitlen(capacity)` -- so each bin's capacity constraint
+reaches for its own slack block. Passing the same fixed start index on
+every iteration is the trap when copying this block as a per-bin template:
+the bins then share slack variables, and one bin's overflow can be absorbed
+by another's slack. The capacity-constraint shape itself, in isolation, is
+the same one this page covers.
 
 ## Failure Mode
 

@@ -41,14 +41,6 @@ budget faults exist only at runtime and have no verifier counterpart.
 That is a boundary rather than a gap: an embedder gets its bound from the
 step and allocation budgets it sets, not from a verification pass.
 
-<!-- xquad:defect QUI-1062 -->
-> **Known issue.** Verification passes some programs that fault at runtime, because the
-> stack-depth phase sees only each block's net delta: an instruction's pop requirement
-> is absorbed by earlier pushes, so a stack underflow can pass verification. See
-> [Verification](../running/verification.md) for the specific failure modes and what to
-> do about them today. Report problems at the
-> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
-
 ## Pipeline
 
 | Order | Phase | Checks |
