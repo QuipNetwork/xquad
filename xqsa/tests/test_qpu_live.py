@@ -19,10 +19,27 @@
 Live QPU integration tests for SolverDWaveQPU.
 
 These tests submit real problems to a D-Wave Advantage QPU via the Leap API.
-They are skipped unless DWAVE_API_TOKEN is set in the environment.
+The module is skipped unless dwave-system is installed, which only the
+``dwave`` extra provides; individual tests are skipped unless DWAVE_API_TOKEN
+is set in the environment.
 
 Run with:
-    DWAVE_API_TOKEN=<token> uv run pytest xqsa/tests/test_qpu_live.py -v
+    DWAVE_API_TOKEN=<token> make test-qpu
+
+Prefer that over a direct pytest call. `make test-qpu` goes through
+scripts/run-hardware-tests.sh, which syncs the ``dwave`` extra, rebuilds
+xqffi, hard-fails on a missing token via scripts/_hwprobe.py, and treats
+"collected zero tests" as a failure -- so this module cannot skip itself
+into a hollow green.
+
+A direct call must carry the extra, or the module skips at import:
+
+    DWAVE_API_TOKEN=<token> uv run --extra dwave \\
+        pytest xqsa/tests/test_qpu_live.py -v
+
+A bare ``uv run`` re-syncs the workspace to the default no-extras
+environment, which uninstalls dwave-system and makes the importorskip below
+skip every test -- reporting a green run that submitted nothing to the QPU.
 """
 
 from __future__ import annotations
@@ -45,12 +62,24 @@ skip_no_token = pytest.mark.skipif(
     reason="DWAVE_API_TOKEN not set (skipped locally; runs and hard-fails in CI)",
 )
 
-if _HAS_TOKEN or _IN_CI:
-    from xqsa import SolverDWaveQPU, SolverResult
-    from xquad.cp import Problem, Types, xq_triu
-    from xquad.types import XQMXDomain
-    from xquad.vm import VM, VMBackend
+# `dwave.system` is a real module dependency of this file, not merely a
+# runtime one: SolverDWaveQPU lazy-imports it inside __init__
+# (xqsa/dwave_qpu.py), but every test below constructs one. It ships only in
+# xqsa's `dwave` extra, so under `uv sync --extra cuda` / `--extra metal` --
+# what hardware:cuda and hardware:metal install -- this module now skips at
+# import rather than dragging the xquad umbrella package, and with it xqffi's
+# cdylib, into a collection that had already deselected every test in it.
+# That import is what turned all three hardware jobs red on main in August
+# 2026 (QUI-1191).
+pytest.importorskip(
+    "dwave.system",
+    reason="dwave-system not installed (run `uv sync --extra dwave`)",
+)
 
+from xqsa import SolverDWaveQPU, SolverResult
+from xquad.cp import Problem, Types, xq_triu
+from xquad.types import XQMXDomain
+from xquad.vm import VM, VMBackend
 
 # -- helpers (extracted from examples/maxcut/runner.py) --------------------
 

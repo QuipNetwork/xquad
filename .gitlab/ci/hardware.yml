@@ -45,19 +45,68 @@
 #   [macos, arm64]        -> tesla-arm (Apple Silicon)                     -> hardware:metal
 #                            (Metal is not reachable from Docker)
 #
-# Prerequisites before these pass (tracked in QUI-654):
-#   * The `cuda`-tagged runners pass the GPU through to the Docker container:
-#     NVIDIA Container Toolkit installed + `gpus = "all"` in the runner's
-#     config.toml, which mounts libcuda.so into the image. Without it, the
-#     cuda tests fail in cupy (no CUDA-capable device).
-#   * DWAVE_API_TOKEN added as a masked, protected CI/CD variable for
-#     hardware:qpu.
+# Two prerequisites gated these jobs when they were written (QUI-654). Both
+# are now in place, confirmed from a pipeline log and the project's CI/CD
+# variables on 2026-08-26 -- recorded here because a job that has never once
+# gone green offers no evidence either way, and the next person to read a red
+# hardware job should not re-diagnose settled infrastructure:
+#   * The `cuda`-tagged runners pass the GPU through to the Docker container
+#     (NVIDIA Container Toolkit + `gpus = "all"` in the runner's config.toml,
+#     which mounts libcuda.so into the image). Confirmed: nvidia-smi enumerates
+#     two RTX A4000s from inside the container, and cupy reads the driver
+#     version through libcuda.
+#   * DWAVE_API_TOKEN exists as a masked, protected CI/CD variable for
+#     hardware:qpu. Protected is what makes it reachable only from the
+#     protected refs these jobs run on, which is the same reason the `.hardware`
+#     rule is written the way it is.
+#
+# What is still unproven is the macOS side: hardware:metal is the only
+# [macos, arm64] job in the pipeline, so cargo, make and maturin have never
+# run on tesla-arm here. Since QUI-1191 this job compiles Rust, so a missing
+# toolchain there surfaces as `cargo: command not found` rather than as a
+# solver failure.
 
-# The `.hardware` template (protected-ref rule + plain uv install, no
-# sync -- each job below runs its own `uv sync --extra <group>` to pull the
-# solver-specific optional deps declared in xqsa/pyproject.toml) and the
-# `.needs-gates` fragment (the shared verify+test `needs:` list below) live
-# in .gitlab/ci/setup.yml, included first by the root .gitlab-ci.yml.
+# The `.hardware` template (protected-ref rule + plain uv install, no sync)
+# and the `.needs-gates` fragment (the shared verify+test `needs:` list
+# below) live in .gitlab/ci/setup.yml, included first by the root
+# .gitlab-ci.yml.
+#
+# The template stops at the plain `uv` fragment because no job here installs
+# anything in its before_script. Each `script:` is a single `make -k
+# test-<kind>`, which delegates to scripts/run-hardware-tests.sh -- the same
+# entry point a developer runs by hand -- and that script owns the install
+# sequence end to end:
+#
+#   1. `uv sync --extra <solver>` for the solver-specific optional deps
+#      declared in xqsa/pyproject.toml (cuda / dwave / metal).
+#   2. `uv run --no-sync maturin develop --manifest-path xqffi/Cargo.toml`,
+#      rebuilding xqffi's cdylib from the Rust sources in this commit. Step
+#      1 alone is NOT enough, and this is not belt-and-braces: uv reinstalls
+#      xqffi from its editable-wheel cache, which uv does not invalidate
+#      when only Cargo sources change. That is how all three jobs went red
+#      on main in August 2026 (QUI-1191) -- the last green cuda run and the
+#      first failing one shared cache key `hw-hardware:cuda-<hash>`, both
+#      logged `Installed 21 packages` with no build at all, and pytest
+#      collection then died on `cannot import name 'DEFAULT_STEP_LIMIT'
+#      from 'xqffi.vm'`. The `--no-sync` is itself load-bearing: a bare `uv
+#      run` there would re-sync to the default (no-extras) environment and
+#      uninstall the cupy / dwave-system / pyobjc-Metal step 1 just
+#      installed. The Makefile's `deps-py` carries the same pairing for the
+#      same reason.
+#   3. scripts/_hwprobe.py <kind>, which hard-fails on a missing device or
+#      an unset DWAVE_API_TOKEN instead of letting the tests skip themselves
+#      into a hollow green.
+#   4. pytest, with exit code 5 ("collected zero tests") promoted to a
+#      failure.
+#
+# Steps 3 and 4 are why these `script:` lines are no longer bare `uv run
+# pytest ... -m <marker>`: called that way, CI had neither guard, and only
+# the local Makefile targets did.
+#
+# Because step 2 is a genuine Rust compile, `.hardware` also carries a cargo
+# cache entry (`target/`, `.cargo/registry/`, `.cargo/git/`) -- see
+# setup.yml for why it is keyed under the same per-job prefix rather than
+# reusing the root `default:` cargo key.
 
 hardware:cuda:
     stage: hardware
@@ -69,28 +118,60 @@ hardware:cuda:
     extends: .hardware
     needs:
         - !reference [.needs-gates, verify-and-test]
-    # 30m: no run data (never executed -- protected refs only). Deliberate
-    # guess with cold-start headroom for first-run driver and kernel
-    # warmup on top of the GPU solve itself. See setup.yml's "Job
-    # timeouts" section.
-    timeout: 30m
+    # 45m: no run data (never executed -- protected refs only). Deliberate
+    # guess with cold-start headroom for first-run driver and kernel warmup
+    # on top of the GPU solve itself, and -- since QUI-1191 -- a cold cargo
+    # registry fetch plus a full xqvm + xqasm + pyo3 compile before the
+    # first GPU test runs. This was 30m when it covered the warmup alone.
+    # The compile is not free headroom: test:python budgets 20m for a cold
+    # uv resolve plus the same maturin build on this same rust:latest
+    # image, and that job stops where this one starts.
+    #
+    # Sized generously on purpose, per setup.yml's rule that a timeout
+    # exists to kill a job that will never finish rather than police one
+    # that is merely slow. The asymmetry is stark here: `timeout` counts as
+    # `stuck_or_timeout_failure`, which the root `default: retry:` list
+    # retries twice, so a limit set one minute too tight costs three full
+    # runs on a scarce GPU runner before the pipeline goes red. See
+    # setup.yml's "Job timeouts" section.
+    timeout: 45m
     before_script:
+        # Non-fatal (|| true): nvidia-smi shows the host driver's max CUDA
+        # and needs the `utility` capability. It needs no Python environment
+        # of any kind, so it stays here; its old partner, the cupy compute
+        # view, moved to after_script -- see below for why.
         - !reference [.fragments, uv]
-        - uv sync --extra cuda
-        # Non-fatal diagnostics (|| true): print what the *container* sees so
-        # a driver/runtime mismatch is visible in the log without gating the
-        # job. nvidia-smi shows the host driver's max CUDA (needs the
-        # `utility` capability); the cupy line is the authoritative compute
-        # view -- driverGetVersion = driver ceiling, runtimeGetVersion = the
-        # CUDA the bundled runtime wants.
         - nvidia-smi || true
-        - uv run python -c "import cupy.cuda.runtime as r; print('driver CUDA:', r.driverGetVersion(), 'runtime CUDA:', r.runtimeGetVersion())" || true
     script:
-        # The cuda tests import cupy and dlopen libcuda.so, so they are the
-        # real GPU gate: they pass when the runner exposes a GPU whose driver
-        # is recent enough for the bundled CUDA runtime, and fail in cupy
-        # otherwise.
-        - uv run pytest xqsa/tests/ -m cuda -v
+        # -> scripts/run-hardware-tests.sh cuda: sync the `cuda` extra,
+        # rebuild xqffi through maturin, hard-fail on a missing GPU via
+        # scripts/_hwprobe.py, then run `-m cuda`. See this file's header for
+        # why the install sequence lives there rather than here.
+        #
+        # The cuda tests still import cupy and dlopen libcuda.so, so they
+        # remain the real GPU gate -- but the probe now reaches that verdict
+        # first, with a named reason, instead of leaving it to a cupy
+        # traceback surfacing from inside a test.
+        - make -k test-cuda
+    # The cupy compute view: driverGetVersion is the driver ceiling,
+    # runtimeGetVersion is the CUDA the bundled runtime wants, and a mismatch
+    # between them is the failure this line exists to make visible. It lives
+    # in after_script, not before_script, for two reasons that both had to be
+    # satisfied at once. First, cupy only exists once the `cuda` extra is
+    # installed, and that now happens inside `script:`, so before_script is
+    # too early -- and a `uv run --no-sync` there would just fail silently
+    # into the `|| true` against a .venv that does not exist yet, leaving a
+    # dead diagnostic that still looks alive. Second, after_script runs
+    # whether the job passed or failed, and a driver/runtime mismatch is
+    # exactly the thing worth printing when the job has just gone red;
+    # appending it to `script:` would skip it on failure.
+    #
+    # Called as .venv/bin/python, deliberately not through `uv run`:
+    # after_script gets a FRESH shell, so nothing before_script exported (uv
+    # on PATH, UV_CACHE_DIR) survives into it. `|| true` keeps a job that
+    # died before the sync from adding noise on top of its real error.
+    after_script:
+        - .venv/bin/python -c "import cupy.cuda.runtime as r; print('driver CUDA:', r.driverGetVersion(), 'runtime CUDA:', r.runtimeGetVersion())" || true
 
 hardware:qpu:
     stage: hardware
@@ -98,17 +179,37 @@ hardware:qpu:
     extends: .hardware
     needs:
         - !reference [.needs-gates, verify-and-test]
-    # 30m: no run data (never executed -- protected refs only). Deliberate
+    # 45m: no run data (never executed -- protected refs only). Deliberate
     # guess with cold-start headroom for a real network round-trip to a
-    # D-Wave QPU, which can queue on the hardware itself. See setup.yml's
-    # "Job timeouts" section.
-    timeout: 30m
-    before_script:
-        - !reference [.fragments, uv]
-        - uv sync --extra dwave
+    # D-Wave QPU, which can queue on the hardware itself, and -- since
+    # QUI-1191 -- a cold cargo registry fetch plus a full xqvm + xqasm +
+    # pyo3 compile before that round-trip starts. This was 30m when it
+    # covered the queueing alone.
+    #
+    # This job expects the cold path more often than the other two. Its
+    # `[linux, x86_64]` tags match lovelace, finney AND watch (see the
+    # routing note above), and the fleet has no shared cache server, so a
+    # cache entry only hits when the job lands on the machine that wrote
+    # it -- roughly one run in three here, against one in two for
+    # hardware:cuda's two-runner `cuda` tag and near-always for
+    # hardware:metal's single macOS box. The cargo cache added in QUI-1191
+    # still earns its place on that arithmetic, but it is an optimisation
+    # for the lucky runs and this timeout has to cover the unlucky ones.
+    # See setup.yml's "Job timeouts" section.
+    timeout: 45m
     script:
-        # DWAVE_API_TOKEN comes from a masked, protected CI/CD variable.
-        - uv run pytest xqsa/tests/ -m qpu -v
+        # -> scripts/run-hardware-tests.sh qpu. DWAVE_API_TOKEN comes from a
+        # masked, protected CI/CD variable; scripts/_hwprobe.py now checks
+        # for it up front and fails the job with that reason by name. That is
+        # not a new failure mode, only an earlier and clearer one: with no
+        # token this job was already red, because test_qpu_live.py's
+        # skip_no_token deliberately does not skip when CI is set, so every
+        # test ran and died constructing SolverDWaveQPU. The probe replaces a
+        # D-Wave client traceback with one line.
+        #
+        # No before_script: `extends: .hardware` supplies exactly the uv
+        # fragment this job needs, and everything else is the script's.
+        - make -k test-qpu
 
 hardware:metal:
     stage: hardware
@@ -116,13 +217,29 @@ hardware:metal:
     extends: .hardware
     needs:
         - !reference [.needs-gates, verify-and-test]
-    # 20m: no run data (never executed -- protected refs only). Deliberate
-    # guess, lower than the other two because there is no network
-    # queueing -- just local Apple Silicon Metal execution. See
-    # setup.yml's "Job timeouts" section.
-    timeout: 20m
+    # 30m: no run data (never executed -- protected refs only). The Metal
+    # solve itself has no network queueing, unlike the other two, and this
+    # was 20m on that basis. It is 30m since QUI-1191 because the run now
+    # also carries a cold cargo registry fetch plus a full compile of xqvm +
+    # xqasm + pyo3 on an empty `target/` -- and `.hardware`'s cargo cache
+    # never inherits main's warm one (see setup.yml), so the first run after
+    # any Cargo.lock bump is genuinely cold. See setup.yml's "Job timeouts"
+    # section.
+    timeout: 30m
     before_script:
         - !reference [.fragments, uv]
-        - uv sync --extra metal
+        # macOS shell runner: `image:` is ignored above, nothing is
+        # containerised, and the toolchain is whatever tesla-arm has
+        # installed. The maturin build this job gained needs cargo/rustc, and
+        # rustup keeps its proxies in ${HOME}/.cargo/bin -- which the root
+        # `default:` CARGO_HOME override does NOT point at, since that
+        # relocates the registry into ${CI_PROJECT_DIR}/.cargo. Put the real
+        # proxy directory on PATH explicitly rather than trusting the
+        # runner's shell to source a rustup env file; a no-op when it is
+        # already there.
+        - export PATH="${HOME}/.cargo/bin:${PATH}"
     script:
-        - uv run pytest xqsa/tests/ -m metal -v
+        # -> scripts/run-hardware-tests.sh metal: sync the `metal` extra,
+        # rebuild xqffi through maturin, hard-fail on an unavailable Metal
+        # device via scripts/_hwprobe.py, then run `-m metal`.
+        - make -k test-metal
