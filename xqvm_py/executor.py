@@ -514,6 +514,25 @@ class Executor:
         value = self.state.registers.get(slot)
         return value.size if isinstance(value, XQMX) and value.is_model() else 0
 
+    def _peek_model_grid(self, slot: int) -> tuple[int, int]:
+        """Grid extent for a charge basis, without discriminating the register.
+
+        The `(rows, cols)` twin of `_peek_model_size`, mirroring
+        `exec_one_hot_r`'s `match self.reg(reg) { RegVal::Model(m) => m.cols,
+        _ => 0 }` and `exec_one_hot_c`'s `rows` counterpart. ONEHOTR charges
+        on `cols` and ONEHOTC on `rows`, both peeked this way, so a slot
+        holding a sample, an int, or nothing at all sizes the charge at zero
+        and falls through to the type error the charge precedes.
+
+        `is_model()` is the whole point: `_get_register_as_xqmx` accepts a
+        sample, so sizing the charge off the resolved register billed a
+        sample for its real extent where Rust bills nothing (QUI-1202).
+        """
+        value = self.state.registers.get(slot)
+        if isinstance(value, XQMX) and value.is_model():
+            return value.rows, value.cols
+        return 0, 0
+
     def _get_register_as_model(self, slot: int, operation: str) -> XQMX:
         """Get a register value, ensuring it's an xqmx in MODEL mode.
 
@@ -1273,12 +1292,14 @@ class Executor:
         """RESIZE: Set grid dimensions."""
         reg = instr.operands[0]
         cols, rows = self.state.pop_n(2)
-        xqmx = self._get_register_as_xqmx(reg)
         # A non-positive extent is not a grid. Assigning it unconditionally
         # left the model degenerate, which is how a grid reached the state
-        # ONEHOTR and ONEHOTC reject.
+        # ONEHOTR and ONEHOTC reject. The check precedes the register read
+        # because `exec_resize` rejects a non-grid extent before it touches
+        # the register, so a program carrying both faults must raise this one.
         if rows <= 0 or cols <= 0:
             raise InvalidGridDimensions(rows, cols)
+        xqmx = self._get_register_as_xqmx(reg)
         # A grid is a reinterpretation of variables the program already
         # declared and already paid for at allocation, so it cannot describe
         # cells that do not exist. Without this bound ROWSUM, COLSUM, ROWFIND
@@ -1340,16 +1361,23 @@ class Executor:
         """ONEHOTR: Add one-hot constraint for row."""
         reg = instr.operands[0]
         penalty, row = self.state.pop_n(2)
-        model = self._get_register_as_xqmx(reg)
-
-        if model.rows == 0 or model.cols == 0:
-            raise InvalidGridDimensions(model.rows, model.cols)
-
         # The expansion writes one linear term per column and one quadratic
         # term per pair of columns, so ONEHOTR costs O(cols^2) entries in one
         # step -- and RESIZE takes cols straight off the value stack.
-        self._charge_equality_expansion(model.cols)
-        self._charge_steps(equality_expansion_steps(model.cols))
+        #
+        # Sized from a peek and charged before the register is discriminated,
+        # matching exec_one_hot_r. Resolving first and charging off the
+        # resolved register billed a sample for its real cols, where Rust's
+        # model-only peek bills nothing and goes straight to the type error
+        # (QUI-1202).
+        _rows, cols = self._peek_model_grid(reg)
+        self._charge_equality_expansion(cols)
+        self._charge_steps(equality_expansion_steps(cols))
+        model = self._get_register_as_model(reg, "ONEHOT")
+        # The grid precondition is `row_indices`' own (`grid_row_extent`
+        # raises InvalidGridDimensions for an ungridded model and
+        # IndexOutOfBounds for a row outside `[0, rows)`), and it lands after
+        # the charge because `grid_row_index` does in Rust.
         indices = row_indices(model, row)
         expand_onehot(model, indices, penalty)
 
@@ -1357,14 +1385,12 @@ class Executor:
         """ONEHOTC: Add one-hot constraint for column."""
         reg = instr.operands[0]
         penalty, col = self.state.pop_n(2)
-        model = self._get_register_as_xqmx(reg)
-
-        if model.rows == 0 or model.cols == 0:
-            raise InvalidGridDimensions(model.rows, model.cols)
-
-        # O(rows^2) entries in one step; see ONEHOTR.
-        self._charge_equality_expansion(model.rows)
-        self._charge_steps(equality_expansion_steps(model.rows))
+        # O(rows^2) entries in one step, peeked and charged ahead of the
+        # register read; see ONEHOTR.
+        rows, _cols = self._peek_model_grid(reg)
+        self._charge_equality_expansion(rows)
+        self._charge_steps(equality_expansion_steps(rows))
+        model = self._get_register_as_model(reg, "ONEHOT")
         indices = col_indices(model, col)
         expand_onehot(model, indices, penalty)
 

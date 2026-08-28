@@ -1,0 +1,22 @@
+; atleast_k_range_before_model_type: ATLEAST range-checks k before it
+; type-checks its model register.
+;
+; r0 holds an int, not a model, and k=0 is out of ATLEAST's (0, n] range.
+; Both faults are live; SPEC.md:176's error precedence decides which one is
+; raised -- exec_at_least's `if k <= 0 || k > n_i64` guard runs before it
+; reaches reg_mut(model). INPUT writes a register of unknown kind, so
+; the verifier admits this program (QUI-1178 route B).
+
+PUSH 0
+INPUT r0         ; r0 = calldata[0] = 5, an int -- not a model
+
+VECI r1
+PUSH 0
+VECPUSH r1
+PUSH 1
+VECPUSH r1
+
+PUSH 0           ; k = 0, out of range
+PUSH 1           ; penalty
+ATLEAST r0 r1
+HALT
