@@ -148,6 +148,62 @@ fail loudly on the Python runner until one exists.
 resolved arbitrarily to one of them. Splitting it is a prerequisite for
 any loop-fault vector.
 
+### Fault ordering (QUI-1178)
+
+`spec/xqvm/SPEC.md` fixes the order of work within one instruction: pops,
+then the allocation charge, then validation. Where a register read once
+preceded the pops in `xqvm_py`, the divergence was reachable two ways --
+a short stack (which the verifier rejects) and an operand fault raised
+ahead of the register read (which it admits). Only the second is
+consensus-visible.
+
+Of the 22 opcodes reordered, the second route reaches:
+
+| Opcode(s) | Fault raised ahead of the register read | Pinned by |
+|---|---|---|
+| `RESIZE` | `InvalidGridDimensions`, unconditional | `vectors/xqmx-grid/resize_type_after_dimension_check` |
+| `VECPUSH`, `SETLINE`, `ADDLINE`, `SETQUAD`, `ADDQUAD`, `EXCLUDE`, `IMPLIES`, `REDUCE` | `MemoryLimitExceeded`, only against a near-exhausted budget | `xqvm_py/tests/test_executor.py` -- `Inputs` carries no `memory_limit`, so a vector cannot express these |
+| `ATLEAST` | `IndexOutOfBounds` on `k`, unconditional | `vectors/constraints/atleast_k_range_before_model_type` |
+| `ATLEASTW` | `VecLengthMismatch`, unconditional | `vectors/constraints/atleastw_length_before_model_type` |
+| `EQUALITY` | `VecLengthMismatch`, unconditional -- the vec lengths are compared before the model register is discriminated, and the charge follows both vec reads | `vectors/constraints/equality_length_mismatch_beats_model_type` |
+| `VECGET`, `VECSET`, `GETLINE`, `GETQUAD`, `ROWFIND`, `COLFIND`, `ROWSUM`, `COLSUM` | none -- Rust type-checks immediately after its pops | short stack only, not verifier-clean |
+| `ONEHOTR`, `ONEHOTC` | none, since QUI-1202 -- the charge is sized from a model-only peek on both VMs, so a sample sizes it at zero | `xqvm_py/tests/test_executor.py` -- `test_onehot_does_not_charge_for_a_sample`; `Inputs` carries no `memory_limit`, so a vector cannot express it |
+
+The `ONEHOTR`/`ONEHOTC` row read "none" before QUI-1202 as well, on a
+justification that did not hold. `exec_one_hot_r` sizes its charge from a
+peek that yields `cols` only for `RegVal::Model` and `0` for everything
+else, then resolves with `as_model_mut`; neither Python runner peeked at
+all -- both went pop, `_get_register_as_xqmx` (which accepts a sample),
+dimensions, charge -- so a sample's real extent sized the charge and a
+tight budget raised `MemoryLimitExceeded` where the Rust VM charged
+nothing. `_peek_model_grid` closes it: the peek is `is_model()`-gated on
+both VMs now, and the budget can no longer decide the fault.
+
+That mattered because the register reaches `ONEHOTR` as a sample without
+the verifier objecting. `check_reads` requires `R::Model` there, and a
+register the verifier knows is a `Sample` is rejected statically -- but it
+does not always know. Two routes get past it:
+
+- **Host calldata.** `Vm::set_calldata` takes any `RegVal`, samples
+  included ("This allows passing models, samples, and vectors between
+  programs"), and `INPUT` clones the entry into the register. `INPUT`
+  writes `RegType::Any`, which satisfies every requirement, so
+  `PUSH 0 / INPUT r0 / PUSH 0 / PUSH 1 / ONEHOTR r0` is verifier-clean and
+  arrives holding whatever the embedder supplied. The `--calldata` CLI flag
+  parses i64s and cannot express this; the embedding API is the reachable
+  surface, and on a chain runtime it is the host that fills those slots.
+- **A branch join.** `meet_reg` merges `Model` and `Sample` to
+  `RegType::Any` (`xqvm/src/dataflow/register.rs:95`), so a program that
+  writes `BQMX` on one branch and `BSMX` on the other, joins, and calls
+  `ONEHOTR` verifies clean using nothing but its own instructions.
+
+What survives is the `XqmxMode` carve-out, which is not this table's
+business: `xqvm_py` rejects the sample with `XQMXModeError` and the Rust
+VM with `RegisterType`. `spec/xqvm/SPEC.md:211` records that row as the
+one unresolved entry in the fault table and says neither identity is safe
+to write a vector against until it is settled, which is why the test above
+pins the charge rather than the name.
+
 ## Authoring a new vector
 
 1. Write `program.xqasm` with a minimal scenario that exercises the

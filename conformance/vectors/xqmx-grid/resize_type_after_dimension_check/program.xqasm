@@ -1,0 +1,15 @@
+; resize_type_after_dimension_check: RESIZE validates its dimensions before
+; it type-checks its register.
+;
+; r0 holds an int, not an XQMX, and the dimensions are zero. Both faults are
+; live; SPEC.md's order of work decides which one is raised. INPUT writes a
+; register of unknown kind, so the verifier admits this program -- the
+; divergence is consensus-visible (QUI-1178 route B).
+
+PUSH 0
+INPUT r0         ; r0 = calldata[0] = 5, an int
+
+PUSH 0           ; rows
+PUSH 0           ; cols
+RESIZE r0
+HALT

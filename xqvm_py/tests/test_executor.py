@@ -3637,3 +3637,334 @@ class TestConstraintCheckOrder:
         )
         with pytest.raises(VecLengthMismatch):
             Executor().execute(prog)
+
+
+class TestFaultOrdering:
+    """Every runner pops its operands before it resolves a register.
+
+    `spec/xqvm/SPEC.md` fixes the order of work within one instruction:
+    pops, then the allocation charge, then validation. A runner that reads
+    its register first raises `TypeMismatch` where the Rust VM raises the
+    operand fault -- a fault-identity divergence, which on a chain runtime
+    is a consensus split (QUI-1178).
+    """
+
+    #: Prefix of every accessor that resolves a register --
+    #: `_get_register_as_xqmx`, `_get_register_as_vec`,
+    #: `_get_register_as_model`, `_get_register_as_int` today. Matched by
+    #: prefix rather than by an explicit set because a runner reaching a
+    #: register through an accessor the set did not name is silently exempt
+    #: rather than flagged: `_first_positions` finds no read at all, so
+    #: `read < pop` is never evaluated. A fifth accessor is the same hazard
+    #: this guard exists to catch, one level up.
+    #:
+    #: The prefix deliberately excludes the non-faulting peeks
+    #: (`_peek_model_size`, `_peek_model_grid`). They read a slot without
+    #: discriminating it, which is what lets the charge precede the type
+    #: error, so they are not the resolution this guard orders against pops.
+    REGISTER_READ_PREFIX = "_get_register_as"
+    POPS = frozenset({"pop", "pop_n"})
+
+    #: Loads calldata slot 0 into r0 as an int. `INPUT` writes a register of
+    #: unknown kind, which is what lets the verifier admit these programs --
+    #: the same shape the route-B conformance vectors use.
+    PROLOGUE = [Instruction(Opcode.PUSH1, (0,)), Instruction(Opcode.INPUT, (0,))]
+
+    @staticmethod
+    def _first_positions(func):
+        """Source position of the first register read and the first pop.
+
+        Returns `(read_pos, pop_pos)`, either of which is `None` when the
+        runner does not do that thing. Positions are `(lineno, col_offset)`
+        so a read and a pop on one line still compare left to right.
+        """
+        import ast
+        import inspect
+        import textwrap
+
+        tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
+        reads, pops = [], []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            target = node.func
+            name = target.attr if isinstance(target, ast.Attribute) else getattr(target, "id", None)
+            pos = (node.lineno, node.col_offset)
+            if name is not None and name.startswith(TestFaultOrdering.REGISTER_READ_PREFIX):
+                reads.append(pos)
+            elif name in TestFaultOrdering.POPS:
+                pops.append(pos)
+        return (min(reads) if reads else None, min(pops) if pops else None)
+
+    @staticmethod
+    def _run(instructions, memory_limit=DEFAULT_MEMORY_LIMIT, registers=(0,)):
+        """Run `PROLOGUE`-loaded registers plus `instructions` to completion.
+
+        Every slot in `registers` is loaded from calldata with an int, so a
+        runner that type-checks its register faults where a runner that pops
+        first does not.
+        """
+        prologue = []
+        for slot in registers:
+            prologue += [
+                Instruction(Opcode.PUSH1, (slot,)),
+                Instruction(Opcode.INPUT, (slot,)),
+            ]
+        prog = make_program(prologue + list(instructions) + [Instruction(Opcode.HALT)])
+        ex = Executor()
+        ex.execute(
+            prog,
+            input_data={slot: 5 for slot in registers},
+            memory_limit=memory_limit,
+        )
+        return ex
+
+    @staticmethod
+    def _prologue_budget(registers=(0,)):
+        """Bytes the prologue alone costs.
+
+        `INPUT` charges for the copy it makes, so a test that wants the
+        *next* charge to fail sets the budget to exactly this. Derived from a
+        run rather than hard-coded, so a change to the charge rate does not
+        silently turn these tests into no-ops.
+        """
+        ex = Executor()
+        prologue = []
+        for slot in registers:
+            prologue += [
+                Instruction(Opcode.PUSH1, (slot,)),
+                Instruction(Opcode.INPUT, (slot,)),
+            ]
+        ex.execute(
+            make_program(prologue + [Instruction(Opcode.HALT)]),
+            input_data={slot: 5 for slot in registers},
+        )
+        return ex.memory_used
+
+    def test_pops_precede_the_register_read(self):
+        offenders = set()
+        for runner in Executor()._build_dispatch_table().values():
+            read, pop = self._first_positions(runner)
+            if read is not None and pop is not None and read < pop:
+                offenders.add(runner.__name__)
+        assert offenders == set(), (
+            "these runners resolve a register before popping their operands, "
+            "which raises TypeMismatch where the Rust VM raises the operand "
+            "fault -- a consensus-visible divergence "
+            f"(spec/xqvm/SPEC.md, QUI-1178): {sorted(offenders)}"
+        )
+
+    def test_vecpush_charges_before_it_reads_its_register(self):
+        """A budget too small to hold the element faults before the type check.
+
+        `exec_vec_push` calls `charge` before it resolves the register, so
+        an int in r0 under an exhausted budget is MemoryLimitExceeded in
+        Rust, not TypeMismatch.
+        """
+        with pytest.raises(MemoryLimitExceeded):
+            self._run(
+                [
+                    Instruction(Opcode.PUSH1, (7,)),
+                    Instruction(Opcode.VECPUSH, (0,)),
+                ],
+                memory_limit=self._prologue_budget(),
+            )
+
+    @staticmethod
+    def _onehot_model_setup(dim):
+        """Instructions building a `dim` x `dim` grid model in r0.
+
+        A square grid so the same setup drives both ONEHOTR (charges on
+        `cols`) and ONEHOTC (charges on `rows`) with the same nonzero
+        magnitude. Mirrors `conformance/vectors/constraints/onehotr_coeff`.
+        """
+        return [
+            Instruction(Opcode.PUSH1, (dim * dim,)),
+            Instruction(Opcode.BQMX, (0,)),
+            Instruction(Opcode.PUSH1, (dim,)),  # rows
+            Instruction(Opcode.PUSH1, (dim,)),  # cols
+            Instruction(Opcode.RESIZE, (0,)),
+        ]
+
+    @classmethod
+    def _onehot_model_setup_budget(cls, dim):
+        """Bytes the model setup alone costs, the way `_prologue_budget` does.
+
+        `BQMX` is the only charging instruction here (`RESIZE` charges
+        nothing), so this is exactly `dim * dim * VARIABLE_BYTES` -- derived
+        from a run rather than hard-coded so a change to the charge rate
+        cannot silently turn the test below into a no-op.
+        """
+        ex = Executor()
+        ex.execute(make_program(cls._onehot_model_setup(dim) + [Instruction(Opcode.HALT)]))
+        return ex.memory_used
+
+    @pytest.mark.parametrize("opcode", [Opcode.ONEHOTR, Opcode.ONEHOTC])
+    def test_onehot_charges_before_it_expands(self, opcode):
+        """A model sized to exhaust the budget faults on the charge itself.
+
+        The register here holds a real model, which is the case both VMs
+        agree on: `exec_one_hot_r` peeks `cols` off it and charges before
+        `as_model_mut` and `grid_row_index`, and `_runner_ONEHOTR` charges
+        after `_get_register_as_xqmx` but still before `row_indices` and
+        `expand_onehot`. A budget that covers building the grid but not the
+        one-hot expansion must therefore raise MemoryLimitExceeded, not the
+        (passing) dimension check or anything downstream of it -- and a
+        regression that dropped the charge call entirely would let this
+        program run to completion instead.
+
+        A register holding something other than a model charges nothing
+        at all; see `test_onehot_does_not_charge_for_a_sample`.
+        """
+        dim = 3
+        budget = self._onehot_model_setup_budget(dim)
+        prog = make_program(
+            self._onehot_model_setup(dim)
+            + [
+                Instruction(Opcode.PUSH1, (0,)),  # row/col index
+                Instruction(Opcode.PUSH1, (1,)),  # penalty
+                Instruction(opcode, (0,)),
+                Instruction(Opcode.HALT),
+            ]
+        )
+        with pytest.raises(MemoryLimitExceeded):
+            Executor().execute(prog, memory_limit=budget)
+
+    @pytest.mark.parametrize("opcode", [Opcode.ONEHOTR, Opcode.ONEHOTC])
+    def test_onehot_does_not_charge_for_a_sample(self, opcode):
+        """A sample sizes the charge at zero, as Rust's peek does (QUI-1202).
+
+        `_peek_model_grid` is `is_model()`-gated, so a sample contributes
+        nothing to the charge and the run reaches the mode check with the
+        budget untouched -- mirroring `exec_one_hot_r`'s `RegVal::Model(m) =>
+        m.cols, _ => 0`, which charges nothing and falls through to
+        `as_model_mut`'s RegisterType.
+
+        The budget below has no headroom past the setup, so the assertion is
+        that the fault is *not* MemoryLimitExceeded: before the fix the
+        register resolved first and a sample was billed 240 bytes for its
+        real 3x3 extent, which raised MemoryLimitExceeded here where the Rust
+        VM raised its type error -- and it is verifier-clean, since `INPUT`
+        and a `BQMX`/`BSMX` branch join both write `RegType::Any`, which
+        satisfies ONEHOT's `R::Model` requirement. Both routes are covered:
+        the in-program `BSMX` below pins the runner, and the calldata sample
+        after it pins the surface an embedder reaches, since
+        `Vm::set_calldata` takes any `RegVal` -- samples included, as its own
+        docs say.
+
+        Which identity the surviving fault carries is deliberately not
+        asserted beyond Python's own: `spec/xqvm/SPEC.md:211` records
+        `XqmxMode` as the one unresolved row in the fault table -- `xqvm_py`
+        raises it where the Rust VM raises `TypeMismatch`, no `xqvm::Error`
+        maps to it, and the spec says neither identity is safe to write a
+        vector against until that is settled. What this pins is the charge,
+        which is settled: the same fault now comes out at any budget.
+
+        An int in the register cannot pin this. `_get_register_as_xqmx`
+        rejects it before the charge either way, so a test written against
+        one passes whatever the charge ordering is.
+        """
+        dim = 3
+        setup = [
+            Instruction(Opcode.PUSH1, (dim * dim,)),
+            Instruction(Opcode.BSMX, (0,)),  # a SAMPLE, not a model
+            Instruction(Opcode.PUSH1, (dim,)),
+            Instruction(Opcode.PUSH1, (dim,)),
+            Instruction(Opcode.RESIZE, (0,)),  # RESIZE accepts model|sample
+        ]
+        ex = Executor()
+        ex.execute(make_program(setup + [Instruction(Opcode.HALT)]))
+        budget = ex.memory_used
+
+        prog = make_program(
+            setup
+            + [
+                Instruction(Opcode.PUSH1, (0,)),  # row/col index
+                Instruction(Opcode.PUSH1, (1,)),  # penalty
+                Instruction(opcode, (0,)),
+                Instruction(Opcode.HALT),
+            ]
+        )
+        with pytest.raises(XQMXModeError):
+            Executor().execute(prog, memory_limit=budget)
+        # Same fault with the budget out of the picture: the charge is what
+        # the fix removed, so it can no longer decide the outcome.
+        with pytest.raises(XQMXModeError):
+            Executor().execute(prog)
+
+        # The same register kind delivered the way a host delivers it. This
+        # is the shorter route to the runner and the one an embedder
+        # controls; `--calldata` parses i64s and cannot express it, which is
+        # what makes it easy to miss from the command line.
+        def calldata_sample() -> XQMX:
+            sample = XQMX.binary_sample(dim * dim)
+            sample.rows, sample.cols = dim, dim
+            return sample
+
+        input_prologue = [
+            Instruction(Opcode.PUSH1, (0,)),
+            Instruction(Opcode.INPUT, (0,)),
+        ]
+        ex = Executor()
+        ex.execute(
+            make_program(input_prologue + [Instruction(Opcode.HALT)]),
+            input_data={0: calldata_sample()},
+        )
+        via_input = make_program(
+            input_prologue
+            + [
+                Instruction(Opcode.PUSH1, (0,)),
+                Instruction(Opcode.PUSH1, (1,)),
+                Instruction(opcode, (0,)),
+                Instruction(Opcode.HALT),
+            ]
+        )
+        for limit in (ex.memory_used, DEFAULT_MEMORY_LIMIT):
+            with pytest.raises(XQMXModeError):
+                Executor().execute(
+                    via_input,
+                    input_data={0: calldata_sample()},
+                    memory_limit=limit,
+                )
+
+    def test_reduce_charges_before_it_reads_its_register(self):
+        """`exec_reduce` charges before it resolves the model register."""
+        with pytest.raises(MemoryLimitExceeded):
+            self._run(
+                [
+                    Instruction(Opcode.PUSH1, (1,)),
+                    Instruction(Opcode.PUSH1, (1,)),
+                    Instruction(Opcode.PUSH1, (1,)),
+                    Instruction(Opcode.REDUCE, (0,)),
+                ],
+                memory_limit=self._prologue_budget(),
+            )
+
+    @pytest.mark.parametrize(
+        "opcode,operands",
+        [
+            (Opcode.EQUALITY, (0, 1, 2)),
+            (Opcode.ATLEAST, (0, 1)),
+            (Opcode.ATLEASTW, (0, 1, 2)),
+        ],
+    )
+    def test_multi_register_opcodes_read_their_inputs_before_the_model(self, opcode, operands):
+        """The indices register is validated before the model register.
+
+        `exec_equality`, `exec_at_least` and `exec_at_least_w` all resolve
+        `indices` with `as_vec_int` before they reach `reg_mut(model)`.
+        With both r0 (model) and r1 (indices) holding ints, the reported
+        register must be r1 in both VMs. (Where in that sequence the
+        charges fall differs per opcode -- but neither register is a model
+        here, so nothing is charged either way.)
+        """
+        with pytest.raises(TypeMismatch) as excinfo:
+            self._run(
+                [
+                    Instruction(Opcode.PUSH1, (1,)),
+                    Instruction(Opcode.PUSH1, (1,)),
+                    Instruction(opcode, operands),
+                ],
+                registers=(0, 1, 2),
+            )
+        assert "r1" in str(excinfo.value)
