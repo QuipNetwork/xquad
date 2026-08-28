@@ -12,8 +12,12 @@
       the commit grammar by `verify:policy`
 - [ ] Title set before the final push -- GitLab does not start a pipeline
       on a title edit, so a title changed afterwards is not rechecked here
-- [ ] Workspace version bumped in all `Cargo.toml` manifests
-- [ ] Workspace version bumped in all `pyproject.toml` manifests
+- [ ] Every version site bumped -- `make check-version-sites TAG=vX.Y.Z` is
+      clean locally. One box rather than one per file type: splitting it that
+      way is what left `xqvm_py/__init__.py` and the `==X.Y.Z` peer pins
+      belonging to neither. `make list-version-sites` prints the full list
+- [ ] Lockfiles regenerated -- `cargo check`, `uv lock`, and
+      `cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml`
 - [ ] `release:validate` is green on this MR's pipeline
 - [ ] Release notes previewed with `make changelog-release VERSION=vX.Y.Z`
 - [ ] Substrate pallet team notified (if this is a major or breaking bump)

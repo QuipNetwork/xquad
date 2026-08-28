@@ -24,7 +24,7 @@
 # literally named `.`, so four of the five published distributions raised
 # ModuleNotFoundError as installed while every release job stayed green.
 #
-# Three checks, cheapest first:
+# Four checks, cheapest first:
 #
 #   1. Layout and payload. Every top-level entry of every built wheel must be
 #      the import package itself or its own dist-info -- `.`, `PKG-INFO` and
@@ -37,11 +37,19 @@
 #      down. Wheels only: the sdist legitimately carries the tests, the
 #      pyproject and the README that the wheel must not, and where pip falls
 #      back to it, it rebuilds the wheel from the configuration this checks.
-#   2. Install and import. Install all five distributions into a throwaway
+#   2. Artefact versions. Every wheel filename, dist-info directory, sdist
+#      filename and PKG-INFO must carry the version the manifests declare.
+#      Check 1 reads the dist-info name but only its prefix, and nothing else
+#      in the pipeline looks at the version at all -- which matters most for
+#      xqffi, whose pyproject is `dynamic` and whose version maturin takes
+#      from xqffi/Cargo.toml while its peers pin it in the PEP 440 spelling.
+#      With scripts/check-version-sites.py comparing the manifests to the tag
+#      on a tag pipeline, this closes the chain artefact == manifests == tag.
+#   3. Install and import. Install all five distributions into a throwaway
 #      venv, import them from a directory outside the repository so the source
 #      tree cannot satisfy the import, and confirm each module resolves inside
 #      that venv rather than out of the checkout.
-#   3. Extras. `xquad` must forward every extra `xqsa` declares, so that
+#   4. Extras. `xquad` must forward every extra `xqsa` declares, so that
 #      `pip install xquad[quip]` resolves like its cuda/dwave/metal siblings.
 #      Resolving an extra for real belongs in manual release verification,
 #      not in every pipeline; this asserts only that the metadata agrees.
@@ -55,8 +63,8 @@
 #
 # Exit codes:
 #   0  -- pass
-#   1  -- a wheel is mislaid, carries a file that is not package content, does
-#         not import, or drops an extra
+#   1  -- a wheel is mislaid, carries a file that is not package content,
+#         carries the wrong version, does not import, or drops an extra
 #   2  -- setup error (no dist directory, no wheel in one, wheel metadata that
 #         cannot be read, uv or python3 unavailable)
 #
@@ -214,6 +222,98 @@ PY
     (( found == 1 )) || die_setup "no wheel in ${name}/dist; build the distributions first"
 }
 
+# Assert every built artefact carries the version the manifests declare.
+#
+# check_layout above reads the dist-info directory but only its name prefix
+# (`top.split("-", 1)[0] != name`); the version segment goes uninspected, and
+# nothing else in the pipeline looks at it either. That leaves a gap on the
+# one site that feeds both ecosystems: xqffi/pyproject.toml declares
+# `dynamic = ["version"]` and maturin takes the version from
+# xqffi/Cargo.toml, while xqvm_py and xquad pin `xqffi==<PEP 440 version>`.
+# Cargo spells a prerelease `0.4.0-rc1` and Python spells it `0.4.0rc1`, so
+# the two sites cannot be compared as strings and the mapping has to be
+# checked against what the builder actually stamps.
+#
+# scripts/check-version-sites.py --print-version is the manifests' side of
+# that comparison, and it refuses a tree whose sites disagree. Together with
+# that guard's tag check on a tag pipeline, this closes the chain: artefact
+# == manifests == tag. It covers all five distributions rather than xqffi
+# alone, so hatchling's rendering of xqvm_py/__init__.py is checked too.
+#
+# Sets FAILED rather than exiting, so one run reports every mismatched
+# artefact instead of the first.
+check_artefact_versions() {
+    local expected
+
+    if ! expected="$(uv run --no-project --isolated --python 3.13 python \
+        "${REPO_ROOT}/scripts/check-version-sites.py" --print-version)"; then
+        die_setup "could not read the workspace version; run \`make list-version-sites\`"
+    fi
+
+    python3 - "${REPO_ROOT}" "${expected}" "${PACKAGES[@]}" <<'PY' || FAILED=1
+import pathlib
+import sys
+import tarfile
+import zipfile
+
+root, expected, names = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3:]
+findings = []
+
+
+def check(where, found):
+    if found != expected:
+        findings.append(f"{where}: version {found}, expected {expected}")
+
+
+for name in names:
+    for artefact in sorted((root / name / "dist").iterdir()):
+        rel = f"{name}/dist/{artefact.name}"
+        if artefact.name.endswith(".whl"):
+            # {name}-{version}-{python}-{abi}-{platform}.whl
+            check(rel, artefact.name.split("-")[1])
+            with zipfile.ZipFile(artefact) as archive:
+                tops = {entry.split("/", 1)[0] for entry in archive.namelist()}
+            for top in sorted(top for top in tops if top.endswith(".dist-info")):
+                check(f"{rel} ({top})", top.removesuffix(".dist-info").split("-", 1)[1])
+        elif artefact.name.endswith(".tar.gz"):
+            stem = artefact.name.removesuffix(".tar.gz")
+            check(rel, stem.split("-", 1)[1])
+            with tarfile.open(artefact) as archive:
+                # extractfile raises KeyError for an absent member and returns
+                # None only for one that exists but is not a regular file, so
+                # the finding below is reachable only with the catch. Without
+                # it a missing PKG-INFO -- or a root directory not named after
+                # the filename stem -- kills the loop on an uncaught KeyError
+                # and the remaining distributions go unreported.
+                try:
+                    member = archive.extractfile(f"{stem}/PKG-INFO")
+                except KeyError:
+                    member = None
+                if member is None:
+                    findings.append(f"{rel}: no PKG-INFO")
+                    continue
+                for line in member.read().decode("utf-8").splitlines():
+                    if line.startswith("Version:"):
+                        check(f"{rel} (PKG-INFO)", line.split(":", 1)[1].strip())
+                        break
+
+for finding in findings:
+    print(f"error: {finding}", file=sys.stderr)
+
+if findings:
+    print(
+        "error: a built artefact does not carry the version its manifests declare."
+        " The builder normalises the Cargo spelling into PEP 440 (0.4.0-rc1 becomes"
+        " 0.4.0rc1), so check xqffi/Cargo.toml and xqvm_py/__init__.py against"
+        " `make list-version-sites` before assuming the builder is at fault.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+print(f"artefact version check passed: every distribution is {expected}")
+PY
+}
+
 # Install every distribution into a throwaway venv and import it from outside
 # the repository, where the source tree cannot answer the import.
 check_install_and_import() {
@@ -356,6 +456,7 @@ main() {
         echo "layout check passed: ${PACKAGES[*]}"
     fi
 
+    check_artefact_versions
     check_install_and_import
     check_extras
 
