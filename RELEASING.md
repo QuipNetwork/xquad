@@ -66,11 +66,18 @@ Before cutting a tag:
    major-version bumps downstream. Ping the pallet team before the
    first `xqvm 0.1.0` release so their pins move atomically; for
    non-breaking bumps (`0.1.x → 0.1.y`) a ping is courtesy.
-3. **Verify workspace version is bumped.** Every crate's
-   `Cargo.toml` and every Python package's `pyproject.toml` must
-   agree on the version being tagged. Between releases main carries
-   the next version with a `-dev` suffix, so this step is normally a
-   matter of dropping that suffix rather than choosing a new number.
+3. **Verify workspace version is bumped.** Run
+   `make check-version-sites TAG=vX.Y.Z`; it compares every version
+   site in the tree against the tag and names the ones that disagree.
+   `make list-version-sites` prints the full list. Between releases
+   main carries the next version with a prerelease suffix, so this step
+   is normally a matter of dropping that suffix rather than choosing a
+   new number.
+
+   The tag pipeline runs the same comparison inside `release:validate`,
+   so a tag cut against an unbumped tree fails before `release:crates`
+   and nothing reaches a registry. Running it here is how you find out
+   before the tag exists rather than after.
 4. **Preview release notes** with `make changelog-release VERSION=vX.Y.Z`.
    The output `CHANGELOG.md` is gitignored; it lets you sanity-check
    what the GitLab Release page will say before tagging. If a
@@ -108,21 +115,19 @@ Before cutting a tag:
 git checkout -b release/vX.Y.Z main
 
 # 2. Bump versions in every manifest, then regenerate the lockfiles.
-#    Version sites:
-#      - Cargo.toml [workspace.dependencies] -- the `version` alongside
-#        `path` on xqvm and xqasm. `cargo publish --locked` fails without
-#        it; the root has no workspace.package.version to bump.
-#      - each crate's Cargo.toml: xqvm, xqasm, xqcli, xqffi, conformance.
-#      - each pyproject.toml [project] version: xqcp, xqsa, xquad.
-#      - xqvm_py/__init__.py __version__ -- xqvm_py and xqffi declare
-#        `dynamic = ["version"]`, so their pyproject carries no version
-#        line and hatch reads this file instead.
-#      - the `==X.Y.Z` peer pins in xqcp, xqsa, xqvm_py and xquad
-#        pyproject.toml, including xquad's optional-dependencies.
+#    `make list-version-sites` prints every site and its current value;
+#    that list lives in scripts/check-version-sites.py and is not
+#    repeated here, so the prose cannot fall behind the check. In shape
+#    it is: every crate manifest, the two workspace dependency aliases in
+#    Cargo.toml, every pyproject [project] version, xqvm_py/__init__.py,
+#    every `==X.Y.Z` peer pin including xquad's optional-dependencies,
+#    and the lockfiles below.
 #    Then regenerate: `cargo check` (Cargo.lock), `uv lock` (uv.lock), and
 #    `cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml`
 #    (standalone workspace with its own lock; no job builds it with
-#    --locked, so a stale xqvm entry there drifts silently for releases).
+#    --locked, so nothing but the version-site guard notices a stale xqvm
+#    entry there).
+#    Then confirm: `make check-version-sites TAG=vX.Y.Z`.
 git commit -s -am "chore: bump workspace to X.Y.Z"
 
 #    Main carries `X.Y.Z-dev` (Rust) / `X.Y.Z.devN` (Python) between
@@ -197,11 +202,26 @@ red. See the job's comment in `.gitlab/ci/release.yml`.
 If you need to tag without a release MR (e.g., hotfix or RC):
 
 ```sh
+# Bump every version site to X.Y.Z first -- step 2 of the release MR
+# flow above. This path has no MR and no review, so nothing else will
+# catch an unbumped tree before the tag exists.
+make check-version-sites TAG=vX.Y.Z
+
 git tag -s vX.Y.Z -m "xquad vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-The tag push triggers the release pipeline identically.
+The tag push triggers the release pipeline identically, including the
+same version-site comparison inside `release:validate`. A tag cut
+against an unbumped tree therefore fails ahead of `release:crates` with
+nothing published: delete the tag, bump, and re-cut, as under "If a tag
+does get cut against a red tree" above.
+
+Release candidates take this path, and the bump is not optional for
+them either. Main carries the next version with a prerelease suffix, so
+cutting `vX.Y.Z-rc1` means moving every site to `X.Y.Z-rc1` (Cargo) /
+`X.Y.ZrcN` (Python) first, and opening the follow-up back to the `-dev`
+version afterwards.
 
 ---
 
@@ -209,9 +229,13 @@ The tag push triggers a fully-automatic pipeline in stage `release`:
 
 1. **`release:validate`** -- the same job that ran on the release MR's
    own pipeline, using the same setup `release:pypi` uses. `make -k
-   check-release` dry-runs all three crates and builds, `twine check`s,
-   and smoke-installs all five Python distributions against the tagged
-   commit. Nothing is uploaded; this is the gate that catches manifest
+   check-release` checks every version site against `$CI_COMMIT_TAG`,
+   dry-runs all three crates, and builds, `twine check`s and
+   smoke-installs all five Python distributions against the tagged
+   commit. The version check is the one part that does nothing on the
+   MR pipeline, where there is no tag to compare against, so the tag
+   pipeline is the first run that exercises it.
+   Nothing is uploaded; this is the gate that catches manifest
    / license / metadata regressions before any registry sees them --
    and because it already ran green on the MR, a broken release setup
    fails there instead of mid-release.
@@ -304,6 +328,8 @@ and rerun the pipeline.
   platform-specific CI runners.
 - **Automated version bumps.** No `cargo-release` / `hatch version`
   integration yet; versions are edited by hand per the step above.
+  `make check-version-sites` verifies the result but does not produce
+  it, so a bump is still as many edits as there are sites.
 - **Signed tags + signed artefacts.** Tags are expected to be git-
   signed (`git tag -s`); crates.io / PyPI artefact signing (sigstore
   cosign, PEP 740) is not wired. Tracked separately.

@@ -4,6 +4,7 @@
         lint-rust lint-python lint-policy check-atomic-spec check-commit-messages \
         test-rust test-python check-parity check-docs-handwritten \
         check-crate-publish check-python-dists check-release \
+        check-version-sites list-version-sites \
         deps deps-miri deps-py deps-wasm \
         install-hooks \
         lint lint-clippy lint-doc lint-deny-rs lint-py \
@@ -97,9 +98,44 @@ check-parity: opcode-parity conformance example-smoke metering-parity
 # requirements.
 check-docs-handwritten: check-docs-drift check-docs-readme
 
-# "Is the release artefact publishable": crate dry-run packaging plus the
-# Python distribution build/check/smoke-install, the same two questions
-# CI's release:validate job answers on every pipeline. Deliberately an
+# Stdlib-only Python for the version-site guard below. Pinned to 3.13 for
+# the same reason scripts/smoke-wheels.sh pins its venv rather than taking
+# whatever `python3` the runner carries: the guard needs tomllib (3.11+),
+# macOS ships 3.9 as `python3`, and the `python3` first on PATH inside
+# release:validate belongs to maturin's uv-tool venv, whose minor version
+# is not ours to choose. Unlike DOCSGEN this takes no `--with`: tomllib,
+# re and pathlib are the whole dependency set, so it never touches an
+# index, and `--no-project --isolated` keeps it independent of deps-py --
+# which matters because check-release must run before anything is built.
+VERPY := uv run --no-project --isolated --python 3.13 python
+
+# Wraps scripts/check-version-sites.py, forwarding the optional positional
+# TAG the way the script expects. With TAG unset the script falls back to
+# $CI_COMMIT_TAG, and with neither set the version comparison is a no-op
+# (its table sweeps still run).
+#
+# Quoted so an unset TAG passes an empty argument rather than none, which
+# is safe only because the script reads an empty positional as an absent
+# one. The parallel with check-atomic-spec above is a spelling and not a
+# mechanism: that target calls a bash script reading `${N:-}`, where empty
+# and absent coincide for free, whereas argparse distinguishes them and
+# had to be told. release:validate reaches this guard only through
+# `make -k check-release`, so that one distinction is the difference
+# between a tag pipeline being checked and being waved through.
+#   make check-version-sites TAG=v0.4.0-rc1
+check-version-sites:
+	$(VERPY) scripts/check-version-sites.py "$(TAG)"
+
+# The authoritative list of every place a release version is written.
+# RELEASING.md's bump step points at this target rather than restating the
+# list, so the prose and the check cannot drift.
+list-version-sites:
+	$(VERPY) scripts/check-version-sites.py --list
+
+# "Is the release artefact publishable": the tag/manifest version check,
+# crate dry-run packaging, and the Python distribution
+# build/check/smoke-install -- the questions CI's release:validate job
+# answers on every pipeline. Deliberately an
 # aggregate of prerequisites rather than a scripts/check-release.sh
 # wrapper: CI invokes this with `make -k`, and a `set -euo pipefail`
 # wrapper defeats `-k` exactly the way a hand-rolled script would --
@@ -157,7 +193,11 @@ check-crate-publish:
 check-python-dists:
 	bash scripts/python-dists.sh check
 
-check-release: check-crate-publish check-python-dists
+# check-version-sites leads: it is sub-second, and on a tag pipeline the
+# decisive failure belongs at the top of a 75-minute job's log rather than
+# after the crate dry-run. `-k` means the other two run regardless of
+# order, so this is about log readability, not gating.
+check-release: check-version-sites check-crate-publish check-python-dists
 
 # -- Preflight --------------------------------------------------------------
 
