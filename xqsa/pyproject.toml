@@ -8,12 +8,12 @@ description = "Solver adapters for XQMX models (dwave-samplers; pluggable solver
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "AGPL-3.0-or-later" }
-version = "0.4.0.dev0"
+version = "0.4.0rc1"
 dependencies = [
     # Pinned exact. The five published distributions share one workspace
     # version and are uploaded as a set, so a mixed-version install is never
     # a supported combination; see RELEASING.md for the bump touchpoints.
-    "xqvm_py==0.4.0.dev0",
+    "xqvm_py==0.4.0rc1",
     "dwave-samplers>=1.0",
 ]
 
