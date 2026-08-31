@@ -13,7 +13,7 @@ dependencies = [
     # Pinned exact. The five published distributions share one workspace
     # version and are uploaded as a set, so a mixed-version install is never
     # a supported combination; see RELEASING.md for the bump touchpoints.
-    "xqffi==0.4.0rc1",
+    "xqffi==0.4.0.dev0",
 ]
 
 [tool.uv.sources]
