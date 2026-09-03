@@ -50,7 +50,6 @@ Every DSL call appends an `Action(kind, data)` to `Problem._actions`. The comple
 | `branch` | `{arms: [{condition, actions}]}` | `problem.branch()` |
 | `output_decl` | `{ref: OutputRef}` | `problem.output()` |
 | `output_append` | `{output, value_expr}` | `output.append()` |
-| `output_setitem` | `{output, index_expr, value_expr}` | `output[i] = value` |
 | `vec_init` | `{reg}` | `problem.vec()` |
 | `vec_push` | `{vec_ref, value_expr}` | `vec.push(value)` |
 
@@ -69,8 +68,9 @@ The encoder compiler partitions the action list into:
 
 Body actions are further partitioned into **objective** and **constraint** blocks at depth-0 boundaries:
 
-- Constraint action kinds: `{onehot_row, onehot_col, exclude, implies, equality, atleast, atleastw, slack, reduce}`
+- Constraint action kinds (`_CONSTRAINT_KINDS`): `{onehot_row, onehot_col, exclude, implies, equality, atleast, atleastw, inequality}`
 - If a top-level block (a contiguous range of actions at loop depth 0) contains any constraint action, it is classified as a constraint block
+- The constraint check descends into `branch` actions: a constraint nested inside any arm of a `problem.branch()` call classifies the whole top-level block as a constraint block, even though `branch` itself is not a constraint action kind
 - Otherwise it is an objective block
 
 ### Assembly Structure
@@ -265,32 +265,72 @@ HALT
 
 ## Decoder Compilation
 
-The decoder uses a fixed register layout:
+The decoder uses its own register layout:
 
 | Register | Purpose |
 |----------|---------|
 | `r0` | Sample (XQMX, SAMPLE mode) |
-| `r1` | N (problem size parameter) |
+| `r1` | The one scalar the caller passes on calldata slot 1 |
+| `r2` upwards | One output vector per declared output, in declaration order |
+| `r10` upwards | One loop variable per open loop, by nesting depth |
+
+Loop registers sit above the outputs and no lower than `r10`, so the common single-loop program emits the `r10` the hand-written decoder fixtures document. A program with more than eight outputs pushes the loop base up rather than colliding with them.
 
 ### Output Block Collection
 
 The decoder compiler collects output blocks defined by `output_decl` markers. Between one `output_decl` and the next (or end of actions), all actions belong to that output's decoder block.
 
+### Supported Action Kinds
+
+The decoder emits three action kinds: `range_start`, `range_end` and `output_append`. Every other kind is rejected with a `RuntimeError` at `compile()`.
+
+The rejection is load-bearing rather than defensive. Program partitioning drops everything after the first `output_decl` from the encoder and the verifier, so an action recorded after `problem.output()` reaches the decoder alone. A kind the decoder cannot emit would therefore be dropped by all three programs, and the failure would surface as an empty output vector rather than as an error -- `branch()` inside an output block silently lost its arms' `.append()` calls this way. Conditional append is not supported; declare every other operation before the first `output()` call.
+
+`iter_start` and `iter_end` are rejected with the rest. `ITER` reads a vector register, and the decoder's calldata is the sample and one scalar, so there is no vector for it to iterate -- remapping its index and value variables would still leave the loop reading a register the decoder never wrote. Walk the indices with `range()` and read each one from `problem.sample`.
+
+An `output_append` whose recorded target is not the block's own output is rejected too. The decoder writes each output to its slot as soon as that output's block ends, so an append recorded after a later `output()` would land after its target had already shipped. Finish filling one output before declaring the next.
+
+An `output()` declared inside a `range()` block is rejected: its decoder block opens with the loop's `range_end`, closing a loop the block never opened.
+
 ### Assembly Structure
 
-For each output:
+For each output, in order: `VECI`, the decode block, then `PUSH slot` / `OUTPUT r{reg}` -- there is no non-`Vec` branch, since `Types.Vec` is the only output type `problem.output()` accepts.
+
 ```
 VECI r{out}                 ; allocate output vector
-{output block actions}      ; loops, VECPUSH, VECSET, GETLINE, COLFIND, etc.
+{output block actions}      ; loops, VECPUSH, GETLINE, COLFIND, etc.
 PUSH {slot}
 OUTPUT r{out}
 ```
 
 Final `HALT` after all outputs.
 
-### InputRef Remapping
+### Register Remapping
 
-In the decoder context, `InputRef` references are remapped. The only scalar input available to the decoder is N (on `r1`), so `InputRef` loads resolve to `LOAD r1`.
+Every expression the decoder emits -- a loop bound and an appended value alike -- is rebuilt against the layout above before emission. Bounds and values share one register file, so they share one rewrite; two rewrites disagreeing about what a reference means is how an input read came to address the sample.
+
+The mapping is total. Every node either resolves onto a decoder register or raises, at any depth: a read nested inside arithmetic is remapped the same as a bare one. A node left to fall through emits the register the DSL allocator assigned at recording time, which the decoder never wrote, so the program reads whatever happens to sit there instead of failing.
+
+| Node | Resolves to |
+|------|-------------|
+| Sample read (`GETLINE`, `ROWSUM`, `COLSUM`, `ROWFIND`, `COLFIND`) | The decoder's sample register, `r0` |
+| Loop variable | The register of its own open loop |
+| `InputRef` (Int), `RegLoad` | The scalar register, `r1` |
+
+Everything else is refused with a message naming the construct: a model coefficient (`CoefficientRef`, `GETQUAD`), a vector (a `Types.Vec` input, `.get()`, `.veclen()`, a `problem.vec()` allocation), and a loop variable read outside its own loop.
+
+The rebuild shares its traversal with the verifier's sentinel rewrite. Both supply a per-node mapping to one structural walker.
+
+### The Single Scalar
+
+The decoder is handed exactly one scalar, on calldata slot 1. Every `InputRef` and `RegLoad` the decoder reaches resolves to `r1`, and referencing a second, distinct one is rejected at `compile()` -- the decoder could not tell the caller which of the two to pass, so it would silently read the other.
+
+Which scalar that is, is the program's choice rather than a fixed "N". `examples/graph_coloring` and `examples/bin_packing` both stow a total variable count before the first `output()` and pass that on slot 1. The emitted header names the resolved scalar so the caller can see what slot 1 must hold:
+
+```
+PUSH 1
+INPUT r1  ; total_vars
+```
 
 ---
 

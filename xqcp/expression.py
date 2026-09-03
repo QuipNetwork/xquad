@@ -25,7 +25,7 @@ Each node type knows how to append its assembly to a line buffer.
 from __future__ import annotations
 
 import enum
-from typing import Any
+from typing import Any, NoReturn
 
 # ---------------------------------------------------------------------------
 # Types enum
@@ -48,6 +48,8 @@ _HEX_VALUES = {100: "0x64", 200: "0xC8"}
 
 def fmt_int(value: int) -> str:
     """Format an integer, using hex for common penalty values."""
+    if isinstance(value, bool):
+        raise TypeError("Cannot format bool as an XQCP integer literal; use 0 or 1")
     return _HEX_VALUES.get(value, str(value))
 
 
@@ -60,6 +62,8 @@ def coerce(val: Any) -> Expr:
     """Convert an int or Expr-like object to an Expr node."""
     if isinstance(val, Expr):
         return val
+    if isinstance(val, bool):
+        raise TypeError("Cannot coerce bool to Expr; XQCP expressions are integer-valued, use 0 or 1")
     if isinstance(val, int):
         return Literal(val)
     raise TypeError(f"Cannot coerce {type(val).__name__} to Expr")
@@ -176,6 +180,10 @@ class _ExprOps:
     def __eq__(self, other: Expr | int) -> CompareOp:  # type: ignore[override]
         return CompareOp("EQ", coerce(self), coerce(other))
 
+    def __ne__(self, other: Expr | int) -> NoReturn:  # type: ignore[override]
+        """Disallow '!=', which has no XQVM opcode; direct users to xq_not(a == b)."""
+        raise TypeError("'!=' is not supported on XQCP expressions; use xq_not(a == b) instead")
+
     def __lt__(self, other: Expr | int) -> CompareOp:
         return CompareOp("LT", coerce(self), coerce(other))
 
@@ -187,6 +195,14 @@ class _ExprOps:
 
     def __ge__(self, other: Expr | int) -> CompareOp:
         return CompareOp("GTE", coerce(self), coerce(other))
+
+    def __bool__(self) -> NoReturn:
+        """Disallow implicit boolean coercion; XQCP expressions are symbolic, not truthy."""
+        raise TypeError(
+            "XQCP expressions cannot be used in a boolean context "
+            "('and', 'or', 'not', 'if'); use xq_and(a, b), xq_or(a, b) or "
+            "xq_not(a) instead"
+        )
 
     def __hash__(self) -> int:
         return id(self)

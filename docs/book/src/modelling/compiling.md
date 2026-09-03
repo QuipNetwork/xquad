@@ -259,15 +259,16 @@ rather than emit a check that does not mean anything there.
 The decoder puts the sample on `r0` and `N` on `r1`, then emits one block
 per `problem.output()` call, each starting with `VECI` to allocate the
 output vector and ending with `PUSH {slot} / OUTPUT r{out}`. Inside a
-decoder block, every `InputRef` -- any input the encoder read -- resolves to
-`LOAD r1`, because `N` is the only scalar input the decoder has:
+decoder block, every scalar reference -- an input the encoder read, or a
+value `problem.stow()` put in a register -- resolves to `LOAD r1`, because
+one scalar is all the decoder is handed:
 
 ```asm
 ; === Inputs ===
 PUSH 0
 INPUT r0
 PUSH 1
-INPUT r1
+INPUT r1  ; num_items
 
 ; === Decode selected ===
 VECI r2
@@ -287,9 +288,13 @@ HALT
 ```
 
 `num_items` in `with problem.range(0, num_items) as i` is an `InputRef` in
-the encoder, so in the decoder it becomes `LOAD r1`, the same register `N`
-was read into two lines above -- the decoder has no independent notion of
-`num_items`, only of `N`.
+the encoder, so in the decoder it becomes `LOAD r1`, the same register slot
+1 was read into two lines above -- the decoder has no independent notion of
+`num_items`, only of the one scalar it is passed. Which scalar that is, is
+the program's choice rather than a fixed `N`, and the header comment names
+it. Referencing a second, distinct scalar is rejected at `compile()`; see
+[Outputs and Decoding](outputs-and-decoding.md#what-a-decoder-block-may-reference)
+for the full list of what a decoder block may and may not name.
 
 ## The Calldata and Output Contract
 

@@ -9,9 +9,10 @@ sense.
 ## Declaring an Output
 
 `problem.output(name, type=Types.Vec)` declares one decoder output and
-returns an `OutputRef`. Every output the DSL currently supports is a
-vector; `.append(value)` grows it by one element, and the emitted decoder
-allocates it with `VECI` before the block that fills it:
+returns an `OutputRef`. `type` must be `Types.Vec` -- every pipeline
+output is a vector, and `problem.output()` raises `TypeError` for
+anything else. `.append(value)` grows the output by one element, and the
+emitted decoder allocates it with `VECI` before the block that fills it:
 
 ```python
 selected = problem.output("selected", type=Types.Vec)
@@ -28,39 +29,26 @@ Compiled, this is `; === Decode selected ===` in the decoder assembly
 [Compiling](compiling.md) shows in full: `VECI r2`, a `RANGE` loop reading
 `GETLINE r0` and pushing with `VECPUSH r2`, then `PUSH 0 / OUTPUT r2`.
 
-`OutputRef` also supports random-access write and read, `out[i] = value` and
-`val = out[i]`, compiling to `VECSET` and `VECGET` against the same output
-register. Neither is a working substitute for `.append()`. A constant
-index compiles cleanly and passes the verifier:
+`OutputRef` does not support random-access write or read. Both raise
+immediately, at problem-definition time -- `out[i] = value` with
 
-```python
-out[0] = problem.sample.getline(0)
-out[1] = problem.sample.getline(1)
+```text
+TypeError: Random-access write to output 'selected' is not supported; use selected.append(value) instead
 ```
 
-but faults at runtime, on both backends, the moment it runs. The decoder
-allocates `out` with `VECI` before this block executes, and `VECI` creates
-an empty `vec<int>`; `VECSET` into an empty vector has nothing to write
-into. The Rust VM raises `IndexOutOfBounds`, and the Python VM raises
-`IndexError`. The index value never matters -- the vector is empty either
-way.
+and `value = out[i]` with
 
-An index built from the loop variable of an enclosing `range` does not
-even get that far: it fails to compile. The decoder's loop value always
-lives in a fixed register regardless of which register the loop variable
-was allocated to during recording, and `output[i] = value` does not make
-that substitution the way a value expression does. `compile()` catches
-this rather than emitting bad bytecode: `out[i] = problem.sample.getline(i)`
-inside a `problem.range` loop fails with
-`ValueError: decoder verification failed: ReadUnsetRegister`. Of the three
-forms on this page, `.append()` inside a loop is the only one that
-actually runs.
+```text
+TypeError: Reading from output 'selected' is not supported; outputs are write-only via .append(value)
+```
 
-<!-- xquad:defect QUI-1027 -->
-> **Known issue.** Neither form of random-access output write works today: a constant index
-> passes the verifier and faults at runtime on both backends, and a loop-variable index fails
-> to compile. `.append()` is the only output form that runs today. Report problems at the
-> [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
+`.append(value)` is the only way to fill an output, and every output is
+write-only: the decoder builds each output vector by appending, in the
+order the decoder program executes, and nothing reads a value back out
+of one. Knapsack's decoder above is
+already the general shape -- an `.append()` per iteration inside a
+`problem.range` loop, compiling to `VECPUSH` against the register the
+output was allocated with `VECI` in.
 
 ## Reading a Sample
 
@@ -85,6 +73,41 @@ reads directly as "which choice was made for this slot." On a
 `sample.colfind(col=0, value=1)` returns `1` (row 1 has the `1` in column
 0) and `sample.colfind(col=1, value=1)` returns `0`, each call compiling to
 the column pushed, then the value to match, then `COLFIND r{sample}`.
+
+## What a Decoder Block May Reference
+
+Everything recorded after the first `problem.output()` call goes to the
+decoder and to nothing else, and the decoder is a separate program with a
+separate register file. It runs on two pieces of calldata: the sample on
+slot 0, and one scalar on slot 1. Anything a decoder block names that is
+not reachable from those two is refused at `compile()` rather than
+compiled into a read of whatever register happens to hold something.
+
+A block may reference the sample through the five read methods above, its
+own loop variables, and one scalar. That scalar does not have to be `N`:
+`examples/graph_coloring/runner.py` stows a total variable count before
+declaring its output and passes that on slot 1. The emitted decoder names
+which one it resolved, so `INPUT r1  ; total_vars` tells you what the
+caller has to supply. Naming a *second* one raises, because the decoder is
+handed exactly one and cannot say which of the two you meant:
+
+```text
+RuntimeError: xqcp: a decoder block references two scalars, 'n' and 'acc', but the decoder is handed exactly one on calldata slot 1
+```
+
+What a block may not reference is anything the decoder was never given: a
+vector input or a `problem.vec()` allocation, a model coefficient
+(`problem.model.linear[i]` -- the decoder holds the sample, not the model),
+or a loop variable from a loop that has closed. `problem.iter()` is refused
+for the same reason: `ITER` walks a vector register, and no vector reaches
+the decoder. Walk the indices with `problem.range()` and read each one from
+`problem.sample`.
+
+One more ordering rule follows from how outputs are emitted. Each output is
+written to its slot as soon as its own block ends, so appending to an
+earlier output after a later `problem.output()` has been declared would
+land after its target had already shipped. Finish filling one output before
+declaring the next.
 
 ## The Decoder Program vs. Decoding in the Host
 

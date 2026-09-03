@@ -63,7 +63,7 @@ Declare a runtime input. `type` is `Types.Int` (scalar) or `Types.Vec` (vector).
 
 ### `problem.define_model(size, domain, rows=None, cols=None)`
 
-Allocate the XQMX model. `size` is the total number of variables. `domain` is `XQMXDomain.BINARY` or `XQMXDomain.SPIN`. For 2D grid models, provide `rows` and `cols`. After this call, `problem.model` and `problem.sample` become available.
+Allocate the XQMX model. `size` is the total number of variables. `domain` is `XQMXDomain.BINARY` or `XQMXDomain.SPIN`. For 2D grid models, provide both `rows` and `cols` -- providing exactly one raises `ValueError`. After this call, `problem.model` and `problem.sample` become available.
 
 `XQMXDomain.DISCRETE` raises `NotImplementedError`.
 
@@ -87,9 +87,9 @@ Allocate an empty untyped `Vec` register. Returns a `VecRef`.
 
 Multi-arm conditional with first-match semantics. Variadic `(condition, callable)` pairs followed by a mandatory default (callable or `None`). Minimum 3 arguments.
 
-### `problem.output(name, type)`
+### `problem.output(name, type=Types.Vec)`
 
-Declare a decoder output. Returns an `OutputRef` with `.append(val)` and `[idx]` access.
+Declare a decoder output. `type` must be `Types.Vec` -- every pipeline output is a vector. Returns an `OutputRef` whose only fill operation is `.append(val)`. Outputs are write-only: indexed read (`out[i]`) and indexed write (`out[i] = value`) are both rejected.
 
 ### `problem.compile()`
 
@@ -114,11 +114,31 @@ For every well-formed XQCP program:
 | `RuntimeError` | `problem.sample` accessed before `define_model()` | `Problem.sample` property |
 | `ValueError` | `branch()` with < 3 arguments | `Problem.branch()` |
 | `ValueError` | `branch()` with even number of arguments | `Problem.branch()` |
+| `ValueError` | `define_model()` with exactly one of `rows=` / `cols=` set | `Problem.define_model()` |
+| `ValueError` | `apply_onehot_row()` on a flat (non-2D) model | `ModelRef.apply_onehot_row()` |
+| `ValueError` | `apply_onehot_col()` on a flat (non-2D) model | `ModelRef.apply_onehot_col()` |
+| `ValueError` | `colfind()` on a flat (non-2D) model | `SampleRef.colfind()` |
+| `ValueError` | `rowfind()` on a flat (non-2D) model | `SampleRef.rowfind()` |
+| `ValueError` | `rowsum()` on a flat (non-2D) model | `SampleRef.rowsum()` |
+| `ValueError` | `colsum()` on a flat (non-2D) model | `SampleRef.colsum()` |
 | `TypeError` | Non-`Expr`, non-`int` value in expression position | `coerce()` |
+| `TypeError` | `bool` value in expression position | `coerce()` |
 | `TypeError` | `.get()` on non-Vec `InputRef` | `InputRef.get()` |
 | `TypeError` | `.veclen()` on non-Vec `InputRef` | `InputRef.veclen()` |
-| `TypeError` | `.append()` on non-Vec `OutputRef` | `OutputRef.append()` |
+| `TypeError` | `a != b` on an XQCP expression | `_ExprOps.__ne__()` |
+| `TypeError` | XQCP expression in a boolean context (`and`, `or`, `not`, `if`) | `_ExprOps.__bool__()` |
+| `TypeError` | Indexed read `out[i]` on an `OutputRef` | `OutputRef.__getitem__()` |
+| `TypeError` | Indexed write `out[i] = value` on an `OutputRef` | `OutputRef.__setitem__()` |
+| `TypeError` | `problem.output()` with a `type` other than `Types.Vec` | `Problem.output()` |
 | `NotImplementedError` | `define_model()` with `XQMXDomain.DISCRETE` | `Problem.define_model()` |
+| `RuntimeError` | `branch()` inside a decoder output block | `compile()` |
+| `RuntimeError` | `iter()` inside a decoder output block | `compile()` |
+| `RuntimeError` | Any other action recorded after the first `output()` | `compile()` |
+| `RuntimeError` | `problem.output()` declared inside a `range()` block | `compile()` |
+| `RuntimeError` | `.append()` to an output declared before the current one | `compile()` |
+| `RuntimeError` | A second, distinct scalar referenced in a decoder block | `compile()` |
+| `RuntimeError` | A vector or model coefficient read in a decoder block | `compile()` |
+| `RuntimeError` | A loop variable read outside its own loop, in a decoder block | `compile()` |
 
 ## Cross-References
 

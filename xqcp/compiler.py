@@ -48,6 +48,7 @@ from .expression import (
     Types,
     UnaryOp,
     VecGetExpr,
+    VecLenExpr,
     coerce,
     emit_flat_index,
     expr_reg,
@@ -59,6 +60,21 @@ from .symbols import CoefficientRef, InputRef, LoopVar, ModelRef, OutputRef, Vec
 
 if TYPE_CHECKING:
     from .problem import Action, Problem
+
+# Action kinds that mark a body block as a constraint block rather than an
+# objective block, for _partition_body.
+_CONSTRAINT_KINDS = frozenset(
+    {
+        "onehot_row",
+        "onehot_col",
+        "exclude",
+        "implies",
+        "equality",
+        "atleast",
+        "atleastw",
+        "inequality",
+    }
+)
 
 # ---------------------------------------------------------------------------
 # Target ID allocator (for branch compilation)
@@ -229,18 +245,17 @@ def _input_reg(expr: Expr) -> int | None:
     return None
 
 
+def _has_constraint(actions: list[Action]) -> bool:
+    """Whether any action in the list is a constraint, including inside branch arms."""
+    return any(
+        action.kind in _CONSTRAINT_KINDS
+        or (action.kind == "branch" and any(_has_constraint(arm["actions"]) for arm in action.data["arms"]))
+        for action in actions
+    )
+
+
 def _partition_body(body_actions: list[Action]) -> tuple[list[Action], list[Action]]:
     """Split body actions into objective and constraint sections by top-level block."""
-    constraint_kinds = {
-        "onehot_row",
-        "onehot_col",
-        "exclude",
-        "implies",
-        "equality",
-        "atleast",
-        "atleastw",
-        "inequality",
-    }
     blocks: list[list[Action]] = []
     current_block: list[Action] = []
     depth = 0
@@ -264,7 +279,7 @@ def _partition_body(body_actions: list[Action]) -> tuple[list[Action], list[Acti
     obj_actions: list[Action] = []
     con_actions: list[Action] = []
     for block in blocks:
-        has_constraint = any(a.kind in constraint_kinds for a in block)
+        has_constraint = _has_constraint(block)
         if has_constraint:
             con_actions.extend(block)
         else:
@@ -882,42 +897,42 @@ def _check_reduce_ordering(body_actions: list[Action], slack_equalities: set[int
 # ---------------------------------------------------------------------------
 
 
-def _rewrite_expr(expr: Expr, sentinel: int, sample_reg: int, model_reg: int) -> Expr:
-    """Rebuild an expression for the verifier's register file.
+_ExprLeaf = Callable[[Expr, Callable[[Expr], Expr]], "Expr | None"]
 
-    Reads through the ``problem.sample`` sentinel are retargeted at the
-    verifier's own sample register.  Everything else is returned
-    structurally unchanged.
 
-    # Errors
+def _map_expr(expr: Expr, leaf: _ExprLeaf) -> Expr:
+    """Rebuild an expression tree, letting ``leaf`` replace individual nodes.
 
-    Raises ``RuntimeError`` if the expression reads a model coefficient.
+    ``leaf`` is called on every node before its children.  It returns the
+    replacement node, or ``None`` to leave the node's own fields alone and
+    rebuild its sub-expressions structurally.  It receives the recursive
+    rebuilder so a replacement can keep mapping its own children, and it may
+    raise to reject a node outright.
+
+    Each emission target differs only in its leaf function -- the verifier
+    retargets sample reads at its own register file, the decoder retargets
+    them plus every loop variable -- so the traversal itself lives here once.
     """
 
     def rw(inner: Expr) -> Expr:
-        return _rewrite_expr(inner, sentinel, sample_reg, model_reg)
+        return _map_expr(inner, leaf)
 
-    def retarget(reg: int) -> int:
-        if reg == model_reg:
-            raise RuntimeError(_MODEL_READ_ERROR)
-        return sample_reg if reg == sentinel else reg
+    replaced = leaf(expr, rw)
+    if replaced is not None:
+        return replaced
 
-    if isinstance(expr, CoefficientRef):
-        raise RuntimeError(_MODEL_READ_ERROR)
     if isinstance(expr, GetQuadExpr):
-        if expr.model_reg == model_reg:
-            raise RuntimeError(_MODEL_READ_ERROR)
         return GetQuadExpr(expr.model_reg, rw(expr.i_expr), rw(expr.j_expr))
     if isinstance(expr, GetLineExpr):
-        return GetLineExpr(retarget(expr.sample_reg), rw(expr.index_expr))
+        return GetLineExpr(expr.sample_reg, rw(expr.index_expr))
     if isinstance(expr, RowSumExpr):
-        return RowSumExpr(retarget(expr.sample_reg), rw(expr.row_expr))
+        return RowSumExpr(expr.sample_reg, rw(expr.row_expr))
     if isinstance(expr, ColSumExpr):
-        return ColSumExpr(retarget(expr.sample_reg), rw(expr.col_expr))
+        return ColSumExpr(expr.sample_reg, rw(expr.col_expr))
     if isinstance(expr, RowFindExpr):
-        return RowFindExpr(retarget(expr.sample_reg), rw(expr.row_expr), expr.value)
+        return RowFindExpr(expr.sample_reg, rw(expr.row_expr), expr.value)
     if isinstance(expr, ColFindExpr):
-        return ColFindExpr(retarget(expr.sample_reg), rw(expr.col_expr), expr.value)
+        return ColFindExpr(expr.sample_reg, rw(expr.col_expr), expr.value)
     if isinstance(expr, BinOp):
         return BinOp(expr.op, rw(expr.left), rw(expr.right))
     if isinstance(expr, CompareOp):
@@ -937,6 +952,45 @@ def _rewrite_expr(expr: Expr, sentinel: int, sample_reg: int, model_reg: int) ->
 
     # Literal, RegLoad, InputRef, LoopVar, VecLenExpr: no sub-expressions.
     return expr
+
+
+def _rewrite_expr(expr: Expr, sentinel: int, sample_reg: int, model_reg: int) -> Expr:
+    """Rebuild an expression for the verifier's register file.
+
+    Reads through the ``problem.sample`` sentinel are retargeted at the
+    verifier's own sample register.  Everything else is returned
+    structurally unchanged.
+
+    # Errors
+
+    Raises ``RuntimeError`` if the expression reads a model coefficient.
+    """
+
+    def retarget(reg: int) -> int:
+        if reg == model_reg:
+            raise RuntimeError(_MODEL_READ_ERROR)
+        return sample_reg if reg == sentinel else reg
+
+    def leaf(node: Expr, rw: Callable[[Expr], Expr]) -> Expr | None:
+        if isinstance(node, CoefficientRef):
+            raise RuntimeError(_MODEL_READ_ERROR)
+        if isinstance(node, GetQuadExpr):
+            if node.model_reg == model_reg:
+                raise RuntimeError(_MODEL_READ_ERROR)
+            return None
+        if isinstance(node, GetLineExpr):
+            return GetLineExpr(retarget(node.sample_reg), rw(node.index_expr))
+        if isinstance(node, RowSumExpr):
+            return RowSumExpr(retarget(node.sample_reg), rw(node.row_expr))
+        if isinstance(node, ColSumExpr):
+            return ColSumExpr(retarget(node.sample_reg), rw(node.col_expr))
+        if isinstance(node, RowFindExpr):
+            return RowFindExpr(retarget(node.sample_reg), rw(node.row_expr), node.value)
+        if isinstance(node, ColFindExpr):
+            return ColFindExpr(retarget(node.sample_reg), rw(node.col_expr), node.value)
+        return None
+
+    return _map_expr(expr, leaf)
 
 
 # ---------------------------------------------------------------------------
@@ -1198,42 +1252,260 @@ class _VerifierEmitter:
 # ---------------------------------------------------------------------------
 
 
+_DECODER_LOOP_BASE = 10
+
+_DECODER_MODEL_READ_ERROR = (
+    "xqcp: a decoder block reads a model coefficient, but the decoder is handed "
+    "the sample and one scalar on calldata and never holds the model; read the "
+    "solved values through problem.sample instead"
+)
+
+
+def _decoder_vector_error(name: str | None) -> str:
+    """Message for a decoder block that reads a vector the decoder is not given.
+
+    ``name`` is the vector's DSL name where it has one; an unnamed
+    ``problem.vec()`` allocation is described rather than named, because its
+    recording register number means nothing in the decoder's register file.
+    """
+    subject = "a vector" if name is None else f"the vector '{name}'"
+    return (
+        f"xqcp: a decoder block reads {subject}, but the decoder is handed the sample "
+        "and one scalar on calldata and holds no other vector; read the solved values "
+        "through problem.sample instead"
+    )
+
+
+class _DecoderRegisters:
+    """The decoder's register file, and the map from recording registers onto it.
+
+    The decoder is its own program: ``r0`` holds the sample, ``r1`` the one
+    scalar its caller passes on calldata slot 1, the registers above those the
+    output vectors, and the ones above those the loop variables of whatever
+    loops are currently open.  None of that numbering matches what the DSL
+    allocator handed out while the problem was recorded, so every register a
+    recorded expression names is mapped onto this file here -- or refused,
+    when the decoder holds nothing that could serve.  A reference left
+    unmapped is what made a decoder silently read its loop index, its sample
+    or another output in place of the value asked for.
+    """
+
+    SAMPLE = 0
+    SCALAR = 1
+
+    def __init__(self, prob: Problem, output_blocks: list[tuple[OutputRef, list[Action]]]) -> None:
+        self._outputs: dict[int, int] = {}
+        next_reg = self.SCALAR + 1
+        for ref, _ in output_blocks:
+            self._outputs[ref.reg] = next_reg
+            next_reg += 1
+
+        # Loop registers sit above the outputs, and no lower than the r10 the
+        # hand-written decoder fixtures document, so the common single-loop
+        # program still emits the register those fixtures name.
+        self._loop_base = max(_DECODER_LOOP_BASE, next_reg)
+
+        self._names: dict[int, str] = {}
+        for action in prob._actions:
+            if action.kind == "input":
+                input_ref: InputRef = action.data["ref"]
+                self._names[input_ref.reg] = input_ref.name
+            elif action.kind == "stow":
+                self._names[action.data["reg"]] = action.data["name"]
+
+        self._sample_sentinel = None if prob._sample is None else prob._sample.reg
+        self._open_loops: list[int] = []
+        self._scalar: int | None = None
+
+    # -- names -----------------------------------------------------------
+
+    def name(self, reg: int) -> str:
+        """The DSL name bound to a recording register, or ``r{reg}`` if unnamed."""
+        return self._names.get(reg, f"r{reg}")
+
+    def known_name(self, reg: int) -> str | None:
+        """The DSL name bound to a recording register, or ``None`` if unnamed."""
+        return self._names.get(reg)
+
+    @property
+    def scalar_name(self) -> str | None:
+        """The name of the scalar slot 1 must carry, once one has been referenced."""
+        return None if self._scalar is None else self.name(self._scalar)
+
+    # -- outputs ---------------------------------------------------------
+
+    def output_reg(self, ref: OutputRef) -> int:
+        """The decoder register holding a declared output's vector.
+
+        # Errors
+
+        Raises ``RuntimeError`` for an output the decoder never allocated.
+        """
+        reg = self._outputs.get(ref.reg)
+        if reg is None:
+            raise RuntimeError(
+                f"xqcp: output '{ref.name}' has no decoder register; it belongs to "
+                "another problem, so the decoder never allocated a vector for it"
+            )
+        return reg
+
+    # -- loop variables --------------------------------------------------
+
+    def open_loop(self, var: LoopVar) -> int:
+        """Give a newly entered loop its decoder register."""
+        reg = self._loop_base + len(self._open_loops)
+        self._open_loops.append(var.reg)
+        return reg
+
+    def close_loop(self) -> None:
+        """Release the innermost open loop's register.
+
+        # Errors
+
+        Raises ``RuntimeError`` when the block closes a loop it never opened.
+        """
+        if not self._open_loops:
+            raise RuntimeError(
+                "xqcp: a decoder output block closes a loop it never opened; "
+                "problem.output() must be called outside every range() block, "
+                "not inside one"
+            )
+        _ = self._open_loops.pop()
+
+    def loop_reg(self, var: LoopVar) -> int:
+        """The decoder register holding an open loop's variable.
+
+        # Errors
+
+        Raises ``RuntimeError`` for a loop variable whose loop is not open,
+        which the decoder has no register for.
+        """
+        if var.reg not in self._open_loops:
+            raise RuntimeError(
+                f"xqcp: a decoder block reads the loop variable '{var.name}' outside "
+                "its own range() block, where the decoder holds no register for it; "
+                "read a loop variable only inside the loop that yields it"
+            )
+        return self._loop_base + self._open_loops.index(var.reg)
+
+    # -- the single scalar -----------------------------------------------
+
+    def scalar(self, reg: int) -> int:
+        """Resolve a scalar reference onto the one register slot 1 fills.
+
+        # Errors
+
+        Raises ``RuntimeError`` on a second, different scalar: the decoder is
+        handed exactly one and could not tell the caller which to pass.
+        """
+        if self._scalar is None:
+            self._scalar = reg
+        elif self._scalar != reg:
+            raise RuntimeError(
+                f"xqcp: a decoder block references two scalars, '{self.name(self._scalar)}' "
+                f"and '{self.name(reg)}', but the decoder is handed exactly one on "
+                "calldata slot 1; stow a single value before the first output() call "
+                "and reference only that"
+            )
+        return self.SCALAR
+
+    # -- sample ----------------------------------------------------------
+
+    def sample_reg(self, reg: int) -> int:
+        """Retarget a recorded sample read at the decoder's sample register.
+
+        # Errors
+
+        Raises ``RuntimeError`` when the read is against the model rather
+        than the sample.
+        """
+        if reg != self._sample_sentinel:
+            raise RuntimeError(_DECODER_MODEL_READ_ERROR)
+        return self.SAMPLE
+
+
+def _rewrite_decoder_expr(expr: Expr, regs: _DecoderRegisters) -> Expr:
+    """Rebuild an expression for the decoder's register file.
+
+    The mapping is total: every node either resolves onto a decoder register
+    or raises.  A node left to fall through emits the register the DSL
+    allocator assigned at recording time, which the decoder never wrote, so
+    the program reads whatever happens to sit there instead of failing.  Loop
+    bounds and appended values share this one rewrite because they share one
+    register file; two rewrites disagreeing about what a reference means is
+    how an input read came to address the sample.
+
+    # Errors
+
+    Raises ``RuntimeError`` when the expression names something the decoder is
+    not handed: a model coefficient, a vector, a second scalar, or a loop
+    variable from a loop that is not open.
+    """
+
+    def leaf(node: Expr, rw: Callable[[Expr], Expr]) -> Expr | None:
+        if isinstance(node, LoopVar):
+            return RegLoad(regs.loop_reg(node))
+        if isinstance(node, InputRef):
+            if node.type_ != Types.Int:
+                raise RuntimeError(_decoder_vector_error(node.name))
+            return RegLoad(regs.scalar(node.reg))
+        if isinstance(node, RegLoad):
+            return RegLoad(regs.scalar(node.reg))
+        if isinstance(node, GetLineExpr):
+            return GetLineExpr(regs.sample_reg(node.sample_reg), rw(node.index_expr))
+        if isinstance(node, RowSumExpr):
+            return RowSumExpr(regs.sample_reg(node.sample_reg), rw(node.row_expr))
+        if isinstance(node, ColSumExpr):
+            return ColSumExpr(regs.sample_reg(node.sample_reg), rw(node.col_expr))
+        if isinstance(node, RowFindExpr):
+            return RowFindExpr(regs.sample_reg(node.sample_reg), rw(node.row_expr), node.value)
+        if isinstance(node, ColFindExpr):
+            return ColFindExpr(regs.sample_reg(node.sample_reg), rw(node.col_expr), node.value)
+        if isinstance(node, (CoefficientRef, GetQuadExpr)):
+            raise RuntimeError(_DECODER_MODEL_READ_ERROR)
+        if isinstance(node, VecGetExpr):
+            raise RuntimeError(_decoder_vector_error(regs.known_name(node.vec_reg)))
+        if isinstance(node, VecLenExpr):
+            raise RuntimeError(_decoder_vector_error(regs.known_name(node.vec_reg)))
+        return None
+
+    return _map_expr(expr, leaf)
+
+
 def compile_decoder(prob: Problem) -> str:
     """Generate the decoder .xqasm program."""
-    lines: list[str] = []
-
-    R_SAMPLE = 0
-    R_N = 1
-    next_reg = 2
-    R_LOOP = 10
-
-    # --- Inputs ---
-    lines.append("; === Inputs ===")
-    lines.append("PUSH 0")
-    lines.append(f"INPUT r{R_SAMPLE}")
-    lines.append("PUSH 1")
-    lines.append(f"INPUT r{R_N}")
-
-    # --- Collect output blocks ---
     output_blocks = _collect_output_blocks(prob._actions)
+    regs = _DecoderRegisters(prob, output_blocks)
 
+    # The body is emitted first because it is what resolves the scalar on
+    # slot 1; the header names that scalar so the caller can see what to pass.
+    body: list[str] = []
     for output_ref, block in output_blocks:
-        out_reg = next_reg
-        next_reg += 1
+        out_reg = regs.output_reg(output_ref)
 
-        if output_ref.type_ == Types.Vec:
-            lines.append("")
-            lines.append(f"; === Decode {output_ref.name} ===")
-            lines.append(f"VECI r{out_reg}")
-            _emit_decoder_block(block, lines, 0, R_SAMPLE, R_N, R_LOOP, out_reg)
+        body.append("")
+        body.append(f"; === Decode {output_ref.name} ===")
+        body.append(f"VECI r{out_reg}")
+        _emit_decoder_block(block, body, 0, output_ref, regs)
 
-        lines.append("")
-        lines.append("; === Output ===")
-        lines.append(f"PUSH {output_ref.slot}")
-        lines.append(f"OUTPUT r{out_reg}")
+        body.append("")
+        body.append("; === Output ===")
+        body.append(f"PUSH {output_ref.slot}")
+        body.append(f"OUTPUT r{out_reg}")
 
-    lines.append("HALT")
-    return "\n".join(lines) + "\n"
+    body.append("HALT")
+
+    scalar_name = regs.scalar_name
+    scalar_comment = "" if scalar_name is None else f"  ; {scalar_name}"
+    header = [
+        "; === Inputs ===",
+        "PUSH 0",
+        f"INPUT r{_DecoderRegisters.SAMPLE}",
+        "PUSH 1",
+        f"INPUT r{_DecoderRegisters.SCALAR}{scalar_comment}",
+    ]
+
+    return "\n".join(header + body) + "\n"
 
 
 def _collect_output_blocks(actions: list[Action]) -> list[tuple[OutputRef, list[Action]]]:
@@ -1263,12 +1535,21 @@ def _emit_decoder_block(
     actions: list[Action],
     lines: list[str],
     indent: int,
-    sample_reg: int,
-    n_reg: int,
-    loop_reg: int,
-    out_reg: int,
+    output_ref: OutputRef,
+    regs: _DecoderRegisters,
 ) -> None:
-    """Emit decoder computation block actions."""
+    """Emit one output's decoder computation block.
+
+    # Errors
+
+    Raises ``RuntimeError`` for any action the decoder cannot emit, and for
+    any expression naming a register the decoder is not handed.
+    """
+    out_reg = regs.output_reg(output_ref)
+
+    def emit(expr: Expr) -> None:
+        _rewrite_decoder_expr(expr, regs).emit(lines, indent)
+
     for action in actions:
         kind = action.kind
         d = action.data
@@ -1277,87 +1558,56 @@ def _emit_decoder_block(
             start_expr: Expr = d["start_expr"]
             end_expr: Expr = d["end_expr"]
 
-            _emit_decoder_expr(start_expr, lines, indent, n_reg)
+            # The bounds are rewritten before the loop opens, so a bound that
+            # reads the loop's own variable is refused rather than resolved.
+            emit(start_expr)
 
             if isinstance(start_expr, Literal) and start_expr.value == 0:
-                _emit_decoder_expr(end_expr, lines, indent, n_reg)
+                emit(end_expr)
             else:
-                _emit_decoder_expr(end_expr, lines, indent, n_reg)
-                _emit_decoder_expr(start_expr, lines, indent, n_reg)
+                emit(end_expr)
+                emit(start_expr)
                 lines.append(line("SUB", indent))
 
             lines.append(line("RANGE", indent))
+            loop_reg = regs.open_loop(d["var"])
             indent += 1
             lines.append(line(f"LVAL r{loop_reg}", indent))
 
         elif kind == "range_end":
+            regs.close_loop()
             indent -= 1
             lines.append(line("NEXT", indent))
 
-        elif kind == "iter_start":
-            iter_vec_ref: InputRef = d["vec_ref"]
-            idx_var: LoopVar = d["idx_var"]
-            val_var: LoopVar = d["val_var"]
-            start_expr_i: Expr = d["start_expr"]
-            end_expr_i: Expr = d["end_expr"]
-
-            _emit_decoder_expr(start_expr_i, lines, indent, n_reg)
-            _emit_decoder_expr(end_expr_i, lines, indent, n_reg)
-            lines.append(line(f"ITER r{iter_vec_ref.reg}", indent))
-            indent += 1
-            lines.append(line(f"LIDX r{idx_var.reg}", indent))
-            lines.append(line(f"LVAL r{val_var.reg}", indent))
-
-        elif kind == "iter_end":
-            indent -= 1
-            lines.append(line("NEXT", indent))
+        elif kind in ("iter_start", "iter_end"):
+            raise RuntimeError(
+                "xqcp: iter() is not supported inside a decoder output block; ITER "
+                "reads a vector register, and the decoder is handed the sample and "
+                "one scalar on calldata and holds no vector to iterate -- walk the "
+                "indices with range() and read each one from problem.sample"
+            )
 
         elif kind == "output_append":
-            _emit_decoder_value_expr(d["value_expr"], lines, indent, sample_reg, loop_reg)
+            target: OutputRef = d["output"]
+            if target is not output_ref:
+                raise RuntimeError(
+                    f"xqcp: '{target.name}.append()' is recorded after output "
+                    f"'{output_ref.name}' was declared, but the decoder writes each "
+                    f"output to its slot as soon as its block ends, so '{target.name}' "
+                    "has already shipped and the appended value would be lost; finish "
+                    f"filling '{target.name}' before calling output('{output_ref.name}')"
+                )
+            emit(d["value_expr"])
             lines.append(line(f"VECPUSH r{out_reg}", indent))
 
-        elif kind == "output_setitem":
-            _emit_decoder_expr(d["index_expr"], lines, indent, n_reg)
-            _emit_decoder_value_expr(d["value_expr"], lines, indent, sample_reg, loop_reg)
-            lines.append(line(f"VECSET r{out_reg}", indent))
+        elif kind == "branch":
+            raise RuntimeError(
+                "branch() is not supported inside a decoder output block; its "
+                "appends would be silently dropped, leaving an empty output vector"
+            )
 
-
-def _emit_decoder_expr(expr: Expr, lines: list[str], indent: int, n_reg: int) -> None:
-    """Emit an expression in decoder context, remapping InputRef to N register."""
-    if isinstance(expr, Literal):
-        expr.emit(lines, indent)
-    elif isinstance(expr, (InputRef, RegLoad)):
-        lines.append(line(f"LOAD r{n_reg}", indent))
-    elif isinstance(expr, BinOp):
-        _emit_decoder_expr(expr.left, lines, indent, n_reg)
-        _emit_decoder_expr(expr.right, lines, indent, n_reg)
-        lines.append(line(expr.op, indent))
-    else:
-        expr.emit(lines, indent)
-
-
-def _emit_decoder_value_expr(
-    expr: Expr,
-    lines: list[str],
-    indent: int,
-    sample_reg: int,
-    loop_reg: int,
-) -> None:
-    """Emit a value expression in decoder context (inside loop)."""
-    if isinstance(expr, ColFindExpr):
-        col = expr.col_expr
-        if isinstance(col, (LoopVar, RegLoad)):
-            lines.append(line(f"LOAD r{loop_reg}", indent))
         else:
-            col.emit(lines, indent)
-        lines.append(line(f"PUSH {fmt_int(expr.value)}", indent))
-        lines.append(line(f"COLFIND r{sample_reg}", indent))
-    elif isinstance(expr, GetLineExpr):
-        idx = expr.index_expr
-        if isinstance(idx, (LoopVar, RegLoad)):
-            lines.append(line(f"LOAD r{loop_reg}", indent))
-        else:
-            idx.emit(lines, indent)
-        lines.append(line(f"GETLINE r{sample_reg}", indent))
-    else:
-        expr.emit(lines, indent)
+            raise RuntimeError(
+                f"Action '{kind}' recorded after problem.output() is not emitted by "
+                "the decoder; declare it before the first output() call"
+            )
