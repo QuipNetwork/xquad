@@ -19,9 +19,12 @@
 Tests for the constraint programming DSL (xqvm.cp).
 """
 
+from collections.abc import Callable
+from typing import Any
+
 import pytest
 
-from xqcp import CompiledPrograms, Problem, Types, xq_triu
+from xqcp import CompiledPrograms, InputRef, OutputRef, Problem, Types, xq_triu
 from xqvm_py import XQMXDomain
 
 # ---------------------------------------------------------------------------
@@ -1112,3 +1115,574 @@ class TestVerifierGuards:
         problem.model.linear[aux].add(-1)
 
         assert "ENERGY" in problem.compile().verifier
+
+
+# ---------------------------------------------------------------------------
+# Rejected constructs: these previously compiled to invalid assembly.
+# ---------------------------------------------------------------------------
+
+
+class TestExpressionOperatorRejections:
+    """'!=' has no XQVM opcode, so it must fail loudly instead of silently
+    producing wrong assembly."""
+
+    def test_not_equal_rejected(self) -> None:
+        from xqcp import Literal
+
+        expr = Literal(1)
+        with pytest.raises(
+            TypeError,
+            match=r"'!=' is not supported on XQCP expressions; use xq_not\(a == b\) instead",
+        ):
+            _ = expr != 0
+
+
+class TestBooleanContextRejections:
+    """XQCP expressions are symbolic, not truthy: 'and', 'or', 'not' and
+    'if' on an expression must fail instead of silently taking Python's
+    object-truthiness branch."""
+
+    _MESSAGE = (
+        r"XQCP expressions cannot be used in a boolean context "
+        r"\('and', 'or', 'not', 'if'\); use xq_and\(a, b\), xq_or\(a, b\) "
+        r"or xq_not\(a\) instead"
+    )
+
+    def test_and_rejected(self) -> None:
+        from xqcp import Literal
+
+        expr = Literal(1)
+        with pytest.raises(TypeError, match=self._MESSAGE):
+            _ = (expr == 0) and (expr == 1)
+
+    def test_or_rejected(self) -> None:
+        from xqcp import Literal
+
+        expr = Literal(1)
+        with pytest.raises(TypeError, match=self._MESSAGE):
+            _ = (expr == 0) or (expr == 1)
+
+    def test_not_rejected(self) -> None:
+        from xqcp import Literal
+
+        expr = Literal(1)
+        with pytest.raises(TypeError, match=self._MESSAGE):
+            _ = not (expr == 0)
+
+    def test_if_rejected(self) -> None:
+        from xqcp import Literal
+
+        expr = Literal(1)
+        with pytest.raises(TypeError, match=self._MESSAGE):
+            if expr == 0:
+                pass
+
+
+class TestCoercionRejections:
+    """bool is a subclass of int in Python; coerce() and fmt_int() must
+    reject it explicitly rather than silently treating True/False as 1/0."""
+
+    def test_coerce_bool_rejected(self) -> None:
+        from xqcp import coerce
+
+        with pytest.raises(
+            TypeError,
+            match=r"Cannot coerce bool to Expr; XQCP expressions are integer-valued, use 0 or 1",
+        ):
+            coerce(True)
+
+    def test_fmt_int_bool_rejected(self) -> None:
+        from xqcp.expression import fmt_int
+
+        with pytest.raises(
+            TypeError,
+            match=r"Cannot format bool as an XQCP integer literal; use 0 or 1",
+        ):
+            fmt_int(False)
+
+
+class TestOutputAccessRejections:
+    """Outputs are write-only, append-only vectors: random-access read and
+    write have no assembly encoding."""
+
+    def test_indexed_output_write_rejected(self) -> None:
+        problem = Problem("OutputWrite")
+        out = problem.output("tour", type=Types.Vec)
+        with pytest.raises(
+            TypeError,
+            match=r"Random-access write to output 'tour' is not supported; use tour\.append\(value\) instead",
+        ):
+            out[0] = 1
+
+    def test_indexed_output_read_rejected(self) -> None:
+        problem = Problem("OutputRead")
+        out = problem.output("tour", type=Types.Vec)
+        with pytest.raises(
+            TypeError,
+            match=r"Reading from output 'tour' is not supported; outputs are write-only via \.append\(value\)",
+        ):
+            _ = out[0]
+
+    def test_non_vec_output_rejected(self) -> None:
+        problem = Problem("NonVecOutput")
+        with pytest.raises(
+            TypeError,
+            match=r"Output 'count' must be Types\.Vec; every pipeline output is a vector",
+        ):
+            problem.output("count", type=Types.Int)
+
+    def test_output_type_defaults_to_vec(self) -> None:
+        problem = Problem("DefaultOutput")
+        assert problem.output("tour").type_ is Types.Vec
+
+
+class TestModelDimensionRejections:
+    """A 2D model needs both rows= and cols=; one-hot row/col constraints
+    only have meaning on a 2D model."""
+
+    def test_define_model_requires_both_rows_and_cols(self) -> None:
+        with pytest.raises(
+            ValueError,
+            match=r"define_model\(\) requires both rows= and cols= for a 2D model",
+        ):
+            Problem("RowsOnly").define_model(size=9, domain=XQMXDomain.BINARY, rows=3)
+
+        with pytest.raises(
+            ValueError,
+            match=r"define_model\(\) requires both rows= and cols= for a 2D model",
+        ):
+            Problem("ColsOnly").define_model(size=9, domain=XQMXDomain.BINARY, cols=3)
+
+    def test_apply_onehot_row_requires_2d_model(self) -> None:
+        problem = Problem("FlatOneHotRow")
+        problem.define_model(size=9, domain=XQMXDomain.BINARY)
+        with pytest.raises(
+            ValueError,
+            match=r"apply_onehot_row\(\) requires a 2D model; pass rows= and cols= to define_model\(\)",
+        ):
+            problem.model.apply_onehot_row(0, penalty=10)
+
+    def test_apply_onehot_col_requires_2d_model(self) -> None:
+        problem = Problem("FlatOneHotCol")
+        problem.define_model(size=9, domain=XQMXDomain.BINARY)
+        with pytest.raises(
+            ValueError,
+            match=r"apply_onehot_col\(\) requires a 2D model; pass rows= and cols= to define_model\(\)",
+        ):
+            problem.model.apply_onehot_col(0, penalty=10)
+
+    @staticmethod
+    def _flat_problem(name: str) -> Problem:
+        problem = Problem(name)
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        return problem
+
+    def test_colfind_requires_2d_model(self) -> None:
+        problem = self._flat_problem("FlatColFind")
+        with pytest.raises(
+            ValueError,
+            match=r"colfind\(\) requires a 2D model; pass rows= and cols= to define_model\(\)",
+        ):
+            problem.sample.colfind(col=0, value=1)
+
+    def test_rowfind_requires_2d_model(self) -> None:
+        problem = self._flat_problem("FlatRowFind")
+        with pytest.raises(
+            ValueError,
+            match=r"rowfind\(\) requires a 2D model; pass rows= and cols= to define_model\(\)",
+        ):
+            problem.sample.rowfind(row=0, value=1)
+
+    def test_rowsum_requires_2d_model(self) -> None:
+        problem = self._flat_problem("FlatRowSum")
+        with pytest.raises(
+            ValueError,
+            match=r"rowsum\(\) requires a 2D model; pass rows= and cols= to define_model\(\)",
+        ):
+            problem.sample.rowsum(0)
+
+    def test_colsum_requires_2d_model(self) -> None:
+        problem = self._flat_problem("FlatColSum")
+        with pytest.raises(
+            ValueError,
+            match=r"colsum\(\) requires a 2D model; pass rows= and cols= to define_model\(\)",
+        ):
+            problem.sample.colsum(0)
+
+    def test_getline_allowed_on_flat_model(self) -> None:
+        problem = self._flat_problem("FlatGetLine")
+        assert problem.sample.getline(0) is not None
+
+    def test_grid_ops_allowed_on_2d_model(self) -> None:
+        problem = Problem("GridOps")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n * n, domain=XQMXDomain.BINARY, rows=n, cols=n)
+        assert problem.sample.colfind(col=0, value=1) is not None
+        assert problem.sample.rowfind(row=0, value=1) is not None
+        assert problem.sample.rowsum(0) is not None
+        assert problem.sample.colsum(0) is not None
+
+
+# ---------------------------------------------------------------------------
+# Branch-arm partitioning
+# ---------------------------------------------------------------------------
+
+
+class TestBranchArmPartitioning:
+    """_partition_body recurses into branch() arms, so a constraint recorded
+    inside a branch arm is classified into the constraint section instead
+    of being hoisted into the objective section alongside it."""
+
+    def test_branch_arm_constraint_lands_in_constraints_section(self) -> None:
+        problem = Problem("BranchPartition")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n * n, domain=XQMXDomain.BINARY, rows=n, cols=n)
+
+        with problem.range(0, n) as i:
+            problem.model.linear[(i, i)].add(1)
+
+        problem.branch(n > 2, lambda: problem.model.apply_onehot_row(0, penalty=100), None)
+
+        with problem.range(0, n) as c:
+            problem.model.apply_onehot_col(c, penalty=100)
+
+        tour = problem.output("tour", type=Types.Vec)
+        with problem.range(0, n) as position:
+            tour.append(problem.sample.colfind(col=position, value=1))
+
+        encoder = problem.compile().encoder
+
+        objective_index = encoder.index("; === Objective ===")
+        constraints_index = encoder.index("; === Constraints ===")
+        onehotr_index = encoder.index("ONEHOTR")
+
+        assert objective_index < constraints_index
+        assert onehotr_index > constraints_index
+
+
+# ---------------------------------------------------------------------------
+# Decoder output-block rejections
+# ---------------------------------------------------------------------------
+
+
+class TestDecoderBlockRejections:
+    """_partition_program drops every action recorded after the first
+    output() from the encoder and verifier, so the decoder is the only
+    program that sees them.  The decoder emits loops and .append() only;
+    anything else it cannot emit must be refused rather than dropped,
+    which used to leave a silently empty output vector."""
+
+    @staticmethod
+    def _problem_with_output(name: str) -> tuple[Problem, OutputRef]:
+        problem = Problem(name)
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        return problem, problem.output("out", type=Types.Vec)
+
+    def test_branch_inside_output_block_rejected(self) -> None:
+        problem, out = self._problem_with_output("DecoderBranch")
+        with problem.range(0, 4) as k:
+            problem.branch(k > 1, lambda: out.append(1), lambda: out.append(0))
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"branch\(\) is not supported inside a decoder output block",
+        ):
+            problem.compile()
+
+    def test_action_after_output_rejected(self) -> None:
+        problem, _out = self._problem_with_output("DecoderStow")
+        problem.stow("scratch", 1)
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"Action 'stow' recorded after problem\.output\(\) is not emitted by the decoder",
+        ):
+            problem.compile()
+
+
+# ---------------------------------------------------------------------------
+# Decoder register remapping
+# ---------------------------------------------------------------------------
+
+
+class TestDecoderRegisterRemapping:
+    """The decoder runs its own register file -- r0 sample, r1 N, r10 loop --
+    so a sample read and a loop variable must be retargeted at those, at any
+    depth.  Only ColFindExpr and GetLineExpr used to be remapped, and only at
+    the top level, so rowsum/colsum/rowfind and any read nested inside
+    arithmetic emitted the recording-time register and failed decoder
+    verification with ReadUnsetRegister."""
+
+    @staticmethod
+    def _decode(name: str, grid: bool, value_fn: Callable[[Problem, Any], Any]) -> str:
+        problem = Problem(name)
+        n = problem.input("n", type=Types.Int)
+        if grid:
+            problem.define_model(size=n * n, domain=XQMXDomain.BINARY, rows=n, cols=n)
+        else:
+            problem.define_model(size=n, domain=XQMXDomain.BINARY)
+
+        out = problem.output("o", type=Types.Vec)
+        with problem.range(0, n) as i:
+            out.append(value_fn(problem, i))
+        return problem.compile().decoder
+
+    def test_rowsum_remapped(self) -> None:
+        decoder = self._decode("DecRowSum", True, lambda p, i: p.sample.rowsum(i))
+        assert "LOAD r10\n  ROWSUM r0" in decoder
+
+    def test_colsum_remapped(self) -> None:
+        decoder = self._decode("DecColSum", True, lambda p, i: p.sample.colsum(i))
+        assert "LOAD r10\n  COLSUM r0" in decoder
+
+    def test_rowfind_remapped(self) -> None:
+        decoder = self._decode("DecRowFind", True, lambda p, i: p.sample.rowfind(row=i, value=1))
+        assert "LOAD r10\n  PUSH 1\n  ROWFIND r0" in decoder
+
+    def test_colfind_remapped(self) -> None:
+        decoder = self._decode("DecColFind", True, lambda p, i: p.sample.colfind(col=i, value=1))
+        assert "LOAD r10\n  PUSH 1\n  COLFIND r0" in decoder
+
+    def test_nested_read_remapped(self) -> None:
+        decoder = self._decode("DecNested", False, lambda p, i: p.sample.getline(i) + 1)
+        assert "LOAD r10\n  GETLINE r0" in decoder
+
+    def test_two_reads_in_one_expression_remapped(self) -> None:
+        decoder = self._decode(
+            "DecTwoReads",
+            True,
+            lambda p, i: p.sample.rowsum(i) + p.sample.getline(i),
+        )
+        assert "LOAD r10\n  ROWSUM r0" in decoder
+        assert "LOAD r10\n  GETLINE r0" in decoder
+
+    def test_read_with_computed_index_remapped(self) -> None:
+        decoder = self._decode("DecComputedIndex", True, lambda p, i: p.sample.rowsum(i + 1))
+        assert "LOAD r10" in decoder
+        assert "ROWSUM r0" in decoder
+
+
+# ---------------------------------------------------------------------------
+# Decoder register file: total mapping
+# ---------------------------------------------------------------------------
+
+
+class TestDecoderRegisterFileIsTotal:
+    """The decoder's register file (r0 sample, r1 the one scalar, r2 upwards
+    the outputs, then the open loops) shares no numbering with the DSL
+    allocator, so a recorded reference that reaches emission unmapped
+    addresses a register the decoder never wrote -- or one it wrote for
+    something else.  Loop bounds and appended values go through one rewrite
+    that maps every node or refuses it; anything the decoder is not handed
+    (a model coefficient, a vector, a second scalar) is refused at
+    compile()."""
+
+    @staticmethod
+    def _flat(name: str) -> tuple[Problem, InputRef]:
+        problem = Problem(name)
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        return problem, n
+
+    # -- loop variables --------------------------------------------------
+
+    def test_nested_loops_get_distinct_registers(self) -> None:
+        problem, n = self._flat("DecNestedLoops")
+        out = problem.output("o", type=Types.Vec)
+        with problem.range(0, n) as i:
+            with problem.range(0, n) as j:
+                out.append(problem.sample.getline(i) + problem.sample.getline(j))
+
+        decoder = problem.compile().decoder
+
+        assert "LVAL r10" in decoder
+        assert "LVAL r11" in decoder
+        assert "LOAD r10\n    GETLINE r0\n    LOAD r11\n    GETLINE r0" in decoder
+
+    def test_loop_variable_as_inner_bound_remapped(self) -> None:
+        problem, n = self._flat("DecLoopVarBound")
+        out = problem.output("o", type=Types.Vec)
+        with problem.range(0, n) as i:
+            with problem.range(0, i) as j:
+                out.append(problem.sample.getline(j))
+
+        decoder = problem.compile().decoder
+
+        assert "PUSH 0\n  LOAD r10\n  RANGE" in decoder
+        assert "LVAL r11" in decoder
+
+    def test_sample_read_as_bound_remapped(self) -> None:
+        problem, _n = self._flat("DecSampleBound")
+        out = problem.output("o", type=Types.Vec)
+        with problem.range(0, problem.sample.getline(0)) as i:
+            out.append(problem.sample.getline(i))
+
+        decoder = problem.compile().decoder
+
+        assert "PUSH 0\nGETLINE r0\nRANGE" in decoder
+        assert "GETLINE r101" not in decoder
+
+    def test_output_declared_inside_a_loop_rejected(self) -> None:
+        problem, n = self._flat("DecOutputInLoop")
+        with problem.range(0, n) as _i:
+            _out = problem.output("o", type=Types.Vec)
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"closes a loop it never opened",
+        ):
+            problem.compile()
+
+    # -- the single scalar -----------------------------------------------
+
+    def test_input_in_a_value_resolves_to_the_scalar_register(self) -> None:
+        problem, n = self._flat("DecInputValue")
+        out = problem.output("o", type=Types.Vec)
+        with problem.range(0, n) as i:
+            out.append(problem.sample.getline(i) * n)
+
+        decoder = problem.compile().decoder
+
+        assert "LOAD r10\n  GETLINE r0\n  LOAD r1\n  MUL" in decoder
+
+    def test_the_scalar_is_named_in_the_header(self) -> None:
+        problem = Problem("DecScalarNamed")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        total = problem.stow("total_vars", n * 2)
+        out = problem.output("o", type=Types.Vec)
+        with problem.range(0, total) as i:
+            out.append(problem.sample.getline(i))
+
+        decoder = problem.compile().decoder
+
+        assert "INPUT r1  ; total_vars" in decoder
+
+    def test_a_stowed_value_in_a_value_expression_is_rejected(self) -> None:
+        problem, n = self._flat("DecTwoScalars")
+        acc = problem.stow("acc", 7)
+        out = problem.output("o", type=Types.Vec)
+        with problem.range(0, n) as i:
+            out.append(problem.sample.getline(i) + acc)
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"references two scalars, 'n' and 'acc'",
+        ):
+            problem.compile()
+
+    def test_two_scalar_inputs_are_rejected(self) -> None:
+        problem = Problem("DecTwoInputs")
+        n = problem.input("n", type=Types.Int)
+        m = problem.input("m", type=Types.Int)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        out = problem.output("o", type=Types.Vec)
+        with problem.range(0, m) as i:
+            out.append(problem.sample.getline(i) + n)
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"references two scalars, 'm' and 'n'",
+        ):
+            problem.compile()
+
+    # -- what the decoder is not handed -----------------------------------
+
+    def test_vector_input_read_rejected(self) -> None:
+        problem = Problem("DecVecInput")
+        n = problem.input("n", type=Types.Int)
+        w = problem.input("w", type=Types.Vec)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        out = problem.output("o", type=Types.Vec)
+        with problem.range(0, n) as i:
+            out.append(problem.sample.getline(i) + w.get(i))
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"reads the vector 'w', but the decoder is handed the sample and one scalar",
+        ):
+            problem.compile()
+
+    def test_vector_input_length_rejected(self) -> None:
+        problem = Problem("DecVecLen")
+        n = problem.input("n", type=Types.Int)
+        w = problem.input("w", type=Types.Vec)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        out = problem.output("o", type=Types.Vec)
+        with problem.range(0, n) as i:
+            out.append(problem.sample.getline(i) + w.veclen())
+
+        with pytest.raises(RuntimeError, match=r"reads the vector 'w'"):
+            problem.compile()
+
+    def test_allocated_vector_read_rejected(self) -> None:
+        problem, n = self._flat("DecAllocVec")
+        scratch = problem.vec()
+        out = problem.output("o", type=Types.Vec)
+        with problem.range(0, n) as i:
+            out.append(scratch.get(i))
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"reads a vector, but the decoder is handed the sample and one scalar",
+        ):
+            problem.compile()
+
+    def test_model_coefficient_read_rejected(self) -> None:
+        problem, n = self._flat("DecModelRead")
+        out = problem.output("o", type=Types.Vec)
+        with problem.range(0, n) as i:
+            out.append(problem.model.linear[i])
+
+        with pytest.raises(RuntimeError, match=r"reads a model coefficient"):
+            problem.compile()
+
+    def test_iter_inside_output_block_rejected(self) -> None:
+        problem = Problem("DecIter")
+        n = problem.input("n", type=Types.Int)
+        w = problem.input("w", type=Types.Vec)
+        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        out = problem.output("o", type=Types.Vec)
+        with problem.iter(w, 0, n) as (_idx, val):
+            out.append(val)
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"iter\(\) is not supported inside a decoder output block",
+        ):
+            problem.compile()
+
+    # -- appends across output blocks -------------------------------------
+
+    def test_append_to_an_earlier_output_rejected(self) -> None:
+        problem, n = self._flat("DecCrossBlock")
+        a = problem.output("a", type=Types.Vec)
+        _b = problem.output("b", type=Types.Vec)
+        with problem.range(0, n) as i:
+            a.append(problem.sample.getline(i))
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"'a\.append\(\)' is recorded after output 'b' was declared",
+        ):
+            problem.compile()
+
+    def test_two_outputs_each_filled_in_its_own_block(self) -> None:
+        problem, n = self._flat("DecTwoOutputs")
+        a = problem.output("a", type=Types.Vec)
+        with problem.range(0, n) as i:
+            a.append(problem.sample.getline(i))
+        b = problem.output("b", type=Types.Vec)
+        with problem.range(0, n) as i:
+            b.append(problem.sample.getline(i) + 1)
+
+        decoder = problem.compile().decoder
+
+        assert "VECI r2" in decoder
+        assert "VECPUSH r2" in decoder
+        assert "PUSH 0\nOUTPUT r2" in decoder
+        assert "VECI r3" in decoder
+        assert "VECPUSH r3" in decoder
+        assert "PUSH 1\nOUTPUT r3" in decoder

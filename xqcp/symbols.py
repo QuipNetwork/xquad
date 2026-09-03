@@ -25,7 +25,7 @@ compilation into assembly.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from xqvm_py import XQMXDomain
 
@@ -48,6 +48,19 @@ from .expression import (
 
 if TYPE_CHECKING:
     from .problem import Problem
+
+
+def _require_2d(is_2d: bool, op: str) -> None:
+    """Reject a grid-only operation on a flat (non-2D) model.
+
+    Grid opcodes read the XQMX rows/cols shape, which stays 0x0 unless
+    define_model() was given both rows= and cols=.  Without this check the
+    program compiles and verifies clean, then faults at run time with
+    InvalidGridDimensions far from the call that caused it.
+    """
+    if not is_2d:
+        raise ValueError(f"{op}() requires a 2D model; pass rows= and cols= to define_model()")
+
 
 # ---------------------------------------------------------------------------
 # InputRef
@@ -102,15 +115,18 @@ class LoopVar(Expr, _ExprOps):
 class SampleRef:
     """Symbolic reference to the sample (counterpart of the model)."""
 
-    def __init__(self, reg: int) -> None:
+    def __init__(self, reg: int, is_2d: bool) -> None:
         self.reg = reg
+        self.is_2d = is_2d
 
     def colfind(self, col: Expr | int, value: int) -> ColFindExpr:
-        """Find the row where the given column has the specified value."""
+        """Find the row where the given column has the specified value (2D models)."""
+        _require_2d(self.is_2d, "colfind")
         return ColFindExpr(self.reg, coerce(col), value)
 
     def rowfind(self, row: Expr | int, value: int) -> RowFindExpr:
-        """Find the column where the given row has the specified value."""
+        """Find the column where the given row has the specified value (2D models)."""
+        _require_2d(self.is_2d, "rowfind")
         return RowFindExpr(self.reg, coerce(row), value)
 
     def getline(self, index: Expr | int) -> GetLineExpr:
@@ -118,11 +134,13 @@ class SampleRef:
         return GetLineExpr(self.reg, coerce(index))
 
     def rowsum(self, row: Expr | int) -> RowSumExpr:
-        """Sum all values in a row."""
+        """Sum all values in a row (2D models)."""
+        _require_2d(self.is_2d, "rowsum")
         return RowSumExpr(self.reg, coerce(row))
 
     def colsum(self, col: Expr | int) -> ColSumExpr:
-        """Sum all values in a column."""
+        """Sum all values in a column (2D models)."""
+        _require_2d(self.is_2d, "colsum")
         return ColSumExpr(self.reg, coerce(col))
 
 
@@ -243,10 +261,12 @@ class ModelRef:
 
     def apply_onehot_row(self, row: Expr | int, penalty: int) -> None:
         """Apply one-hot constraint on a row."""
+        _require_2d(self.is_2d, "apply_onehot_row")
         self._problem._record_onehot_row(self, row, penalty)
 
     def apply_onehot_col(self, col: Expr | int, penalty: int) -> None:
         """Apply one-hot constraint on a column."""
+        _require_2d(self.is_2d, "apply_onehot_col")
         self._problem._record_onehot_col(self, col, penalty)
 
     def apply_exclude(self, coord_a: Any, coord_b: Any, penalty: int) -> None:
@@ -319,22 +339,24 @@ class OutputRef:
         self.type_ = type_
 
     def append(self, value_expr: Expr | int) -> None:
-        """Append a value to a Vec output (valid only for Vec type)."""
-        if self.type_ != Types.Vec:
-            raise TypeError(f"Cannot append to {self.type_.value} output '{self.name}'")
+        """Append a value to the output vector.
+
+        Problem.output() rejects any type other than Types.Vec, so every
+        OutputRef is a vector by construction and no type check is needed here.
+        """
         self._problem._record_output_append(self, value_expr)
 
-    def __getitem__(self, index: Expr | int) -> VecGetExpr:
-        """Read a Vec output element by index."""
-        if self.type_ != Types.Vec:
-            raise TypeError(f"Cannot index into {self.type_.value} output '{self.name}'")
-        return VecGetExpr(self.reg, coerce(index))
+    def __getitem__(self, index: Expr | int) -> NoReturn:
+        """Reading from an output is not supported; outputs are write-only."""
+        raise TypeError(
+            f"Reading from output '{self.name}' is not supported; outputs are write-only via .append(value)"
+        )
 
-    def __setitem__(self, index: Expr | int, value: Expr | int) -> None:
-        """Set a Vec output element by index."""
-        if self.type_ != Types.Vec:
-            raise TypeError(f"Cannot index into {self.type_.value} output '{self.name}'")
-        self._problem._record_output_setitem(self, index, value)
+    def __setitem__(self, index: Expr | int, value: Expr | int) -> NoReturn:
+        """Random-access writes to an output are not supported; use .append(value)."""
+        raise TypeError(
+            f"Random-access write to output '{self.name}' is not supported; use {self.name}.append(value) instead"
+        )
 
 
 # ---------------------------------------------------------------------------

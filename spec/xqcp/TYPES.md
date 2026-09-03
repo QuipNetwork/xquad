@@ -60,8 +60,8 @@ Available as `problem.sample` after `define_model()`. Provides read access in th
 | `.colfind(col, value)` | `COLFIND` | Find row where column has given value (2D models) |
 | `.rowfind(row, value)` | `ROWFIND` | Find column where row has given value (2D models) |
 | `.getline(index)` | `GETLINE` | Read variable assignment by index |
-| `.rowsum(row)` | `ROWSUM` | Sum all values in a row |
-| `.colsum(col)` | `COLSUM` | Sum all values in a column |
+| `.rowsum(row)` | `ROWSUM` | Sum all values in a row (2D models) |
+| `.colsum(col)` | `COLSUM` | Sum all values in a column (2D models) |
 
 ### CoefficientRef
 
@@ -75,13 +75,13 @@ Proxy for a single model coefficient. Not a register -- emits operations on the 
 
 ### OutputRef
 
-Provides write access in the decoder context:
+Provides append-only write access in the decoder context. Outputs are write-only: there is no indexed read or write.
 
 | Method | Opcode | Description |
 |--------|--------|-------------|
 | `.append(value)` | `VECPUSH` | Append value to output vector |
-| `[idx] = value` | `VECSET` | Set element at index |
-| `[idx]` | `VECGET` | Get element at index (returns expression) |
+| `[idx] = value` | -- | Raises `TypeError`; use `.append(value)` instead |
+| `[idx]` | -- | Raises `TypeError`; outputs are write-only |
 
 ### VecRef
 

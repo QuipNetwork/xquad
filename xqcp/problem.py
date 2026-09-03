@@ -164,6 +164,11 @@ class Problem:
         if domain == XQMXDomain.DISCRETE:
             raise NotImplementedError("Discrete domain (XQMX/XSMX) is not yet supported in the CP layer")
 
+        if (rows is None) != (cols is None):
+            raise ValueError(
+                f"define_model() requires both rows= and cols= for a 2D model; got rows={rows!r} cols={cols!r}"
+            )
+
         size_expr = coerce(size)
         is_2d = rows is not None and cols is not None
         cols_reg: int | None = None
@@ -175,7 +180,7 @@ class Problem:
 
         model_reg = self._alloc.alloc()
         self._model = ModelRef(self, model_reg, domain, cols_reg, is_2d)
-        self._sample = SampleRef(model_reg + 100)
+        self._sample = SampleRef(model_reg + 100, is_2d)
 
         self._actions.append(
             Action(
@@ -328,8 +333,10 @@ class Problem:
         self._actions = saved
         return captured
 
-    def output(self, name: str, type: Types) -> OutputRef:
+    def output(self, name: str, type: Types = Types.Vec) -> OutputRef:
         """Declare a pipeline output. Returns a symbolic OutputRef."""
+        if type != Types.Vec:
+            raise TypeError(f"Output '{name}' must be Types.Vec; every pipeline output is a vector")
         reg = self._alloc.alloc()
         slot = self._output_slot
         self._output_slot += 1
@@ -628,18 +635,6 @@ class Problem:
                 {
                     "output": output,
                     "value_expr": coerce(value_expr),
-                },
-            )
-        )
-
-    def _record_output_setitem(self, output: OutputRef, index: Expr | int, value: Expr | int) -> None:
-        self._actions.append(
-            Action(
-                "output_setitem",
-                {
-                    "output": output,
-                    "index_expr": coerce(index),
-                    "value_expr": coerce(value),
                 },
             )
         )

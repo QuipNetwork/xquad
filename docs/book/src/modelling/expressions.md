@@ -52,19 +52,19 @@ result usable anywhere an integer is: as a coefficient directly, as the
 condition argument to `problem.branch()` (see
 [Control Flow](control-flow.md)), or combined further with arithmetic.
 
-**Python has no `!=` here.** `_ExprOps` overloads `__eq__` but not
-`__ne__`, so `a != b` does not build a `CompareOp`. Python's default
-`__ne__` calls `__eq__` and inverts the result, but inverting a
-`CompareOp` object with `not` just asks whether the object itself is
-falsy, and `CompareOp` never says it is. `a != b` always evaluates to
-the Python constant `False`, at problem-definition time, regardless of
-what `a` and `b` are. If that `False` reaches a coefficient
-position, `coerce()` accepts it silently, since `bool` is a subtype of
-`int` in Python, and formats it as the literal text `False`, which is not
-valid `.xqasm` and fails when the program is assembled, not when you wrote
-the `!=`. `problem.compile()` surfaces it as `ValueError: encoder
-verification failed: parsing error: expected EOI or operand`, an error with
-no visible connection to the `!=`. Write `xq_not(a == b)` instead:
+**Python has no `!=` here.** There is no XQVM opcode for it, so `!=` on
+an XQCP expression raises immediately, at problem-definition time:
+
+```text
+TypeError: '!=' is not supported on XQCP expressions; use xq_not(a == b) instead
+```
+
+`_ExprOps` overloads `__ne__` purely to raise that. Left to Python's
+default, `__ne__` would call `__eq__` and invert the result, and
+inverting a `CompareOp` object with `not` only asks whether the object
+itself is falsy -- which it never is -- so `a != b` would evaluate to the
+constant `False` regardless of `a` and `b`. Write `xq_not(a == b)`
+instead:
 
 ```python
 model.linear[0] = xq_not(a == b)
@@ -72,13 +72,6 @@ model.linear[0] = xq_not(a == b)
 
 compiles to `LOAD`, `LOAD`, `EQ`, `NOT`, and gives `1` when `a` and `b`
 differ, `0` when they match.
-
-<!-- xquad:defect QUI-1027 -->
-> **Known issue.** `a != b`, `a and b` and `a or b` are not overloaded, so each silently
-> evaluates to a plain Python value at problem-definition time instead of building an
-> expression; the result is invalid assembly or a silently wrong model, reported far from the
-> mistake. Use `xq_not(a == b)`, `xq_and(a, b)` and `xq_or(a, b)` instead. Report problems at
-> the [issue tracker](https://gitlab.com/quip.network/xquad/-/issues).
 
 ## Bitwise: Bit-Level Values
 
@@ -124,13 +117,18 @@ xq_bnot(x)      # BNOT: bitwise complement, the same opcode as ~ above,
                 # kept as a function for symmetry -- not the same as xq_not
 ```
 
-Writing `a and b` instead of `xq_and(a, b)` does not raise an error and
-does not build an expression either -- Python evaluates `and`/`or` on the
-truthiness of the *objects*, and every expression node is truthy, so
-`a and b` just evaluates to `b` itself, silently, the same class of trap
-as `!=` above. If a construct you reach for by Python habit compiles
-without a `TypeError` but the assembly looks too short, this is usually
-why.
+Writing `a and b`, `a or b`, `not a`, or using an expression as an `if`
+condition instead of calling one of these functions raises immediately,
+the same way `!=` does above:
+
+```text
+TypeError: XQCP expressions cannot be used in a boolean context ('and', 'or', 'not', 'if'); use xq_and(a, b), xq_or(a, b) or xq_not(a) instead
+```
+
+Python's `and`/`or`/`not`/`if` all decide on the truthiness of the
+*object*, not on the value it represents, so XQCP has no way to give them
+the right answer -- only to refuse before a Python habit produces the
+wrong operand or the constant `False` in place of a real expression.
 
 Five more free functions round out the arithmetic vocabulary that has no
 Python operator:
