@@ -74,7 +74,7 @@ uv sync --extra "${extra}"
 # rather than into a foreign VIRTUAL_ENV. maturin itself is a root
 # `[dependency-groups] dev` entry, so the sync above is what puts it on PATH.
 echo ">> maturin develop --manifest-path xqffi/Cargo.toml"
-uv run --no-sync maturin develop --manifest-path xqffi/Cargo.toml
+uv run --no-sync maturin develop --locked --manifest-path xqffi/Cargo.toml
 
 # Run after the sync above: the probe for `cuda`/`metal` imports the
 # hardware-specific package (cupy / Metal) that only exists once the

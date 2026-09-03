@@ -343,12 +343,10 @@ SITES: tuple[Site, ...] = (
         )
         for extra in ("cuda", "dwave", "metal", "quip")
     ),
-    # uv.lock. Nothing enforces it today: every uv invocation in the repo is a
-    # bare `uv sync` or `uv run --no-sync`, with no --locked or --frozen
-    # anywhere, and `uv sync` rewrites a stale lock in place rather than
-    # failing. The principled fix is `uv lock --check` in CI; until that
-    # lands, these three lines ride here.
-    *(Site("uv.lock", Eco.PYTHON, Role.LOCK_ENTRY, dist=dist) for dist in ("xqcp", "xqsa", "xquad")),
+    # uv.lock's internal consistency (every workspace member's locked entry
+    # agreeing with its manifest) is now enforced by `uv lock --check`
+    # (`make check-uv-lock`, run by `verify:python` and `preflight-py`), so
+    # entries here would be redundant duplication of what uv already checks.
     # The pallet fixture's standalone lock. RELEASING.md's bump step already
     # says a stale xqvm entry here "drifts silently for releases", because the
     # fixture is an excluded workspace that no job builds with --locked.

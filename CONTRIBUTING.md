@@ -13,7 +13,7 @@ Be respectful in all project spaces, including issues, merge requests, and code 
 ## Prerequisites
 
 - Rust (stable, latest recommended)
-- Dev tools — install everything in one step:
+- Dev tools -- install everything in one step:
 
 ```sh
 make deps
@@ -21,44 +21,107 @@ make deps
 
 This installs: `clippy`, `rustfmt`, `taplo-cli`, `cargo-deny`, `cargo-nextest`.
 
-- Miri interpreter — optional, but highly recommended; see [Undefined Behaviour](#undefined-behaviour):
+- Miri interpreter -- optional, but highly recommended; see [Undefined Behaviour](#undefined-behaviour):
 
 ```sh
 make deps-miri
 ```
 
+- Python 3.13+ and [uv](https://docs.astral.sh/uv/) -- install the Python workspace in one step:
+
+```sh
+make deps-py
+```
+
+This runs `uv sync` plus `maturin develop`, giving you editable installs of
+`xqvm_py`, `xqcp`, `xqsa`, `xqffi`, and `xquad` with the `xqffi` cdylib built
+from the current Rust sources.
+
+## Dependencies and Lockfiles
+
+The workspace carries two lockfiles. Both are enforced, so a lock that has
+drifted from its manifests fails a check rather than being silently
+re-resolved:
+
+- **`Cargo.lock`** -- every dependency-resolving invocation carries
+  `--locked`, so cargo fails if the lockfile would have to change instead of
+  quietly resolving a different dependency set. That covers the wrappers as
+  well as `cargo` itself: `cargo deny --locked check`, `maturin develop
+  --locked` (including the one in `make deps-py`, so a drifted lock fails the
+  bootstrap rather than being resolved around), the two `maturin build
+  --locked` calls in `scripts/python-dists.sh` that produce the wheels
+  `release:pypi` uploads, and `wasm-pack test`, which forwards trailing
+  options through to its `cargo build`. `cargo fmt` is excluded because it
+  resolves nothing, as is `cargo miri setup`, which prepares a toolchain
+  rather than building the workspace.
+
+  One resolving invocation is covered by ordering instead of by a flag:
+  `maturin sdist`, at the end of `scripts/python-dists.sh`, re-resolves (it
+  shells out to `cargo metadata`, which rewrites a stale lock in place) but
+  has no `--locked` option. The script is `set -euo pipefail` and the two
+  `maturin build --locked` calls run first, so a stale lock fails there and
+  the run never reaches the sdist. Do not reorder those three calls.
+
+  `fixtures/pallet-xqvm` is a standalone workspace with its own lock; it is
+  covered too, by `make test-substrate-fixture`'s `cargo test --locked`.
+- **`uv.lock`** -- `make check-uv-lock` runs `uv lock --check`, a read-only
+  resolver pass that fails when `uv.lock` is stale against any
+  `pyproject.toml`, rather than the `uv sync` behaviour of quietly rewriting
+  it. It runs in `make preflight-py` and in CI's `verify:python`.
+
+If either check fails, regenerate the lock (`cargo check`, `uv lock`) and
+commit the result with the change that caused it.
+
+Tool-version pins live in the Makefile rather than in CI configuration.
+`RUFF_VERSION` and `UV_VERSION` are each read out of the Makefile with `sed`,
+by `.githooks/pre-commit` and by `.gitlab/ci/setup.yml` respectively, rather
+than carrying a second copy of the pin. The two bind differently, though.
+`RUFF_VERSION` is installed by both sides -- local dev gets it through `uvx
+ruff@<pin>` in `make lint-py` / `make fmt-check-py` and in the pre-commit
+hook -- so local and CI run the same ruff. `UV_VERSION` is installed by CI
+only: nothing can install uv through uv, so your `uv` is whatever is on your
+PATH. `make check-uv-lock` warns (it does not fail) when that differs from
+the pin, because a resolver difference between two uv versions otherwise
+shows up as `uv.lock` looking stale locally while CI is green, or the
+reverse. `PYYAML_VERSION` pins the isolated `uv run`
+environment the documentation generator uses and is consumed only within the
+Makefile. Cargo-installed tool versions (`taplo`, `cargo-deny`,
+`cargo-nextest`, `mdbook`, `git-cliff`, `wasm-pack`, `cargo-zigbuild`) are
+pinned separately in `scripts/cargo-tools.lock`, read directly by
+`scripts/install-cargo-tools.sh` and by CI's tool cache key.
+
 ## Development Workflow
 
-All checks must pass before a merge request is accepted. Run them locally before pushing:
+All checks must pass before a merge request is accepted. `make preflight`
+runs the full local mirror of what CI enforces, grouped by phase so a
+single-language MR can run just its half:
 
 ```sh
-make all          # lint + test (what CI runs)
+make preflight          # everything below, in one shot
+make preflight-rs       # fmt, taplo, clippy, rustdoc, deny, unit/integration/doc tests
+make preflight-py       # taplo, ruff format + lint, pytest, uv.lock freshness
+make preflight-parity   # opcode parity, conformance, example smoke
+make preflight-docs     # generated-doc freshness, docs drift, README length guards
+make preflight-policy   # changelog render, release-notes scoping, atomic spec-MR and commit-message guards
 ```
 
-Individual targets:
+`make preflight-release` (crate packaging dry-run plus the five Python
+distributions) needs `maturin`, `twine`, and `uv` on `PATH`, so it is kept out
+of plain `make preflight`; see [RELEASING.md](RELEASING.md).
 
-```sh
-# Formatting
-make fmt              # apply all formatting (Rust + TOML)
-make fmt-rs           # cargo fmt --all
-make fmt-toml         # taplo fmt
+`make all` (`fmt` + `lint` + `test`) is a convenience for reformatting the
+tree and running everything locally, but it is not what CI runs -- CI invokes
+the `preflight-*` targets above, one per pipeline phase. Match those before
+pushing.
 
-make fmt-check        # check formatting without modifying files
-make fmt-check-rs
-make fmt-check-toml
+Miri is not part of `preflight-rs`; run it separately with `make test-miri`
+before submitting changes that touch `unsafe` code, dependencies, or
+procedural macros -- see [Undefined Behaviour](#undefined-behaviour) below.
 
-# Lints
-make lint             # all lints + format check
-make lint-clippy      # cargo clippy --workspace --all-targets --all-features -- -D warnings
-make lint-doc         # RUSTDOCFLAGS="-D warnings" cargo doc
-make lint-deny-rs     # cargo deny check
-
-# Tests
-make test             # unit + integration
-make test-unit-rs     # cargo nextest --lib
-make test-integ-rs    # cargo nextest --test '*'
-make test-miri        # cargo +nightly miri test (requires make deps-miri)
-```
+For the individual leaf targets behind each `preflight-*` aggregate
+(`fmt-rs`, `lint-clippy`, `test-unit-rs`, and so on), see the
+Quick-Reference Commands in `AGENTS.md` rather than a second list here that
+can drift from it.
 
 ## Documentation Layout
 
@@ -131,7 +194,7 @@ make test-miri
 
 - All public items must be documented (`missing-docs` is enforced).
 - Follow standard Rust naming conventions (`nonstandard-style = "deny"`).
-- Run `make fmt` before committing — formatting is checked in CI.
+- Run `make fmt` before committing -- formatting is checked in CI.
 
 ## Licensing
 
@@ -228,10 +291,10 @@ silently skipped for contributors who do not have one.
 
 Any MR that changes VM semantics must touch **all four** of these layers in the same MR:
 
-1. `spec/xqvm/SPEC.md` — the normative specification
-2. `xqvm/src/**/*.rs` — the Rust production implementation
-3. `xqvm_py/{executor,opcodes,xqmx,state,vector,tracer,errors}.py` — the Python reference implementation
-4. `conformance/vectors/**` or `conformance/opcodes.yaml` — cross-impl parity coverage
+1. `spec/xqvm/SPEC.md` -- the normative specification
+2. `xqvm/src/**/*.rs` -- the Rust production implementation
+3. `xqvm_py/{executor,opcodes,xqmx,state,vector,tracer,errors}.py` -- the Python reference implementation
+4. `conformance/vectors/**` or `conformance/opcodes.yaml` -- cross-impl parity coverage
 
 CI enforces this via `verify:policy` (`scripts/check-atomic-spec-mr.sh`). MRs touching 0 or all 4 layers pass; partial changes fail.
 

@@ -218,7 +218,7 @@ def test_release_candidate_passes_against_its_own_spellings(bumped: Path) -> Non
     """v0.4.0-rc1 against 0.4.0-rc1 / 0.4.0rc1 is the release candidate flow."""
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 0, result.stderr
-    assert "26 sites at 0.4.0-rc1 / 0.4.0rc1" in result.stdout
+    assert "23 sites at 0.4.0-rc1 / 0.4.0rc1" in result.stdout
 
 
 def test_python_site_in_cargo_spelling_fails(bumped: Path) -> None:
@@ -226,7 +226,7 @@ def test_python_site_in_cargo_spelling_fails(bumped: Path) -> None:
     patch(bumped, "xqcp/pyproject.toml", f'version = "{PEP_RC}"', f'version = "{CARGO_RC}"')
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert "disagrees with 1 of 26" in result.stderr
+    assert "disagrees with 1 of 23" in result.stderr
     assert f"xqcp/pyproject.toml:3: project version: found {CARGO_RC}, expected {PEP_RC}" in result.stderr
 
 
@@ -234,13 +234,12 @@ def test_release_tag_against_dev_tree_fails(tree: Path) -> None:
     """The live gap: tagging v0.4.0 against a -dev main would publish 0.4.0-dev."""
     result = run_guard(tree, tag="v0.4.0")
     assert result.returncode == 1
-    assert "disagrees with 26 of 26" in result.stderr
+    assert "disagrees with 23 of 23" in result.stderr
     for expected in (
         "Cargo.toml:6: workspace dependency xqvm",
         "xqffi/Cargo.toml:3: package version",
         "xqvm_py/__init__.py:1: __version__",
         "xquad/pyproject.toml:12: peer pin xqsa[cuda]",
-        "uv.lock:3: locked version xqcp",
         "fixtures/pallet-xqvm/Cargo.lock:3: locked version xqvm",
     ):
         assert expected in result.stderr
@@ -255,7 +254,6 @@ def test_release_tag_against_dev_tree_fails(tree: Path) -> None:
         ("xqvm_py/__init__.py", PEP_RC, PEP_DEV, 1, "xqvm_py/__init__.py:1: __version__"),
         ("xquad/pyproject.toml", f'"xqcp=={PEP_RC}"', f'"xqcp=={PEP_DEV}"', 1, "peer pin xqcp"),
         ("xquad/pyproject.toml", f"xqsa[cuda]=={PEP_RC}", f"xqsa[cuda]=={PEP_DEV}", 1, "peer pin xqsa[cuda]"),
-        ("uv.lock", f'name = "xqcp"\nversion = "{PEP_RC}"', f'name = "xqcp"\nversion = "{PEP_DEV}"', 1, "uv.lock:3"),
         ("fixtures/pallet-xqvm/Cargo.lock", CARGO_RC, CARGO_DEV, 1, "fixtures/pallet-xqvm/Cargo.lock:3"),
     ],
 )
@@ -270,7 +268,7 @@ def test_partial_bump_reports_exactly_the_stale_site(
     patch(bumped, rel, old, new)
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert f"disagrees with {count} of 26" in result.stderr
+    assert f"disagrees with {count} of 23" in result.stderr
     assert site in result.stderr
 
 
@@ -286,7 +284,7 @@ def test_every_xquad_pin_missed_reports_four_sites(bumped: Path) -> None:
         patch(bumped, "xquad/pyproject.toml", f'"{dist}=={PEP_RC}"', f'"{dist}=={PEP_DEV}"')
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert "disagrees with 4 of 26" in result.stderr
+    assert "disagrees with 4 of 23" in result.stderr
     assert "project version" not in result.stderr
 
 
@@ -294,10 +292,9 @@ def test_unrelated_stale_sites_are_all_reported(bumped: Path) -> None:
     """Findings accumulate; the guard never stops at the first."""
     patch(bumped, "xqvm/Cargo.toml", f'version = "{CARGO_RC}"', f'version = "{CARGO_DEV}"')
     patch(bumped, "xqvm_py/__init__.py", PEP_RC, PEP_DEV)
-    patch(bumped, "uv.lock", f'name = "xquad"\nversion = "{PEP_RC}"', f'name = "xquad"\nversion = "{PEP_DEV}"')
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert "disagrees with 3 of 26" in result.stderr
+    assert "disagrees with 2 of 23" in result.stderr
 
 
 def test_environment_tag_is_used_when_no_argument_is_given(bumped: Path) -> None:
@@ -459,7 +456,7 @@ def test_lock_version_for_a_dynamic_package_is_a_setup_error(tree: Path) -> None
 def test_list_prints_every_site(tree: Path) -> None:
     result = run_guard(tree, "--list")
     assert result.returncode == 0
-    assert result.stdout.rstrip().endswith("26 version sites")
+    assert result.stdout.rstrip().endswith("23 version sites")
 
 
 def test_print_version_reports_the_canonical_spelling(tree: Path) -> None:

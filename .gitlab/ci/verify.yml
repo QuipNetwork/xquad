@@ -1,19 +1,19 @@
 # Verify phase -- does the workspace match what it is required to match?
 # Rust lint/policy checks (formatting, clippy, rustdoc, cargo-deny, the
 # changelog smoke render, the atomic spec-MR guard, the commit-message
-# guard), the Python lint (ruff), and cross-implementation parity (opcode
-# table, conformance vectors, example smoke) all live here -- see
-# setup.yml's verify-vs-test header for what makes these `verify` jobs
-# rather than `test` jobs.
+# guard), the Python lint (ruff), cross-implementation parity (opcode
+# table, conformance vectors, example smoke), and the fresh-xqffi-cdylib
+# guarantee all live here -- see setup.yml's verify-vs-test header for
+# what makes these `verify` jobs rather than `test` jobs.
 #
 # Reuses the workspace's `make` targets so the CI definition and the
 # local workflow stay identical. Changing a lint rule means updating the
 # Makefile once, not here.
 #
-# All four jobs carry `needs: []` and start at t=0 alongside every
+# All five jobs carry `needs: []` and start at t=0 alongside every
 # `test:*` job -- verify and test are peers, not a chain. See setup.yml's
 # "Dependency gating" section for the full topology and why hardware:*
-# waits on all nine of them. All four here are created on every pipeline;
+# waits on all ten of them. All five here are created on every pipeline;
 # two of the five `test:*` jobs are path-gated and may be absent (see
 # test.yml's "Path gating" section).
 #
@@ -221,6 +221,11 @@ verify:python:
     script:
         - make -k lint-py
         - make -k fmt-check-py
+        # Extends `.python-tools` deliberately (see the job comment
+        # above -- no maturin build here). `uv lock --check` needs uv on
+        # PATH only, no workspace sync, so it fits this cheap job rather
+        # than a synced one like `.python` or the new `verify:xqffi`.
+        - make -k check-uv-lock
 
 # Cross-implementation parity -- do the two implementations agree? Opcode
 # table parity, the shared xquad-conformance vector suite (both
@@ -263,3 +268,92 @@ verify:parity:
     timeout: 25m
     script:
         - make -k check-parity
+
+# Fresh-xqffi-cdylib guarantee (QUI-1199). `xquad/__init__.py` eagerly
+# imports `vm`/`asm`/`program`/`verifier`, each doing a top-level `from
+# xqffi.* import <symbol>` that binds nine concrete symbols
+# (assemble_source, disassemble, parse_xqasm, Vm, DEFAULT_STEP_LIMIT,
+# XqmxModel, XqmxSample, verify, verify_source) -- so a bare `import
+# xquad` genuinely exercises the maturin-built cdylib, not just the
+# pure-Python packages around it. `make -k check-xqffi-fresh` does `uv
+# sync --extra dwave` then that import, asserting the symbols resolve.
+#
+# That guarantee used to be added by hand at each hardware call site
+# (scripts/run-hardware-tests.sh rebuilds xqffi's cdylib on every run)
+# and enforced nowhere else -- nothing failed if a caller quietly ran
+# against a stale cached wheel instead. The one path that would have
+# caught a violation sat behind `.hardware`'s protected-ref rule, so it
+# never ran on a merge request -- exactly the blind spot this ticket
+# exists to close. This job is what makes the guarantee systematic
+# instead of a convention someone has to remember to copy.
+#
+# Does NOT extend `.python`. `.python`'s `.venv/` cache entry is shared,
+# under one uv.lock/pyproject.toml-hashed key, with test:python,
+# verify:parity and test:quip -- syncing the dwave extra into that
+# shared archive would make every one of those jobs alternately install
+# and uninstall dwave-system depending on run order, and the cache
+# contents would stop being deterministic (see setup.yml's `.python`
+# comment). Instead this job takes `.hardware`'s per-job-name cache-
+# prefix shape (setup.yml, "Hardware-backed solver jobs") without
+# extending `.hardware` itself -- specifically to drop its protected-ref
+# rule. A job gated to protected refs would just reproduce the gap
+# QUI-1199 exists to close; this one has to run on every merge request
+# to mean anything. `.venv/` is excluded from the cache for the same
+# reason `.hardware` excludes it: the job should never start from a
+# previous run's environment.
+#
+# That exclusion is necessary but NOT what makes the job trustworthy.
+# `.uv-cache/` IS cached here, keyed on uv.lock + pyproject.toml, so a
+# Rust-only change is a cache hit and the editable-wheel entry restored
+# from it is stale by construction -- no cache shape can fix that,
+# because the key cannot see xqffi/src/. The freshness guarantee comes
+# from `check-xqffi-fresh`'s explicit `maturin develop`, which overwrites
+# whatever the sync restored before the import runs. `.uv-cache/` is
+# therefore safe to keep: it is only a download/build cache, and the
+# rebuild lands on top of it.
+#
+# `dwave` is the extra used to prove freshness, not `cuda`, `metal` or
+# `quip`: dwave-system installs cleanly on a plain Linux runner with no
+# GPU, no QPU token and no macOS box; `cuda` would pull a ~1 GB cupy
+# wheel for no reason here; `metal`'s dependencies carry a `sys_platform
+# == 'darwin'` marker and would install nothing at all on this runner.
+#
+# `stage: verify` follows `verify:parity`'s precedent: both jobs run the
+# VM (or, here, import the interpreter that wraps it) and are still
+# `verify`, not `test` -- the question is whether the cdylib the venv
+# resolves against matches the source tree it was built from, not
+# whether the VM behaves correctly once loaded.
+verify:xqffi:
+    stage: verify
+    needs: []
+    before_script:
+        - !reference [.fragments, uv]
+    cache:
+        - key:
+              prefix: "$CI_JOB_NAME"
+              files:
+                  - uv.lock
+                  - pyproject.toml
+          paths:
+              - .uv-cache/
+        - key:
+              prefix: "$CI_JOB_NAME"
+              files:
+                  - Cargo.lock
+          paths:
+              - .cargo/registry/
+              - .cargo/git/
+              - target/
+    # 30m: sized against the CACHE SHAPE, not against verify:parity.
+    # verify:parity also builds the cdylib, but it rides `.python`'s
+    # shared, pipeline-wide `target/` archive and so is warm in the
+    # normal case. This job's per-job-name prefix means its `target/` is
+    # populated by nobody but itself, so a cold full compile of xqvm +
+    # xqasm + pyo3 is the ordinary first-run outcome, not the pathological
+    # one. The `.hardware` jobs share exactly this cache shape and carry
+    # 30-45m for the same reason. Per setup.yml's "Job timeouts" section a
+    # timeout exists to kill a job that will never finish, not to police
+    # one that is merely slow.
+    timeout: 30m
+    script:
+        - make -k check-xqffi-fresh

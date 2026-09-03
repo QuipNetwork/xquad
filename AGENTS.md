@@ -33,7 +33,7 @@ make install-hooks    # point git at .githooks/ pre-commit hook
 # Preflight (run locally exactly what CI enforces; N/A a language you didn't touch)
 make preflight         # preflight-rs + preflight-py + preflight-parity + preflight-docs + preflight-policy
 make preflight-rs      # fmt, taplo, clippy, rustdoc, deny, unit/integration/doc tests
-make preflight-py      # taplo, ruff format + lint, pytest
+make preflight-py      # taplo, ruff format + lint, pytest, uv.lock freshness
 make preflight-parity  # opcode parity, conformance, example smoke
 make preflight-docs    # generated-doc freshness + docs drift + README length guards
 make preflight-release # crate packaging dry-run + five Python dists (needs maturin/twine/uv; not in `preflight`)
@@ -62,6 +62,9 @@ make fmt-py           # ruff format across all Python packages
 make fmt-check-py     # ruff format --check
 make lint-py          # ruff check across all Python packages
 make test-py          # pytest xqvm_py/tests xqcp/tests xqsa/tests xquad/tests
+make check-uv-lock     # uv lock --check -- fails if uv.lock is stale against pyproject.toml
+make check-xqffi-fresh # uv sync --extra dwave + import xquad -- asserts the xqffi cdylib is
+                       # fresh; mutates .venv/, re-run `make deps-py` afterwards
 make repl             # Python REPL with xqffi + workspace packages
 
 # Cross-language
@@ -80,8 +83,9 @@ make serve-docs            # mdbook serve --open
 
 # Changelog (CHANGELOG.md is gitignored; cliff.toml + git history is source of truth)
 make changelog                              # generate CHANGELOG.md (preview unreleased)
-make changelog-release VERSION=v0.2.0       # preview a tag's release notes
+make changelog-release VERSION=v0.2.0       # preview a tag's release notes (renders exactly one section)
 make render-changelog                       # render-only validation (lint smoke)
+make check-release-notes                    # regression guard: every non-rc release renders exactly one section
 ```
 
 ## Shared Conventions
@@ -337,7 +341,7 @@ happened to share a stage barrier and nothing else:
 
 | Phase | Question it answers | What it covers |
 | --- | --- | --- |
-| `verify` | Does the workspace match what it's required to match? | clippy, rustdoc, cargo-deny, ruff, opcode parity, Rust + Python conformance vectors, example smoke tests, atomic spec-MR guard, commit-message guard, merge-request-title guard, changelog render |
+| `verify` | Does the workspace match what it's required to match? | clippy, rustdoc, cargo-deny, ruff, `uv.lock` freshness, the fresh-xqffi-cdylib check, opcode parity, Rust + Python conformance vectors, example smoke tests, atomic spec-MR guard, commit-message guard, merge-request-title guard, changelog render |
 | `test` | Does the workspace do what it should when executed? | unit, integration, doc tests (Rust); pytest (Python); Quip signing-layer tests; WASM no_std tests; Substrate pallet fixture |
 | `hardware` | Does it work on real hardware? | CUDA, D-Wave QPU, and Metal solver tests on real hardware (protected refs only) |
 | `docs` | Is the documentation correct and buildable? | generated-docs freshness, docs drift guard, package README length guard, mdbook build, GitLab Pages publish |
@@ -402,10 +406,10 @@ Jobs are authored in per-stage files under `.gitlab/ci/` and composed via `inclu
 
 Caveats:
 
-- The `cliff.toml` `footer` carries the `[0.1.0]` placeholder section as a stub until v0.1.0 is actually tagged. Once a v0.2.0 cycle starts, drop that footer; from then on the whole file is 100% generated from history.
-- Pre-conventional-commits history (everything before QUI-480) is filtered out by `filter_unconventional = true`; only commits on or after the QUI-480 enforcement appear in the rendered output. The static footer is appended to whatever `make changelog` produces, so an empty render plus footer is the expected state until the first user-visible `feat`/`fix` lands.
+- Pre-conventional-commits history (everything before QUI-480) is filtered out by `filter_unconventional = true`; only commits on or after the QUI-480 enforcement appear in the rendered output. `make changelog` renders the whole unreleased history with no other scoping, so an empty render is the expected state until the first user-visible `feat`/`fix` lands.
 - `chore`, `style`, `test`, `ci`, `build` are **dropped silently** -- if a commit under one of those types ships a user-visible change (e.g. a security-relevant dep bump under `chore`), promote it to `feat`/`fix`/`security` before merging or it will be invisible in release notes.
-- Before tagging a release, run `make changelog-release VERSION=vX.Y.Z` locally to preview what the GitLab Release page will say. Bad commit subjects can be fixed on the source branch and re-merged before the tag is cut.
+- `cliff.toml`'s `tag_pattern` scopes each release's notes to that release alone: it keeps an rc tag from ever becoming a range boundary, so an rc's commits fold into the following non-rc release's section instead of getting a page of their own. `changelog-release` (the Makefile target `release:notes` invokes) pairs this with an explicit `PREV..VERSION` range, where `PREV` is the nearest non-rc predecessor tag, rather than an unbounded `--tag`. `make check-release-notes` (`scripts/check-release-notes.sh`, run as part of `lint-policy` / `verify:policy`) is the regression guard: it renders every non-rc tag's range plus the pre-tag preview and asserts each yields exactly one `## [` heading.
+- Before tagging a release, run `make changelog-release VERSION=vX.Y.Z` locally to preview what the GitLab Release page will say -- the render contains exactly one section. Bad commit subjects can be fixed on the source branch and re-merged before the tag is cut.
 
 ## Local overrides
 

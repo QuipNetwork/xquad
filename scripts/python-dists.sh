@@ -138,14 +138,25 @@ rm -rf "${CDYLIB}/dist"
 mkdir -p "${CDYLIB}/dist"
 
 # 1. Native abi3 wheel (abi3 tag comes from pyo3's abi3-py313 feature)
-maturin build --release --manifest-path "${CDYLIB}/Cargo.toml" \
+maturin build --locked --release --manifest-path "${CDYLIB}/Cargo.toml" \
     --out "${CDYLIB}/dist"
 
 # 2. Cross-compiled aarch64 abi3 wheel via zig linker
-maturin build --release --manifest-path "${CDYLIB}/Cargo.toml" \
+maturin build --locked --release --manifest-path "${CDYLIB}/Cargo.toml" \
     --out "${CDYLIB}/dist" --target aarch64-unknown-linux-gnu --zig
 
 # 3. sdist (universal source fallback)
+#
+# No `--locked` here, unlike the two builds above: `maturin sdist` does
+# not accept the flag (checked against maturin 1.13.3) even though it
+# does re-resolve -- it shells out to `cargo metadata`, which rewrites a
+# stale Cargo.lock in place. The ordering is what covers it. This script
+# is `set -euo pipefail` and sdist runs LAST, so a lock that would have
+# to change has already hard-failed at step 1's `maturin build
+# --locked` and the run never reaches here. Moving sdist ahead of the
+# builds, or dropping `--locked` from them, reopens the gap silently:
+# the wheels uploaded to PyPI would be built from a re-resolved
+# dependency set that no lockfile records.
 maturin sdist --manifest-path "${CDYLIB}/Cargo.toml" --out "${CDYLIB}/dist"
 
 # --- build: pure-Python peers + umbrella -----------------------------------

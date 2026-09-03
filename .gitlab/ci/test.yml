@@ -7,7 +7,7 @@
 # All five jobs carry `needs: []` and start at t=0 alongside every
 # `verify:*` job -- verify and test are peers, not a chain. See
 # setup.yml's "Dependency gating" section for the full topology and why
-# hardware:* waits on all nine of them.
+# hardware:* waits on all ten of them.
 #
 # Three of the five run on every pipeline. `test:wasm` and `test:substrate`
 # are path-gated -- see the "Path gating" section immediately below.

@@ -12,7 +12,7 @@ Cutting a release publishes eleven artefacts in one shot from a single
 | 5 | [`xqvm_py`](xqvm_py/) sdist | PyPI | before xquad |
 | 6 | [`xqcp`](xqcp/) sdist | PyPI | before xquad |
 | 7 | [`xqsa`](xqsa/) sdist | PyPI | before xquad |
-| 8 | [`xquad`](xquad/) sdist | PyPI | last — depends on 4-7 |
+| 8 | [`xquad`](xquad/) sdist | PyPI | last -- depends on 4-7 |
 | 9 | GitLab Release notes | GitLab | last -- `release:notes` |
 
 Triggered by `.gitlab/ci/release.yml`; see that file for the exact
@@ -30,7 +30,7 @@ view.
 **Protected CI variable** (set once in **Settings → CI/CD →
 Variables**; masked + protected):
 
-- `CARGO_REGISTRY_TOKEN` — crates.io API token from
+- `CARGO_REGISTRY_TOKEN` -- crates.io API token from
   `ops@postquant.xyz`. Scope to `xqvm`, `xqasm`, `xqcli` publish-new
   + publish-update.
 
@@ -80,7 +80,14 @@ Before cutting a tag:
    before the tag exists rather than after.
 4. **Preview release notes** with `make changelog-release VERSION=vX.Y.Z`.
    The output `CHANGELOG.md` is gitignored; it lets you sanity-check
-   what the GitLab Release page will say before tagging. If a
+   what the GitLab Release page will say before tagging. The render
+   should contain exactly one `## [` section, for this release alone --
+   `make changelog-release VERSION=vX.Y.Z STRIP=all OUTPUT=-` prints it
+   to stdout so you can count. Zero sections means an rc tag in the
+   range is being treated as a release boundary when it should not be;
+   more than one means the range leaked an earlier release's commits
+   in. `make check-release-notes` is the automated version of this same
+   check, run against every past release in `verify:policy`. If a
    conventional-commit subject was poorly worded, fix it on the
    relevant feature branch and re-merge before cutting the tag.
 5. **Run the release checks locally** before pushing with
@@ -94,14 +101,14 @@ Before cutting a tag:
 
 ### One-time setup (per GitLab project)
 
-1. **Settings → Repository → Protected tags** — add pattern `v*`,
+1. **Settings → Repository → Protected tags** -- add pattern `v*`,
    allowed to create: Maintainers. This restricts who can push tags
    manually and ensures the CI-created tag is protected.
-2. **Settings → CI/CD → Variables** — add `GITLAB_API_TOKEN` (project
+2. **Settings → CI/CD → Variables** -- add `GITLAB_API_TOKEN` (project
    access token, `api` scope, masked). `write_repository` is the minimum
    needed to push tags; full `api` is simpler to configure. Used only by
    `release:auto-tag` to look up the merged MR and push the tag.
-3. **Settings → Merge requests → Approvals** — enable "Require code
+3. **Settings → Merge requests → Approvals** -- enable "Require code
    owner approval" for the `main` branch and set approvals required
    to 2. This enforces that all MRs go through both
    `@kleczkowski` and `@meganathanmanish`.
@@ -110,7 +117,7 @@ Before cutting a tag:
 
 ```sh
 # 1. Create a release branch. The branch name must match release/vX.Y.Z
-#    exactly — the CI auto-tag job matches the merge SHA against the MR
+#    exactly -- the CI auto-tag job matches the merge SHA against the MR
 #    API to find this branch name.
 git checkout -b release/vX.Y.Z main
 
@@ -122,11 +129,19 @@ git checkout -b release/vX.Y.Z main
 #    Cargo.toml, every pyproject [project] version, xqvm_py/__init__.py,
 #    every `==X.Y.Z` peer pin including xquad's optional-dependencies,
 #    and the lockfiles below.
-#    Then regenerate: `cargo check` (Cargo.lock), `uv lock` (uv.lock), and
-#    `cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml`
-#    (standalone workspace with its own lock; no job builds it with
-#    --locked, so nothing but the version-site guard notices a stale xqvm
-#    entry there).
+#    Then regenerate: `cargo check` (Cargo.lock) and `uv lock` (uv.lock).
+#    `uv lock` is not optional bookkeeping here -- `make check-uv-lock`
+#    (`uv lock --check`) runs in `verify:python` and `preflight-py` and
+#    fails the moment uv.lock is stale against any pyproject.toml, so a
+#    version bump that forgets it fails CI on this branch rather than
+#    drifting silently. Also run `cargo update -p xqvm
+#    --manifest-path fixtures/pallet-xqvm/Cargo.toml` (standalone
+#    workspace with its own lock, which check-uv-lock does not reach).
+#    That one is enforced too, but by a different guard: the fixture
+#    takes xqvm by path, and `make test-substrate-fixture` builds it with
+#    `cargo test --locked`, so skipping this `cargo update` hard-fails
+#    test:substrate in CI and `make preflight-rs` locally with a lockfile
+#    error rather than drifting until the version-site guard notices.
 #    Then confirm: `make check-version-sites TAG=vX.Y.Z`.
 git commit -s -am "chore: bump workspace to X.Y.Z"
 
@@ -179,7 +194,7 @@ subject that fails the grammar is dropped from the rendered notes by
 and add the entry by hand on the GitLab Release page.
 
 Open the MR targeting `main`. Both @kleczkowski and @meganathanmanish
-must approve. After approval, merge using any strategy — squash and
+must approve. After approval, merge using any strategy -- squash and
 merge commit are both supported. `release:auto-tag` detects the merged
 MR by matching `CI_COMMIT_SHA` against both `squash_commit_sha` and
 `merge_commit_sha` in the GitLab MR API.
@@ -223,6 +238,16 @@ cutting `vX.Y.Z-rc1` means moving every site to `X.Y.Z-rc1` (Cargo) /
 `X.Y.ZrcN` (Python) first, and opening the follow-up back to the `-dev`
 version afterwards.
 
+An rc tag runs the full pipeline through `release:crates` and
+`release:pypi` -- both share the `.on-release-tag` rule, so rc
+artefacts publish the same as any other tag -- but `release:notes`
+carries its own, narrower rule and does not fire on a tag matching
+`-rc`. An rc tag publishes crates and wheels with no GitLab Release
+page. This mirrors `cliff.toml`'s `tag_pattern`, which does not treat
+an rc tag as a release boundary either: the rc's commits fold into the
+following non-rc release's notes instead of getting a page of their
+own that the real release would then have to absorb a second time.
+
 ---
 
 The tag push triggers a fully-automatic pipeline in stage `release`:
@@ -238,7 +263,9 @@ The tag push triggers a fully-automatic pipeline in stage `release`:
    Nothing is uploaded; this is the gate that catches manifest
    / license / metadata regressions before any registry sees them --
    and because it already ran green on the MR, a broken release setup
-   fails there instead of mid-release.
+   fails there instead of mid-release. Its last step is a HEAD request
+   against `RELEASE_CLI_URL`, the same pinned URL `release:notes`
+   fetches `release-cli` from below -- see that job's entry for why.
 2. **`release:crates`** -- `cargo publish` for `xqvm` → `xqasm` →
    `xqcli`, in topological order. Fires automatically once
    `release:validate` passes.
@@ -247,11 +274,17 @@ The tag push triggers a fully-automatic pipeline in stage `release`:
    `xqsa` / `xquad`. Fires automatically once `release:crates` passes
    (`needs:` enforces ordering so PyPI cannot run before crates.io).
 4. **`release:notes`** -- git-cliff renders the GitLab Release page
-   from the conventional-commit history. Runs after `release:pypi` so
-   the announcement page goes live only once all artefacts are on the
-   registries. Its `release-cli` and git-cliff install path is the one
-   part of the release chain no pre-tag pipeline exercises; it is also
-   the last job, so artefacts are already live and a re-run is safe.
+   from the conventional-commit history, scoped to the range between
+   this tag and its nearest non-rc predecessor, so the page carries
+   exactly this release's own section rather than every release
+   reachable from history. Skipped entirely on an rc tag (see "Release
+   candidates" above). Runs after `release:pypi` so the announcement
+   page goes live only once all artefacts are on the registries. It
+   fetches `release-cli` from the same `RELEASE_CLI_URL` that
+   `release:validate` probes on every pipeline, so a 404 or an
+   unreachable registry now surfaces on a merge request instead of
+   here, last in the tag-only publish chain. It is also the last job,
+   so artefacts are already live and a re-run is safe.
 
 Watch the pipeline. If `release:pypi` fails, rerun only that job:
 `twine upload --skip-existing` makes a re-run a no-op for anything
@@ -267,7 +300,7 @@ and rerun the pipeline.
 ## Post-flight
 
 1. **Verify on the registries.** All four crates (xqvm, xqasm, xqcli,
-   and — eventually, once we publish it — xqffi's cdylib) should show
+   and -- eventually, once we publish it -- xqffi's cdylib) should show
    `vX.Y.Z` within a minute of pipeline completion; all five Python
    distributions (`xqffi`, `xqvm_py`, `xqcp`, `xqsa`, `xquad`) on
    PyPI within seconds.
