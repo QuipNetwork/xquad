@@ -122,7 +122,26 @@
         - !reference [.fragments, cargo-path]
         - bash scripts/install-cargo-tools.sh --only "${CARGO_TOOLS}"
     uv:
-        - curl -LsSf https://astral.sh/uv/install.sh | sh
+        # UV_VERSION lives in the Makefile beside RUFF_VERSION, and is
+        # grepped out here rather than pinned a second time -- the same
+        # single-source-of-truth idiom .githooks/pre-commit already uses
+        # for RUFF_VERSION.
+        #
+        # The two pins are not equally binding, and the difference
+        # matters. RUFF_VERSION is INSTALLED by both sides: local dev
+        # gets it through `uvx ruff@$(RUFF_VERSION)` in lint-py /
+        # fmt-check-py and through .githooks/pre-commit, so the versions
+        # cannot diverge. UV_VERSION is installed by CI only -- a
+        # contributor's `uv` is whatever they put on their PATH, and
+        # nothing can install uv through uv. Local dev CHECKS the pin
+        # instead: `make check-uv-lock` warns (does not fail) when the
+        # local uv differs, because since QUI-1190 `uv lock --check`
+        # gates both `make preflight-py` and verify:python, and a
+        # resolver difference between two uv versions otherwise presents
+        # as a stale lockfile rather than as what it is.
+        - UV_VERSION="$(sed -n 's/^UV_VERSION[[:space:]]*:=[[:space:]]*//p' "${CI_PROJECT_DIR}/Makefile" | head -n1)"
+        - '[ -n "${UV_VERSION}" ] || { echo "uv: could not read UV_VERSION from Makefile" >&2; exit 1; }'
+        - curl -LsSf --retry 3 --retry-all-errors "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
         - export PATH="${HOME}/.local/bin:${PATH}"
         - export UV_CACHE_DIR="${CI_PROJECT_DIR}/.uv-cache"
     # uv on PATH plus a full workspace sync -- installs xqvm_py/xqcp/xqsa/
@@ -421,10 +440,10 @@
 # The five phases are a deliberate gating topology, not five stages that
 # merely happen to run one after another:
 #
-#   verify:*, test:*  -- all nine jobs carry `needs: []` and start at t=0.
+#   verify:*, test:*  -- all ten jobs carry `needs: []` and start at t=0.
 #                         verify and test are peers, not a chain -- test
-#                         does NOT wait for verify to pass first. Seven of
-#                         the nine are created on every pipeline; test:wasm
+#                         does NOT wait for verify to pass first. Eight of
+#                         the ten are created on every pipeline; test:wasm
 #                         and test:substrate are path-gated and may be
 #                         absent -- see test.yml's "Path gating" section.
 #   hardware:*        -- each of the three jobs needs every verify:* and
@@ -463,10 +482,41 @@
 # not just for hardware: docs:publish's edge to docs:build is NOT
 # optional (docs:build is unconditional). The three edges inside the
 # publish chain are bare strings, not `optional: true`, and must stay
-# that way: release:validate is the one job in release.yml with no
-# `rules:` at all, and release:crates / release:pypi / release:notes
-# share a single `<<: *on-release-tag`, so on any pipeline where a
-# consumer exists its target exists too. release:validate carries the
+# that way. The invariant that licenses a bare string is a SUBSET
+# relationship, not an identical rule: a consumer's rules must select no
+# pipeline its target's rules do not, so on every pipeline where the
+# consumer exists its target exists too. Each of the three edges
+# satisfies it:
+#
+#   release:validate <- release:crates   release:validate has no `rules:`
+#                                        at all, so it exists on every
+#                                        pipeline. Any consumer is a
+#                                        subset of that trivially.
+#   release:crates   <- release:pypi     Both are `<<: *on-release-tag`
+#                                        -- the same rule, which is the
+#                                        degenerate case of a subset.
+#   release:pypi     <- release:notes    NOT the same rule since
+#                                        QUI-1096. release:notes carries
+#                                        its own `$CI_COMMIT_TAG =~
+#                                        /^v\d/ && $CI_COMMIT_TAG !~
+#                                        /-rc/`, which is strictly
+#                                        narrower than on-release-tag:
+#                                        the rc tags it drops are ones
+#                                        release:pypi still runs on. Safe
+#                                        in this direction, and only this
+#                                        direction.
+#
+# Two edits break it, and both look like cleanups. Narrowing
+# release:pypi's rules (or release:crates') without widening the
+# consumer's inverts the subset and leaves a dangling non-optional
+# `needs:` -- GitLab then refuses to create the tag pipeline outright,
+# i.e. a release that cannot start. Folding release:notes back onto the
+# shared `*on-release-tag` anchor "for consistency" restores the
+# identical rule but silently reverts the QUI-1096 rc fix, publishing an
+# empty or duplicate Release page for every rc tag. See release:notes'
+# own `rules:` comment before touching either.
+#
+# release:validate carries the
 # same optional hardware:*/fixture edges as docs:*, and because
 # release:crates, release:pypi and release:notes each `needs:` back to
 # release:validate (or to the job before them in that chain) rather than
@@ -501,7 +551,7 @@
 # pipelines the dropped edges affect only docs:* and release:validate,
 # neither of which publishes anything.
 #
-# The two lists below -- the nine-entry verify+test gate and the twelve-
+# The two lists below -- the ten-entry verify+test gate and the thirteen-
 # entry verify+test+hardware gate -- are shared via `!reference`, not a
 # YAML anchor (anchors don't cross `include:`, see this file's top-of-file
 # comment), so each gate is written once here instead of being retyped
@@ -512,6 +562,7 @@
         - verify:rust
         - verify:python
         - verify:parity
+        - verify:xqffi
         - test:rust
         - test:python
         - test:quip
@@ -524,6 +575,7 @@
         - verify:rust
         - verify:python
         - verify:parity
+        - verify:xqffi
         - test:rust
         - test:python
         - test:quip

@@ -5,10 +5,10 @@
 # The release pipeline regenerates on each tagged release; see
 # `.gitlab/ci/release.yml` and RELEASING.md for the full flow.
 #
-# Pre-conventional-commits content (the v0.1.0 hand-written section) is
-# pinned in `footer` below until v0.1.0 ships. Once v0.1.0 is tagged
-# and a v0.2.0 cycle starts, drop the footer; from that point on the
-# whole file is 100% generated from git history.
+# v0.1.0 is tagged and a v0.2.0 cycle has started, so the whole file is
+# now 100% generated from git history -- the static `footer` block that
+# used to pin the v0.1.0 hand-written section here has been removed
+# (see the note below `trim = true`).
 
 [changelog]
 # What lands at the top of CHANGELOG.md on every regeneration. Mirrors
@@ -52,28 +52,16 @@ body = """
 {% endfor %}\n
 """
 
-# Static block appended once at the very end of CHANGELOG.md. Keeps
-# the v0.1.0 hand-written notes in place until the release ships;
-# delete this footer (and bump cliff.toml back to a single trailing
-# newline) once a real v0.2.0 entry exists.
-#
-# The `YYYY-MM-DD` below is a deliberate placeholder -- it gets
-# replaced with the real release date when v0.1.0 is tagged and the
-# footer is removed in the same MR.
-footer = """
-## [0.1.0] - YYYY-MM-DD
-
-First public release of the unified XQuad toolchain -- the end state
-of the xq-rs / xq-py merge (QUI-412). Everything below was previously
-available only to in-repo consumers; this is the first tag published
-to crates.io and PyPI. See the v0.1.0 git tag annotation for the full
-hand-written release notes.
-
-[Unreleased]: https://gitlab.com/quip.network/xquad/-/compare/v0.1.0...main
-[0.1.0]: https://gitlab.com/quip.network/xquad/-/releases/v0.1.0
-"""
-
 trim = true
+
+# The static `footer` block that used to live here (a hand-written
+# `## [0.1.0] - YYYY-MM-DD` stub) is gone. It was pinned until a real
+# v0.2.0 existed -- this file's header comment said to remove it once
+# that happened, and it has. Left in place, git-cliff would emit the
+# `[0.1.0]` heading twice on every regeneration: once from real history
+# (v0.1.0 is tagged and generates its own section now) and once more
+# from the stub, the second copy carrying the literal `YYYY-MM-DD`
+# placeholder instead of the real release date.
 
 [git]
 # Only conventional commits feed the changelog. Anything pre-QUI-480
@@ -92,9 +80,37 @@ protect_breaking_commits = true
 # the output so they never produce a duplicate entry alongside the
 # squashed change.
 filter_commits = true
-skip_tags      = "^v0\\.0\\."
-topo_order     = false
-sort_commits   = "newest"
+# Pre-v0.1.0 tags never had a real audience and are dropped outright.
+skip_tags = "^v0\\.0\\."
+
+# Which tags count as releases at all. Deliberately excludes rc tags
+# (QUI-1096): an rc must never become a range boundary, or the rc's
+# commits are orphaned out of the release that actually shipped them.
+#
+# This is `tag_pattern`, NOT a `-rc` clause bolted onto `skip_tags`,
+# and the difference is load-bearing -- the two are not
+# interchangeable. `skip_tags` suppresses a release from the OUTPUT but
+# git-cliff still sees the tag and still treats it as a boundary. That
+# is good enough when the upper bound of the range is itself a real tag
+# (rendering `v0.2.1..v0.3.0` folds the skipped v0.3.0-rc1's commits
+# into v0.3.0), but it silently fails on the pre-tag preview path,
+# where the upper bound is a synthetic `--tag` override over untagged
+# HEAD: there git-cliff drops the skipped release's commits instead of
+# folding them, and `make changelog-release VERSION=v0.4.0` renders an
+# EMPTY changelog -- zero sections, exit 0. That path is step 4 of
+# RELEASING.md's pre-flight, so the failure mode is a release manager
+# previewing notes, seeing nothing, and having no signal that anything
+# is wrong.
+#
+# `tag_pattern` avoids the whole class of problem by making git-cliff
+# not recognise rc tags as tags in the first place, so they are never
+# boundaries on any path. Verified across all five non-rc tags with a
+# predecessor plus the v0.4.0 preview: exactly one section each, with
+# the rc's commits present inside the release that shipped them.
+tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+
+topo_order   = false
+sort_commits = "newest"
 
 # Conventional-commit type -> Keep-a-Changelog section. `chore`,
 # `style`, `test`, `ci`, `build` are deliberately dropped: they're

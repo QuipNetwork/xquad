@@ -10,13 +10,19 @@
 #                      crates.io in dependency order.
 #   release:pypi       tag only -- publishes the five PyPI
 #                      distributions, umbrella package last.
-#   release:notes      tag only -- renders git-cliff notes and creates
-#                      the GitLab Release page.
+#   release:notes      NON-RC tag only -- renders git-cliff notes and
+#                      creates the GitLab Release page. The one job in
+#                      this chain that does not run on an rc tag: rc
+#                      crates and wheels still publish, only the Release
+#                      page is skipped (QUI-1096 -- see the job's own
+#                      `rules:` comment, and RELEASING.md's "Release
+#                      candidates").
 #   release:auto-tag   push to main -- tags `vX.Y.Z` when a
 #                      `release/vX.Y.Z` MR merges.
 #
 # Chain: release:validate -> release:crates -> release:pypi ->
-# release:notes. release:auto-tag is standalone -- `needs: []`, so it
+# release:notes (the last link only on a non-rc tag).
+# release:auto-tag is standalone -- `needs: []`, so it
 # starts at t=0 and waits on nothing, including release:validate in its
 # own stage. It fires on the push that merges a release MR, and the tag
 # it pushes is what triggers the other four jobs on a fresh, tag
@@ -56,8 +62,9 @@
 #      MR via the GitLab API, and pushes tag `vX.Y.Z` via glab.
 #   4. The tag push triggers the rest of this pipeline as normal.
 #      release:validate runs again on the tag, then release:crates,
-#      then release:pypi, then release:notes creates the GitLab
-#      Release page with git-cliff notes once artefacts are live.
+#      then release:pypi, then -- on a non-rc tag only -- release:notes
+#      creates the GitLab Release page with git-cliff notes once
+#      artefacts are live. An rc tag stops after release:pypi.
 #
 #   Prerequisite: GITLAB_API_TOKEN (project access token, api scope)
 #   must be set in Settings -> CI/CD -> Variables (masked).
@@ -65,6 +72,26 @@
 #   Settings -> Repository -> Protected tags.
 #
 # See RELEASING.md for the full tag-cut checklist.
+
+# ---------------------------------------------------------------------------
+# Variables
+# ---------------------------------------------------------------------------
+
+# A top-level `variables:` block in a file brought in via `include:` is
+# merged into the pipeline-global config by GitLab, not scoped to this
+# file -- so RELEASE_CLI_URL below is visible to every job in the
+# pipeline, not just release:validate and release:notes. That is
+# exactly what QUI-1092 wants (both jobs read it with no job-level
+# `variables:` of their own), but it means a later reader must not
+# assume this block is file-private.
+variables:
+    # Pinned to v0.24.0 (verified reachable unauthenticated on
+    # 2026-08-18, HTTP 200, and the latest published release at that
+    # time) rather than `latest`, so the release path does not float.
+    # See release:notes below for where this is fetched, and
+    # release:validate for where the fetch itself is probed ahead of a
+    # tag.
+    RELEASE_CLI_URL: "https://gitlab.com/api/v4/projects/gitlab-org%2Frelease-cli/packages/generic/release-cli/v0.24.0/release-cli-linux-amd64"
 
 # ---------------------------------------------------------------------------
 # Shared rules
@@ -140,6 +167,33 @@ release:validate:
         - !reference [.fragments, python-publish]
     script:
         - make -k check-release
+        # QUI-1092: release:notes fetches release-cli from gitlab.com's
+        # generic package registry in its before_script, but it is the
+        # LAST job on a tag pipeline -- a 404 there is discovered only
+        # after crates.io and PyPI publishing has already run and is
+        # irreversible. release:validate runs on every pipeline, so
+        # probing the same URL here exercises the fetch continuously,
+        # well ahead of a tag.
+        #
+        # A one-byte range GET, not a HEAD: the probe has to take the
+        # same path as the fetch it stands in for, which is `-fsSL` (GET,
+        # follows redirects) further down this file. GitLab serves this
+        # URL directly today, but a generic-package download is normally
+        # redirected to object storage when `proxy_download` is off, and
+        # under that mode a `-f` HEAD with no `-L` fails on the redirect
+        # while release:notes' own `-L` fetch still succeeds -- turning
+        # every merge request red for a URL that is in fact fine
+        # (release:validate has no `rules:`, and the root `retry:` block
+        # deliberately excludes script_failure).
+        #
+        # `-fsSIL` would follow the redirect but is still the wrong
+        # method: an object-storage redirect lands on a SigV4 presigned
+        # URL whose signature covers the HTTP verb, so a HEAD against a
+        # presigned GET is a 403 in exactly the scenario this is meant to
+        # survive. `-r 0-0` keeps the verb correct and the transfer at
+        # one byte; a server that ignores Range answers 200 with the full
+        # body, which `-o /dev/null` discards.
+        - curl -fsSL --retry 3 --retry-all-errors -r 0-0 -o /dev/null "${RELEASE_CLI_URL}"
 
 # Publish the three Rust crates to crates.io in topological dependency
 # order: xqvm (no deps) -> xqasm (depends on xqvm) -> xqcli (depends on
@@ -242,10 +296,13 @@ release:pypi:
 # Alpine edge ships; release-cli is installed directly instead of
 # switching images.
 #
-# release-cli is fetched from gitlab.com's generic package registry,
-# pinned to v0.24.0 (verified reachable unauthenticated on 2026-08-18,
-# HTTP 200, and the latest published release at that time) rather than
-# `latest`, so the release path does not float.
+# release-cli is fetched from gitlab.com's generic package registry, at
+# the pinned URL in the top-level RELEASE_CLI_URL variable (see this
+# file's "Variables" section for why it does not float). That fetch is
+# no longer unexercised before a tag: release:validate -- which runs on
+# every pipeline -- probes the same URL as the last line of its
+# `script:`, so a 404 or an unreachable registry surfaces on a merge
+# request instead of here, last in the tag-only publish chain.
 #
 # `STRIP=all` drops the cliff.toml header/footer so the published
 # notes contain only the tag's own section -- the GitLab release page
@@ -268,7 +325,19 @@ release:notes:
     # once artefacts are live on crates.io and PyPI (QUI-496).
     needs:
         - release:pypi
-    <<: *on-release-tag
+    # Deliberately its own `rules:`, not `<<: *on-release-tag`. That
+    # anchor is shared with release:crates and release:pypi (this
+    # file's "Shared rules" section), which must keep publishing rc
+    # artefacts -- only the GitLab Release page is skipped for an rc
+    # tag. QUI-1096: cliff.toml's tag_pattern no longer recognises `-rc`
+    # tags as releases at all, so an rc tag's commits are folded into the
+    # following non-rc release's section instead of getting a page of
+    # their own; running this job on the rc tag itself would
+    # either publish an empty page (no commits since the last non-rc
+    # release yet) or a duplicate once the real release ships. Narrow
+    # the job, not the anchor.
+    rules:
+        - if: $CI_COMMIT_TAG =~ /^v\d/ && $CI_COMMIT_TAG !~ /-rc/
     variables:
         GIT_DEPTH: 0
     dependencies: []
@@ -314,8 +383,7 @@ release:notes:
         # release-cli isn't a cargo tool and isn't in cargo-tools.lock;
         # fetch the pinned binary directly instead of switching this
         # job to the release-cli image (see the job comment above).
-        - curl -fsSL --retry 3 --retry-all-errors -o /usr/local/bin/release-cli
-            "https://gitlab.com/api/v4/projects/gitlab-org%2Frelease-cli/packages/generic/release-cli/v0.24.0/release-cli-linux-amd64"
+        - curl -fsSL --retry 3 --retry-all-errors -o /usr/local/bin/release-cli "${RELEASE_CLI_URL}"
         - chmod +x /usr/local/bin/release-cli
     script:
         - make changelog-release VERSION="${CI_COMMIT_TAG}" STRIP=all OUTPUT=release-notes.md

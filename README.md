@@ -224,7 +224,7 @@ make repl
 ### CI-equivalent locally
 
 ```sh
-make all          # fmt + lint + test (what CI runs)
+make preflight    # what CI enforces, split into preflight-rs / -py / -parity / -docs / -policy
 make conformance  # cross-impl parity suite (Rust + Python)
 ```
 

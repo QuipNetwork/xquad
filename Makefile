@@ -2,15 +2,16 @@
         preflight preflight-rs preflight-py preflight-parity preflight-docs \
         preflight-policy preflight-release \
         lint-rust lint-python lint-policy check-atomic-spec check-commit-messages \
+        check-release-notes \
         test-rust test-python check-parity check-docs-handwritten \
         check-crate-publish check-python-dists check-release \
         check-version-sites list-version-sites \
         deps deps-miri deps-py deps-wasm \
         install-hooks \
-        lint lint-clippy lint-doc lint-deny-rs lint-py \
+        lint lint-clippy lint-doc lint-deny-rs lint-py check-uv-lock \
         fmt fmt-rs fmt-toml fmt-check fmt-check-rs fmt-check-toml fmt-py fmt-check-py \
         test test-unit-rs test-integ-rs test-doc test-miri test-py test-wasm test-substrate-fixture \
-        test-quip test-quip-sign test-quip-e2e \
+        test-quip test-quip-sign test-quip-e2e check-xqffi-fresh \
         test-cuda test-qpu test-metal \
         opcode-parity opcode-parity-rs opcode-parity-py \
         metering-parity \
@@ -64,10 +65,22 @@ lint-python: fmt-check-py lint-py
 # from YAML that isn't also reachable, and checked, from a local `make
 # lint-policy`.
 #
+# check-release-notes joins for the same reason and closes the gap that
+# render-changelog alone leaves open: render-changelog proves cliff.toml
+# parses and its Tera templates do not error, but it renders the whole,
+# unscoped history, so it would stay green through the exact QUI-1096
+# regression (every GitLab release page republishing every prior
+# release's changelog). check-release-notes instead renders every
+# non-rc tag's actual PREV..tag range and asserts each yields exactly
+# one `## [` heading, which is the regression itself. It needs full tag
+# history, not just depth, which verify:policy already provides via
+# GIT_DEPTH: 0 (see verify.yml), so this line is the only CI-side change
+# it needs.
+#
 # preflight-py lists fmt-check-toml directly so a Python-only
 # contributor gets the TOML check without running the rest of the
 # policy phase.
-lint-policy: fmt-check-toml lint-deny-rs render-changelog check-atomic-spec check-commit-messages
+lint-policy: fmt-check-toml lint-deny-rs render-changelog check-atomic-spec check-commit-messages check-release-notes
 
 # Wraps scripts/check-atomic-spec-mr.sh, forwarding the optional positional
 # BASE/HEAD refs the way the script expects. Both are quoted so that
@@ -226,7 +239,30 @@ check-release: check-version-sites check-crate-publish check-python-dists
 # workspace packaging dry-run.
 preflight-rs: lint-rust lint-deny-rs test-rust test-wasm test-substrate-fixture
 
-preflight-py: fmt-check-toml lint-python test-py
+# check-uv-lock joins here because it is cheap and read-only (uv lock
+# --check does not sync, it only fails when uv.lock is stale against
+# pyproject.toml).
+#
+# Its POSITION is load-bearing, not cosmetic: it has to precede test-py.
+# test-py depends on deps-py, whose bare `uv sync` silently rewrites a
+# stale uv.lock in place (see check-uv-lock's own comment below). make
+# runs prerequisites left to right, so a check-uv-lock listed after
+# test-py would only ever see a lock that deps-py had already
+# regenerated -- it could not fail, and a contributor who edited a
+# pyproject.toml and forgot `uv lock` would get a green preflight and
+# then fail in CI's verify:python, which extends `.python-tools` and
+# never syncs. Left-to-right ordering holds under serial make only, but
+# this Makefile is already parallel-unsafe (recipes share .venv/ and
+# target/), so that is not a new constraint.
+#
+# check-xqffi-fresh is deliberately NOT here even though it is also a
+# Python check: it runs `uv sync --extra dwave` and a maturin rebuild,
+# which mutate the developer's own .venv/, and a preflight aggregate
+# that leaves dwave-system installed in a contributor's working
+# environment as a side effect is a bad trade. It stays reachable only
+# as its own leaf target (make check-xqffi-fresh) and through its own
+# CI job (verify:xqffi).
+preflight-py: fmt-check-toml check-uv-lock lint-python test-py
 
 preflight-parity: check-parity
 
@@ -335,6 +371,14 @@ deps-wasm:
 # current Rust sources — essential for local runs of
 # `make example-smoke`, `make test-py`, etc.
 #
+# `--locked` on that maturin call is the same contract every other
+# resolving cargo invocation in this file carries (see CONTRIBUTING.md,
+# "Dependencies and Lockfiles"), and it is worth naming here because
+# deps-py is the contributor bootstrap: a Cargo.lock that has drifted
+# from the manifests now fails `make deps-py` outright rather than being
+# quietly re-resolved into a different dependency set. Regenerate with
+# `cargo check` and commit the result.
+#
 # Each package's pyproject.toml sets `dev-mode-dirs = [".."]`, so its
 # editable install puts the repo root on sys.path rather than just
 # the package directory (a flat-layout quirk: without it, only
@@ -343,7 +387,7 @@ deps-wasm:
 # xqcp` etc.
 deps-py:
 	uv sync
-	uv run --active maturin develop --manifest-path xqffi/Cargo.toml
+	uv run --active maturin develop --locked --manifest-path xqffi/Cargo.toml
 
 # Point git at the repo-tracked .githooks/ directory so the pre-commit
 # hook runs on every commit. Run once per clone; bypass ad hoc with
@@ -373,6 +417,24 @@ RUFF_VERSION := 0.15.16
 # by-hand-with-uv.lock upkeep as RUFF_VERSION above.
 PYYAML_VERSION := 6.0.3
 
+# Pinned uv version. The single source of truth for it: .gitlab/ci/setup.yml
+# greps this line out of the Makefile to build the pinned installer URL
+# (https://astral.sh/uv/${UV_VERSION}/install.sh), exactly the way
+# .githooks/pre-commit already greps RUFF_VERSION out of this same file
+# rather than hardcoding a second copy of the pin. There is no
+# TOOLCHAIN_IMAGE-style precedent in this repo for pinning a tool version
+# (the three floating CI image tags -- rust:latest, alpine:3, and the
+# gitlab-org/cli image -- are a separate, out-of-scope finding); this
+# Makefile-as-source-of-truth pattern is the real in-repo precedent.
+# 0.11.7 is the version the reference developer machine runs today.
+#
+# Unlike RUFF_VERSION, this pin binds CI only. `uvx ruff@$(RUFF_VERSION)`
+# installs ruff on the local side too, but nothing can install uv through
+# uv, so a contributor runs whatever uv is on their PATH. check-uv-lock
+# warns when that differs from this value -- see its comment for why a
+# warning rather than a gate.
+UV_VERSION := 0.11.7
+
 fmt: fmt-rs fmt-toml fmt-py
 
 fmt-rs:
@@ -400,23 +462,53 @@ fmt-check-py:
 lint: lint-clippy lint-doc lint-deny-rs lint-py fmt-check
 
 lint-clippy:
-	cargo clippy --workspace --all-targets --all-features -- -D warnings
+	cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
 lint-doc:
-	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+	RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps
 
 lint-deny-rs:
-	cargo deny check
+	cargo deny --locked check
 
 lint-py:
 	uvx ruff@$(RUFF_VERSION) check xqvm_py xqcp xqsa xqffi xquad examples scripts
+
+# `uv lock --check` is read-only -- it is an alias of `uv sync --locked`
+# with no environment sync at all, and fails when uv.lock is stale
+# against pyproject.toml rather than silently rewriting it, which is what
+# a plain `uv sync` (deps-py, test-py) does. This is the Python-side
+# equivalent of the `--locked` flag every cargo invocation in this file
+# already carries (check-crate-publish, test-unit-rs via nextest, etc.):
+# a stale lockfile fails the check instead of being quietly regenerated
+# out from under CI. No `--with`, `--isolated`, or maturin build needed,
+# so it costs nothing beyond a resolver pass over the existing lock.
+#
+# The version probe in front of it is the local consumer of UV_VERSION,
+# and it is deliberately a WARNING, not a failure. CI installs the pin
+# (.gitlab/ci/setup.yml's `uv` fragment greps it out of this file); a
+# contributor's `uv` is whatever they installed, so the two can differ.
+# When they do, a resolver or lockfile-format difference between the two
+# versions surfaces here as `uv lock --check` failing locally while CI
+# is green, or the reverse -- and the obvious reading of that failure
+# ("my uv.lock is stale") is the wrong one. Naming the mismatch turns a
+# confusing failure into an obvious one. It does not gate: blocking
+# every contributor whose uv is newer than the pin would cost more than
+# the drift does, and `uv lock --check`'s own exit status is what
+# decides this target.
+check-uv-lock:
+	@have="$$(uv --version 2>/dev/null | awk '{print $$2}')"; \
+	if [ -n "$${have}" ] && [ "$${have}" != "$(UV_VERSION)" ]; then \
+		echo "warning: local uv $${have} != pinned $(UV_VERSION) (Makefile UV_VERSION, installed by CI);" >&2; \
+		echo "         a uv.lock disagreement with CI may be a resolver difference, not a stale lock" >&2; \
+	fi
+	uv lock --check
 
 # -- Tests ------------------------------------------------------------------
 
 test: test-unit-rs test-integ-rs test-doc test-py
 
 test-unit-rs:
-	cargo nextest run --workspace --all-features --lib --cargo-profile ci-test
+	cargo nextest run --locked --workspace --all-features --lib --cargo-profile ci-test
 
 # xquad-conformance is excluded here because its `python` feature gates
 # a test file that shells out to `uv run python -m xqvm_py`, and the
@@ -424,25 +516,30 @@ test-unit-rs:
 # own dedicated job (verify:parity) that covers both runtimes with
 # the proper before_script setup.
 test-integ-rs:
-	cargo nextest run --workspace --exclude xquad-conformance --all-features --test '*' --cargo-profile ci-test
+	cargo nextest run --locked --workspace --exclude xquad-conformance --all-features --test '*' --cargo-profile ci-test
 
 # nextest cannot execute rustdoc doctests, so they are driven by the
 # built-in test harness on a dedicated target.
 test-doc:
-	cargo test --doc --workspace --all-features --profile ci-test
+	cargo test --locked --doc --workspace --all-features --profile ci-test
 
 test-miri: deps-miri
-	cargo +nightly miri test --workspace --all-features
+	cargo +nightly miri test --locked --workspace --all-features
 
 # `uv run pytest` alone skips rebuilding xqffi's maturin-built cdylib
 # when Rust sources have changed (uv's editable-wheel cache masks the
-# edit). Depend on deps-py so a fresh maturin develop runs first;
-# CI already has this via the job's before_script.
+# edit). Depend on deps-py so a fresh maturin develop runs first. CI does
+# NOT get this for free from the job's before_script -- `.python`'s
+# before_script is a bare `uv sync`, with no maturin step at all (see
+# setup.yml's `.fragments.uv-sync`). `test:python` only gets the rebuild
+# because its script is `make -k test-py`, which pulls it in through this
+# deps-py prerequisite; a job that called pytest directly would silently
+# run against a stale cdylib.
 # Excludes the hardware-backed solver tests (cuda/qpu/metal); those run in
 # their own GPU/QPU runner jobs (.gitlab/ci/hardware.yml) where they hard-fail
 # on a missing device/token rather than skip. Also excludes the Quip signing
 # tests (quip), which need the `[quip]` extra and run in the dedicated
-# `test:quip` job (.gitlab/ci/python.yml). This job runs everywhere, so it must
+# `test:quip` job (.gitlab/ci/test.yml). This job runs everywhere, so it must
 # deselect them or they would run unconfigured in CI.
 test-py: deps-py
 	uv run --no-sync pytest xqvm_py/tests xqcp/tests xqsa/tests xquad/tests scripts/tests -m "not cuda and not qpu and not metal and not quip"
@@ -459,14 +556,14 @@ test-py: deps-py
 # `make -k test-wasm` off the plain `.rust` before_script and picks the
 # whole toolchain up through this prerequisite.
 test-wasm: deps-wasm
-	cargo build -p xqvm --target wasm32v1-none --no-default-features
-	wasm-pack test --node fixtures/xqvm-wasm
+	cargo build --locked -p xqvm --target wasm32v1-none --no-default-features
+	wasm-pack test --node fixtures/xqvm-wasm --locked
 
 # Run native pallet tests for the Substrate FRAME fixture
 # (fixtures/pallet-xqvm). The fixture lives in a standalone workspace to
 # isolate the QuipNetwork/polkadot-sdk git dep from the main build.
 test-substrate-fixture:
-	cargo test --manifest-path fixtures/pallet-xqvm/Cargo.toml
+	cargo test --locked --manifest-path fixtures/pallet-xqvm/Cargo.toml
 
 # Full SolverQuip sweep -- the signing tests plus the live-devnet end-to-end
 # suite. Run this when an MR changes SolverQuip (xqsa/quip*.py); it is the
@@ -482,11 +579,32 @@ test-quip: test-quip-sign test-quip-e2e
 # Run the quip-marked signing tests (xqsa/tests/test_quip_signing.py): the
 # pure-Python SCALE / keystore / extrinsic tests that need the `[quip]` extra
 # and so are deselected by `make test-py` (`-m "not ... quip"`). This is the
-# local leaf for the CI `test:quip` job (.gitlab/ci/python.yml); `--extra quip`
-# pulls the quip_signer wheel those tests importorskip on. No chain required --
-# the live-devnet suite is the separate `test-quip-e2e` target below.
+# local leaf for the CI `test:quip` job (.gitlab/ci/test.yml).
+#
+# Three-step shape, matching scripts/run-hardware-tests.sh:59-77 rather
+# than test-py's `deps-py` + `uv run --no-sync` pair (QUI-1199 asked for
+# the latter; it does not work here, see below):
+#   1. `uv sync --extra quip` -- extras-bearing sync. setup.yml:256-267
+#      names test:quip the SOLE writer of the quip extra's cache
+#      contents, and it holds that role only because this call performs
+#      its own sync (it pulls in the quip_signer wheel neither test:python
+#      nor verify:parity install). Swapping in a `deps-py` prerequisite
+#      plus `--no-sync` here, as the ticket's literal text suggested,
+#      removes that sync and the cache-writer role with it.
+#   2. `uv run --no-sync maturin develop --manifest-path xqffi/Cargo.toml`
+#      -- explicit rebuild, so this job never runs against a cdylib
+#      staled by step 1's editable-wheel cache restore, the same problem
+#      test-py's deps-py prerequisite solves for that job.
+#   3. `uv run --no-sync pytest ...` -- `--no-sync` here is load-bearing,
+#      not decorative: a bare `uv run --extra quip pytest ...` re-syncs
+#      the workspace and, per run-hardware-tests.sh:66-69, reverts xqffi
+#      to the cached editable wheel, silently undoing step 2's rebuild
+#      and reintroducing the exact stale-cdylib bug this reshape exists
+#      to close.
 test-quip-sign:
-	uv run --extra quip pytest xqsa/tests/test_quip_signing.py -m quip
+	uv sync --extra quip
+	uv run --no-sync maturin develop --locked --manifest-path xqffi/Cargo.toml
+	uv run --no-sync pytest xqsa/tests/test_quip_signing.py -m quip
 
 # Live Quip Network devnet end-to-end tests for SolverQuip
 # (xqsa/tests/test_quip_live.py) -- the chain-backed sibling of
@@ -503,13 +621,21 @@ test-quip-sign:
 # target hard-errors when it is missing rather than reporting a hollow, all-
 # skipped pass. QUIP_FAUCET_URL is optional but needed for the funded submit
 # and end-to-end tiers; without it only the read-only connectivity tests run.
+#
+# Same three-step shape as test-quip-sign above, for the same reason:
+# extras-bearing sync to preserve the cache-writer role, an explicit
+# maturin rebuild for a fresh cdylib, `--no-sync` on the pytest call so
+# that rebuild is not immediately reverted. See test-quip-sign's comment
+# for the full rationale; not repeated here.
 test-quip-e2e:
 	@if [ -z "$(QUIP_RPC_URL)" ]; then \
 		echo "error: QUIP_RPC_URL is required (e.g. make test-quip-e2e QUIP_RPC_URL=ws://127.0.0.1:9944 QUIP_FAUCET_URL=http://127.0.0.1:8087)" >&2; \
 		exit 2; \
 	fi
+	uv sync --extra quip
+	uv run --no-sync maturin develop --locked --manifest-path xqffi/Cargo.toml
 	QUIP_RPC_URL="$(QUIP_RPC_URL)" QUIP_FAUCET_URL="$(QUIP_FAUCET_URL)" \
-		uv run --extra quip pytest xqsa/tests/test_quip_live.py -m quip -v
+		uv run --no-sync pytest xqsa/tests/test_quip_live.py -m quip -v
 
 # Real-hardware xqsa solver tests -- CUDA, D-Wave QPU, Apple Metal -- each
 # exercising the encode -> solve -> verify -> decode pipeline against an
@@ -551,6 +677,59 @@ test-qpu:
 test-metal:
 	bash scripts/run-hardware-tests.sh metal
 
+# Asserts the xqffi cdylib xquad actually loads is fresh: build it from
+# current Rust sources, then prove by runtime import that the result
+# still satisfies the Python surface. `xquad/__init__.py` eagerly imports
+# `asm`, `program`, `verifier` and `vm`, each doing a top-level `from
+# xqffi.* import <symbol>`, so a bare `import xquad` genuinely exercises
+# the compiled extension and binds nine concrete symbols across those
+# four submodules. If any of them fails to resolve, the cdylib xqffi
+# loaded is missing something the Python surface expects of it -- exactly
+# the fresh-cdylib guarantee QUI-1199 exists to make systematic rather
+# than hand-enforced at each quip/hardware call site.
+#
+# The maturin step is what binds the assertion to *this* tree, and it is
+# not optional: `uv sync` does not rebuild the cdylib when only Rust
+# sources changed, it reinstalls xqffi from uv's editable-wheel cache,
+# which those sources do not invalidate (run-hardware-tests.sh:12 and
+# deps-py above document the same trap). Without the rebuild this target
+# would import whatever wheel the sync restored and report it fresh --
+# a check that cannot fail, which is worse than no check. Hence the same
+# three-step shape as test-quip-sign / test-quip-e2e above and
+# run-hardware-tests.sh: extras-bearing sync, explicit maturin rebuild,
+# `--no-sync` on everything after it so the rebuild is not reverted.
+#
+# `dwave` is the extra to sync, not `cuda` or `metal`: dwave-system
+# installs on a plain Linux runner with no device attached, cuda pulls a
+# ~1 GB cupy wheel for no reason (this check imports nothing cupy-side),
+# and metal is gated behind a `sys_platform == 'darwin'` marker in
+# pyproject.toml, so it would install nothing at all on the Linux runner
+# this check actually runs on.
+#
+# Deliberately NOT a preflight-py prerequisite (see that target's
+# comment): `uv sync --extra dwave` mutates .venv/, and a preflight that
+# leaves dwave-system in a contributor's working environment as a side
+# effect is a bad trade. It is still a make target, not a bare script
+# invocation, because the house rule is that CI calls `make -k <target>`
+# and never a script directly -- here that CI caller is the dedicated
+# verify:xqffi job (.gitlab/ci/verify.yml), which runs on every merge
+# request rather than being gated behind a protected-ref rule, since a
+# pre-merge signal is the entire point.
+#
+# Running this locally mutates your own .venv/ the same way; re-run
+# `make deps-py` afterwards to put it back to the plain (no-extra) sync
+# the rest of local dev expects.
+check-xqffi-fresh:
+	uv sync --extra dwave
+	uv run --no-sync maturin develop --locked --manifest-path xqffi/Cargo.toml
+	uv run --no-sync python -c \
+		"import xquad; \
+		syms = [xquad.asm.assemble_source, xquad.asm.disassemble, xquad.asm.parse_xqasm, \
+		xquad.program.Vm, xquad.vm.DEFAULT_STEP_LIMIT, xquad.program.XqmxModel, \
+		xquad.program.XqmxSample, xquad.verifier.verify, xquad.verifier.verify_source]; \
+		assert all(s is not None for s in syms), 'xqffi symbol failed to resolve'; \
+		print(f'xqffi fresh: {len(syms)} symbols resolved')"
+
 # -- Conformance ------------------------------------------------------------
 
 # Cross-implementation parity (opcode table, spec conformance vectors).
@@ -559,7 +738,7 @@ test-metal:
 opcode-parity: opcode-parity-rs opcode-parity-py
 
 opcode-parity-rs:
-	cargo build -p xqvm
+	cargo build --locked -p xqvm
 
 # `deps-py` + `--no-sync` for the same reason as `test-py` and
 # `example-smoke`: a bare `uv run` re-syncs the workspace and reinstalls
@@ -581,14 +760,14 @@ metering-parity: deps-py
 conformance: conformance-rs conformance-py
 
 conformance-rs:
-	cargo test -p xquad-conformance --no-default-features --features rust
+	cargo test --locked -p xquad-conformance --no-default-features --features rust
 
 # The Python side (run by CI's verify:parity job) shells out to
 # `uv run python -m xqvm_py run` from within the Rust test; the xqffi
 # extension (maturin-built) and xqvm_py (editable) must both be
 # installed in .venv/ first.
 conformance-py: deps-py
-	cargo test -p xquad-conformance --no-default-features --features python
+	cargo test --locked -p xquad-conformance --no-default-features --features python
 
 # -- Dev ergonomics ---------------------------------------------------------
 
@@ -707,6 +886,22 @@ changelog:
 render-changelog:
 	git-cliff --config cliff.toml --output /dev/null
 
+# Wraps scripts/check-release-notes.sh, which renders every non-rc tag's
+# PREV..tag range (the same range changelog-release derives below, for
+# every past tag rather than just the one VERSION names) and asserts
+# each render yields exactly one `## [` heading. render-changelog above
+# only proves cliff.toml parses and its templates do not error -- it
+# renders the whole, unscoped history, so it would stay green straight
+# through the QUI-1096 regression class (a release page silently
+# absorbing every prior release's changelog). This is the check that
+# actually exercises the regression. Needs full tag history, which
+# verify:policy already provides via GIT_DEPTH: 0 (verify.yml), and
+# degrades to a skip-with-message when the clone has no tags at all, so
+# a fresh fork or a shallow-clone CI change does not turn it red for the
+# wrong reason.
+check-release-notes:
+	bash scripts/check-release-notes.sh
+
 # Generate the changelog / release notes for a tagged release.
 # Invoked from `release:notes` in .gitlab/ci/release.yml with
 # VERSION set to the pushed tag, STRIP=all (the GitLab Release page
@@ -716,12 +911,116 @@ render-changelog:
 #   make changelog-release VERSION=v0.2.0
 # Optional flags:
 #   STRIP=all|header|footer   forwarded to git-cliff --strip
-#   OUTPUT=path               write target (default CHANGELOG.md)
+#   OUTPUT=path               write target (default CHANGELOG.md, `-` for stdout)
+#
+# Passes an explicit PREV..VERSION (or PREV..HEAD) range rather than
+# bare `--tag VERSION` with no range at all -- the pre-fix behaviour.
+# With no range, git-cliff walks the ENTIRE history and renders every
+# prior release's changelog into this one page: the QUI-1096 bug,
+# verified live against the actual GitLab release pages (v0.3.2 showed 7
+# sections where it should show 1, v0.4.0-rc1 showed 8).
+#
+# --- Why the derivation lives in the recipe, not in `$(shell ...)` ---------
+#
+# VERSION reaches the shell through the ENVIRONMENT (the three
+# target-specific `export` lines below), never spliced into a command
+# line. That is a security boundary, not a style choice.
+# scripts/check-release-notes.sh drives this target in a loop over tag
+# names taken verbatim from `git tag -l 'v[0-9]*'`, and that runs inside
+# `make lint-policy` -> `verify:policy` on every pipeline. Git refnames
+# forbid spaces but permit `;`, `$`, backticks, `&`, `|` and `'`, so a
+# tag named `v1.0.0;touch/pwned` -- creatable by anyone with tag-push
+# rights and matched by that filter -- would execute as a command if
+# VERSION were interpolated. Single-quoting is not enough either: a
+# refname may itself contain `'`. An exported variable read back as
+# "$${VERSION}" cannot be re-parsed as code at all, which is the only
+# form that closes this completely.
+#
+# Two secondary benefits of the same move. It resolves the range with
+# one `git rev-parse` plus one `git describe`, where the previous
+# `PREV`/`RANGE` variable pair re-tested the same condition and shelled
+# out to git three times per invocation. And it retires the `=`-not-`:=`
+# hazard entirely: a recipe body only runs when the target is invoked,
+# so there is no longer any way for this git call to fire at Makefile
+# PARSE time -- on every `make`, for every target, including from inside
+# an extracted source tarball with no .git directory, where the failure
+# would land before any guard clause could run.
+#
+# --- Why the branch shape is what it is -----------------------------------
+#
+# Two `git describe` branches because this target has two distinct
+# callers and only one of them has a real tag to look behind:
+#   - `release:notes` (.gitlab/ci/release.yml) runs after the tag is
+#     pushed, with VERSION set to that tag -- `$${VERSION}^` resolves.
+#   - RELEASING.md step 4's pre-flight preview runs
+#     `make changelog-release VERSION=vX.Y.Z` BEFORE the tag is cut, so a
+#     bad commit subject can still be fixed and re-merged. On that
+#     caller VERSION is not yet a ref, so `$${VERSION}^` has nothing to
+#     resolve and `git describe` would simply fail.
+# `git rev-parse -q --verify "$${VERSION}"` tells the two apart: if it
+# resolves, VERSION is a real tag and the search starts at its parent
+# commit; if not, the search starts at HEAD instead, which is where the
+# not-yet-tagged commit sits. That same test picks the upper bound of
+# the range: `prev..VERSION` once the tag is real, `prev..HEAD` while it
+# is still only a preview (VERSION is still passed to git-cliff
+# separately via --tag, so the rendered section is labelled with the
+# version being previewed rather than "unreleased").
+#
+# `--exclude='*-rc*'` is what keeps an rc tag from becoming the lower
+# bound of a release's range: an rc predecessor is passed over in favour
+# of the last real release, so the rc's own commits stay inside the
+# range and fold into the next real release's notes.
+#
+# It pairs with cliff.toml's `tag_pattern` (NOT its `skip_tags`), which
+# does the same job for the upper half -- git-cliff does not recognise
+# rc tags as releases at all, so one cannot become a boundary inside the
+# range either. Both halves are needed: this one is git's view of which
+# tag `prev` resolves to, that one is git-cliff's view of which tags
+# split a range. See cliff.toml's tag_pattern comment for why
+# `skip_tags` is not sufficient there.
+#
+# An `if`/`then`/`else`, not a `rev-parse && describe-parent || describe-
+# HEAD` chain: that reads shorter but is wrong the moment VERSION is a
+# real tag with no predecessor of its own, i.e. the very first release a
+# repository ever tags. There, `rev-parse` (A) succeeds but `describe
+# "$${VERSION}^"` (B) fails with no earlier tag to find, and a plain
+# `A && B || C` chain cannot tell "A failed" from "A succeeded, B
+# failed" -- both take the `|| C` branch, so it silently falls through
+# to describing HEAD instead and `prev` comes back with an unrelated,
+# *newer* tag instead of the empty result that should trip the guard.
+# Verified against this repo's own v0.1.0 (its parent commit has no
+# earlier tag): the chain form resolves `prev` to v0.3.2 -- wrong, and
+# wrong silently. The if/then/else form below asks the one question that
+# matters (does VERSION already exist as a tag) exactly once, so a real
+# tag with no predecessor stays on the parent-describe branch, fails it,
+# and `prev` comes back empty, landing correctly in the guard.
+#
+# `|| true` on each `git describe`: the guard below is what reports an
+# unresolvable predecessor, with a message that names the cause. Without
+# it `set -e` would abort on the describe itself and print git's own
+# error instead.
+changelog-release: export VERSION := $(VERSION)
+changelog-release: export STRIP   := $(STRIP)
+changelog-release: export OUTPUT  := $(OUTPUT)
 changelog-release:
-	@if [ -z "$(VERSION)" ]; then \
+	@set -eu; \
+	if [ -z "$${VERSION}" ]; then \
 		echo "error: VERSION is required (e.g. make changelog-release VERSION=v0.2.0)" >&2; \
 		exit 2; \
-	fi
-	git-cliff --config cliff.toml --tag $(VERSION) \
-		$(if $(STRIP),--strip $(STRIP)) \
-		--output $(or $(OUTPUT),CHANGELOG.md)
+	fi; \
+	if git rev-parse -q --verify "$${VERSION}" >/dev/null 2>&1; then \
+		prev="$$(git describe --tags --abbrev=0 --exclude='*-rc*' "$${VERSION}^" 2>/dev/null || true)"; \
+		range="$${prev}..$${VERSION}"; \
+	else \
+		prev="$$(git describe --tags --abbrev=0 --exclude='*-rc*' HEAD 2>/dev/null || true)"; \
+		range="$${prev}..HEAD"; \
+	fi; \
+	if [ -z "$${prev}" ]; then \
+		echo "error: no predecessor tag found for VERSION=$${VERSION} (git describe --tags --abbrev=0 --exclude='*-rc*' <ref> returned nothing); changelog-release needs at least one earlier non-rc tag to bound the range" >&2; \
+		exit 2; \
+	fi; \
+	echo "changelog-release: rendering $${range} as $${VERSION}" >&2; \
+	set -- --config cliff.toml --tag "$${VERSION}" "$${range}" \
+		--output "$${OUTPUT:-CHANGELOG.md}"; \
+	if [ -n "$${STRIP}" ]; then set -- "$$@" --strip "$${STRIP}"; fi; \
+	git-cliff "$$@"
