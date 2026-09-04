@@ -226,7 +226,11 @@ the build is broken. Concrete enforcement:
 
 - **Opcode table** -- `xqvm/build.rs` asserts `opcodes.yaml` against the
   `opcodes!` x-macro at compile time; `scripts/check-opcode-parity.py`
-  asserts `opcodes.yaml` against `xqvm_py/opcodes.py` in CI.
+  asserts `opcodes.yaml` against `xqvm_py/opcodes.py` in CI. The Rust
+  check compares the wire byte, the mnemonic, the net stack effect and
+  each operand's name and encoded byte width. It compares the net effect
+  rather than the `stack_pop`/`stack_push` pair, because the x-macro
+  stores only the net delta; the pair is compared on the Python side.
 - **Bytecode encoding** -- owned by the `xqasm` crate's own test suite
   (`xqasm/tests/integration.rs` plus assembler unit tests).
 - **Observable behaviour** -- [`check_vector`](src/lib.rs) asserts the

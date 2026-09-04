@@ -43,6 +43,12 @@ class OpcodeMeta:
     operand_count: int  # Number of operands in assembly
     operand_types: tuple[OperandType, ...]  # Types of each operand
     description: str
+    # True for an opcode that empties the stack outright rather than
+    # applying a fixed net effect, in which case stack_pop and stack_push
+    # are both 0. SCLR alone. Mirrors `stack_reset` in
+    # conformance/opcodes.yaml, which scripts/check-opcode-parity.py
+    # compares against this field.
+    stack_reset: bool = False
 
 
 class Opcode(Enum):
@@ -256,6 +262,7 @@ class Opcode(Enum):
         0,
         (),
         "Clear entire stack",
+        stack_reset=True,
     )
     SWAP = OpcodeMeta(
         0x1B,
