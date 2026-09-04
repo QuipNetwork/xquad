@@ -94,6 +94,8 @@ Columns:
 - **Mnemonic** -- uppercase assembly name.
 - **Operands** -- post-opcode operand layout; empty for no-operand instructions.
 - **Stack** -- stack effect as `pop → push`; `0 → 1` means one value produced.
+  `any → 0` marks an instruction that empties the stack outright rather than
+  applying a fixed net effect.
 - **Description** -- single-sentence semantic summary.
 
 """
@@ -129,6 +131,8 @@ Columns:
 - **Mnemonic** -- uppercase assembly name.
 - **Operands** -- post-opcode operand layout; empty for no-operand instructions.
 - **Stack** -- stack effect as `pop → push`; `0 → 1` means one value produced.
+  `any → 0` marks an instruction that empties the stack outright rather than
+  applying a fixed net effect.
 - **Description** -- single-sentence semantic summary.
 
 """
@@ -162,6 +166,21 @@ def format_operands(operands: list[object], entry_path: str) -> str:
                 "conformance/opcodes.yaml"
             )
     return ", ".join(parts)
+
+
+def format_stack_effect(stack_pop: int, stack_push: int, entry: Mapping[str, object], entry_path: str) -> str:
+    """Render the Stack column.
+
+    An opcode carrying `stack_reset` has no fixed net effect to print --
+    it empties the stack whatever its depth -- so `0 → 0` would read as
+    "leaves the stack alone", which is the opposite of what SCLR does.
+    """
+    reset = entry.get("stack_reset", False)
+    if not isinstance(reset, bool):
+        raise SetupError(f"{entry_path}: optional key `stack_reset` must be bool, got {type(reset).__name__}")
+    if reset:
+        return "`any → 0`"
+    return f"`{stack_pop} → {stack_push}`"
 
 
 def _format_reserved_range(start: int, end: int) -> str:
@@ -244,7 +263,7 @@ def render_tables(data: dict) -> str:
             operands = format_operands(require_key(entry, entry_path, "operands", list), entry_path)
             stack_pop = require_key(entry, entry_path, "stack_pop", int)
             stack_push = require_key(entry, entry_path, "stack_push", int)
-            stack = f"`{stack_pop} → {stack_push}`"
+            stack = format_stack_effect(stack_pop, stack_push, entry, entry_path)
             doc = require_key(entry, entry_path, "doc", str).replace("|", "\\|")
             lines.append(f"| `0x{code:02X}` | `{mnemonic}` | {operands} | {stack} | {doc} |")
         lines.append("")

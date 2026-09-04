@@ -20,9 +20,14 @@
 
 The Rust side is checked at compile time by xqvm/build.rs. This script is
 the Python counterpart: it loads the canonical YAML and compares every
-(code, mnemonic, stack_pop, stack_push, operand_count, operand_types)
-tuple against xqvm_py/opcodes.py. Any mismatch prints a
+(code, mnemonic, stack_pop, stack_push, stack_reset, operand_count,
+operand_types) tuple against xqvm_py/opcodes.py. Any mismatch prints a
 diff-style report and the script exits 1.
+
+This side compares stack_pop and stack_push separately. The Rust check
+cannot: the opcodes! x-macro stores only the net delta, so xqvm/build.rs
+narrows the pair before comparing. The pop/push split is therefore pinned
+here and nowhere else.
 
 Intended to be invoked from the `opcode-parity` CI job and the
 `make opcode-parity` Makefile target.
@@ -52,6 +57,7 @@ class Row:
     mnemonic: str
     stack_pop: int
     stack_push: int
+    stack_reset: bool
     operand_byte_width: int
     operand_types: tuple[str, ...]
 
@@ -59,7 +65,7 @@ class Row:
         types = ",".join(self.operand_types) if self.operand_types else "-"
         return (
             f"{self.code:#04x} {self.mnemonic:<8} "
-            f"pop={self.stack_pop} push={self.stack_push} "
+            f"pop={self.stack_pop} push={self.stack_push} reset={self.stack_reset} "
             f"operand_bytes={self.operand_byte_width} types={types}"
         )
 
@@ -87,10 +93,23 @@ def load_yaml_rows(path: Path) -> dict[int, Row]:
             mnemonic=require_key(entry, entry_path, "mnemonic", str),
             stack_pop=int(require_key(entry, entry_path, "stack_pop", int)),
             stack_push=int(require_key(entry, entry_path, "stack_push", int)),
+            stack_reset=_stack_reset(entry, entry_path),
             operand_byte_width=operand_byte_width,
             operand_types=operand_types,
         )
     return rows
+
+
+def _stack_reset(entry: Mapping[str, object], path: str) -> bool:
+    """Read the optional `stack_reset` flag, defaulting to false.
+
+    Optional rather than required so the 92 opcodes with a fixed stack
+    effect stay unannotated; only SCLR carries it.
+    """
+    reset = entry.get("stack_reset", False)
+    if not isinstance(reset, bool):
+        raise SetupError(f"{path}: optional key `stack_reset` must be bool, got {type(reset).__name__}")
+    return reset
 
 
 def _operand_width(op: Mapping[str, object], path: str) -> int:
@@ -120,6 +139,7 @@ def load_python_rows() -> dict[int, Row]:
             mnemonic=op.name,
             stack_pop=meta.stack_pop,
             stack_push=meta.stack_push,
+            stack_reset=meta.stack_reset,
             operand_byte_width=meta.operand_count,
             operand_types=tuple(t.name for t in meta.operand_types),
         )

@@ -25,6 +25,8 @@ Columns:
 - **Mnemonic** -- uppercase assembly name.
 - **Operands** -- post-opcode operand layout; empty for no-operand instructions.
 - **Stack** -- stack effect as `pop → push`; `0 → 1` means one value produced.
+  `any → 0` marks an instruction that empties the stack outright rather than
+  applying a fixed net effect.
 - **Description** -- single-sentence semantic summary.
 
 Reserved wire bytes (rejected by the decoder as illegal): `0x0D`, `0x19`, `0x1D`-`0x1F`, `0x2D`-`0x2F`, `0x35`, `0x46`-`0x49`, `0x4D`-`0x4F`, `0x55`-`0x59`, `0x5C`-`0x5F`, `0x6B`-`0x6F`, `0x78`-`0x7E`, `0x80`-`0xEF`, `0xF1`-`0xFE`.
@@ -75,7 +77,7 @@ Total: **93 opcodes**.
 | `0x16` | `PUSH6` | `val: [u8; 6]` | `0 → 1` | Push a 6-byte big-endian signed constant, sign-extended to i64. |
 | `0x17` | `PUSH7` | `val: [u8; 7]` | `0 → 1` | Push a 7-byte big-endian signed constant, sign-extended to i64. |
 | `0x18` | `PUSH8` | `val: [u8; 8]` | `0 → 1` | Push a full 8-byte big-endian signed constant (i64). |
-| `0x1A` | `SCLR` | -- | `0 → 0` | Clear the entire value stack. |
+| `0x1A` | `SCLR` | -- | `any → 0` | Clear the entire value stack. |
 | `0x1B` | `SWAP` | -- | `2 → 2` | Swap the top two stack elements. |
 | `0x1C` | `COPY` | -- | `1 → 2` | Duplicate the top of the stack. |
 

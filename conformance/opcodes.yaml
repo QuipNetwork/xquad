@@ -15,6 +15,11 @@
 #              type ∈ {register, label, immediate}; width = byte count.
 #   stack_pop: number of stack slots consumed.
 #   stack_push: number of stack slots produced.
+#   stack_reset: optional bool, default false. True marks an opcode that
+#              empties the stack outright instead of applying a fixed net
+#              effect; stack_pop and stack_push must both be 0 alongside it.
+#              SCLR is the only such opcode. The Rust opcode table spells
+#              this as the i8::MIN sentinel in place of a delta.
 #   doc:       single-sentence description (used by gen-bytecode-docs.py).
 #
 # Reserved wire bytes (rejected by the decoder as illegal) are derived by
@@ -280,6 +285,7 @@ opcodes:
     operands: []
     stack_pop: 0
     stack_push: 0
+    stack_reset: true
     doc: "Clear the entire value stack."
 
   - code: 0x1B

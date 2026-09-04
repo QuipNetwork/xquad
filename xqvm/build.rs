@@ -19,6 +19,14 @@
 //! opcode table that the crate compares against the `opcodes!` x-macro in
 //! `src/bytecode/types/parity.rs`. Any mismatch becomes a compile error.
 //!
+//! The emitted table carries the wire byte, the mnemonic, the net stack
+//! delta (with `i8::MIN` marking a stack reset, matching the x-macro's own
+//! sentinel) and the operand layout as `(name, byte width)` pairs. The
+//! YAML's `stack_pop`/`stack_push` pair is narrowed to that single delta
+//! here, because the delta is what the x-macro stores and therefore all
+//! the two tables can agree on; the pop/push split is compared against
+//! `xqvm_py` by `scripts/check-opcode-parity.py` instead.
+//!
 //! Build scripts run at compile time with no caller to propagate errors
 //! to, so panicking on failure is the correct behaviour. The workspace's
 //! `clippy::panic` and `clippy::expect_used` lints are allowed here for
@@ -44,6 +52,61 @@ struct Root {
 struct Op {
     code: u8,
     mnemonic: String,
+    #[serde(default)]
+    operands: Vec<Operand>,
+    stack_pop: i32,
+    stack_push: i32,
+    /// True for an opcode that empties the stack outright rather than
+    /// applying a fixed net effect. `SCLR` alone; see the sentinel note
+    /// on `stack_delta` in `src/bytecode/types/table.rs`.
+    #[serde(default)]
+    stack_reset: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct Operand {
+    name: String,
+    #[serde(default = "default_operand_width")]
+    width: u8,
+}
+
+const fn default_operand_width() -> u8 {
+    1
+}
+
+/// Collapse the YAML's `stack_pop`/`stack_push`/`stack_reset` triple into
+/// the single `i8` the `opcodes!` x-macro carries.
+///
+/// The macro stores a net delta with `i8::MIN` reserved as the "reset the
+/// stack" sentinel, so the YAML's richer spelling has to be narrowed to
+/// compare at all. Narrowing here rather than in `parity.rs` keeps the
+/// `const` comparison a plain equality.
+fn stack_delta(op: &Op) -> i8 {
+    if op.stack_reset {
+        assert!(
+            op.stack_pop == 0 && op.stack_push == 0,
+            "opcode {} ({:#04X}): stack_reset is true, so stack_pop and stack_push must both \
+             be 0 — a reset has no fixed net effect to declare",
+            op.mnemonic,
+            op.code
+        );
+        return i8::MIN;
+    }
+    let delta = op.stack_push - op.stack_pop;
+    let narrowed = i8::try_from(delta).unwrap_or_else(|_| {
+        panic!(
+            "opcode {} ({:#04X}): net stack effect {delta} does not fit in i8",
+            op.mnemonic, op.code
+        )
+    });
+    assert!(
+        narrowed != i8::MIN,
+        "opcode {} ({:#04X}): net stack effect {delta} collides with the i8::MIN reset \
+         sentinel; widen the encoding rather than letting the two spellings alias",
+        op.mnemonic,
+        op.code
+    );
+    narrowed
 }
 
 fn main() {
@@ -74,10 +137,39 @@ fn main() {
     code.push_str(
         "// Do not edit; regenerate by touching opcodes.yaml and re-running `cargo build`.\n\n",
     );
-    code.push_str("const YAML_OPCODES: &[(u8, &str)] = &[\n");
+    // Each row is (code, mnemonic, stack delta, operands), where an
+    // operand is (name, byte width). `OpcodeRow` is the alias parity.rs
+    // declares for that tuple; the shape mirrors what parity.rs derives
+    // from the `opcodes!` x-macro so the comparison there stays a
+    // field-by-field equality.
+    code.push_str("const YAML_OPCODES: &[OpcodeRow] = &[\n");
     for op in &parsed.opcodes {
-        writeln!(code, "    ({:#04X}, \"{}\"),", op.code, op.mnemonic)
-            .expect("writing to a String cannot fail");
+        let delta = stack_delta(op);
+        let delta = if delta == i8::MIN {
+            "i8::MIN".to_owned()
+        } else {
+            delta.to_string()
+        };
+        let mut operands = String::new();
+        for operand in &op.operands {
+            assert!(
+                operand.width != 0,
+                "opcode {} ({:#04X}): operand `{}` has width 0",
+                op.mnemonic,
+                op.code,
+                operand.name
+            );
+            write!(operands, "(\"{}\", {}), ", operand.name, operand.width)
+                .expect("writing to a String cannot fail");
+        }
+        writeln!(
+            code,
+            "    ({:#04X}, \"{}\", {delta}, &[{}]),",
+            op.code,
+            op.mnemonic,
+            operands.trim_end_matches(", ")
+        )
+        .expect("writing to a String cannot fail");
     }
     code.push_str("];\n");
 
