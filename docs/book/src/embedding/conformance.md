@@ -100,18 +100,46 @@ Reference](../xqvm/).
 
 ## Coverage Is Per-Opcode, and Incomplete
 
-A vector exists only where someone wrote one. Nothing tracks coverage:
-there is no script, manifest, or report that computes which opcodes have
-a vector and which don't. `conformance/vectors/` currently holds 87
-vectors across seven directories, against 93 opcodes, and many vectors
-exercise the same opcode -- `bitlen_small` and `bitlen_negative` both
-cover `BITLEN`; three separate `slack_*` vectors all cover `SLACK`; the
-`xqmx-grid` directory alone spends seventeen vectors on six opcodes --
-so the number of distinct opcodes actually checked is well under 87.
-Where a vector is missing, the harness makes no claim about that opcode
-at all. Passing CI does not mean every opcode has been checked for
-cross-implementation agreement -- only that every opcode a vector
-currently exercises has been.
+A vector exists only where someone wrote one, and `conformance/vectors/`
+holds far more vectors than it covers distinct opcodes: `bitlen_small`
+and `bitlen_negative` both cover `BITLEN`; three separate `slack_*`
+vectors all cover `SLACK`; the `xqmx-grid` directory alone spends
+seventeen vectors on six opcodes. Where a vector is missing, the harness
+makes no claim about that opcode at all. Passing CI does not mean every
+opcode has been checked for cross-implementation agreement -- only that
+every opcode a vector currently exercises has been.
+
+Which opcodes those are is now computed rather than guessed. CI prints
+the report on every pipeline, as the last step of `make check-parity`,
+and it runs locally with:
+
+```sh
+make conformance-coverage
+```
+
+The report gives two numbers, because one is not enough. **Present**
+counts opcodes appearing in some vector's assembled program; **reached**
+counts those a vector executes to completion. Reached is the stronger
+measure and always the smaller one: an opcode behind an untaken branch is
+present but not reached, and so is the instruction an error vector exists
+to make fault -- a faulting instruction never completes a step. Reporting
+only "reached" would call `DIV` uncovered despite
+`arithmetic/div_by_zero`; reporting only "present" would credit an opcode
+sitting in dead code.
+
+Both numbers sit below the size of the opcode table, and the report names
+the shortfall rather than only counting it. Run `make conformance-coverage`
+for the current figures; this page does not repeat them, because they move
+whenever a vector lands. The opcodes in no vector at all are the real
+holes. Those present but never reached are a weaker signal worth knowing:
+each has an error vector pinning how it fails, and no vector pinning what
+it does when it succeeds.
+
+Coverage reports; it does not gate on completeness, which would fail
+today. It does gate on regression --
+[`conformance/tests/coverage.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/conformance/tests/coverage.rs)
+holds both numbers as floors that a merge request may raise and may not
+lower without saying why.
 
 `IDXTRIU` is the worked example of what that costs. It had no vector, and
 the two implementations disagreed on it in two separate ways: on operand
@@ -121,7 +149,8 @@ mechanical check, and both are now closed, with
 `index-math/idxtriu_intermediate_overflow` and
 `index-math/idxgrid_intermediate_overflow` pinning the second. Neither
 gap was exotic; both were simply in the part of the opcode table nothing
-had written a vector for.
+had written a vector for -- which is the hole the coverage report exists
+to make visible before someone has to find it by reading.
 
 Treat a green conformance run as evidence for the programs it actually
 tests, not as a blanket guarantee that the two implementations agree on

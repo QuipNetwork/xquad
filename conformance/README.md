@@ -236,6 +236,11 @@ the build is broken. Concrete enforcement:
 - **Observable behaviour** -- [`check_vector`](src/lib.rs) asserts the
   observed `{outputs, final_stack}`, or the observed fault identity,
   matches `expected.json` for both runtimes.
+- **Coverage** -- [`coverage.rs`](src/coverage.rs) computes which opcodes
+  the vectors cover, and CI prints the report on every pipeline as the
+  last step of `make check-parity`. It does not require completeness,
+  which would fail today; [`tests/coverage.rs`](tests/coverage.rs) holds
+  the current numbers as floors so coverage cannot regress unremarked.
 
 ## Running locally
 
@@ -251,6 +256,18 @@ cargo test -p xquad-conformance --no-default-features --features python
 
 # Manual CLI for authoring / triaging a single vector
 cargo run -p xquad-conformance -- --filter arithmetic/add_basic --impl both
+
+# Which opcodes no vector covers
+make conformance-coverage
 ```
+
+The coverage report gives two numbers. **Present** counts opcodes
+appearing in a vector's assembled program; **reached** counts those a
+vector executes to completion. Reached is always the smaller: an opcode
+behind an untaken branch is present but not reached, and so is the
+instruction an error vector exists to fault on, since a faulting
+instruction never completes a step. An opcode missing from both lists is
+a genuine hole; one that is present but never reached has an error vector
+and no success-path vector.
 
 Override the Python interpreter with `XQUAD_CONFORMANCE_PYTHON=...`.

@@ -52,6 +52,10 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
+pub mod coverage;
+
+pub use coverage::Coverage;
+
 /// Shape of the Python runner's stdout. A run either reports results or
 /// reports the fault that stopped it; `error` carries the raising
 /// exception's class name, which the harness maps onto a [`Fault`].
@@ -295,6 +299,48 @@ fn conformance_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// List every complete vector as `(category, name)`, sorted.
+///
+/// "Complete" is the same rule `build.rs` applies when generating the
+/// per-vector tests: a directory holding all three of `program.xqasm`,
+/// `inputs.json` and `expected.json`. A half-authored directory is
+/// skipped rather than reported as a failure, so the set walked here is
+/// exactly the set the generated tests cover.
+#[must_use]
+pub fn discover_vectors() -> Vec<(String, String)> {
+    let root = conformance_root().join("vectors");
+    let mut out = Vec::new();
+    let Ok(categories) = fs::read_dir(&root) else {
+        return out;
+    };
+    for category_entry in categories.flatten() {
+        if !category_entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let category = category_entry.file_name().to_string_lossy().into_owned();
+        let Ok(vectors) = fs::read_dir(category_entry.path()) else {
+            continue;
+        };
+        for vector_entry in vectors.flatten() {
+            if !vector_entry.file_type().is_ok_and(|t| t.is_dir()) {
+                continue;
+            }
+            let dir = vector_entry.path();
+            if dir.join("program.xqasm").exists()
+                && dir.join("inputs.json").exists()
+                && dir.join("expected.json").exists()
+            {
+                out.push((
+                    category.clone(),
+                    vector_entry.file_name().to_string_lossy().into_owned(),
+                ));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 /// Load a vector by `<category>/<name>` relative path segments.
 ///
 /// # Errors
@@ -323,18 +369,10 @@ pub fn load_vector(category: &str, name: &str) -> io::Result<Vector> {
 /// # Errors
 /// Returns an error message if assembly, VM setup, or execution fails.
 pub fn run_rust(vector: &Vector) -> Result<Outcome, String> {
-    use xqvm::RegVal;
-
     let program = xqasm::assemble_source(&vector.program_xqasm)
         .map_err(|e| format!("assemble_source failed: {e}"))?;
 
-    let calldata: Vec<RegVal> = vector
-        .inputs
-        .calldata
-        .iter()
-        .copied()
-        .map(|v| v.map_or(RegVal::Unset, RegVal::Int))
-        .collect();
+    let calldata = calldata_of(&vector.inputs);
 
     let outcome = run_rust_program(&program, &calldata, &vector.inputs);
 
@@ -352,18 +390,44 @@ pub fn run_rust(vector: &Vector) -> Result<Outcome, String> {
     Ok(outcome)
 }
 
+/// A vector's declared calldata as VM register values.
+///
+/// An absent entry is [`xqvm::RegVal::Unset`], which is what an argument
+/// the program must not read looks like to the VM.
+#[must_use]
+pub(crate) fn calldata_of(inputs: &Inputs) -> Vec<xqvm::RegVal> {
+    inputs
+        .calldata
+        .iter()
+        .copied()
+        .map(|v| v.map_or(xqvm::RegVal::Unset, xqvm::RegVal::Int))
+        .collect()
+}
+
+/// A VM carrying every budget and input a vector declares.
+///
+/// The single place `Inputs` becomes VM state. The coverage report runs
+/// vectors too, and measuring a run configured differently from the one
+/// [`check_vector`] judges would report coverage of something the harness
+/// never executes.
+#[must_use]
+pub(crate) fn vm_for(calldata: &[xqvm::RegVal], inputs: &Inputs) -> xqvm::Vm {
+    let mut vm = xqvm::Vm::new();
+    let _ = vm
+        .set_calldata(calldata.to_vec())
+        .set_output_slots(inputs.output_slots);
+    let _ = vm.set_step_limit(inputs.step_limit);
+    vm
+}
+
 fn run_rust_program(
     program: &xqvm::Program,
     calldata: &[xqvm::RegVal],
     inputs: &Inputs,
 ) -> Outcome {
-    use xqvm::{RegVal, Vm};
+    use xqvm::RegVal;
 
-    let mut vm = Vm::new();
-    let _ = vm
-        .set_calldata(calldata.to_vec())
-        .set_output_slots(inputs.output_slots);
-    let _ = vm.set_step_limit(inputs.step_limit);
+    let mut vm = vm_for(calldata, inputs);
 
     if let Err(e) = vm.run(program) {
         return Outcome::Failure {

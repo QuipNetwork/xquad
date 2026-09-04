@@ -13,23 +13,28 @@
 //! cargo run -p xquad-conformance -- --impl both
 //! cargo run -p xquad-conformance -- --filter arithmetic --impl rust
 //! cargo run -p xquad-conformance -- --filter energy/bqmx_trivial --impl python
+//! cargo run -p xquad-conformance -- --coverage
 //! ```
 
 #![expect(
     clippy::print_stdout,
     clippy::print_stderr,
-    clippy::expect_used,
     reason = "this is a CLI binary whose whole purpose is user-facing output"
 )]
 
-use std::fs;
-use std::path::PathBuf;
 use std::process::ExitCode;
 
-use xquad_conformance::{Impl, check, load_vector, run_python, run_rust};
+use xquad_conformance::{
+    Coverage, Impl, check, discover_vectors, load_vector, run_python, run_rust,
+};
 
 fn main() -> ExitCode {
     let args = Args::parse_env();
+
+    if args.coverage {
+        print!("{}", Coverage::collect().render());
+        return ExitCode::SUCCESS;
+    }
 
     let vectors = discover(args.filter.as_deref());
     if vectors.is_empty() {
@@ -82,6 +87,8 @@ fn main() -> ExitCode {
 struct Args {
     which: Which,
     filter: Option<String>,
+    /// Report per-opcode vector coverage instead of running the suite.
+    coverage: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -95,6 +102,7 @@ impl Args {
     fn parse_env() -> Self {
         let mut which = Which::Both;
         let mut filter: Option<String> = None;
+        let mut coverage = false;
         let argv: Vec<String> = std::env::args().skip(1).collect();
         let mut i = 0;
         while i < argv.len() {
@@ -115,9 +123,11 @@ impl Args {
                     i += 1;
                     filter = argv.get(i).cloned();
                 }
+                "--coverage" => coverage = true,
                 "--help" | "-h" => {
                     println!(
-                        "usage: conformance [--impl rust|python|both] [--filter <category>[/<name>]]"
+                        "usage: conformance [--impl rust|python|both] [--filter <category>[/<name>]]\n\
+                                conformance --coverage"
                     );
                     std::process::exit(0);
                 }
@@ -128,46 +138,29 @@ impl Args {
             }
             i += 1;
         }
-        Self { which, filter }
+        Self {
+            which,
+            filter,
+            coverage,
+        }
     }
 }
 
+/// Narrow the shared vector listing to those matching `filter`.
+///
+/// Discovery itself lives in the library so this binary, the generated
+/// tests and the coverage report all walk the same set of vectors.
 fn discover(filter: Option<&str>) -> Vec<(String, String)> {
-    let root: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("vectors");
-    let mut out = Vec::new();
-    if !root.exists() {
-        return out;
-    }
-    let categories = fs::read_dir(&root).expect("read vectors/");
-    for cat_entry in categories.flatten() {
-        if !cat_entry.file_type().is_ok_and(|t| t.is_dir()) {
-            continue;
-        }
-        let category = cat_entry.file_name().to_string_lossy().into_owned();
-        if let Some(f) = filter
-            && !prefix_matches(&category, f)
-        {
-            continue;
-        }
-        for vec_entry in fs::read_dir(cat_entry.path())
-            .expect("read category")
-            .flatten()
-        {
-            if !vec_entry.file_type().is_ok_and(|t| t.is_dir()) {
-                continue;
-            }
-            let name = vec_entry.file_name().to_string_lossy().into_owned();
-            if let Some(f) = filter {
+    discover_vectors()
+        .into_iter()
+        .filter(|(category, name)| match filter {
+            None => true,
+            Some(f) => {
                 let full = format!("{category}/{name}");
-                if !(prefix_matches(&category, f) && (f == category || prefix_matches(&full, f))) {
-                    continue;
-                }
+                prefix_matches(category, f) && (f == category || prefix_matches(&full, f))
             }
-            out.push((category.clone(), name));
-        }
-    }
-    out.sort();
-    out
+        })
+        .collect()
 }
 
 fn prefix_matches(candidate: &str, filter: &str) -> bool {

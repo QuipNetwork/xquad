@@ -15,7 +15,7 @@
         test-cuda test-qpu test-metal \
         opcode-parity opcode-parity-rs opcode-parity-py \
         metering-parity \
-        conformance conformance-rs conformance-py \
+        conformance conformance-rs conformance-py conformance-coverage \
         example-smoke \
         build-docs regen-docs regen-docs-opcodes regen-docs-examples \
         check-docs-generated check-docs-opcodes check-docs-examples \
@@ -103,7 +103,12 @@ test-rust: test-unit-rs test-integ-rs test-doc
 
 test-python: test-py
 
-check-parity: opcode-parity conformance example-smoke metering-parity
+# conformance-coverage runs last and always passes: it prints the
+# per-opcode coverage report into the CI log so the holes are visible on
+# every pipeline rather than only when someone runs the target by hand.
+# The check that can *fail* on coverage is the ratchet in
+# conformance/tests/coverage.rs, which conformance-rs already runs.
+check-parity: opcode-parity conformance example-smoke metering-parity conformance-coverage
 
 # Both are alpine, handwritten-docs checks -- no uv, no generation, no
 # mdbook. Kept apart from check-docs-generated (which needs uv) so the two
@@ -768,6 +773,13 @@ conformance-rs:
 # installed in .venv/ first.
 conformance-py: deps-py
 	cargo test --locked -p xquad-conformance --no-default-features --features python
+
+# Per-opcode vector coverage: which of the 93 opcodes no vector covers.
+# Reports only. The ratchet that stops coverage regressing is a test
+# (conformance/tests/coverage.rs) and so already runs under
+# conformance-rs; this target is for reading the list.
+conformance-coverage:
+	cargo run --locked -q -p xquad-conformance -- --coverage
 
 # -- Dev ergonomics ---------------------------------------------------------
 
