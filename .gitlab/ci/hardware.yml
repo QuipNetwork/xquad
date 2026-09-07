@@ -42,8 +42,29 @@
 # more specific selector or it can land on a runner with no GPU:
 #   [linux, x86_64, cuda] -> a GPU runner (lovelace/finney, tagged `cuda`) -> hardware:cuda
 #   [linux, x86_64]       -> any Linux runner (cloud QPU, no GPU)          -> hardware:qpu
-#   [macos, arm64]        -> tesla-arm (Apple Silicon)                     -> hardware:metal
+#   [macos, arm64]        -> ANY Apple Silicon runner in the group         -> hardware:metal
 #                            (Metal is not reachable from Docker)
+#
+# That last line is a pool, not a machine, and treating it as a machine is
+# what left this job red on 2026-09-04. The runners are self-hosted across
+# the team and shared group-wide, so a Mac registered for one project's
+# work also answers tag queries from every other project in the group. The
+# job had resolved to the same box for long enough to look deterministic;
+# it then began resolving to a different pool member and died in `make
+# deps-py` with `rustc, the rust compiler, is not installed or not in
+# PATH`. Nothing in xquad had changed, and nothing was wrong with either
+# Mac.
+#
+# The requirement was real and undocumented: since QUI-1191 this job
+# compiles Rust, and no macOS host owner outside xquad had any reason to
+# know that. It is fixed at the source rather than by provisioning a box
+# -- scripts/ensure-rust-toolchain.sh, wired in through `.fragments`'
+# `rust-toolchain` entry, installs a toolchain when the host has none, so
+# any pool member can run this job and none of them has to be special.
+# That asks nothing of a host's OWNER; it does leave roughly 450 MB of
+# toolchain in the runner user's ${HOME}/.rustup, which is what makes the
+# next run on that member cheap. See the script header for why that beats
+# redirecting RUSTUP_HOME into the build directory.
 #
 # Two prerequisites gated these jobs when they were written (QUI-654). Both
 # are now in place, confirmed from a pipeline log and the project's CI/CD
@@ -60,11 +81,15 @@
 #     protected refs these jobs run on, which is the same reason the `.hardware`
 #     rule is written the way it is.
 #
-# What is still unproven is the macOS side: hardware:metal is the only
-# [macos, arm64] job in the pipeline, so cargo, make and maturin have never
-# run on tesla-arm here. Since QUI-1191 this job compiles Rust, so a missing
-# toolchain there surfaces as `cargo: command not found` rather than as a
-# solver failure.
+# The macOS side is no longer unproven, and what proved it is worth
+# keeping. hardware:metal is the only [macos, arm64] job in the pipeline,
+# so it is the only evidence anyone has about any Mac in the pool. It went
+# green on one host (25 Metal tests) and, on the next pipeline, red on
+# another for want of a Rust toolchain -- which is exactly the shape of
+# failure a single-machine reading of the tag pair cannot predict. The job
+# now provisions its own toolchain, so a red hardware:metal means the
+# Metal path is broken rather than that the scheduler picked a different
+# Mac.
 
 # The `.hardware` template (protected-ref rule + plain uv install, no sync)
 # and the `.needs-gates` fragment (the shared verify+test `needs:` list
@@ -191,8 +216,10 @@ hardware:qpu:
     # routing note above), and the fleet has no shared cache server, so a
     # cache entry only hits when the job lands on the machine that wrote
     # it -- roughly one run in three here, against one in two for
-    # hardware:cuda's two-runner `cuda` tag and near-always for
-    # hardware:metal's single macOS box. The cargo cache added in QUI-1191
+    # hardware:cuda's two-runner `cuda` tag. hardware:metal used to be
+    # cited here as the near-always case on the strength of its "single
+    # macOS box"; it has no such box (see the routing note above), so no
+    # job in this file is reliably warm. The cargo cache added in QUI-1191
     # still earns its place on that arithmetic, but it is an optimisation
     # for the lucky runs and this timeout has to cover the unlucky ones.
     # See setup.yml's "Job timeouts" section.
@@ -222,22 +249,28 @@ hardware:metal:
     # was 20m on that basis. It is 30m since QUI-1191 because the run now
     # also carries a cold cargo registry fetch plus a full compile of xqvm +
     # xqasm + pyo3 on an empty `target/` -- and `.hardware`'s cargo cache
-    # never inherits main's warm one (see setup.yml), so the first run after
-    # any Cargo.lock bump is genuinely cold. See setup.yml's "Job timeouts"
-    # section.
+    # never inherits main's warm one (see setup.yml), so a cold compile is
+    # the ORDINARY case rather than a first-run exception: the cache is
+    # local to whichever pool member wrote it, and every landing elsewhere
+    # pays the full build. A member with no Rust at all adds a rustup
+    # install on top of that, which is under a minute and does not move
+    # this number. See setup.yml's "Job timeouts" section.
     timeout: 30m
     before_script:
         - !reference [.fragments, uv]
         # macOS shell runner: `image:` is ignored above, nothing is
-        # containerised, and the toolchain is whatever tesla-arm has
-        # installed. The maturin build this job gained needs cargo/rustc, and
-        # rustup keeps its proxies in ${HOME}/.cargo/bin -- which the root
-        # `default:` CARGO_HOME override does NOT point at, since that
-        # relocates the registry into ${CI_PROJECT_DIR}/.cargo. Put the real
-        # proxy directory on PATH explicitly rather than trusting the
-        # runner's shell to source a rustup env file; a no-op when it is
-        # already there.
-        - export PATH="${HOME}/.cargo/bin:${PATH}"
+        # containerised, and the toolchain is whatever the host carries.
+        # The maturin build this job gained in QUI-1191 needs cargo/rustc,
+        # so `rust-toolchain` puts both plausible rustup proxy directories
+        # on PATH and installs a toolchain when neither yields one.
+        #
+        # This replaced a bare `export PATH="${HOME}/.cargo/bin:${PATH}"`.
+        # That line was correct about the root CARGO_HOME override pointing
+        # away from rustup's proxies, and wrong to stop there: it encoded
+        # one install layout as the only one, so a pool member with Rust
+        # under Homebrew, mise or a relocated CARGO_HOME failed this job
+        # while serving its owner perfectly. See the header note above.
+        - !reference [.fragments, rust-toolchain]
     script:
         # -> scripts/run-hardware-tests.sh metal: sync the `metal` extra,
         # rebuild xqffi through maturin, hard-fail on an unavailable Metal

@@ -121,6 +121,32 @@
     cargo-tools-only:
         - !reference [.fragments, cargo-path]
         - bash scripts/install-cargo-tools.sh --only "${CARGO_TOOLS}"
+    # A Rust toolchain for a job that cannot get one from `image:`.
+    #
+    # Only the shell-executor jobs need this. Everything running under the
+    # root `default: image: rust:latest` already has rustc on PATH and
+    # should keep using `cargo-path` above; this entry exists for
+    # hardware:metal, whose macOS runner ignores `image:` entirely.
+    #
+    # PATH carries BOTH plausible rustup proxy directories, and the ORDER
+    # is load-bearing. `${HOME}/.cargo/bin` is where a host-provisioned
+    # rustup keeps its proxies, which the root CARGO_HOME override
+    # deliberately points away from; `${CARGO_HOME}/bin` is where
+    # scripts/ensure-rust-toolchain.sh installs when it has to, and is
+    # restored from this job's cache. The host's directory goes FIRST so
+    # that a cache-restored proxy cannot shadow a working host toolchain
+    # -- the host's is real installed state, the cached one is a copy that
+    # may have outlived the RUSTUP_HOME it forwards to. Getting this
+    # backwards does not merely pick the slower path: it puts the entry
+    # most likely to be stale in front of the entry least likely to be.
+    #
+    # Exporting here rather than inside the script is not a style choice
+    # -- a child process cannot amend its caller's PATH, and the `make -k
+    # test-metal` that follows needs cargo in ITS environment, not in the
+    # script's.
+    rust-toolchain:
+        - export PATH="${HOME}/.cargo/bin:${CARGO_HOME}/bin:${PATH}"
+        - bash scripts/ensure-rust-toolchain.sh
     uv:
         # UV_VERSION lives in the Makefile beside RUFF_VERSION, and is
         # grepped out here rather than pinned a second time -- the same
@@ -389,11 +415,19 @@
 # than for the hit. Per the "Job timeouts" section above the fleet has no
 # shared cache server, so an entry is local to whichever runner wrote it
 # and only hits when the job lands on that same machine again. How often
-# that happens is a property of each job's tags: hardware:metal has one
-# macOS box and so is reliably warm after its first run; hardware:cuda's
-# `cuda` tag matches two runners; hardware:qpu's bare `[linux, x86_64]`
-# matches three, so roughly two runs in three pay the full cold build AND
-# upload a fresh `target/` archive the next run elsewhere will not read.
+# that happens is a property of each job's tags, and none of the three is
+# pinned to a machine: `[macos, arm64]` selects any Apple Silicon runner
+# in the group, hardware:cuda's `cuda` tag matches two runners, and
+# hardware:qpu's bare `[linux, x86_64]` matches three, so roughly two runs
+# in three there pay the full cold build AND upload a fresh `target/`
+# archive the next run elsewhere will not read.
+#
+# hardware:metal was described here as reliably warm after its first run,
+# on the reading that `[macos, arm64]` meant one box. It does not (see
+# hardware.yml's routing note), and the correction runs the same way as
+# the others: every landing on a pool member that has not run this job
+# since its last Cargo.lock bump is cold, so cold is the ordinary case
+# for all three and the timeouts are sized for it.
 #
 # That is a weak cache, not a useless one -- the hits are real and cost
 # nothing to collect -- but it is why the compile has to fit inside each
@@ -432,6 +466,34 @@
               - .cargo/registry/
               - .cargo/git/
               - target/
+              # `.cargo/bin/` holds the rustup proxies that
+              # scripts/ensure-rust-toolchain.sh installs when the host has
+              # no toolchain (CARGO_HOME is ${CI_PROJECT_DIR}/.cargo, so
+              # they land inside the cached build directory). Keyed on
+              # Cargo.lock with the rest rather than on a key of its own:
+              # the toolchain does not depend on the lock file, but a lock
+              # bump already forces a cold compile that dwarfs the
+              # sub-minute install this saves, so a second cache entry
+              # would buy nothing it does not already cost to maintain.
+              #
+              # Only hardware:metal ever populates this path. The two
+              # Docker jobs sharing this template take rustc from
+              # `rust:latest` and never write `.cargo/bin/`, so their cache
+              # push logs one "no matching files" warning apiece -- the
+              # accepted price of one cache block instead of two.
+              #
+              # The toolchain ITSELF lives in RUSTUP_HOME (${HOME}/.rustup,
+              # not overridden), which a shell executor leaves alone between
+              # jobs, so these proxies are only ever restored onto the same
+              # host that wrote them: the fleet has no shared cache server.
+              # ensure-rust-toolchain.sh tests that the restored proxies
+              # RUN rather than trusting the restore, and repairs them
+              # through `rustup toolchain install` when that host's
+              # RUSTUP_HOME was cleared out from under the cache. Detecting
+              # that without repairing it would be worse than not caching
+              # at all: the job would then fail identically on every retry
+              # until someone emptied the runner's cache by hand.
+              - .cargo/bin/
 
 # ---------------------------------------------------------------------------
 # Dependency gating
