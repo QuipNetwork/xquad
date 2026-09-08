@@ -893,14 +893,20 @@ impl Vm {
     /// Validate, charge for, and convert an allocator's size operand.
     ///
     /// The order is normative and the whole point of the helper: reject a
-    /// size that is not an allocation, then charge the budget off the `i64`,
-    /// and only then narrow to `usize`. Charging before the conversion is
-    /// what keeps the fault identity target-independent -- a negative size
-    /// raises [`Error::InvalidAllocation`] on every target and an oversized
-    /// one raises [`Error::MemoryLimitExceeded`] on every target, including
-    /// the wasm32 runtime the Substrate pallet executes in, where `usize` is
-    /// 32 bits wide and a `usize::try_from` would otherwise decide the
-    /// answer.
+    /// negative size, then charge the budget off the `i64`, and only then
+    /// narrow to `usize`. Charging before the conversion is what keeps the
+    /// fault identity target-independent -- a negative size raises
+    /// [`Error::InvalidAllocation`] on every target and an oversized one
+    /// raises [`Error::MemoryLimitExceeded`] on every target, including the
+    /// wasm32 runtime the Substrate pallet executes in, where `usize` is 32
+    /// bits wide and a `usize::try_from` would otherwise decide the answer.
+    ///
+    /// That holds while the charge is certain to refuse first, which is
+    /// every memory limit below `2^32 * VARIABLE_BYTES` (32 GiB) -- far
+    /// above the default. Above it the `usize::try_from` below does decide
+    /// the answer, and the identity splits by target. QUI-1315 closes that
+    /// by giving `size` a maximum that does not mention pointer width;
+    /// `spec/xqvm/SPEC.md`'s Allocation budget section records the bound.
     fn allocation_size(&mut self, pos: usize, size: i64) -> Result<usize, Error> {
         if size < 0 {
             return Err(Error::InvalidAllocation { pos, size });

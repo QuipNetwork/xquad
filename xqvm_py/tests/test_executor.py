@@ -3853,8 +3853,8 @@ class TestFaultOrdering:
         docs say.
 
         Which identity the surviving fault carries is deliberately not
-        asserted beyond Python's own: `spec/xqvm/SPEC.md:211` records
-        `XqmxMode` as the one unresolved row in the fault table -- `xqvm_py`
+        asserted beyond Python's own: `spec/xqvm/SPEC.md`'s Faults table
+        records `XqmxMode` as its one unresolved row -- `xqvm_py`
         raises it where the Rust VM raises `TypeMismatch`, no `xqvm::Error`
         maps to it, and the spec says neither identity is safe to write a
         vector against until that is settled. What this pins is the charge,

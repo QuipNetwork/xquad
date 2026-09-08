@@ -531,7 +531,8 @@ fn fault_from_python(class_name: &str) -> Result<Fault, String> {
 /// Drop trailing `None` entries so outputs report a sparse map rather than
 /// a fixed-width array padded with `null`. A vector that writes only slot 0
 /// out of 16 reserved slots thus produces `[value]`, not
-/// `[value, null, null, …]` — matching `spec/xqvm/SPEC.md:46`.
+/// `[value, null, null, …]` — matching `spec/xqvm/SPEC.md`'s Machine State
+/// sketch.
 fn trim_trailing_unset(outputs: &mut Vec<Option<i64>>) {
     while matches!(outputs.last(), Some(None)) {
         let _ = outputs.pop();

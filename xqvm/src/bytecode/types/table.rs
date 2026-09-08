@@ -36,6 +36,15 @@
 /// Code `0x0D` is an unassigned gap reserved for future use; the decoder
 /// and VM treat it as an illegal opcode.
 ///
+/// Adding a row here is a change to VM semantics rather than a table
+/// edit: the merge request has to argue that the new opcode clears all
+/// six clauses of the on-chain admissibility bar -- integer-only checked
+/// arithmetic, no host or ambient state, a fixed iteration order,
+/// bounded allocation, bounded per-instruction work, and specified
+/// behaviour with a conformance vector covering it. The gate is stated
+/// in `docs/guide/development-workflow.md` under "The opcode-addition
+/// gate", and there is deliberately no CI guard for it.
+///
 /// # Examples
 ///
 /// ```rust

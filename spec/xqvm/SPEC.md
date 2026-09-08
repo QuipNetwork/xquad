@@ -49,6 +49,18 @@ Programs execute independently with no shared state. Communication occurs only t
 
 ---
 
+## Determinism
+
+An instruction's result is a function of the program, the calldata, and the machine state defined above -- and of nothing else. No instruction reads host state that the calldata did not carry: not a clock, not a random source, not an environment variable, not a filesystem or a network, and not any counter the host advances outside the program's own execution. The instruction set contains no opcode that can, and this is a property of the instruction set rather than a configuration a host selects; an operation that would need one does not become an opcode.
+
+The rule is normative and has no implementation-defined alternative: two conforming implementations running the same program against the same calldata produce the same outputs, the same step and allocation charges, and the same fault identity if the program faults. Without it a program's result would stop being a function of its inputs, and every other guarantee stated here rests on that one. A host that replays a submitted program on more than one machine and compares the results -- which is what a chain does -- would find that an instruction reading anything the machines do not share splits them rather than merely complicating a debugger.
+
+One host configuration currently escapes the fault-identity half of that rule, and exactly one: an allocation budget large enough to pay for an allocator size past a 32-bit target's address space. [Allocation budget](#allocation-budget) states the bound, what happens above it, and the ticket that closes it. No default reaches it, and the rule above is what that gap is measured against rather than something the gap qualifies.
+
+Three properties this rule leans on are specified in their own sections rather than restated here: checked arithmetic, so that a result leaving the value range faults instead of becoming target-dependent, in [Type System](#type-system); a fixed iteration order for anything that walks a collection, in [HLF.md](HLF.md#accumulation-order); and fault identity, so that the same program fails by the same name everywhere, in [Faults](#faults), which states that rule and records the one identity not yet settled under it. The step and allocation schedules in [METERING.md](METERING.md) are observable for the same reason, and are derived from the program and its data alone rather than from the executing target's pointer width or measured speed.
+
+---
+
 ## Type System
 
 ### Stack
@@ -99,7 +111,7 @@ Programs execute independently with no shared state. Communication occurs only t
 | Loop nesting | 8192 (2^13) | `LoopStackOverflow` if exceeded. A `RANGE` or `ITER` that would push a frame past the cap raises and pushes nothing. The bound mirrors the stack-depth cap: a loop frame is a per-run allocation the program controls, so leaving it uncapped leaves one growth path outside every budget. |
 | Step budget | Host-supplied | Bounds the work one run may do, counted in steps rather than instructions; `StepLimitExceeded` when exhausted. See [Step budget](#step-budget) and [METERING.md](METERING.md). |
 | Allocation budget | Host-supplied | Bounds the bytes one run may ask the host to allocate; `MemoryLimitExceeded` when exhausted. See [Allocation budget](#allocation-budget). |
-| XQMX size | Bounded by the allocation budget | No fixed spec limit. A size that is not an allocation -- negative, or larger than the executing target can address -- raises `InvalidAllocation`; a size that is an allocation but does not fit the remaining budget raises `MemoryLimitExceeded`. |
+| XQMX size | Bounded by the allocation budget | No fixed spec limit. A negative size raises `InvalidAllocation`; a non-negative size that does not fit the remaining budget raises `MemoryLimitExceeded`. See [Allocator validation order](#allocation-budget) for the one case in which a non-negative size raises `InvalidAllocation` instead. |
 | Program length | Implementation-defined | No spec limit. |
 
 ### Step budget
@@ -168,11 +180,13 @@ A rate must not be derived from the executing target's pointer width, or from an
 
 **Allocator validation order.** An allocator resolves its `size` operand in a fixed order, so that a bad program gets the same fault on every target:
 
-1. Reject a `size` that is not an allocation -- negative, or larger than the executing target can address -- with `InvalidAllocation`. For the discrete allocators the domain width `k` is validated before the size.
+1. Reject a negative `size` with `InvalidAllocation`. For the discrete allocators the domain width `k` is validated before the size.
 2. Charge the budget for that size, computed from the operand as the i64 the program pushed. `MemoryLimitExceeded` if it does not fit.
-3. Only then convert the size to the target's native width and allocate.
+3. Only then convert the size to the target's native width and allocate. A size the target cannot address raises `InvalidAllocation` here, in the one case the bound below admits.
 
-Charging off the i64 rather than off the converted value is the point of the ordering: a negative size raises `InvalidAllocation` on every target, and a size beyond one target's address space raises `MemoryLimitExceeded` on every target, instead of silently becoming a zero-sized allocation that charges nothing on the narrower one.
+Charging off the i64 rather than off the converted value is the point of the ordering: a negative size raises `InvalidAllocation` on every target, and a size beyond one target's address space raises `MemoryLimitExceeded` on every target under the bound stated next, instead of silently becoming a zero-sized allocation that charges nothing on the narrower one.
+
+**The bound on that guarantee.** Step 3 is decided by the executing target's pointer width, so the ordering makes the identity target-independent only while step 2 is certain to refuse first. That holds for every allocation budget below the bytes `2^32` variables cost -- 32 GiB at the variable rate above -- which is every budget a host sets today. Above it the guarantee lapses: a size past a 32-bit target's address space is charged successfully, and then raises `InvalidAllocation` on that target while a 64-bit one accepts it, as does an implementation whose integers are unbounded and which therefore has no step 3 at all. This is a recorded gap rather than a licence, in the sense the [Faults](#faults) section gives the `XqmxMode` row: closing it means giving `size` a maximum that does not mention pointer width, and is tracked as QUI-1315. Until it closes, a host that wants the identity guarantee keeps its allocation budget below that bound.
 
 **Error precedence.** Within one instruction, operand pops happen first (`StackUnderflow`), then the allocation charge, then type and range validation. An instruction can therefore raise `MemoryLimitExceeded` for work it would never have done, because the register it names holds the wrong type or the index it was given is out of range. That ordering is deliberate: the charge is what makes the later work safe to attempt, so it cannot be made conditional on that work succeeding.
 
@@ -204,7 +218,7 @@ A fault aborts the run. Every fault has an **identity** -- a name from the list 
 | `VecLengthMismatch` | Two vec operands required to have equal length do not. |
 | `StepLimitExceeded` | The step budget is exhausted (see [Step budget](#step-budget)). |
 | `MemoryLimitExceeded` | The allocation budget cannot pay a charge (see [Allocation budget](#allocation-budget)). |
-| `InvalidAllocation` | An allocator is given a size that is not an allocation: negative, or larger than the executing target can address. |
+| `InvalidAllocation` | An allocator is given a negative size. A non-negative size the executing target cannot address also raises it, in the one case [Allocator validation order](#allocation-budget) bounds. |
 | `InvalidShift` | `SHL` or `SHR` with a shift amount outside `[0, 63]`. |
 | `InvalidGridDimensions` | A grid extent is not positive, does not fit the register's variables, or is required by the opcode and absent. |
 | `InvalidDiscreteK` | `XQMX` or `XSMX` with `k < 2`. |

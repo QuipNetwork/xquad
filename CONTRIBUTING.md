@@ -306,6 +306,14 @@ Atomic-Spec-Exempt: Python-only fix bringing impl in line with existing Rust beh
 
 See [docs/guide/development-workflow.md](docs/guide/development-workflow.md) for the full rationale and exempt cases.
 
+### Opcode Addition Gate
+
+Adding a row to the `opcodes!` table in `xqvm/src/bytecode/types/table.rs` is a change to VM semantics. The MR that adds it argues in its description that the new opcode clears all six clauses of the on-chain admissibility bar: no floating point, no host I/O or ambient state, no nondeterministic iteration order, bounded allocation, bounded per-instruction work, and behaviour specified in `spec/xqvm/` with a conformance vector covering it. An opcode that cannot clear all six does not ship; the operation belongs in `xqcp`, `xqsa`, the `xquad` API or a helper library instead.
+
+There is deliberately no CI guard for this one. The gate asks for a correctness argument a reviewer weighs, not a string a script can find.
+
+Reading [docs/guide/development-workflow.md](docs/guide/development-workflow.md) is required before changing VM semantics, not optional background: it carries the six clauses in full and the reasoning behind both this gate and the atomic spec-MR rule above.
+
 ---
 
 **License**: This document is licensed under AGPL-3.0-or-later

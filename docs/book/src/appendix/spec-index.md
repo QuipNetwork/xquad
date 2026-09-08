@@ -29,7 +29,7 @@ and the bytecode verifier.
   -- document index for this layer.
 - [`spec/xqvm/SPEC.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/SPEC.md)
   -- normative for the machine overview, the three-program architecture,
-  the state model, the type system, and runtime limits.
+  the state model, determinism, the type system, and runtime limits.
 - [`spec/xqvm/ISA.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/ISA.md)
   -- normative for the instruction set: notation, per-category opcode
   tables, semantic notes, and reserved opcodes.
@@ -43,6 +43,10 @@ and the bytecode verifier.
 - [`spec/xqvm/VERIFIER.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/VERIFIER.md)
   -- normative for the bytecode verifier: its phase pipeline and every
   error it can raise.
+- [`spec/xqvm/METERING.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/METERING.md)
+  -- normative for step metering: what a step is, the cost constants and
+  how they were measured, the per-opcode charge table, the three formulas,
+  and the conformance rules for step counts and operand validation order.
 
 ## XQCP
 

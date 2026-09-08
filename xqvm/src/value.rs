@@ -135,8 +135,8 @@ impl Default for RegVal {
     /// An uninitialised register. Returning `Unset` (rather than `Int(0)`)
     /// means any `vec![RegVal::default(); n]` buffer starts in the same
     /// state as a freshly-constructed `Vm`, and a `LOAD` from such a
-    /// register faults — matching `spec/xqvm/SPEC.md:46`, which treats
-    /// unwritten slots as absent, not zero.
+    /// register faults — matching `spec/xqvm/SPEC.md`'s Machine State
+    /// sketch, which treats unwritten slots as absent, not zero.
     fn default() -> Self {
         Self::Unset
     }

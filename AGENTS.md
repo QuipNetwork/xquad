@@ -315,6 +315,12 @@ Any MR that changes VM semantics must touch **all four** layers in the same MR: 
 
 For deliberately one-sided changes (e.g. aligning one impl to existing behaviour), add an `Atomic-Spec-Exempt: <reason>` trailer to a commit message. The guard scans every commit in the MR range and bypasses when it finds at least one trailer. See `docs/guide/development-workflow.md` for the full rationale and exempt cases.
 
+### Opcode Addition Gate
+
+Adding a row to the `opcodes!` table in `xqvm/src/bytecode/types/table.rs` is a change to VM semantics. The MR that adds it argues in its description that the new opcode clears all six clauses of the on-chain admissibility bar: no floating point, no host I/O or ambient state, no nondeterministic iteration order, bounded allocation, bounded per-instruction work, and behaviour specified in `spec/xqvm/` with a conformance vector covering it. An opcode that cannot clear all six does not ship; the operation belongs in `xqcp`, `xqsa`, the `xquad` API or a helper library instead.
+
+There is deliberately no CI guard for this one -- it is a correctness argument a reviewer weighs, not a string a script can find. `docs/guide/development-workflow.md` is required reading before changing VM semantics and carries the six clauses in full.
+
 ### Rust-Python Bindings (xqffi)
 
 `xqvm_py` consumes `xqffi.asm` only -- its executor stays pure-Python so `xqvm_py` remains an independent conformance oracle. Build with `maturin develop --manifest-path xqffi/Cargo.toml` (handled by `make deps-py`).

@@ -145,7 +145,7 @@ which disassembles the program and points at the failing instruction.
 | `MemoryLimitExceeded` | An allocating instruction exceeded the configured allocation budget |
 | `InvalidShift` | `SHL`/`SHR` shift amount outside `[0, 64)` |
 | `InvalidGridDimensions` | `RESIZE` with rows or cols <= 0, `RESIZE` with `rows * cols` past the register's declared size, or a grid-reading opcode on a register with no grid |
-| `InvalidAllocation` | An allocator given a size that is not an allocation: negative, or too large for the executing target to address |
+| `InvalidAllocation` | An allocator given a negative size, or -- only above the budget bound `spec/xqvm/SPEC.md` records -- one too large for the executing target to address |
 | `LoopStackOverflow` | `RANGE`/`ITER` nesting past 8,192 frames |
 | `InvalidDiscreteK` | `XQMX`/`XSMX` called with `k < 2` -- at `k = 1` the signed `[-k, k-1]` domain is `{-1, 0}`, which degenerates to a binary choice `BQMX` already covers |
 | `UnmatchedLoop` | A `RANGE`/`ITER` skip-forward scan reached the end of the stream without a matching `NEXT` |

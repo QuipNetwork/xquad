@@ -13,24 +13,31 @@ meet the bar below is not an opcode that needs gating: it is functionality
 that belongs in `xqcp`, `xqsa`, the `xquad` API or a helper library, and it
 never enters the ISA at all.
 
-This page is the reader-facing summary of that rule. Five of the six clauses
-are specified where a third implementation reads them: clause 1 in
+This page is the reader-facing summary of that rule. All six clauses are
+specified where a third implementation reads them: clause 1 in
 `spec/xqvm/SPEC.md`'s Type System, which makes checked arithmetic normative
-with no implementation-defined alternative; clause 3 in `HLF.md`'s ordering
-rules, covering delta application, sparse-table accumulation and the grid
-fold; clauses 4 and 5 in `METERING.md`, which fixes both schedules, their
-charging points and their counting units; and clause 6 in `SPEC.md`'s closed
-fault-identity table, which `ISA.md` is bound to name faults by, together
-with the conformance vectors that pin the behaviour itself.
+with no implementation-defined alternative; clause 2 in the same file's
+Determinism section, which states that an instruction's result is a
+function of the program, the calldata and the VM's own state, and that no
+instruction reads host state the calldata did not carry; clause 3 in
+`HLF.md`'s ordering rules, covering delta application, sparse-table
+accumulation and the grid fold; clause 4 in `SPEC.md`'s Allocation budget
+section, which charges every allocation before it happens; clause 5 in
+`METERING.md`, which fixes the step schedule, its charging points and its
+counting units; and clause 6 in `SPEC.md`'s Faults section, which gives
+every fault a normative identity that `ISA.md` is bound to name faults by,
+together with the conformance vectors that pin the behaviour itself. One
+row of that section records an identity that is not yet settled; the
+section on [what is not enforced](#what-is-not-enforced-today) says which.
 
-Clause 2 has no such home, and neither does the gate in the opcode-addition
-process that would hold a proposed opcode against all six. Nothing in
-`spec/xqvm/` says an instruction may read no host state the calldata did not
-carry, and adding a row to the opcode table requires no argument that the new
-opcode clears the bar. Both are QUI-1192. Until that lands, treat clause 2
-and the gate as a description of the design intent, and the section on
-[what is not enforced](#what-is-not-enforced-today) as the current state of
-the tree.
+The gate that holds a proposed opcode against all six belongs to the
+contribution process rather than to the specification. It is stated in
+`docs/guide/development-workflow.md` under "The opcode-addition gate":
+adding a row to the opcode table requires the merge request to argue each
+of the six clauses in its description, and an opcode that cannot clear all
+six does not ship. There is deliberately no CI guard for it, because the
+gate asks for a correctness argument a reviewer weighs rather than a string
+a script can find.
 
 ## The bar
 
@@ -235,12 +242,15 @@ operand ordering, and accumulation overflow in energy and grid sums.
 Operand validation order is part of that agreement and is now normative:
 `spec/xqvm/METERING.md` fixes it under Conformance, and both VMs validate
 each register completely before looking at the next. What the specification
-deliberately does not pin is the *identity* of a mode fault. `xqvm::Error`
-has no mode variant -- a `RegVal` is either a model or a sample, so the Rust
-VM reports a sample in a model slot as a register-type error, where
-`xqvm_py`, whose `XQMX` carries a mode flag, reports a mode error. That
-difference spans every mode check rather than one opcode, predates step
-metering and is tracked separately; a runtime that surfaces fault identity
-to submitters should know it is not yet uniform. See
+has not yet settled is the *identity* of a mode fault. `xqvm::Error` has no
+mode variant -- a `RegVal` is either a model or a sample, so the Rust VM
+reports a sample in a model slot as a register-type error, where `xqvm_py`,
+whose `XQMX` carries a mode flag, reports a mode error. That difference
+spans every mode check rather than one opcode, predates step metering and is
+tracked separately. Unsettled is not the same as permitted: `SPEC.md`'s
+Faults section holds every identity normative and records this row as the
+one still unresolved, so one of the two implementations is wrong and a third
+must not read either spelling as settled. A runtime that surfaces fault
+identity to submitters should know it is not yet uniform. See
 [Conformance](conformance.md) for how the suite is structured and what
 adding a vector involves.
