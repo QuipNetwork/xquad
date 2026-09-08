@@ -26,25 +26,14 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from _docsgen import (
-    BANNER_PREFIX,
-    SetupError,
-    Target,
-    banner,
-    emit,
-    format_setup_error,
-    load_yaml,
-    read_text,
-    require_key,
-    require_mapping,
-)
+from _docsgen import BANNER_PREFIX, Target, banner, emit
+from _scriptio import SetupError, format_setup_error, load_yaml, read_text, require_key, require_mapping
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES_ROOT = REPO_ROOT / "examples"
 MANIFEST_PATH = EXAMPLES_ROOT / "manifest.yaml"
 BOOK_EXAMPLES_ROOT = REPO_ROOT / "docs" / "book" / "src" / "examples"
 SUMMARY_PATH = REPO_ROOT / "docs" / "book" / "src" / "SUMMARY.md"
-GITLAB_BLOB_URL = "https://gitlab.com/quip.network/xquad/-/blob/main"
 SOURCE_SCHEMES = ("http://", "https://", "mailto:", "#")
 # Keys are the repo-relative links as written in `examples/*/README.md`, where
 # `README.md` is correct: those pages are browsed on GitLab. Values are the
@@ -67,7 +56,7 @@ SOLVER_SECTION_REPLACEMENT = [
     "Solver selection and install extras are the same for every example: see",
     "[Using the Examples](using-examples.md#running-one) and",
     "[Solving Overview](../solving/). The default is `dwave-cpu`, and a",
-    "non-default solver will not reproduce the output shown here.",
+    "non-default solver will not reproduce the canonical result.",
 ]
 INLINE_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 REFERENCE_LINK_RE = re.compile(r"^\s*\[[^\]]+\]:")
@@ -288,6 +277,11 @@ def replace_section(lines: list[str], heading: str, replacement: list[str] | Non
                 kept.append(line)
                 kept.append("")
                 kept.extend(replacement)
+                # The blank line the source put before the next heading was
+                # inside the section being replaced, so it was skipped with
+                # the rest of it. Put one back, or the following heading
+                # lands hard against the replacement's last line.
+                kept.append("")
             continue
         if skipping and not in_fence and line.startswith("#") and not line.startswith("###"):
             skipping = False
@@ -309,13 +303,11 @@ def transform_readme(entry: ExampleEntry) -> str:
     body = lines[1:]
     if body and body[0] == "":
         body = body[1:]
-    body, stripped_canonical_output = replace_section(body, "## Canonical output", None)
     # The solver table is identical in all fourteen source READMEs, where each
     # one is a standalone page. Inside the book it would be the same eighteen
     # lines fourteen times over, one click from the chapter that owns them.
     body, _ = replace_section(body, "## Choosing a solver", SOLVER_SECTION_REPLACEMENT)
     rewritten_body = rewrite_links(body)
-    source_url = f"{GITLAB_BLOB_URL}/examples/{entry.directory}/README.md"
 
     output = [
         banner(
@@ -326,17 +318,10 @@ def transform_readme(entry: ExampleEntry) -> str:
         "",
         f"# {entry.title}",
         "",
-        f"Source: [examples/{entry.directory}/README.md]({source_url})",
+        f"Source: `examples/{entry.directory}/README.md`",
         "",
         *rewritten_body,
     ]
-    if stripped_canonical_output:
-        output.extend(
-            [
-                "",
-                f"The canonical output and its invariants are defined in the [source README]({source_url}).",
-            ]
-        )
     return "\n".join(output).rstrip() + "\n"
 
 

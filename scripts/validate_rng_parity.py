@@ -49,7 +49,16 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bench_spin_packing import build_instance  # noqa: E402
 
+from _scriptio import (  # noqa: E402
+    SetupError,
+    format_setup_error,
+    read_json,
+    require_key,
+    require_mapping,
+)
 from xqsa.cuda_gpu import SolverCudaGPU  # noqa: E402
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 SIZES = (256, 1024)
 INSTANCE_SEEDS = (7, 11, 13)
@@ -140,21 +149,38 @@ def compare_cell(name: str, base: list[float], cand: list[float]) -> list[str]:
 
 
 def compare(base_path: Path, cand_path: Path) -> int:
-    """Compare two run outputs; print a verdict and return a process code."""
-    base = json.loads(base_path.read_text())
-    cand = json.loads(cand_path.read_text())
-    if base["params"] != cand["params"]:
-        print(f"FAIL: parameter mismatch\n  base: {base['params']}\n  cand: {cand['params']}")
+    """Compare two run outputs; print a verdict and return a process code.
+
+    Every read of either document goes through the `_scriptio` require
+    helpers. A run output that predates a key, or that was written by a
+    different tool entirely, is a setup error and not a parity failure --
+    it says nothing about the RNG, and a traceback out of a subscript
+    reports it with the exit code reserved for a real divergence.
+    """
+    base = require_mapping(read_json(base_path), base_path)
+    cand = require_mapping(read_json(cand_path), cand_path)
+    base_params = require_key(base, base_path, "params")
+    cand_params = require_key(cand, cand_path, "params")
+    if base_params != cand_params:
+        print(f"FAIL: parameter mismatch\n  base: {base_params}\n  cand: {cand_params}")
         return 1
+    base_cells = require_key(base, base_path, "cells", dict)
+    cand_cells = require_key(cand, cand_path, "cells", dict)
     failures: list[str] = []
-    for name in sorted(base["cells"]):
-        failures.extend(compare_cell(name, base["cells"][name], cand["cells"][name]))
+    for name in sorted(base_cells):
+        failures.extend(
+            compare_cell(
+                name,
+                require_key(base_cells, f"{base_path}: cells", name, list),
+                require_key(cand_cells, f"{cand_path}: cells", name, list),
+            )
+        )
     if failures:
         print("FAIL: distributional parity violated")
         for f in failures:
             print(f"  {f}")
         return 1
-    print(f"PASS: {len(base['cells'])} cells within KS/mean/best-energy thresholds")
+    print(f"PASS: {len(base_cells)} cells within KS/mean/best-energy thresholds")
     return 0
 
 
@@ -174,7 +200,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.cmd == "run":
         return run(args.out, args.smoke)
-    return compare(args.baseline, args.candidate)
+    try:
+        return compare(args.baseline, args.candidate)
+    except (OSError, SetupError) as exc:
+        sys.stderr.write(f"validate_rng_parity setup error: {format_setup_error(exc, REPO_ROOT)}\n")
+        return 2
 
 
 if __name__ == "__main__":

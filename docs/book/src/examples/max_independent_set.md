@@ -7,7 +7,7 @@
 
 # Maximum Independent Set
 
-Source: [examples/max_independent_set/README.md](https://gitlab.com/quip.network/xquad/-/blob/main/examples/max_independent_set/README.md)
+Source: `examples/max_independent_set/README.md`
 
 Find the largest subset of nodes in an undirected graph such that no two
 selected nodes share an edge.
@@ -60,6 +60,10 @@ uv run python examples/max_independent_set/runner.py --n 7 --interpreter rust
 Solver selection and install extras are the same for every example: see
 [Using the Examples](using-examples.md#running-one) and
 [Solving Overview](../solving/). The default is `dwave-cpu`, and a
-non-default solver will not reproduce the output shown here.
+non-default solver will not reproduce the canonical result.
 
-The canonical output and its invariants are defined in the [source README](https://gitlab.com/quip.network/xquad/-/blob/main/examples/max_independent_set/README.md).
+## Canonical output
+
+`example-smoke` validates both interpreters produce `valid == 1` with
+`--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
+it checks validity, not exact output.

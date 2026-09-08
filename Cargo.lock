@@ -1453,6 +1453,7 @@ dependencies = [
  "miette",
  "pest",
  "pest_derive",
+ "serde_json",
  "thiserror",
  "xqvm",
 ]

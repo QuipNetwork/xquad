@@ -16,3 +16,6 @@ miette.workspace    = true
 pest                = "2"
 pest_derive         = "2"
 thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

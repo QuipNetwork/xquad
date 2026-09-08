@@ -12,10 +12,11 @@
 
 # `make check-docs-generated` (see the Makefile's DOCSGEN comment) runs the
 # two generators through `uv run --no-project --isolated`, not a workspace
-# sync -- both import only scripts/_docsgen.py and PyYAML. This job
-# therefore needs uv on PATH but not a synced workspace, so it shares
-# `.python-tools`'s cache instead of paying a cold resolve (and a maturin
-# build of xqffi's cdylib) every pipeline just to diff some YAML.
+# sync -- both import only scripts/_docsgen.py, scripts/_scriptio.py and
+# PyYAML. This job therefore needs uv on PATH but not a synced workspace,
+# so it shares `.python-tools`'s cache instead of paying a cold resolve
+# (and a maturin build of xqffi's cdylib) every pipeline just to diff
+# some YAML.
 docs:generated:
     stage: docs
     extends: .python-tools
@@ -28,34 +29,43 @@ docs:generated:
     script:
         - make -k check-docs-generated
 
-# Handwritten-docs checks -- book prose/SUMMARY drift and published
-# package README length -- merged into one job running
-# `make -k check-docs-handwritten` (check-docs-drift check-docs-readme).
-# Both are alpine-only, need no uv and no mdbook -- unlike
-# docs:generated above, which needs uv to import
+# Handwritten-docs checks -- book prose/SUMMARY drift, published package
+# README length, and the Vale prose lint -- merged into one job running
+# `make -k check-docs-handwritten` (check-docs-drift check-docs-readme
+# check-docs-prose). All three are alpine-only, need no uv and no mdbook
+# -- unlike docs:generated above, which needs uv to import
 # scripts/_docsgen.py. `cache: []` (via `.alpine`) stays deliberate
 # here, not an oversight: these jobs compile nothing, so downloading
 # the (irrelevant) default cargo cache would be pure waste.
 #
 # `make` is in APK_PACKAGES because alpine ships neither bash nor make
-# in its base image. The two checks used to be invoked as `bash
+# in its base image. The two original checks used to be invoked as `bash
 # scripts/...` directly, so make was not needed; routing them through
 # the Makefile means the job now depends on it. Dropping it fails at
-# `make: not found` with exit 127 before either check runs.
+# `make: not found` with exit 127 before any check runs. The other four
+# entries are Vale's: `curl` and `tar` fetch and unpack it, and
+# `gcompat libstdc++ libgcc` are what let it run. Vale is a Go binary
+# but not a static one -- it links glibc and libstdc++ for the spell
+# checker -- so alpine needs the shim and the C++ runtime. That is four
+# small packages and no language runtime, which is still a long way
+# short of turning this back into a toolchain image; see the `vale`
+# fragment in setup.yml for how the failure presents without them.
 docs:handwritten:
     stage: docs
     extends: .alpine
     needs:
         - !reference [.needs-gates, verify-test-and-hardware]
     variables:
-        APK_PACKAGES: "bash grep make"
-    # 10m: an alpine container running a bash script, so the only cold
-    # cost is the apk fetch. Sized like docs:generated rather than tighter
-    # because two samples of this job already swung 8.6x (10s / 86s). See
-    # setup.yml's "Job timeouts" section.
+        APK_PACKAGES: "bash grep make curl tar gcompat libstdc++ libgcc"
+    # 10m: an alpine container running bash scripts, so the only cold
+    # costs are the apk fetch and Vale's 40 MB release tarball. Sized like
+    # docs:generated rather than tighter because two samples of this job
+    # already swung 8.6x (10s / 86s). See setup.yml's "Job timeouts"
+    # section.
     timeout: 10m
     before_script:
         - !reference [.fragments, apk]
+        - !reference [.fragments, vale]
     script:
         - make -k check-docs-handwritten
 

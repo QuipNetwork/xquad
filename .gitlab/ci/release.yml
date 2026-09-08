@@ -150,6 +150,41 @@ release:validate:
     # every ordering relationship between them is expressed through
     # `needs:` alone.
     dependencies: []
+    # `policy: pull` on both root default cache entries. A job-level
+    # `cache:` REPLACES the default rather than merging with it
+    # (.gitlab-ci.yml's `default: cache:` comment), so both entries are
+    # restated here in full -- key and paths, not just the policy --
+    # or this job would silently stop caching at all.
+    #
+    # Pull-only because this job has nothing worth uploading. Its other
+    # leg, check-python-dists (Makefile), drives scripts/python-dists.sh,
+    # which builds the five wheels through maturin straight into the
+    # shared target/ -- throwaway output, rebuilt from scratch every run
+    # regardless of what is cached. And nothing downstream ever consumes
+    # what this job produces: `dependencies: []` two lines up already
+    # says so, and no job in this file `needs:` release:validate for
+    # artefacts. Pushing here would upload a fresh Cargo.lock-keyed cache
+    # entry that no later job pulls, only for the next run's push to
+    # overwrite it unread -- the same wasted-write shape check-crate-
+    # publish's own scratch-tree fix (Makefile) exists to avoid on the
+    # other leg. Left at pull so this job still benefits from the warm
+    # cache verify:rust and test:rust push, without adding a third writer
+    # that helps no one.
+    cache:
+        - key:
+              files:
+                  - Cargo.lock
+          paths:
+              - .cargo/registry/
+              - .cargo/git/
+              - target/
+          policy: pull
+        - key:
+              files:
+                  - scripts/cargo-tools.lock
+          paths:
+              - .cargo/bin/
+          policy: pull
     # 75m: the two dry-run jobs this merges each carried 20m, each sized
     # as cold-cache room for exactly ONE of the two legs (crate publish
     # dry-run, Python dist build). This job runs both legs serially, and

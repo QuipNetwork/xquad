@@ -10,6 +10,8 @@
 #   - Types: see scripts/commit-grammar.sh's TYPES
 #   - Subject max 72 characters, lowercase description start, no trailing period
 #   - Signed-off-by trailer present
+#   - Merge commit subjects (is_merge_subject) are exempt from both of
+#     the above, since GitLab and git generate them
 #
 # Install once per clone with:
 #
@@ -31,6 +33,8 @@ if [[ -z "${subject}" ]]; then
     echo "commit-msg: empty commit message." >&2
     exit 1
 fi
+
+is_merge_subject "${subject}" && exit 0
 
 check_commit_subject "${subject}" || exit 1
 check_signed_off < "${MSG_FILE}" || exit 1

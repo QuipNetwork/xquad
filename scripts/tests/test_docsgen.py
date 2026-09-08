@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from _docsgen import BANNER_PREFIX, SetupError, Target, banner, emit, format_setup_error, load_yaml, require_key
+from _docsgen import BANNER_PREFIX, Target, banner, emit
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "gen-bytecode-docs.py"
 
@@ -101,46 +101,6 @@ def test_emit_check_returns_setup_error_for_non_utf8_target(tmp_path, capsys):
     assert "docs generation setup error:" in captured.err
     assert "cannot read" in captured.err
     assert "Traceback" not in captured.err
-
-
-def test_load_yaml_reports_missing_source(tmp_path):
-    with pytest.raises(SetupError, match="cannot read"):
-        load_yaml(tmp_path / "missing.yaml")
-
-
-def test_load_yaml_reports_empty_source(tmp_path):
-    empty_yaml = tmp_path / "empty.yaml"
-    empty_yaml.write_text("", encoding="utf-8")
-
-    with pytest.raises(SetupError, match="empty or not a mapping"):
-        load_yaml(empty_yaml)
-
-
-def test_load_yaml_reports_non_utf8_source(tmp_path):
-    bad_yaml = tmp_path / "bad.yaml"
-    bad_yaml.write_bytes(b"groups:\n  - caf\xe9\n")
-
-    with pytest.raises(SetupError, match="cannot read"):
-        load_yaml(bad_yaml)
-
-
-def test_format_setup_error_makes_repo_paths_relative(tmp_path):
-    message = f"{tmp_path}/examples/manifest.yaml: missing required key `groups`"
-
-    assert format_setup_error(SetupError(message), tmp_path) == "examples/manifest.yaml: missing required key `groups`"
-
-
-@pytest.mark.parametrize(
-    ("payload", "message"),
-    [
-        ({}, "missing required key `opcodes`"),
-        ({"opcodes": None}, "required key `opcodes` must be list, got null"),
-        ({"opcodes": {}}, "required key `opcodes` must be list, got dict"),
-    ],
-)
-def test_require_key_reports_bad_required_key(payload, message):
-    with pytest.raises(SetupError, match=message):
-        require_key(payload, "source.yaml", "opcodes", list)
 
 
 def test_generator_main_returns_setup_error_for_missing_yaml(tmp_path, monkeypatch, capsys):

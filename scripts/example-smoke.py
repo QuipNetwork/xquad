@@ -33,13 +33,41 @@ import subprocess
 import sys
 from pathlib import Path
 
-from _docsgen import load_yaml
 from _hwprobe import available_hardware_solvers
+from _scriptio import SetupError, format_setup_error, load_yaml
 from xqsa import DEFAULT_SOLVER
 
-EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+EXAMPLES_DIR = REPO_ROOT / "examples"
 MANIFEST_PATH = EXAMPLES_DIR / "manifest.yaml"
 SEED = 42
+
+
+def _require_xqffi_verifier() -> None:
+    """Fail fast if the compiled bytecode verifier extension is missing.
+
+    ``xqcp.problem._verify_compiled`` silently skips verification on
+    ``ImportError`` by design, so xqcp stays usable in source-only
+    environments where the ``xqffi`` extension has not been built. That
+    silent skip is correct for xqcp as a library, but this smoke test is
+    the harness that is supposed to guarantee the verifier actually ran
+    over every compiled example program -- so here, an unimportable
+    verifier is a hard setup error rather than a silent skip that could
+    let verifier coverage quietly vanish.
+
+    The import is written exactly as the consumer writes it, symbol and
+    all, because ``ImportError`` covers a missing symbol as well as a
+    missing module. An ``xqffi`` build that ships ``xqffi.verifier``
+    without ``verify_source`` -- a rename, a partial cdylib, a symbol
+    dropped from the pyo3 module -- satisfies a module-level import while
+    ``_verify_compiled`` returns early on every call. Checking less than
+    the consumer checks is how this guard would pass on the day coverage
+    disappeared.
+    """
+    try:
+        from xqffi.verifier import verify_source  # noqa: F401
+    except ImportError as exc:
+        raise SetupError(f"xqffi.verifier.verify_source is not importable: {exc}") from exc
 
 
 def _hardware_examples() -> tuple[str, ...]:
@@ -83,6 +111,12 @@ def run_example(runner: Path, interpreter: str, solver: str = DEFAULT_SOLVER) ->
 
 
 def main() -> int:
+    try:
+        _require_xqffi_verifier()
+    except SetupError as exc:
+        print(f"example-smoke setup error: {format_setup_error(exc, REPO_ROOT)}", file=sys.stderr)
+        return 2
+
     runners = sorted(EXAMPLES_DIR.glob("*/runner.py"))
     if not runners:
         print("ERROR: no examples found", file=sys.stderr)

@@ -170,6 +170,25 @@
         - curl -LsSf --retry 3 --retry-all-errors "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
         - export PATH="${HOME}/.local/bin:${PATH}"
         - export UV_CACHE_DIR="${CI_PROJECT_DIR}/.uv-cache"
+    vale:
+        # Same Makefile-as-source-of-truth idiom as `uv` above, and the
+        # same asymmetry: CI installs the pin, a contributor runs whatever
+        # `vale` is on their PATH. Vale is a Go binary published as a
+        # release tarball, so neither of this repository's other pinning
+        # mechanisms fits it -- uvx for Python tools, cargo-tools.lock for
+        # Rust CLIs -- and it lands here with release-cli instead.
+        #
+        # Not a static binary, despite being Go: it links glibc and
+        # libstdc++ for the spell checker. On alpine that means gcompat,
+        # libstdc++ and libgcc alongside curl and tar -- all five in
+        # docs:handwritten's APK_PACKAGES. Verified by running the job's
+        # own `make -k check-docs-handwritten` inside alpine:3: without
+        # gcompat the binary is "not found", and with gcompat but without
+        # libstdc++ it dies relocating C++ symbols.
+        - VALE_VERSION="$(sed -n 's/^VALE_VERSION[[:space:]]*:=[[:space:]]*//p' "${CI_PROJECT_DIR}/Makefile" | head -n1)"
+        - '[ -n "${VALE_VERSION}" ] || { echo "vale: could not read VALE_VERSION from Makefile" >&2; exit 1; }'
+        - curl -fsSL --retry 3 --retry-all-errors -o /tmp/vale.tar.gz "https://github.com/errata-ai/vale/releases/download/v${VALE_VERSION}/vale_${VALE_VERSION}_Linux_64-bit.tar.gz"
+        - tar -xzf /tmp/vale.tar.gz -C /usr/local/bin vale
     # uv on PATH plus a full workspace sync -- installs xqvm_py/xqcp/xqsa/
     # xqffi/xquad editable into .venv/ and builds xqffi's cdylib through
     # maturin (xqffi is a uv workspace member).

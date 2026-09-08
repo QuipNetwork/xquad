@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from _docsgen import SetupError
+from _scriptio import SetupError
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "gen-example-docs.py"
 
@@ -80,7 +80,7 @@ def test_readme_link_validation_rejects_unmapped_relative_link():
     assert errors == ["README.md:1: unmapped relative link `../../CONTRIBUTING.md`"]
 
 
-def test_transform_readme_preserves_headings_and_strips_canonical_output(tmp_path, monkeypatch):
+def test_transform_readme_preserves_headings_and_keeps_canonical_output(tmp_path, monkeypatch):
     module = load_generator_module()
     readme = tmp_path / "examples" / "graph_coloring" / "README.md"
     readme.parent.mkdir(parents=True)
@@ -103,7 +103,7 @@ def test_transform_readme_preserves_headings_and_strips_canonical_output(tmp_pat
                 "```sh",
                 "# fenced heading does not end the section",
                 "```",
-                "Do not publish this.",
+                "Keep this.",
             ]
         )
         + "\n",
@@ -116,15 +116,15 @@ def test_transform_readme_preserves_headings_and_strips_canonical_output(tmp_pat
 
     assert rendered.startswith("<!--\n  AUTO-GENERATED FILE. DO NOT EDIT.")
     assert "# Graph Coloring\n" in rendered
-    assert "Source: [examples/graph_coloring/README.md]" in rendered
+    assert "Source: `examples/graph_coloring/README.md`" in rendered
     assert "## QUBO formulation" in rendered
     assert "### Encoding strategy" in rendered
     assert "](../start/)" in rendered
     assert "](../solving/)" in rendered
-    assert "## Canonical output" not in rendered
-    assert "# fenced heading does not end the section" not in rendered
-    assert "Do not publish this." not in rendered
-    assert "The canonical output and its invariants are defined in the [source README]" in rendered
+    assert "## Canonical output" in rendered
+    assert "# fenced heading does not end the section" in rendered
+    assert "Keep this." in rendered
+    assert "gitlab.com" not in rendered
 
 
 def test_transform_readme_replaces_solver_section_with_a_pointer(tmp_path, monkeypatch):
@@ -165,6 +165,10 @@ def test_transform_readme_replaces_solver_section_with_a_pointer(tmp_path, monke
     assert "Solver selection and install extras are the same for every example" in rendered
     assert "## Notes" in rendered
     assert "Kept." in rendered
+    # The blank line the source put before `## Notes` was inside the section
+    # being replaced. Without one put back, the next heading lands hard
+    # against the replacement's last line and reads as part of it.
+    assert "\n\n## Notes" in rendered
 
 
 def test_render_repo_index_links_into_the_example_directories(tmp_path, monkeypatch):

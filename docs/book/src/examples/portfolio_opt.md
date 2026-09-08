@@ -7,7 +7,7 @@
 
 # Portfolio Optimization
 
-Source: [examples/portfolio_opt/README.md](https://gitlab.com/quip.network/xquad/-/blob/main/examples/portfolio_opt/README.md)
+Source: `examples/portfolio_opt/README.md`
 
 Select a portfolio of exactly B assets from N candidates to maximise expected
 return while penalising higher-order risk cross-interactions.
@@ -68,6 +68,10 @@ uv run python examples/portfolio_opt/runner.py --n 6 --budget 3 --interpreter ru
 Solver selection and install extras are the same for every example: see
 [Using the Examples](using-examples.md#running-one) and
 [Solving Overview](../solving/). The default is `dwave-cpu`, and a
-non-default solver will not reproduce the output shown here.
+non-default solver will not reproduce the canonical result.
 
-The canonical output and its invariants are defined in the [source README](https://gitlab.com/quip.network/xquad/-/blob/main/examples/portfolio_opt/README.md).
+## Canonical output
+
+`example-smoke` validates both interpreters produce `valid == 1` with
+`--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
+it checks validity, not exact output.

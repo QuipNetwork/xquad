@@ -1,0 +1,9 @@
+# AGENTS.md: "NEVER use em-dash in documentation -- prefer using `--`."
+# The en-dash is caught with it: the same keyboard slip produces either, and
+# neither is used anywhere in the book on purpose.
+extends: existence
+message: "Write `--` rather than %s."
+level: error
+nonword: true
+tokens:
+    - '[\x{2014}\x{2013}]'
