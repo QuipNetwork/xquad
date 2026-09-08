@@ -27,6 +27,16 @@ This installs: `clippy`, `rustfmt`, `taplo-cli`, `cargo-deny`, `cargo-nextest`.
 make deps-miri
 ```
 
+- [Vale](https://vale.sh) -- the prose linter behind `make check-docs-prose`,
+  and so a prerequisite of `make preflight-docs` and `make preflight`.
+  `make deps` does not install it: it is a Go binary, not a cargo or uv tool.
+  Pinned by `VALE_VERSION` in the Makefile; CI fetches that exact release.
+
+```sh
+brew install vale          # macOS
+# or download the pinned release from https://github.com/errata-ai/vale/releases
+```
+
 - Python 3.13+ and [uv](https://docs.astral.sh/uv/) -- install the Python workspace in one step:
 
 ```sh
@@ -36,6 +46,11 @@ make deps-py
 This runs `uv sync` plus `maturin develop`, giving you editable installs of
 `xqvm_py`, `xqcp`, `xqsa`, `xqffi`, and `xquad` with the `xqffi` cdylib built
 from the current Rust sources.
+
+`uv sync` resolves the base dependencies only, so the optional solver backends
+are absent from a fresh workspace. Local GPU or QPU work needs the matching
+extra synced on top -- `uv sync --extra cuda`, `--extra metal`, `--extra dwave`
+or `--extra quip`.
 
 ## Dependencies and Lockfiles
 
@@ -101,7 +116,7 @@ make preflight          # everything below, in one shot
 make preflight-rs       # fmt, taplo, clippy, rustdoc, deny, unit/integration/doc tests
 make preflight-py       # taplo, ruff format + lint, pytest, uv.lock freshness
 make preflight-parity   # opcode parity, conformance, example smoke
-make preflight-docs     # generated-doc freshness, docs drift, README length guards
+make preflight-docs     # generated-doc freshness, docs drift, README length, prose (needs vale)
 make preflight-policy   # changelog render, release-notes scoping, atomic spec-MR and commit-message guards
 ```
 
@@ -298,11 +313,15 @@ Any MR that changes VM semantics must touch **all four** of these layers in the 
 
 CI enforces this via `verify:policy` (`scripts/check-atomic-spec-mr.sh`). MRs touching 0 or all 4 layers pass; partial changes fail.
 
-**Exemptions:** For deliberately one-sided changes (e.g. aligning one impl to existing behaviour), add a `Atomic-Spec-Exempt: <reason>` trailer to a commit message:
+**Exemptions:** For deliberately one-sided changes (e.g. aligning one impl to existing behaviour), add an `Atomic-Spec-Exempt:` trailer to a commit message. It goes in the message's last paragraph at column 0, beside the sign-off, with the whole reason and the ticket on that one line. git reads trailers out of the last paragraph only, and a wrapped reason is silently truncated, so the guard rejects either rather than bypassing on a trailer nobody can read:
 
 ```
-Atomic-Spec-Exempt: Python-only fix bringing impl in line with existing Rust behaviour
+Fixes QUI-453
+Atomic-Spec-Exempt: QUI-453 one-sided Python fix, no semantics change
+Signed-off-by: You <you@example.com>
 ```
+
+A bare-word `Fixes QUI-NNN` footer may share that paragraph, as above, but not the line directly below the trailer -- there it cannot be told apart from a wrapped reason.
 
 See [docs/guide/development-workflow.md](docs/guide/development-workflow.md) for the full rationale and exempt cases.
 

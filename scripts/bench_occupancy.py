@@ -30,11 +30,16 @@ import hashlib
 import json
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
+from _scriptio import SetupError, format_setup_error, read_json, require_key, require_mapping
 from xqvm_py.xqmx import XQMX
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 TRAJ_SIZES = (64, 256)
 TRAJ_SEEDS = tuple(range(30))
@@ -129,10 +134,36 @@ def cmd_timing(out: Path) -> None:
     print(f"wrote timing records -> {out}")
 
 
+def record_field(
+    data: Mapping[str, object],
+    path: Path,
+    key: str,
+    field: str,
+    expected_type: type | tuple[type, ...],
+) -> Any:
+    """Return `data[key][field]`, or raise a setup error naming what is wrong.
+
+    Both `parity` and `timing` read one named field out of one per-key
+    record, in either document, so the mapping check and the field check
+    are worth having in one place rather than eight.
+    """
+    where = f"{path}: {key}"
+    return require_key(require_mapping(require_key(data, path, key), where), where, field, expected_type)
+
+
 def cmd_compare(mode: str, baseline: Path, current: Path) -> int:
-    base = json.loads(baseline.read_text())
-    cur = json.loads(current.read_text())
+    """Compare two run outputs; print a verdict and return a process code.
+
+    Every read of either document goes through the `_scriptio` require
+    helpers, so a stale or foreign JSON file is a setup error rather than
+    a traceback out of a subscript wearing the exit code reserved for a
+    real regression.
+    """
+    base = require_mapping(read_json(baseline), baseline)
+    cur = require_mapping(read_json(current), current)
     if mode == "trajectories":
+        # `cur.get` is total, and an absent key reads as a mismatch, which
+        # is what a trajectory record missing from the candidate is.
         mismatches = [k for k in sorted(base) if base[k] != cur.get(k)]
         if mismatches:
             for k in mismatches[:20]:
@@ -143,8 +174,8 @@ def cmd_compare(mode: str, baseline: Path, current: Path) -> int:
         return 0
     if mode == "parity":
         for key in sorted(base):
-            b = np.asarray(base[key]["best_energies"])
-            c = np.asarray(cur[key]["best_energies"])
+            b = np.asarray(record_field(base, baseline, key, "best_energies", list))
+            c = np.asarray(record_field(cur, current, key, "best_energies", list))
             db, dc = b.mean(), c.mean()
             rel = abs(dc - db) / max(abs(db), 1e-12)
             print(
@@ -152,7 +183,8 @@ def cmd_compare(mode: str, baseline: Path, current: Path) -> int:
             )
         return 0
     for key in sorted(base):
-        b, c = base[key]["seconds"], cur[key]["seconds"]
+        b = record_field(base, baseline, key, "seconds", (int, float))
+        c = record_field(cur, current, key, "seconds", (int, float))
         print(f"{key}: base={b:.1f} s -> new={c:.1f} s ({b / max(c, 1e-9):.1f}x)")
     return 0
 
@@ -169,7 +201,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("current", type=Path)
     args = parser.parse_args(argv)
     if args.cmd == "compare":
-        return cmd_compare(args.mode, args.baseline, args.current)
+        try:
+            return cmd_compare(args.mode, args.baseline, args.current)
+        except (OSError, SetupError) as exc:
+            sys.stderr.write(f"bench_occupancy setup error: {format_setup_error(exc, REPO_ROOT)}\n")
+            return 2
     args.out.parent.mkdir(parents=True, exist_ok=True)
     {"trajectories": cmd_trajectories, "parity": cmd_parity, "timing": cmd_timing}[args.cmd](args.out)
     return 0

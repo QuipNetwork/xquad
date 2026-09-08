@@ -12,23 +12,34 @@ One repository, two implementations, one spec:
 
 | Component | Owner(s) | Role |
 |-----------|----------|------|
-| [`spec/xqvm/SPEC.md`](../spec/xqvm/SPEC.md) | all | Normative description of VM behaviour. Every conformance vector derives from here. |
-| [`xqvm/`](../xqvm/) | Rust track | Production interpreter. `no_std + alloc`. Used by the Substrate pallet, the `xquad` CLI, and the `xqffi` pyo3 extension. |
-| [`xqvm_py/`](../xqvm_py/) | Python track | Reference interpreter. Pure Python. The conformance oracle. |
-| [`conformance/`](../conformance/) | shared | Cross-impl parity harness. Every committed vector runs on both VMs in CI; disagreement fails the build. |
-| [`xqffi/`](../xqffi/) | Rust track | PyO3 FFI layer. Rust crate compiled via maturin to a Python wheel -- exposes `xqvm` and `xqasm` to the Python side. Not a pure-Python package. |
-| [`xqcp/`](../xqcp/), [`xqsa/`](../xqsa/), [`xquad/`](../xquad/) | Python track | Python surface: DSL, solver adapters, and umbrella. Consume the VMs (via `xqffi`) rather than define their semantics. |
+| [`spec/xqvm/SPEC.md`](../../spec/xqvm/SPEC.md) | all | Normative description of VM behaviour. Every conformance vector derives from here. |
+| [`xqvm/`](../../xqvm/) | Rust track | Production interpreter. `no_std + alloc`. Used by the Substrate pallet, the `xquad` CLI, and the `xqffi` pyo3 extension. |
+| [`xqvm_py/`](../../xqvm_py/) | Python track | Reference interpreter. Pure Python. The conformance oracle. |
+| [`conformance/`](../../conformance/) | shared | Cross-impl parity harness. Every committed vector runs on both VMs in CI; disagreement fails the build. |
+| [`xqffi/`](../../xqffi/) | Rust track | PyO3 FFI layer. Rust crate compiled via maturin to a Python wheel -- exposes `xqvm` and `xqasm` to the Python side. Not a pure-Python package. |
+| [`xqcp/`](../../xqcp/), [`xqsa/`](../../xqsa/), [`xquad/`](../../xquad/) | Python track | Python surface: DSL, solver adapters, and umbrella. Consume the VMs (via `xqffi`) rather than define their semantics. |
 
 ## Branches
 
-- **`main`** -- released state. Protected. Squash-merge from MRs only.
-- **`experimentation`** -- long-lived integration branch where
-  exploratory changes accumulate. No protection beyond basic CI.
-  Periodic promotion to `main` via atomic spec-MRs (see below).
+- **`main`** -- released state. Protected. Merged from MRs only, and
+  always as a real merge commit: every merge on `main` has two parents
+  and a GitLab-generated `merge: branch '<source>' into 'main'`
+  subject. The repository ran a merge train with squash-on-merge until
+  that was disabled; [`scripts/check-mr-title.sh`](../../scripts/check-mr-title.sh)
+  records what the change cost and what replaced it.
 - **`feature/qui-<id>[-tag]`** -- short-lived branches for individual
-  tickets. Merged directly into `main` when the change is scoped
-  small enough to fit an atomic spec-MR, or into `experimentation`
-  when it's part of a larger coordinated effort.
+  tickets, merged into `main` on green CI. One branch may carry several
+  tickets when they touch the same files. The MR body lists each ticket
+  it consumes (QUI-*), so Linear status moves in lockstep with git
+  state.
+- **`release/v<version>`** -- prepares a release: the version bump
+  across the manifests and whatever else the tag needs. Merged into
+  `main` before the tag is cut.
+- **`chore/<tag>`** -- repository maintenance belonging to no ticket,
+  such as bumping `main` back to its `-dev` version after a release.
+
+There is no long-lived integration branch. Every branch above is
+short-lived and merges into `main` directly.
 
 ## The atomic spec-MR rule
 
@@ -62,7 +73,7 @@ following in the same MR:**
 
 ### Enforcement
 
-A CI guard -- [`scripts/check-atomic-spec-mr.sh`](../scripts/check-atomic-spec-mr.sh)
+A CI guard -- [`scripts/check-atomic-spec-mr.sh`](../../scripts/check-atomic-spec-mr.sh)
 -- runs as part of `verify:policy` on every merge request. It classifies
 changed files into the four layers and fails the pipeline if an MR
 touches **1-3 layers but not all four**. Touching **0 layers** (pure
@@ -89,12 +100,18 @@ exempt cases:
   changing the normative rules. No impl updates needed.
 - **Conformance-only coverage addition.** A new vector exercises
   existing semantics. No spec / impl changes.
+- **Cross-implementation alignment with no normative change.** Both
+  impls move, and sometimes the harness with them, to converge on
+  behaviour the spec already states -- so the spec layer has nothing to
+  add and the guard's four-layer test cannot be satisfied honestly.
+  This is the case the v0.4.0 series used most: QUI-1147's step-budget
+  export touched `xqvm/src/` and `xqvm_py/` together, and QUI-1032's
+  opcode-signature check touched those two plus `conformance/`, neither
+  of them changing what the spec says.
 
 **To take an exemption, add a commit-message trailer of the form
-`Atomic-Spec-Exempt: <reason>` on its own line.** The trailer format
-mirrors `Signed-off-by:` / `Co-authored-by:` -- unambiguous to the
-guard, visible to reviewers, and impossible to trigger accidentally
-from prose that happens to mention the token. Example:
+`Atomic-Spec-Exempt: QUI-<id> <reason>`.** It goes in the message's last
+paragraph, at column 0, beside the sign-off:
 
 ```
 Align Python SSMX default to Rust's [-1, -1, ...] initialisation.
@@ -102,32 +119,42 @@ Align Python SSMX default to Rust's [-1, -1, ...] initialisation.
 Python was shipping empty-dict samples where Rust used vec![-1; size];
 this aligns the Python side. No Rust change needed.
 
-Atomic-Spec-Exempt: one-sided Python fix bringing impl in line with
-  existing Rust behaviour -- no semantics change, no Rust diff, no
-  new vector.
+Fixes QUI-453
+Atomic-Spec-Exempt: QUI-453 one-sided Python fix, no semantics change
+Signed-off-by: You <you@example.com>
 ```
 
-The guard scans every commit message in the MR range and bypasses
-when it finds at least one trailer. Reviewers should see the
-exemption and confirm the rationale holds; there is no approval
-process beyond review.
+The layout is not stylistic. git reads trailers out of the **last
+paragraph only**, and a paragraph break above the trailer hides it from
+`git log --format='%(trailers)'`, from GitLab's commit view, and from
+everything else built on git's trailer parsing. Every exempt trailer
+written before QUI-1030 sat in a paragraph of its own above the ticket
+footer, so not one of them parses -- which is how eleven exemptions were
+taken without any of them being findable.
 
-## Promotion from experimentation to main
+Two more rules follow from how git treats that paragraph:
 
-When the experimentation branch accumulates work that forms a
-coherent change:
+- **The whole reason goes on the trailer line.** A continuation line is
+  not a trailer, and git either drops it -- silently truncating the
+  reason to its first line -- or, with no sign-off in the paragraph,
+  stops reading the paragraph altogether.
+- **A `Fixes QUI-NNN` footer may share the paragraph, but not the line
+  directly below the trailer.** It has no colon, so it is not a trailer
+  either; the mandatory sign-off is what makes git tolerate it. Directly
+  below the trailer it is indistinguishable from a wrapped reason, so the
+  guard rejects that position rather than guess. Put it above the
+  trailer, or below the sign-off.
 
-1. Open an MR from `experimentation` to `main`.
-2. The MR must either respect the atomic spec-MR rule directly or
-   carry an `Atomic-Spec-Exempt:` trailer with justification.
-3. The MR body explicitly lists each ticket it consumes (QUI-*), so
-   Linear status moves in lockstep with git state.
-4. Squash-merge on green CI. `experimentation` then rebases onto
-   the new `main` to stay current.
+A trailer that breaks any of this fails the guard rather than being
+ignored by it, because an exemption nobody can find is worse than no
+exemption at all. Column 0 is git's rule too, which is why an indented
+example in a commit body -- like the ones in this repository's own
+documentation commits -- is not mistaken for a real exemption.
 
-Avoid letting `experimentation` diverge by more than ~2 weeks from
-`main`; promotion churn scales non-linearly with the size of the
-delta.
+The guard scans every commit message in the MR range and bypasses when
+it finds at least one well-formed trailer. Reviewers should see the
+exemption and confirm the rationale holds; there is no approval process
+beyond review.
 
 ## What does NOT trigger the rule
 
@@ -217,7 +244,7 @@ the same way they would ask for a test.
 
 ## Commit and review conventions
 
-See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for:
+See [`CONTRIBUTING.md`](../../CONTRIBUTING.md) for:
 
 - Sign-off (DCO) requirements.
 - Commit message format.

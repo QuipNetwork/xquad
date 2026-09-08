@@ -35,7 +35,7 @@ make preflight         # preflight-rs + preflight-py + preflight-parity + prefli
 make preflight-rs      # fmt, taplo, clippy, rustdoc, deny, unit/integration/doc tests
 make preflight-py      # taplo, ruff format + lint, pytest, uv.lock freshness
 make preflight-parity  # opcode parity, conformance, example smoke
-make preflight-docs    # generated-doc freshness + docs drift + README length guards
+make preflight-docs    # generated-doc freshness + docs drift + README length + prose (needs vale)
 make preflight-release # crate packaging dry-run + five Python dists (needs maturin/twine/uv; not in `preflight`)
 
 # Rust
@@ -79,6 +79,8 @@ make check-docs-generated  # assert generated docs match regenerated output
 make check-docs-drift      # guard book prose, SUMMARY.md coverage, and page links
 make check-docs-mermaid    # assert book diagrams rendered (needs make build-docs first)
 make check-docs-readme     # guard published package READMEs against the 100-line limit
+make check-docs-prose      # Vale over the handwritten book pages. Needs vale on PATH:
+                           # `brew install vale`; pinned by VALE_VERSION in the Makefile
 make serve-docs            # mdbook serve --open
 
 # Changelog (CHANGELOG.md is gitignored; cliff.toml + git history is source of truth)
@@ -313,7 +315,7 @@ Behavioural parity between `xqvm_py` (Python reference) and the Rust `xqvm` crat
 
 Any MR that changes VM semantics must touch **all four** layers in the same MR: (1) `spec/xqvm/*.md`, (2) `xqvm/src/**/*.rs`, (3) `xqvm_py/{executor,opcodes,xqmx,state,vector,tracer,errors}.py`, (4) `conformance/vectors/**` or `conformance/opcodes.yaml`. CI enforces this via `verify:policy` (`scripts/check-atomic-spec-mr.sh`). MRs touching 0 or all 4 layers pass; partial changes (1-3 layers) fail.
 
-For deliberately one-sided changes (e.g. aligning one impl to existing behaviour), add an `Atomic-Spec-Exempt: <reason>` trailer to a commit message. The guard scans every commit in the MR range and bypasses when it finds at least one trailer. See `docs/guide/development-workflow.md` for the full rationale and exempt cases.
+For deliberately one-sided changes (e.g. aligning one impl to existing behaviour), add an `Atomic-Spec-Exempt: QUI-<id> <reason>` trailer to a commit message. It goes in the message's last paragraph at column 0, beside the sign-off, with the whole reason and the ticket on that one line; git reads trailers from the last paragraph only and truncates a wrapped reason, so the guard fails on either instead of bypassing. A `Fixes QUI-NNN` footer may share the paragraph but not the line directly below the trailer. The guard scans every commit in the MR range and bypasses when it finds at least one well-formed trailer. See `docs/guide/development-workflow.md` for the full rationale and exempt cases.
 
 ### Opcode Addition Gate
 

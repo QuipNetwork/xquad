@@ -7,7 +7,7 @@
 
 # Number Partition
 
-Source: [examples/number_partition/README.md](https://gitlab.com/quip.network/xquad/-/blob/main/examples/number_partition/README.md)
+Source: `examples/number_partition/README.md`
 
 Given N positive integers, find a way to split them into two subsets of
 equal sum (or as close as possible if an exact split does not exist).
@@ -56,6 +56,10 @@ uv run python examples/number_partition/runner.py --n 8 --interpreter rust
 Solver selection and install extras are the same for every example: see
 [Using the Examples](using-examples.md#running-one) and
 [Solving Overview](../solving/). The default is `dwave-cpu`, and a
-non-default solver will not reproduce the output shown here.
+non-default solver will not reproduce the canonical result.
 
-The canonical output and its invariants are defined in the [source README](https://gitlab.com/quip.network/xquad/-/blob/main/examples/number_partition/README.md).
+## Canonical output
+
+`example-smoke` validates both interpreters produce `valid == 1` with
+`--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
+it checks validity, not exact output.

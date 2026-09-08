@@ -7,7 +7,7 @@
 
 # Max-3-SAT
 
-Source: [examples/max3sat/README.md](https://gitlab.com/quip.network/xquad/-/blob/main/examples/max3sat/README.md)
+Source: `examples/max3sat/README.md`
 
 Given M clauses of 3 positive literals over N binary variables, find the
 assignment that satisfies the maximum number of clauses.
@@ -63,6 +63,10 @@ uv run python examples/max3sat/runner.py --n 8 --m 10 --interpreter rust
 Solver selection and install extras are the same for every example: see
 [Using the Examples](using-examples.md#running-one) and
 [Solving Overview](../solving/). The default is `dwave-cpu`, and a
-non-default solver will not reproduce the output shown here.
+non-default solver will not reproduce the canonical result.
 
-The canonical output and its invariants are defined in the [source README](https://gitlab.com/quip.network/xquad/-/blob/main/examples/max3sat/README.md).
+## Canonical output
+
+`example-smoke` validates both interpreters produce `valid == 1` with
+`--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
+it checks validity, not exact output.

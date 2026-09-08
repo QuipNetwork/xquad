@@ -32,14 +32,32 @@
 TYPES="feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|security|deprecate|release"
 PATTERN="^(${TYPES})(\([a-zA-Z0-9_-]+\))?\!?: .+"
 
-# Matches a GitLab-generated merge commit subject, in either the
-# historical "Merge branch '...' into ..." form or the newer "merge:
-# ..." form this repo also uses. "merge" is deliberately not a
-# Conventional Commits type (see TYPES above), and these subjects are
-# server-generated rather than authored, so grammar checking does not
-# apply to them. Mirrors cliff.toml's first-position
-# `{ message = "^[Mm]erge", skip = true }` parser.
-MERGE_SUBJECT_PATTERN="^[Mm]erge"
+# Matches a GENERATED merge commit subject, in either the historical
+# "Merge branch '...' into ..." form or the "merge: branch '...' into
+# '...'" form GitLab produces for this repo. "merge" is deliberately not
+# a Conventional Commits type (see TYPES above); these subjects are
+# generated rather than authored, so grammar checking does not apply to
+# them.
+#
+# The noun after "Merge" is load-bearing and was missing until QUI-1030,
+# when the pattern was a bare `^[Mm]erge`. Matching a merge subject
+# skips the sign-off check as well as the grammar check, because a
+# generated merge subject carries no sign-off -- so a bare prefix let an
+# authored subject like "Merge the two loaders into one" land with no
+# DCO sign-off at all, on both the local hook and the CI validator.
+#
+# git generates: "Merge branch", "Merge remote-tracking branch",
+# "Merge tag", "Merge commit", "Merge pull request". Only the first two
+# forms and the GitLab "merge: branch" form appear in this repository's
+# history (verified across every merge on main); the rest are here so a
+# contributor merging by hand is not told their merge is ungrammatical.
+#
+# This is deliberately TIGHTER than cliff.toml's first-position
+# `{ message = "^[Mm]erge", skip = true }` parser, which it used to
+# mirror exactly. The looser parser costs nothing there: a subject this
+# pattern declines is grammar-checked, and an authored "Merge ..." fails
+# that check, so it never reaches a changelog render.
+MERGE_SUBJECT_PATTERN="^([Mm]erge (branch|remote-tracking branch|tag|commit|pull request) |merge: branch )"
 
 # True when `subject` is a merge-commit subject that should skip
 # grammar checking entirely.

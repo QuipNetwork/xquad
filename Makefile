@@ -19,7 +19,8 @@
         example-smoke \
         build-docs regen-docs regen-docs-opcodes regen-docs-examples \
         check-docs-generated check-docs-opcodes check-docs-examples \
-        check-docs-drift check-docs-mermaid check-docs-readme serve-docs \
+        check-docs-drift check-docs-mermaid check-docs-readme check-docs-prose \
+        serve-docs \
         changelog render-changelog changelog-release
 
 all: fmt lint test
@@ -110,11 +111,15 @@ test-python: test-py
 # conformance/tests/coverage.rs, which conformance-rs already runs.
 check-parity: opcode-parity conformance example-smoke metering-parity conformance-coverage
 
-# Both are alpine, handwritten-docs checks -- no uv, no generation, no
+# All three are alpine, handwritten-docs checks -- no uv, no generation, no
 # mdbook. Kept apart from check-docs-generated (which needs uv) so the two
 # doc-check aggregates map onto CI jobs with different runtime
-# requirements.
-check-docs-handwritten: check-docs-drift check-docs-readme
+# requirements. check-docs-prose adds one binary to that image and no
+# language runtime: Vale is a Go executable fetched by the CI job. Not a
+# static one, despite being Go -- it links glibc and libstdc++ for the
+# spell checker, which is why docs:handwritten's APK_PACKAGES carries
+# gcompat, libstdc++ and libgcc.
+check-docs-handwritten: check-docs-drift check-docs-readme check-docs-prose
 
 # Stdlib-only Python for the version-site guard below. Pinned to 3.13 for
 # the same reason scripts/smoke-wheels.sh pins its venv rather than taking
@@ -197,10 +202,19 @@ list-version-sites:
 # stale-source failure survived; scoping CARGO_HOME as well is what makes
 # the check hermetic. The cost is a cold index and dependency fetch on
 # every run of this target, which is the price of the guarantee.
+#
+# Both scratch trees live under a mktemp -d root outside target/, not
+# under it (the old target/publish-check). CI's default cache is keyed
+# on Cargo.lock and covers all of target/, so a scratch dir inside it
+# was itself a cache entry: every run uploaded a throwaway cargo home
+# and workspace build that the next run's `rm -rf` deleted unread before
+# the hermetic guarantee above even engaged. A trap on EXIT removes the
+# mktemp root on success or failure so nothing throwaway is left behind
+# either way.
 check-crate-publish:
-	rm -rf target/publish-check
-	CARGO_HOME=$(CURDIR)/target/publish-check/cargo-home \
-	CARGO_TARGET_DIR=target/publish-check \
+	@set -eu; scratch="$$(mktemp -d)"; trap 'rm -rf "$${scratch}"' EXIT; \
+	CARGO_HOME="$${scratch}/cargo-home" \
+	CARGO_TARGET_DIR="$${scratch}/target" \
 	cargo publish --dry-run --locked --workspace
 
 # Needs maturin, twine and uv on PATH -- the same kind of prerequisite
@@ -421,6 +435,22 @@ RUFF_VERSION := 0.15.16
 # for why the docs generators run this way). Same rationale and same
 # by-hand-with-uv.lock upkeep as RUFF_VERSION above.
 PYYAML_VERSION := 6.0.3
+
+# Pinned Vale version for check-docs-prose. The single source of truth for
+# it: the `vale` fragment in .gitlab/ci/setup.yml greps this line out of the
+# Makefile to build the release URL, the same Makefile-as-source-of-truth
+# pattern UV_VERSION uses below and .githooks/pre-commit uses for
+# RUFF_VERSION.
+#
+# Vale fits neither of this repository's other two pinning mechanisms.
+# Python tools pin through a _VERSION variable and run as
+# `uvx <tool>@<version>`; Rust CLIs pin in scripts/cargo-tools.lock and
+# install through cargo. Vale is a Go binary distributed as a release
+# tarball, so it follows the third pattern already used for uv and
+# release-cli: a pinned version plus a curl fetch. Locally it is whatever
+# `vale` is on PATH -- nothing installs it for you, and scripts/lint-prose.sh
+# says so when it is missing.
+VALE_VERSION := 3.15.1
 
 # Pinned uv version. The single source of truth for it: .gitlab/ci/setup.yml
 # greps this line out of the Makefile to build the pinned installer URL
@@ -864,6 +894,14 @@ check-docs-drift:
 # of the book. `--list` prints every package and its count without enforcing.
 check-docs-readme:
 	bash scripts/check-readme-length.sh
+
+# House prose rules over the handwritten book pages: no emoji, no em-dash,
+# and a spell check against .vale/styles/XQuad/vocab.txt. The config and the
+# styles are both in the tree and the script passes --no-global, so this
+# gives the same verdict here and in CI -- which is the point of the target.
+# Pass file paths to check a single page while editing it.
+check-docs-prose:
+	bash scripts/lint-prose.sh
 
 # Assert that book diagrams actually rendered, rather than trusting the
 # mdbook-mermaid version-skew warning's absence. Needs mdbook and a built

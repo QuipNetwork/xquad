@@ -1,0 +1,7 @@
+# AGENTS.md: "NEVER use emojis in code, documentation, or commit messages."
+extends: existence
+message: "Remove the emoji %s. The house style has no emoji in prose."
+level: error
+nonword: true
+tokens:
+    - '[\x{1F000}-\x{1FAFF}\x{2600}-\x{27BF}\x{2B00}-\x{2BFF}\x{FE0F}\x{2190}-\x{21FF}]'

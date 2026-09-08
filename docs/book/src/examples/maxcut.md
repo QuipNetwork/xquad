@@ -7,7 +7,7 @@
 
 # Max-Cut
 
-Source: [examples/maxcut/README.md](https://gitlab.com/quip.network/xquad/-/blob/main/examples/maxcut/README.md)
+Source: `examples/maxcut/README.md`
 
 Find a 2-colour partition of a weighted graph that maximises the total weight
 of edges crossing the partition.
@@ -58,6 +58,10 @@ uv run python examples/maxcut/runner.py --n 6 --seed 7 -o /tmp/mc.json
 Solver selection and install extras are the same for every example: see
 [Using the Examples](using-examples.md#running-one) and
 [Solving Overview](../solving/). The default is `dwave-cpu`, and a
-non-default solver will not reproduce the output shown here.
+non-default solver will not reproduce the canonical result.
 
-The canonical output and its invariants are defined in the [source README](https://gitlab.com/quip.network/xquad/-/blob/main/examples/maxcut/README.md).
+## Canonical output
+
+`example-smoke` validates both interpreters produce `valid == 1` with
+`--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
+it checks validity, not exact output.

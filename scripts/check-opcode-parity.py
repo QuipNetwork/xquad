@@ -40,7 +40,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from _docsgen import SetupError, load_yaml, require_key, require_mapping
+from _scriptio import SetupError, load_yaml, require_key, require_mapping
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 YAML_PATH = REPO_ROOT / "conformance" / "opcodes.yaml"

@@ -7,7 +7,7 @@
 
 # Weighted Set Cover
 
-Source: [examples/weighted_set_cover/README.md](https://gitlab.com/quip.network/xquad/-/blob/main/examples/weighted_set_cover/README.md)
+Source: `examples/weighted_set_cover/README.md`
 
 A generalisation of Set Cover where each set s has a coverage capacity cap[s]
 and each element e has a demand demand[e]. The goal is to select sets of
@@ -61,6 +61,10 @@ uv run python examples/weighted_set_cover/runner.py --num-sets 6 --interpreter r
 Solver selection and install extras are the same for every example: see
 [Using the Examples](using-examples.md#running-one) and
 [Solving Overview](../solving/). The default is `dwave-cpu`, and a
-non-default solver will not reproduce the output shown here.
+non-default solver will not reproduce the canonical result.
 
-The canonical output and its invariants are defined in the [source README](https://gitlab.com/quip.network/xquad/-/blob/main/examples/weighted_set_cover/README.md).
+## Canonical output
+
+`example-smoke` validates both interpreters produce `valid == 1` with
+`--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
+it checks validity, not exact output.

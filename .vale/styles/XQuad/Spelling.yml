@@ -1,0 +1,16 @@
+# Spell check against Vale's dictionary plus the project vocabulary in
+# vocab.txt. A custom rule rather than the stock `Vale.Spelling` so the two
+# filters below can travel with it.
+extends: spelling
+message: "'%s' is in neither the dictionary nor .vale/styles/XQuad/vocab.txt."
+level: error
+ignore:
+    - XQuad/vocab.txt
+filters:
+    # Possessives. The dictionary carries the noun but not `noun's`, so every
+    # domain term would otherwise need two vocabulary entries. The cost is
+    # that a typo written in the possessive goes unreported.
+    - '\w+''s'
+    # Subscripted variables written in running prose: x_i, a_k, s_j. Listing
+    # each one would be a vocabulary of single letters.
+    - '[A-Za-z]_[A-Za-z0-9]+'
