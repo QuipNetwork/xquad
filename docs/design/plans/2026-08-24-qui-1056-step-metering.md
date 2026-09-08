@@ -10,6 +10,8 @@
 
 **Spec:** [QUI-1056](https://linear.app/quip-network/issue/QUI-1056/fixxqvm-energy-and-the-other-omodel-opcodes-cost-one-step) plus the Design section below. Task 9 lands the normative specification at `spec/xqvm/METERING.md`; until then this document is the spec.
 
+**Base:** the tree this plan was written against, before QUI-1056 landed. Every line number in this plan is from that tree and is not maintained as those files move; resolve a reference by the name it cites rather than by its line.
+
 ---
 
 ## Design

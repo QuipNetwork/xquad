@@ -147,6 +147,74 @@ delta.
   the authoritative cross-impl check and that's what the guard
   watches.
 
+## The opcode-addition gate
+
+**Adding a row to the `opcodes!` table in
+`xqvm/src/bytecode/types/table.rs` is a change to VM semantics, and the
+merge request that adds it argues in its description that the new opcode
+clears all six clauses of the on-chain admissibility bar:**
+
+1. **No floating point.** Integer arithmetic only, with every operation
+   range-checked so that it faults rather than wrapping.
+2. **No host I/O, wall-clock, or ambient state.** An instruction's
+   result is a function of the program, the calldata and the VM's own
+   state. Stated normatively in `spec/xqvm/SPEC.md` under Determinism.
+3. **No nondeterministic iteration order.** Anything that walks a
+   collection walks it in an order the spec fixes.
+4. **Bounded allocation.** Every allocation is charged against a budget
+   before it happens, and the budget is not escapable by a value the
+   submitting account controls.
+5. **Bounded per-instruction work.** The work one instruction performs
+   is charged against the step budget before it happens, at a rate that
+   scales with the data the program controls, so that a step is a unit
+   of cost rather than a unit of dispatch.
+6. **Specified behaviour, pinned by a vector.** The result and every
+   fault the opcode can raise are specified normatively in
+   `spec/xqvm/`, and a conformance vector covers the behaviour, failure
+   paths included.
+
+An opcode that cannot clear all six does not ship. The operation belongs
+in `xqcp`, `xqsa`, the `xquad` API or a helper library, where it is
+ordinary code rather than something every embedder has to trust.
+
+### Why
+
+The bar is a property of the instruction set rather than a decision each
+embedder makes, and that is only true while every row on the table has
+been held to it. The denied set is empty by construction, so an embedder
+has nothing to gate -- but "by construction" names a construction
+somebody has to carry out. Each of the six clauses was argued for every
+opcode shipped so far, and none of those arguments was recorded where
+the next proposal's reviewer would find it. An unwritten rule holds
+nothing.
+
+Clause 2 is the one most easily lost, because no test can fail it. An
+opcode that read a clock would pass every conformance vector on the
+machine that ran them, and split two hosts replaying the same program.
+Clauses 4 and 5 are the ones most often half-satisfied: a charge levied
+after the work rather than before it, or one that scales with something
+other than the data the caller controls, reads as bounded until somebody
+submits the worst case.
+
+### Enforcement
+
+There is none, deliberately. Every comparable process rule here ships a
+`scripts/check-*.sh` guard that `verify:policy` runs -- the atomic
+spec-MR rule, the commit-message grammar, the merge-request title, the
+release notes. This one does not, and the absence is a decision rather
+than an oversight.
+
+The reason is what the gate asks for. A guard can prove that a trailer
+exists, or that a file was touched. It cannot prove that the argument
+the trailer claims was made is sound, and soundness is the whole of what
+a reviewer is weighing here. Wiring in a grep would convert a
+correctness argument into a compliance ritual, and the ritual is the
+half that can be satisfied without doing the work.
+
+So the gate lives in review. A reviewer who cannot find the six-clause
+argument in the merge request description asks for it before approving,
+the same way they would ask for a test.
+
 ## Commit and review conventions
 
 See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for:

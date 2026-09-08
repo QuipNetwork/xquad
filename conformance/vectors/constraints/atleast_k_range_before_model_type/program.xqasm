@@ -2,7 +2,7 @@
 ; type-checks its model register.
 ;
 ; r0 holds an int, not a model, and k=0 is out of ATLEAST's (0, n] range.
-; Both faults are live; SPEC.md:176's error precedence decides which one is
+; Both faults are live; SPEC.md's error-precedence rule decides which one is
 ; raised -- exec_at_least's `if k <= 0 || k > n_i64` guard runs before it
 ; reaches reg_mut(model). INPUT writes a register of unknown kind, so
 ; the verifier admits this program (QUI-1178 route B).

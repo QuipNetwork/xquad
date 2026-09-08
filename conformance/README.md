@@ -199,8 +199,8 @@ does not always know. Two routes get past it:
 
 What survives is the `XqmxMode` carve-out, which is not this table's
 business: `xqvm_py` rejects the sample with `XQMXModeError` and the Rust
-VM with `RegisterType`. `spec/xqvm/SPEC.md:211` records that row as the
-one unresolved entry in the fault table and says neither identity is safe
+VM with `RegisterType`. `spec/xqvm/SPEC.md`'s Faults table records that
+row as its one unresolved entry and says neither identity is safe
 to write a vector against until it is settled, which is why the test above
 pins the charge rather than the name.
 

@@ -66,6 +66,20 @@ impl core::fmt::Display for OptionalPos {
 }
 
 /// Errors that can occur during XQVM bytecode execution.
+///
+/// This enum is deliberately not `#[non_exhaustive]`. The attribute forces a
+/// wildcard arm on matches in *downstream* crates, and `fault_from_rust` in
+/// the `conformance` crate depends on not having one: it maps each variant
+/// onto the implementation-neutral fault identity that `spec/xqvm/SPEC.md`
+/// specifies, and being wildcard-free is what makes adding a variant without
+/// extending it a compile error rather than a silent degradation to an
+/// "unknown" fault -- which is the whole value of those identities being
+/// normative. The `byte_pos` helper below is a second wildcard-free match
+/// over this enum, but it lives in this crate, where the attribute would
+/// change nothing.
+///
+/// The cost is accepted rather than overlooked: adding a variant is a
+/// breaking change to this crate's public API and needs a major version bump.
 #[derive(Debug, Error)]
 #[expect(
     missing_docs,
@@ -243,13 +257,15 @@ pub enum Error {
     #[error("trace failed at byte {pos:#06x}: {message}")]
     TraceFailed { pos: usize, message: String },
 
-    /// An allocator was handed a size that is not an allocation: negative, or
-    /// too large for the executing target to address.
+    /// An allocator was handed a negative size, or -- only above the memory
+    /// limit `Vm::allocation_size` documents -- one too large for the
+    /// executing target to address.
     ///
     /// The size is carried as the `i64` the program pushed, not as a `usize`,
     /// so the fault reports what the program asked for on every target. See
     /// `Vm::allocation_size` for the validate-charge-convert order that keeps
-    /// this identity target-independent.
+    /// this identity target-independent, and for the limit above which it
+    /// stops doing so.
     #[error("invalid allocation size {size} at byte {pos:#06x}")]
     InvalidAllocation { pos: usize, size: i64 },
 
