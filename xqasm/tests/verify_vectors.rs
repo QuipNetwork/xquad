@@ -28,10 +28,11 @@
 //! that are in fact valid, long before that regression would otherwise
 //! surface as a mysterious conformance or example-smoke failure.
 //!
-//! Two vectors are excluded by name (see [`VERIFIER_STRICT_EXCEPTIONS`])
-//! because the verifier is *deliberately* stricter than the runtime for
-//! `GETLINE`/`SETLINE`/`ADDLINE`: this is pre-existing, documented
-//! behaviour, not a regression this sweep should flag.
+//! The sweep has no exclusions. It carried two until QUI-1168, both there
+//! because `RegisterTypePhase` required a model register for
+//! `GETLINE`/`SETLINE`/`ADDLINE` while the runtime and `spec/xqvm/ISA.md`
+//! both accepted a sample. That was a defect in the verifier rather than
+//! deliberate strictness, and fixing it retired the exclusions with it.
 
 #![expect(
     clippy::expect_used,
@@ -45,24 +46,6 @@ use std::path::{Path, PathBuf};
 
 use xqasm::assemble_source;
 use xqvm::verifier::verify;
-
-/// Conformance vectors that run to completion on the VM but are
-/// deliberately rejected by the static verifier's stricter typing rules.
-///
-/// `GETLINE`/`SETLINE`/`ADDLINE` accept either a model or a sample register
-/// at runtime -- see their opcode docs in
-/// `xqvm/src/bytecode/types/table.rs`, each of which ends with "`xquad
-/// verify` requires a model". `RegisterTypePhase`
-/// (`xqvm/src/verifier/reg_type.rs`) only ever records `RegType::Model` as
-/// the accepted type for these three opcodes, so a register carrying a
-/// sample is flagged even though the interpreter runs the program to
-/// completion. This is intentional, pre-existing verifier behaviour, so
-/// these two vectors are excluded by name rather than weakening the "clean
-/// vectors verify clean" assertion for everyone else.
-const VERIFIER_STRICT_EXCEPTIONS: &[(&str, &str)] = &[
-    ("xqmx-grid", "sample_linear_ops"),
-    ("xqmx-grid", "discrete_alloc"),
-];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -97,22 +80,16 @@ fn expects_runtime_error(expected_path: &Path) -> bool {
 }
 
 /// Collect `conformance/vectors/<category>/<vector>/` directories whose
-/// `expected.json` has no top-level `error` key, excluding the documented
-/// [`VERIFIER_STRICT_EXCEPTIONS`].
+/// `expected.json` has no top-level `error` key.
 ///
 /// Returns the selected directories and the total number of vector
 /// directories walked. The total is what a broken glob or a moved tree
 /// would zero out, and unlike the selected count it does not move when a
 /// vector's expected outcome changes -- so it is the number worth
 /// asserting a floor on.
-///
-/// Panics if an exception in [`VERIFIER_STRICT_EXCEPTIONS`] no longer
-/// exists in the tree, so a stale exception is caught rather than silently
-/// doing nothing.
 fn clean_vector_dirs(vectors_root: &Path) -> (Vec<PathBuf>, usize) {
     let mut dirs = Vec::new();
     let mut walked = 0usize;
-    let mut exceptions_seen = vec![false; VERIFIER_STRICT_EXCEPTIONS.len()];
 
     let categories = fs::read_dir(vectors_root)
         .unwrap_or_else(|err| panic!("cannot read {}: {err}", vectors_root.display()));
@@ -124,8 +101,6 @@ fn clean_vector_dirs(vectors_root: &Path) -> (Vec<PathBuf>, usize) {
         if !category_type.is_dir() {
             continue;
         }
-        let category_name = category.file_name().to_string_lossy().into_owned();
-
         let vectors = fs::read_dir(category.path())
             .unwrap_or_else(|err| panic!("cannot read {}: {err}", category.path().display()));
         for vector in vectors {
@@ -136,17 +111,7 @@ fn clean_vector_dirs(vectors_root: &Path) -> (Vec<PathBuf>, usize) {
             if !vector_type.is_dir() {
                 continue;
             }
-            let vector_name = vector.file_name().to_string_lossy().into_owned();
             walked += 1;
-
-            if let Some(idx) = VERIFIER_STRICT_EXCEPTIONS
-                .iter()
-                .position(|(c, v)| *c == category_name && *v == vector_name)
-                && let Some(seen) = exceptions_seen.get_mut(idx)
-            {
-                *seen = true;
-                continue;
-            }
 
             let dir = vector.path();
             let expected_path = dir.join("expected.json");
@@ -154,15 +119,6 @@ fn clean_vector_dirs(vectors_root: &Path) -> (Vec<PathBuf>, usize) {
                 dirs.push(dir);
             }
         }
-    }
-
-    for (seen, (category, vector)) in exceptions_seen.iter().zip(VERIFIER_STRICT_EXCEPTIONS) {
-        assert!(
-            *seen,
-            "VERIFIER_STRICT_EXCEPTIONS entry {category}/{vector} no longer exists under {}; \
-             remove the stale exception",
-            vectors_root.display()
-        );
     }
 
     (dirs, walked)
@@ -241,25 +197,6 @@ fn verify_vectors() {
         failures.len(),
         failures.join("\n")
     );
-
-    // Each exception must still be rejected. Checking only that the
-    // directory exists leaves the list able to rot in the other direction:
-    // if the verifier is later relaxed to accept a sample register on
-    // GETLINE/SETLINE/ADDLINE, a stale exclusion would quietly keep two
-    // vectors out of the sweep forever.
-    for (category, vector) in VERIFIER_STRICT_EXCEPTIONS {
-        let program_path = vectors_root
-            .join(category)
-            .join(vector)
-            .join("program.xqasm");
-        let source = fs::read_to_string(&program_path)
-            .unwrap_or_else(|err| panic!("cannot read {}: {err}", program_path.display()));
-        assert!(
-            verify_source(&program_path, &source).is_err(),
-            "{category}/{vector} now verifies clean; drop it from \
-             VERIFIER_STRICT_EXCEPTIONS so the sweep covers it"
-        );
-    }
 
     println!(
         "verify_vectors: {swept} programs verified clean ({} of {walked} conformance \

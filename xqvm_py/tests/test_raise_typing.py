@@ -40,6 +40,7 @@ from xqvm_py.errors import (
     InvalidDiscreteK,
     InvalidOpcode,
     InvalidShift,
+    SampleOutOfDomain,
     SizeMismatch,
     TruncatedInstruction,
     TypeMismatch,
@@ -72,6 +73,16 @@ BYTECODE_CASES = [
     ("reduce_out_of_range", "PUSH 3\nBQMX r0\nPUSH 9\nPUSH 1\nPUSH 10\nREDUCE r0\nHALT", IndexOutOfBounds),
     ("negative_allocation", "PUSH -1\nBQMX r0\nHALT", InvalidAllocation),
     ("discrete_k_below_two", "PUSH 4\nPUSH 1\nXQMX r0\nHALT", InvalidDiscreteK),
+    (
+        "setline_out_of_domain",
+        "PUSH 4\nPUSH 3\nXSMX r0\nPUSH 0\nPUSH 7\nSETLINE r0\nHALT",
+        SampleOutOfDomain,
+    ),
+    (
+        "addline_leaves_domain",
+        "PUSH 4\nBSMX r0\nPUSH 1\nPUSH 1\nSETLINE r0\nPUSH 1\nPUSH 1\nADDLINE r0\nHALT",
+        SampleOutOfDomain,
+    ),
     ("negative_shl", "PUSH 1\nPUSH -1\nSHL\nHALT", InvalidShift),
     ("negative_shr", "PUSH 8\nPUSH -1\nSHR\nHALT", InvalidShift),
     # The upper half of Rust's `(0..64)` guard. Before it was closed, the SHL

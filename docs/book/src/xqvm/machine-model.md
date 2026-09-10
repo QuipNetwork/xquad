@@ -105,8 +105,9 @@ Each slot holds a typed `RegVal` value.
 
 Register access is type-checked at runtime. Instructions that expect a
 specific variant (e.g. `LOAD` expects `Int`, `VECPUSH` expects `VecInt`,
-`SETLINE` expects `Model`) will produce a `RegisterType` error if the register
-holds a different variant. The error message includes the expected and actual
+`SETQUAD` expects `Model`, and `SETLINE` accepts either `Model` or
+`Sample`) will produce a `RegisterType` error if the register holds a
+variant the instruction does not accept. The error message includes the expected and actual
 type names. Reading an `Unset` register (via `LOAD` or `OUTPUT`) is a separate
 case: it produces an `UnsetRegister` error rather than `RegisterType`, since
 there is no variant to compare against.

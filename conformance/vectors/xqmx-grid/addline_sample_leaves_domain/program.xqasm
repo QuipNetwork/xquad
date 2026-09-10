@@ -1,0 +1,23 @@
+; addline_sample_leaves_domain: ADDLINE is checked on its result.
+;
+; The delta here is 1, which is a perfectly good binary value; the sum is 2,
+; which is not. A guard that checked the operand instead of the result would
+; accept this program and leave the sample holding 2, which is the whole
+; failure the check exists to prevent.
+;
+; Paired with addline_sample_returns_to_domain, which moves by -1 from the
+; same state and must succeed. A guard that rejected negative deltas, or one
+; that checked the delta against the domain, would pass one and fail the
+; other.
+
+PUSH 4
+BSMX r0          ; binary sample, domain {0, 1}
+
+PUSH 1
+PUSH 1
+SETLINE r0       ; values[1] = 1, the top of the domain
+
+PUSH 1
+PUSH 1
+ADDLINE r0       ; 1 + 1 = 2, outside the domain
+HALT

@@ -261,8 +261,82 @@ fn reg_type_bqmx_then_getline_ok() {
 }
 
 #[test]
+fn reg_type_bsmx_then_getline_ok() {
+    // GETLINE reads a sample's assignment as readily as a model's bias.
+    let code = bytes(&[
+        Instruction::Push1 { val: [4] },
+        Instruction::Bsmx { reg: Register(0) },
+        Instruction::Push1 { val: [0] },
+        Instruction::GetLine { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    assert!(RegisterTypePhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn reg_type_bsmx_then_setline_ok() {
+    // SETLINE assigns a sample variable. The value's domain is a run-time
+    // quantity the VM checks; the verifier only settles the register kind.
+    let code = bytes(&[
+        Instruction::Push1 { val: [4] },
+        Instruction::Bsmx { reg: Register(0) },
+        Instruction::Push1 { val: [0] },
+        Instruction::Push1 { val: [1] },
+        Instruction::SetLine { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    assert!(RegisterTypePhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn reg_type_bsmx_then_addline_ok() {
+    let code = bytes(&[
+        Instruction::Push1 { val: [4] },
+        Instruction::Bsmx { reg: Register(0) },
+        Instruction::Push1 { val: [0] },
+        Instruction::Push1 { val: [1] },
+        Instruction::AddLine { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    assert!(RegisterTypePhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn reg_type_bsmx_then_setquad_mismatch() {
+    // The linear opcodes widened to accept a sample; the quadratic ones did
+    // not. A sample has no place to put a coupling term.
+    let code = bytes(&[
+        Instruction::Push1 { val: [4] },
+        Instruction::Bsmx { reg: Register(0) },
+        Instruction::Push1 { val: [0] },
+        Instruction::Push1 { val: [1] },
+        Instruction::Push1 { val: [1] },
+        Instruction::SetQuad { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    let err = RegisterTypePhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "RegisterTypeMismatch");
+}
+
+#[test]
+fn reg_type_bsmx_then_onehotr_mismatch() {
+    // The same guard for the high-level constraint group: a penalty
+    // expansion writes coefficients, which a sample does not hold.
+    let code = bytes(&[
+        Instruction::Push1 { val: [4] },
+        Instruction::Bsmx { reg: Register(0) },
+        Instruction::Push1 { val: [0] },
+        Instruction::Push1 { val: [1] },
+        Instruction::OneHotR { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    let err = RegisterTypePhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "RegisterTypeMismatch");
+}
+
+#[test]
 fn reg_type_veci_then_getline_mismatch() {
-    // VECI writes VecInt to r0; GETLINE expects Model.
+    // VECI writes VecInt to r0; GETLINE accepts Model or Sample, not a vec.
     let code = bytes(&[
         Instruction::VecI { reg: Register(0) },
         Instruction::Push1 { val: [0] },

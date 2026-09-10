@@ -1,0 +1,25 @@
+; setline_model_accepts_out_of_domain_value: models are unbounded.
+;
+; A model's linear entry is a bias coefficient, not an assignment. Its
+; magnitude is the weight the objective gives that variable and has nothing
+; to do with the values the variable may take, so a binary model routinely
+; carries negative and large biases. Only samples carry a domain the VM
+; enforces.
+;
+; This is the scope vector: it fails the moment the check is applied by
+; register kind rather than by mode, which is the single easiest way to get
+; this change wrong.
+
+PUSH 2
+BQMX r0          ; binary MODEL, not a sample
+
+PUSH 0
+PUSH -7          ; a bias, and not an assignment
+SETLINE r0
+
+PUSH 0
+GETLINE r0
+STOW r1
+PUSH 0
+OUTPUT r1        ; outputs[0] = -7
+HALT

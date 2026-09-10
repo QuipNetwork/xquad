@@ -264,8 +264,11 @@ rather than values. An allocator size, a grid extent, a loop bound, a
 calldata index and every arithmetic operand are ordinary popped stack
 values, so `InvalidAllocation`, `InvalidGridDimensions`,
 `InvalidDiscreteK`, `ArithmeticOverflow`, `IndexOutOfBounds`,
-`LoopStackOverflow`, `StepLimitExceeded` and `MemoryLimitExceeded` are
-all runtime faults with no static counterpart. A verified program can
+`SampleOutOfDomain`, `LoopStackOverflow`, `StepLimitExceeded` and
+`MemoryLimitExceeded` are all runtime faults with no static counterpart.
+`SampleOutOfDomain` is the clearest case of why: the value written into a
+sample can arrive from calldata, so no amount of static analysis can know
+it. A verified program can
 still raise any of them, and for an embedder that is the point: the
 budgets and the range checks are what bound a program the verifier has
 already passed. See [Limits and

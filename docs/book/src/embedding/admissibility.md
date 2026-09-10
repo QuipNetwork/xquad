@@ -199,6 +199,13 @@ paid for, and that bounds what the grid *holds*, not what a scan over it
 costs. An embedder pricing `WeightPerStep * steps` is pricing work rather
 than dispatches.
 
+The same pass closed the sample value domain, which had been documented as
+a producer convention rather than a rule: `SETLINE` and `ADDLINE` now raise
+`SampleOutOfDomain` for a write outside the domain the register's allocator
+declared. It is a bounded per-instruction check on a value already on the
+stack, so it costs nothing against the bar above, and it removes a way for
+a program to hand a solver an assignment that is not an assignment.
+
 What is left is narrow.
 
 **A tracer copies registers outside the step budget.** The Rust VM clones

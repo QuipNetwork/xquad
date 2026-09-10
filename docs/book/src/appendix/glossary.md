@@ -27,7 +27,7 @@ partition, a set of selected items). See
 [Three Programs](../concepts/three-programs.md).
 
 **Domain.** The set of values a model's variables take: binary (\\(\{0,
-1\}\\)), spin (\\(\{-1, 1\}\\)), or discrete (\\(\{-k, \ldots, k-1\}\\)). A
+1\}\\)), spin (\\(\{-1, 1\}\\)), or discrete (\\(\{0, \ldots, k-1\}\\)). A
 model and the sample solving it must share a domain. See [Quadratic
 Models](../concepts/quadratic-models.md#three-domains).
 

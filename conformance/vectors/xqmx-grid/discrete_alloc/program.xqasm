@@ -1,33 +1,37 @@
 ; discrete_alloc: allocate a discrete model and a discrete sample and use
-; the signed centred domain [-k, k-1].
+; the domain {0, ..., k-1}.
 ;
 ; No vector allocated a discrete model or sample before this one, which is
-; why the domain could be documented two different ways -- [-k, k-1] in
-; spec/xqvm/ and [0..k-1] in spec/xqsa/DOMAINS.md and the xqvm_py
-; docstrings -- without anything failing.
+; why the domain could be documented two different ways -- a signed centred
+; [-k, k-1] in spec/xqvm/ and {0, ..., k-1} in spec/xqsa/DOMAINS.md and the
+; xqvm_py docstrings -- without anything failing. QUI-1150 settled it on the
+; second reading: k is the number of values the domain holds, not a
+; half-width, so a discrete variable is a case index.
 ;
-; k = 3, so the domain is [-3, 2]. The sample defaults to 0, which the
-; centred range always contains. The negative assignment below is the part
-; the [0..k-1] reading would have called out-of-domain.
+; k = 3, so the domain is {0, 1, 2} and the sample defaults to 0. The two
+; assignments below walk it from the bottom to the top. A write of -3 was
+; legal under the centred reading and is out of domain now; SETLINE and
+; ADDLINE enforce that, which the setline_discrete_* vectors pin.
 
 PUSH 4           ; size
 PUSH 3           ; k
-XQMX r0          ; discrete model, domain [-3, 2]
+XQMX r0          ; discrete model, domain {0, 1, 2}
 
 PUSH 4           ; size
 PUSH 3           ; k
 XSMX r1          ; discrete sample, defaults to 0
 
-; a freshly allocated discrete sample reads 0
+; a freshly allocated discrete sample reads its default, the bottom of the
+; domain rather than a value the domain merely happens to contain
 PUSH 0
 GETLINE r1
 STOW r2
 PUSH 0
 OUTPUT r2
 
-; the lower end of the centred domain is a legal assignment
+; an interior case index
 PUSH 1
-PUSH -3
+PUSH 1
 SETLINE r1
 PUSH 1
 GETLINE r1
@@ -35,7 +39,7 @@ STOW r3
 PUSH 1
 OUTPUT r3
 
-; and the upper end
+; and the top of the domain, k-1 rather than k
 PUSH 2
 PUSH 2
 SETLINE r1

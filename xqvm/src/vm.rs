@@ -52,7 +52,7 @@ use crate::metering::{
 };
 use crate::model::{Domain, XqmxModel, XqmxSample};
 use crate::tracer::{NoopTracer, StepState, Tracer};
-use crate::value::RegVal;
+use crate::value::{RegVal, XqmxGridRefMut};
 
 // ---------------------------------------------------------------------------
 // Loop support
@@ -204,6 +204,34 @@ fn bounded_index(pos: usize, raw: i64, len: usize) -> Result<usize, Error> {
         });
     }
     Ok(idx)
+}
+
+/// Reject a write whose value falls outside the grid's declared domain.
+///
+/// A free function rather than a method on [`Vm`] because the caller already
+/// holds the `&mut self` borrow through `grid`, so a method would not be
+/// callable. Models return `None` from `write_domain` and are always
+/// accepted: their coefficients are unbounded `i64` by design.
+///
+/// # Errors
+///
+/// Returns [`Error::SampleOutOfDomain`] when `grid` is a sample and `value`
+/// is not a member of its domain.
+fn check_write_domain(
+    pos: usize,
+    grid: &XqmxGridRefMut<'_>,
+    index: usize,
+    value: i64,
+) -> Result<(), Error> {
+    match grid.write_domain() {
+        Some(d) if !d.contains(value) => Err(Error::SampleOutOfDomain {
+            pos,
+            index,
+            value,
+            domain: *d,
+        }),
+        _ => Ok(()),
+    }
 }
 
 /// Sign-extend a big-endian byte slice (1..=8 bytes) to `i64`.
@@ -1457,6 +1485,14 @@ impl Vm {
         // allocation the program made itself. Calldata can hold a model, and
         // cloning one clones its coefficient maps, so the step meter pays for
         // the same copy the byte budget does (QUI-1056).
+        //
+        // Deliberately no domain check on a sample arriving here. The
+        // invariant QUI-1168 establishes is that `SETLINE` and `ADDLINE`
+        // reject an out-of-domain write, not that a sample register always
+        // holds in-domain values: `Vm::set_calldata` is the trusted-embedder
+        // path and stays infallible. Host-supplied samples are validated at
+        // the FFI boundary instead, where the extent checks (QUI-1164) also
+        // live.
         let entry = self
             .calldata
             .get(usize_idx)
@@ -1863,7 +1899,10 @@ impl Vm {
         let size = self.pop(pos)?;
         let size = self.allocation_size(pos, size)?;
         self.charge_steps(pos, widen(size).saturating_mul(SAMPLE_COPY_STEPS))?;
-        *self.reg_mut(reg) = RegVal::Sample(XqmxSample::new(Domain::Binary, vec![0; size]));
+        *self.reg_mut(reg) = RegVal::Sample(XqmxSample::new(
+            Domain::Binary,
+            vec![Domain::Binary.default_value(); size],
+        ));
         Ok(StepResult::Continue)
     }
 
@@ -1871,7 +1910,10 @@ impl Vm {
         let size = self.pop(pos)?;
         let size = self.allocation_size(pos, size)?;
         self.charge_steps(pos, widen(size).saturating_mul(SAMPLE_COPY_STEPS))?;
-        *self.reg_mut(reg) = RegVal::Sample(XqmxSample::new(Domain::Spin, vec![-1; size]));
+        *self.reg_mut(reg) = RegVal::Sample(XqmxSample::new(
+            Domain::Spin,
+            vec![Domain::Spin.default_value(); size],
+        ));
         Ok(StepResult::Continue)
     }
 
@@ -1883,7 +1925,10 @@ impl Vm {
         }
         let size = self.allocation_size(pos, size)?;
         self.charge_steps(pos, widen(size).saturating_mul(SAMPLE_COPY_STEPS))?;
-        *self.reg_mut(reg) = RegVal::Sample(XqmxSample::new(Domain::Discrete(k), vec![0; size]));
+        *self.reg_mut(reg) = RegVal::Sample(XqmxSample::new(
+            Domain::Discrete(k),
+            vec![Domain::Discrete(k).default_value(); size],
+        ));
         Ok(StepResult::Continue)
     }
 
@@ -2154,6 +2199,7 @@ impl Vm {
             })?;
         let size = grid.size();
         let usize_i = bounded_index(pos, i, size)?;
+        check_write_domain(pos, &grid, usize_i, val)?;
         grid.linear_set(usize_i, val);
         Ok(StepResult::Continue)
     }
@@ -2173,6 +2219,19 @@ impl Vm {
             })?;
         let size = grid.size();
         let usize_i = bounded_index(pos, i, size)?;
+        // The domain applies to the result of the add, not the delta: a write
+        // that leaves the domain raises, one that returns to it succeeds. The
+        // sum is computed twice on the sample path, deliberately -- it keeps
+        // `linear_add`'s sparse-aware model path untouched and keeps one error
+        // type per function, at the cost of one instruction on a path that
+        // already bounds-checks.
+        if grid.write_domain().is_some() {
+            let updated = grid
+                .linear(usize_i)
+                .checked_add(delta)
+                .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
+            check_write_domain(pos, &grid, usize_i, updated)?;
+        }
         grid.linear_add(usize_i, delta).map_err(at_pos(pos))?;
         Ok(StepResult::Continue)
     }

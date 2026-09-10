@@ -10,34 +10,51 @@ stack effects are in the
 [XQMX Coefficient Access](../opcodes.md#xqmx-coefficient-access) section of
 the opcode reference. All coefficient values are `i64`.
 
-## Linear Access Also Reads Samples at the VM Level, but Not Under Verification
+## Linear Access Reads and Writes Samples Too
 
-At the VM level, `GETLINE`, `SETLINE` and `ADDLINE` accept `reg` holding
-either a `Model` or a `Sample`, not a `Model` only: on a `Model` register
-they read or write the sparse bias map, and on a `Sample` register the
-identical instruction reads or writes the sample's per-variable assignment
-at the same index instead. `GETLINE r0` on a freshly allocated `BSMX`
-sample (no coefficients, only assignments) runs without a `RegisterType`
-error and returns the assigned value at that index.
+`GETLINE`, `SETLINE` and `ADDLINE` accept `reg` holding either a `Model` or
+a `Sample`: on a `Model` register they read or write the sparse bias map,
+and on a `Sample` register the identical instruction reads or writes the
+sample's per-variable assignment at the same index instead. `GETLINE r0` on
+a freshly allocated `BSMX` sample (no coefficients, only assignments)
+returns the assigned value at that index.
 
-`xquad verify` rejects the same program.
+`xquad verify` accepts the same programs. It did not until QUI-1168:
 [`xqvm/src/verifier/reg_type.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/verifier/reg_type.rs)
-groups `GETLINE`, `SETLINE`, `ADDLINE`, `GETQUAD`, `SETQUAD`, `ADDQUAD`,
-`ONEHOTR`, `ONEHOTC`, `EXCLUDE` and `IMPLIES` under a single check that
-requires `Model`, with no exception for the linear trio on a `Sample`:
-`GETLINE r0` on the program above fails verification with `register r0 at
-byte 0x0006: expected model, got sample`. So the VM's sample-mode linear
-access cannot appear in any program that passes `xquad verify` -- the VM
-and the verifier disagree about what `reg` may hold for `GETLINE`,
-`SETLINE` and `ADDLINE`, and the verifier is what gates a program before
-it runs in a verified pipeline. Use a `Model` register for the linear trio
-if the program must pass verification; this is a known VM-versus-verifier
-disagreement, not a documented alternative.
+grouped the linear trio with the quadratic and constraint opcodes under a
+single check requiring `Model`, so `GETLINE r0` on the program above failed
+with `register r0 at byte 0x0006: expected model, got sample` even though
+the VM ran it. `spec/xqvm/ISA.md` had said all along that the linear
+opcodes accept either mode, so that was a defect in the verifier rather
+than a documented restriction, and it is fixed.
 
 The quadratic trio, `GETQUAD`, `SETQUAD` and `ADDQUAD`, has no sample
 equivalent at either level and rejects a `Sample` register with
 `RegisterType` ("expected model, got sample"), since a sample has no
 coupling terms to read or write.
+
+## Sample Writes Are Domain-Checked
+
+A sample's entry is an assignment, so it has to be a value the variable can
+actually take. `SETLINE` and `ADDLINE` raise `SampleOutOfDomain` when the
+value they would store is not a member of the register's domain -- `{0, 1}`
+for `BSMX`, `{-1, +1}` for `SSMX`, `{0, ..., k-1}` for `XSMX`. Note that
+`0` is out of domain for spin: the spin domain has two members and a gap
+between them, so a check written as a range would wrongly admit it.
+
+`ADDLINE` checks the result of the addition, not the delta. Adding `1` to a
+binary variable already holding `1` raises; adding `-1` to it succeeds and
+leaves `0`, even though `-1` is not itself a binary value.
+
+A `Model` register is never checked. Its `linear[i]` is a bias coefficient,
+whose magnitude is the weight the objective gives that variable and has
+nothing to do with the values the variable may take -- a binary model
+routinely carries large negative biases.
+
+The guarantee is about the two opcodes and not about the register. A host
+that installs a whole sample through calldata bypasses them, and `GETLINE`
+will read back whatever it installed; the Python and FFI bindings validate
+at that boundary instead.
 
 ## Every Index Is Bounds-Checked
 

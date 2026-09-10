@@ -162,17 +162,17 @@ These instructions allocate typed objects into registers.
 
 | Code | Mnemonic | Arguments | Stack effect | Register effect | Interpretation |
 |------|----------|-----------|--------------|-----------------|----------------|
-| `0x40` | `BQMX` | `reg` | `[..., size] → [...]` | `write` — `reg ← xqmx(model, binary, size)` | Pop `size`. Create a binary `[0,1]` model XQMX with `size` variables and empty linear/quadratic tables. Write to `reg`. |
-| `0x41` | `SQMX` | `reg` | `[..., size] → [...]` | `write` — `reg ← xqmx(model, spin, size)` | Pop `size`. Create a spin `[-1,+1]` model XQMX. Write to `reg`. |
-| `0x42` | `XQMX` | `reg` | `[..., size, k] → [...]` | `write` — `reg ← xqmx(model, discrete(k), size)` | Pop `k`, then `size`. Create a discrete `[-k,...,k-1]` model XQMX. Error if `k < 2`. Write to `reg`. |
+| `0x40` | `BQMX` | `reg` | `[..., size] → [...]` | `write` — `reg ← xqmx(model, binary, size)` | Pop `size`. Create a binary `{0, 1}` model XQMX with `size` variables and empty linear/quadratic tables. Write to `reg`. |
+| `0x41` | `SQMX` | `reg` | `[..., size] → [...]` | `write` — `reg ← xqmx(model, spin, size)` | Pop `size`. Create a spin `{-1, +1}` model XQMX. Write to `reg`. |
+| `0x42` | `XQMX` | `reg` | `[..., size, k] → [...]` | `write` — `reg ← xqmx(model, discrete(k), size)` | Pop `k`, then `size`. Create a discrete `{0, ..., k-1}` model XQMX. Error if `k < 2`. Write to `reg`. |
 
 ### Sample Allocators
 
 | Code | Mnemonic | Arguments | Stack effect | Register effect | Interpretation |
 |------|----------|-----------|--------------|-----------------|----------------|
-| `0x43` | `BSMX` | `reg` | `[..., size] → [...]` | `write` — `reg ← xqmx(sample, binary, size)` | Pop `size`. Create a binary `[0,1]` sample XQMX with `size` variables; every position initialised to `0`. Linear table stores variable assignments. Write to `reg`. |
-| `0x44` | `SSMX` | `reg` | `[..., size] → [...]` | `write` — `reg ← xqmx(sample, spin, size)` | Pop `size`. Create a spin `[-1,+1]` sample XQMX; every position initialised to `-1` (a valid spin state). Write to `reg`. |
-| `0x45` | `XSMX` | `reg` | `[..., size, k] → [...]` | `write` — `reg ← xqmx(sample, discrete(k), size)` | Pop `k`, then `size`. Create a discrete `[-k,...,k-1]` sample XQMX; every position initialised to `0`. Error if `k < 2`. Write to `reg`. |
+| `0x43` | `BSMX` | `reg` | `[..., size] → [...]` | `write` — `reg ← xqmx(sample, binary, size)` | Pop `size`. Create a binary `{0, 1}` sample XQMX with `size` variables; every position initialised to `0`. Linear table stores variable assignments. Write to `reg`. |
+| `0x44` | `SSMX` | `reg` | `[..., size] → [...]` | `write` — `reg ← xqmx(sample, spin, size)` | Pop `size`. Create a spin `{-1, +1}` sample XQMX; every position initialised to `-1` (a valid spin state). Write to `reg`. |
+| `0x45` | `XSMX` | `reg` | `[..., size, k] → [...]` | `write` — `reg ← xqmx(sample, discrete(k), size)` | Pop `k`, then `size`. Create a discrete `{0, ..., k-1}` sample XQMX; every position initialised to `0`. Error if `k < 2`. Write to `reg`. |
 
 Sample allocation is dense: after `BSMX`/`SSMX`/`XSMX` every position `i` in `[0, size)` holds its domain-default value. Reads via `GETLINE` see that default until a matching write overrides it. This mirrors the Rust runtime's `vec![default; size]` storage; the Python reference VM pre-populates the equivalent sparse entries (QUI-453).
 
@@ -237,15 +237,15 @@ Read and write the linear (bias) and quadratic (coupling) coefficients of an XQM
 
 **Index precondition.** Every index in this section is bounded against the register's declared size, and every opcode here raises `IndexOutOfBounds` for one outside `[0, size)` -- reads as well as writes. Within that range a missing entry reads as `0`; outside it there is no entry to be missing, because the variable is not one the allocator declared. The bound is the declared size and not the extent of the sparse map, so a read of an absent in-range coefficient and a read past the end are different outcomes rather than the same `0`. An unbounded write is the case this rules out: the sparse map would accept the key and the model would carry a coefficient over a variable that does not exist, leaving a constraint that constrains nothing on a model that still solves cleanly.
 
-The linear opcodes (`GETLINE`, `SETLINE`, `ADDLINE`) accept either MODEL or SAMPLE mode — sample values are stored densely in `values[i]`, model biases sparsely in `linear[i]`. The quadratic opcodes (`GETQUAD`, `SETQUAD`, `ADDQUAD`) require MODEL mode: samples carry no quadratic storage, and `reg` must hold an XQMX in MODEL mode. A sample register raises `XqmxMode` on `xqvm_py` and `TypeMismatch` on the Rust `xqvm` VM, whose error type has no mode-specific variant.
+The linear opcodes (`GETLINE`, `SETLINE`, `ADDLINE`) accept either MODEL or SAMPLE mode — sample values are stored densely in `values[i]`, model biases sparsely in `linear[i]`. A sample write is additionally checked against the register's domain, which a model write is not: a model's `linear[i]` is a bias coefficient and carries no domain. The quadratic opcodes (`GETQUAD`, `SETQUAD`, `ADDQUAD`) require MODEL mode: samples carry no quadratic storage, and `reg` must hold an XQMX in MODEL mode. A sample register raises `XqmxMode` on `xqvm_py` and `TypeMismatch` on the Rust `xqvm` VM, whose error type has no mode-specific variant.
 
 ### Linear Coefficients
 
 | Code | Mnemonic | Arguments | Stack effect | Register effect | Interpretation |
 |------|----------|-----------|--------------|-----------------|----------------|
 | `0x60` | `GETLINE` | `reg` | `[..., i] → [..., linear[i]]` | `read` — `reg.xqmx.linear[i]` | Pop `i`. Push `linear[i]` (0 if absent). Error: `IndexOutOfBounds` if `i` out of range `[0, size)`. |
-| `0x61` | `SETLINE` | `reg` | `[..., i, v] → [...]` | `mutate` — `reg.xqmx.linear[i] ← v` | Pop `v`, then `i`. Set `linear[i] ← v`. Error: `IndexOutOfBounds` if `i` out of range `[0, size)`. |
-| `0x62` | `ADDLINE` | `reg` | `[..., i, δ] → [...]` | `mutate` — `reg.xqmx.linear[i] += δ` | Pop `δ`, then `i`. `linear[i] += δ`. Error: `IndexOutOfBounds` if `i` out of range. |
+| `0x61` | `SETLINE` | `reg` | `[..., i, v] → [...]` | `mutate` — `reg.xqmx.linear[i] ← v` | Pop `v`, then `i`. Set `linear[i] ← v`. Error: `IndexOutOfBounds` if `i` out of range `[0, size)`; then `SampleOutOfDomain` if `reg` is a sample and `v` is not in its domain. |
+| `0x62` | `ADDLINE` | `reg` | `[..., i, δ] → [...]` | `mutate` — `reg.xqmx.linear[i] += δ` | Pop `δ`, then `i`. `linear[i] += δ`. Error: `IndexOutOfBounds` if `i` out of range; then `ArithmeticOverflow` if the sum leaves the i64 range; then `SampleOutOfDomain` if `reg` is a sample and the *result* is not in its domain. A delta that returns an out-of-domain value to the domain is legal. |
 
 ### Quadratic Coefficients
 

@@ -1,0 +1,19 @@
+; setline_discrete_sample_out_of_domain: the discrete domain starts at 0.
+;
+; QUI-1150 settled the discrete domain as {0, ..., k-1}, where k is the
+; number of values. Under the signed centred reading it replaced, k = 3 gave
+; {-3, ..., 2} and the write below was legal -- discrete_alloc asserted
+; exactly that, and argued for it at length in its comments.
+;
+; So this vector is the shape decision made executable. A check that merely
+; rejects something out of range would pass with either reading; only the
+; lower bound at 0 distinguishes them.
+
+PUSH 4
+PUSH 3
+XSMX r0          ; discrete sample, k = 3, domain {0, 1, 2}
+
+PUSH 1
+PUSH -1          ; below the domain; legal under the old centred reading
+SETLINE r0
+HALT

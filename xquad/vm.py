@@ -33,12 +33,13 @@ from xqffi.vm import DEFAULT_STEP_LIMIT as _DEFAULT_STEP_LIMIT
 from xqffi.vm import Vm as _RustVm
 from xqffi.vm import XqmxModel as ModelFFI
 from xqffi.vm import XqmxSample as SampleFFI
+from xqvm_py.errors import SampleOutOfDomain
 from xqvm_py.executor import DEFAULT_MEMORY_LIMIT as _DEFAULT_MEMORY_LIMIT
 from xqvm_py.executor import Executor as _PyExecutor
 from xqvm_py.program import program_from_bytecode as _program_from_bytecode
 from xqvm_py.program import program_from_xqasm as _program_from_xqasm
 from xqvm_py.vector import Vec
-from xqvm_py.xqmx import XQMX, XQMXDomain
+from xqvm_py.xqmx import XQMX, XQMXDomain, domain_description
 
 __all__ = ["DEFAULT_STEP_LIMIT", "VM", "VMBackend"]
 
@@ -90,8 +91,9 @@ def _xqmx_to_model_ffi(xqmx: XQMX) -> ModelFFI:
 
 def _xqmx_to_sample_ffi(xqmx: XQMX) -> SampleFFI:
     domain_str = _DOMAIN_TO_STR[xqmx.domain]
-    default = -1 if xqmx.domain == XQMXDomain.SPIN else 0
-    values = [xqmx.linear.get(i, default) for i in range(xqmx.size)]
+    # `get_linear` supplies the domain default for an absent entry, so the
+    # dense vector Rust expects is built without restating that default here.
+    values = [xqmx.get_linear(i) for i in range(xqmx.size)]
     k = xqmx.discrete_k if xqmx.domain == XQMXDomain.DISCRETE else None
     return SampleFFI(domain=domain_str, values=values, rows=xqmx.rows, cols=xqmx.cols, k=k)
 
@@ -147,7 +149,32 @@ def _prepare_calldata_rust(data: list) -> list:
     return out
 
 
+def _check_sample_domains(data: list) -> None:
+    """Raise unless every sample-mode `XQMX` in `data` is wholly in domain.
+
+    Absent `linear` entries need no check -- `XQMX._absent_linear` reads
+    them as the domain's own default. Only the entries a caller wrote can
+    be out of domain.
+    """
+    for item in data:
+        if isinstance(item, XQMX) and item.is_sample():
+            for index, value in item.linear.items():
+                if not item.domain_contains(value):
+                    raise SampleOutOfDomain(
+                        index,
+                        value,
+                        domain_description(item.domain, item.discrete_k),
+                    )
+
+
 def _prepare_calldata_python(data: list) -> dict[int, Any]:
+    # Re-scanned here, not just in `set_calldata`. `set_calldata` retains the
+    # caller's `XQMX` objects rather than copying them, so a mutation between
+    # the two calls is visible to the run. The RUST path observes that same
+    # late mutation and faults on it in `PyXqmxSample::new`, so checking only
+    # once would leave Python executing an out-of-domain sample that Rust
+    # rejects -- the exact divergence this ticket closes elsewhere.
+    _check_sample_domains(data)
     result: dict[int, Any] = {}
     for i, item in enumerate(data):
         if item is None:
@@ -223,6 +250,18 @@ class VM:
         return self._backend
 
     def set_calldata(self, data: list) -> None:
+        """Install the calldata slots for the next run.
+
+        Sample-mode `XQMX` entries are checked against their domain here so
+        a bad sample is refused where the caller supplied it rather than
+        several lines later inside `run`. The check is not sufficient on its
+        own: only the outer list is copied, so the caller keeps a live
+        reference to every `XQMX` and can mutate one afterwards. Both
+        backends therefore re-check at run time -- `_prepare_calldata_python`
+        by calling the same scan, the RUST path by rebuilding each
+        `XqmxSample`, whose constructor checks.
+        """
+        _check_sample_domains(data)
         self._calldata = list(data)
 
     def set_output_slots(self, n: int) -> None:

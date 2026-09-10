@@ -1,5 +1,5 @@
 ; xqmx_bad_k_before_bad_size: when both operands are bad, the discrete
-; half-width is what the fault names.
+; domain size is what the fault names.
 ;
 ; XQMX pops k and then size, and both are wrong here: k = 1 is below the
 ; two values a domain needs, and size = -1 is not an allocation. Only one

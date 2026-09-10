@@ -365,7 +365,7 @@ opcodes:
     operands: [{name: reg, type: register, width: 1}]
     stack_pop: 1
     stack_push: 0
-    doc: "Pop size; allocate a binary QUBO model ([0, 1] domain) into a register."
+    doc: "Pop size; allocate a binary QUBO model ({0, 1} domain) into a register."
 
   - code: 0x41
     mnemonic: SQMX
@@ -374,7 +374,7 @@ opcodes:
     operands: [{name: reg, type: register, width: 1}]
     stack_pop: 1
     stack_push: 0
-    doc: "Pop size; allocate a spin Ising model ([-1, 1] domain) into a register."
+    doc: "Pop size; allocate a spin Ising model ({-1, +1} domain) into a register."
 
   - code: 0x42
     mnemonic: XQMX
@@ -383,7 +383,7 @@ opcodes:
     operands: [{name: reg, type: register, width: 1}]
     stack_pop: 2
     stack_push: 0
-    doc: "Pop k then size; allocate a discrete model with signed centered domain [-k, k-1] into a register. Errors when k < 2."
+    doc: "Pop k then size; allocate a discrete model with domain {0, ..., k-1} into a register. Errors when k < 2."
 
   - code: 0x43
     mnemonic: BSMX
@@ -392,7 +392,7 @@ opcodes:
     operands: [{name: reg, type: register, width: 1}]
     stack_pop: 1
     stack_push: 0
-    doc: "Pop size; allocate a binary sample ([0, 1] domain) into a register."
+    doc: "Pop size; allocate a binary sample ({0, 1} domain) into a register."
 
   - code: 0x44
     mnemonic: SSMX
@@ -401,7 +401,7 @@ opcodes:
     operands: [{name: reg, type: register, width: 1}]
     stack_pop: 1
     stack_push: 0
-    doc: "Pop size; allocate a spin sample ([-1, 1] domain) into a register."
+    doc: "Pop size; allocate a spin sample ({-1, +1} domain) into a register."
 
   - code: 0x45
     mnemonic: XSMX
@@ -410,7 +410,7 @@ opcodes:
     operands: [{name: reg, type: register, width: 1}]
     stack_pop: 2
     stack_push: 0
-    doc: "Pop k then size; allocate a discrete sample with signed centered domain [-k, k-1] into a register. Errors when k < 2."
+    doc: "Pop k then size; allocate a discrete sample with domain {0, ..., k-1} into a register. Errors when k < 2."
 
   # ------------------------------------------------------------------------
   # Allocators — Vec (0x4A-0x4C)
@@ -451,9 +451,9 @@ opcodes:
   # XQMX Coefficient Access (0x60-0x65)
   # ------------------------------------------------------------------------
 
-  - {code: 0x60, mnemonic: GETLINE, variant: GetLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 1, stack_push: 1, doc: "Pop i; push `linear[i]` from the register's model, or a sample's assignment at i; raises IndexOutOfBounds outside [0, size); `xquad verify` requires a model."}
-  - {code: 0x61, mnemonic: SETLINE, variant: SetLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop value and i; set `linear[i]` in the register's model, or a sample's assignment at i; `xquad verify` requires a model."}
-  - {code: 0x62, mnemonic: ADDLINE, variant: AddLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop delta and i; add delta to `linear[i]` in the register's model, or a sample's assignment at i; `xquad verify` requires a model."}
+  - {code: 0x60, mnemonic: GETLINE, variant: GetLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 1, stack_push: 1, doc: "Pop i; push `linear[i]` from the register's model, or a sample's assignment at i; raises IndexOutOfBounds outside [0, size)."}
+  - {code: 0x61, mnemonic: SETLINE, variant: SetLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop value and i; set `linear[i]` in the register's model, or a sample's assignment at i; a sample value outside its domain raises `SampleOutOfDomain`."}
+  - {code: 0x62, mnemonic: ADDLINE, variant: AddLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop delta and i; add delta to `linear[i]` in the register's model, or a sample's assignment at i; a sample result outside its domain raises `SampleOutOfDomain`."}
   - {code: 0x63, mnemonic: GETQUAD, variant: GetQuad, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 1, doc: "Pop j and i; push `quadratic[i, j]` from the register's model; raises IndexOutOfBounds outside [0, size)."}
   - {code: 0x64, mnemonic: SETQUAD, variant: SetQuad, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop value, j, and i; set `quadratic[i, j]` in the register's model; raises IndexOutOfBounds outside [0, size)."}
   - {code: 0x65, mnemonic: ADDQUAD, variant: AddQuad, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop delta, j, and i; add delta to `quadratic[i, j]` in the register's model; raises IndexOutOfBounds outside [0, size)."}
