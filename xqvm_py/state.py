@@ -27,8 +27,8 @@ from typing import Any
 
 from .errors import (
     CallDataIndex,
-    LoopError,
     LoopStackOverflow,
+    NoActiveLoop,
     OutputIndex,
     RegisterNotFound,
     StackOverflow,
@@ -117,9 +117,13 @@ class JumpControl:
         self.loop_stack.append(LoopFrame(target=target, values=values, start_offset=start_idx))
 
     def pop_loop(self) -> LoopFrame:
-        """Pop the current loop frame. Raises LoopError if no active loop."""
+        """Pop the current loop frame. Raises NoActiveLoop if there is none.
+
+        Popping a frame is NEXT's job, so that is the mnemonic the
+        fault reports.
+        """
         if not self.loop_stack:
-            raise LoopError("No active loop")
+            raise NoActiveLoop("NEXT")
         return self.loop_stack.pop()
 
     def current_loop(self) -> LoopFrame | None:
@@ -129,7 +133,7 @@ class JumpControl:
     def advance_loop(self) -> bool:
         """Advance loop index. Returns True if loop should continue."""
         if not self.loop_stack:
-            raise LoopError("No active loop to advance")
+            raise NoActiveLoop("NEXT")
 
         frame = self.loop_stack[-1]
         frame.index += 1
@@ -141,16 +145,16 @@ class JumpControl:
         return True
 
     def current_loop_value(self) -> Value:
-        """Get current loop value. Raises LoopError if no active loop."""
+        """Get current loop value. Raises NoActiveLoop if there is none."""
         if not self.loop_stack:
-            raise LoopError("No active loop")
+            raise NoActiveLoop("LVAL")
         frame = self.loop_stack[-1]
         return frame.values[frame.index]
 
     def current_loop_index(self) -> int:
-        """Get current loop index (offset-adjusted). Raises LoopError if no active loop."""
+        """Get current loop index (offset-adjusted). Raises NoActiveLoop if there is none."""
         if not self.loop_stack:
-            raise LoopError("No active loop")
+            raise NoActiveLoop("LIDX")
         frame = self.loop_stack[-1]
         return frame.index + frame.start_offset
 

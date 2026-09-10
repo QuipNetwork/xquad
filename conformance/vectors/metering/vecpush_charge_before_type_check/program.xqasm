@@ -1,0 +1,22 @@
+; vecpush_charge_before_type_check: the allocation charge precedes the
+; register read, so an exhausted budget decides the fault.
+;
+; spec/xqvm/SPEC.md orders the work within one instruction: pops, then the
+; allocation charge, then validation. VECPUSH on a register holding an int
+; is a TypeMismatch under a budget that admits the charge, and a
+; MemoryLimitExceeded under one that does not -- the ordering is only
+; observable at the boundary between the two.
+;
+; conformance/README.md's fault-ordering table listed this row as pinned by
+; xqvm_py's unit tests alone, because `Inputs` carried no memory budget and
+; no vector could express it (QUI-1289). It now can: VECPUSH charges
+; VEC_ELEMENT_BYTES (16 -- a Vec holds up to two elements' worth of buffer
+; per live element), so the boundary is a budget of 15 against one of 16.
+; This vector sits well below it at 0, so it stays about the ordering rather
+; than about the exact charge.
+
+PUSH 7
+STOW r0          ; r0 holds an int, which VECPUSH would reject on type
+PUSH 1
+VECPUSH r0       ; charged before the register is read
+HALT

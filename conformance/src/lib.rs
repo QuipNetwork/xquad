@@ -107,6 +107,18 @@ pub struct Inputs {
     /// default each runner happens to carry.
     #[serde(default = "default_step_limit")]
     pub step_limit: u64,
+    /// Allocation budget in bytes for the run, applied to both runners.
+    ///
+    /// The other half of the pair `step_limit` opened. `Inputs` gained the
+    /// step budget and not this one, so no vector could pin behaviour at a
+    /// non-default memory budget -- against the release whose largest
+    /// security change is that budget, and with a whole class of faults
+    /// (the allocation charge raised ahead of a register read) reachable
+    /// only under a tight one. Resolved here for both runners for the
+    /// reason `step_limit` is: a vector's budget is a property of the
+    /// vector, not of whichever default each runner happens to carry.
+    #[serde(default = "default_memory_limit")]
+    pub memory_limit: u64,
 }
 
 const fn default_output_slots() -> usize {
@@ -120,6 +132,16 @@ const fn default_output_slots() -> usize {
 /// would and cannot drift from the VM it is testing.
 const fn default_step_limit() -> u64 {
     xqvm::DEFAULT_STEP_LIMIT
+}
+
+/// The harness-wide allocation budget for a vector that does not name one.
+///
+/// Is `xqvm::DEFAULT_MEMORY_LIMIT`, rather than a literal restating it, for
+/// the reason [`default_step_limit`] names the step constant: a vector that
+/// is not about the budget behaves exactly as `xquad run` would, and cannot
+/// drift from the VM it is testing.
+const fn default_memory_limit() -> u64 {
+    xqvm::DEFAULT_MEMORY_LIMIT
 }
 
 /// Implementation-neutral identity of a VM fault.
@@ -258,7 +280,13 @@ impl<'de> Deserialize<'de> for Expected {
 }
 
 /// Execution result in a form directly comparable to [`Expected`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+///
+/// `PartialEq` is written out rather than derived because [`Outcome::Failure`]
+/// carries a diagnostic `detail` that is not part of the result: the two
+/// bytecode round-trip comparisons ([`run_rust`] and [`run_python`]) compare
+/// whole outcomes to prove source and bytecode agree, and a `detail` naming
+/// the byte offset would fail them for two spellings of the same fault.
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum Outcome {
     /// The program ran to completion.
@@ -274,8 +302,51 @@ pub enum Outcome {
     Failure {
         /// Identity of the fault the implementation raised.
         error: Fault,
+        /// What the implementation said, verbatim: the Rust `Error` in full
+        /// or the Python exception's message.
+        ///
+        /// The identity is deliberately coarse -- it is what a vector
+        /// asserts, and a byte offset in it would make vectors brittle. That
+        /// left a mismatch reporting two names and nothing else, where the
+        /// pre-rewrite harness printed `vm.run failed: ArithmeticOverflow {
+        /// pos: 49, .. }`. This carries the offset and operand values back
+        /// into the failure message without putting them in the identity.
+        ///
+        /// Skipped when serialising: an `Outcome` serialises into the shape
+        /// `expected.json` writes, and this is diagnostics, not an assertion.
+        #[serde(skip)]
+        detail: String,
     },
 }
+
+impl PartialEq for Outcome {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Success {
+                    outputs,
+                    final_stack,
+                    steps,
+                },
+                Self::Success {
+                    outputs: other_outputs,
+                    final_stack: other_stack,
+                    steps: other_steps,
+                },
+            ) => outputs == other_outputs && final_stack == other_stack && steps == other_steps,
+            // `detail` is diagnostics, not identity -- see the type's docs.
+            (
+                Self::Failure { error, .. },
+                Self::Failure {
+                    error: other_error, ..
+                },
+            ) => error == other_error,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Outcome {}
 
 /// Loaded conformance vector with all on-disk artifacts materialised.
 #[derive(Debug, Clone)]
@@ -417,6 +488,7 @@ pub(crate) fn vm_for(calldata: &[xqvm::RegVal], inputs: &Inputs) -> xqvm::Vm {
         .set_calldata(calldata.to_vec())
         .set_output_slots(inputs.output_slots);
     let _ = vm.set_step_limit(inputs.step_limit);
+    let _ = vm.set_memory_limit(inputs.memory_limit);
     vm
 }
 
@@ -432,6 +504,7 @@ fn run_rust_program(
     if let Err(e) = vm.run(program) {
         return Outcome::Failure {
             error: fault_from_rust(&e),
+            detail: format!("{e:?}"),
         };
     }
 
@@ -508,8 +581,15 @@ fn fault_from_python(class_name: &str) -> Result<Fault, String> {
         "InvalidGridDimensions" => Ok(Fault::InvalidGridDimensions),
         "ArithmeticOverflow" => Ok(Fault::ArithmeticOverflow),
         "IndexOutOfBounds" => Ok(Fault::IndexOutOfBounds),
+        "NoActiveLoop" => Ok(Fault::NoActiveLoop),
+        "UnmatchedLoop" => Ok(Fault::UnmatchedLoop),
         "InvalidOpcode" => Ok(Fault::BadOpcode),
-        "TargetNotFound" => Ok(Fault::BadJumpTarget),
+        // Python raises this only where `resolve_target(...)` returns
+        // None -- a JUMP/JUMPI naming a label the jump table does not
+        // hold, which is Rust's `InvalidLabel`. `BadJumpTarget` is a
+        // different fault: a stream seek outside the bytecode buffer,
+        // which `xqvm_py` has no class for.
+        "TargetNotFound" => Ok(Fault::InvalidLabel),
         "StepLimitExceeded" => Ok(Fault::StepLimitExceeded),
         "MemoryLimitExceeded" => Ok(Fault::MemoryLimitExceeded),
         "XQMXModeError" => Ok(Fault::XqmxMode),
@@ -602,7 +682,8 @@ fn run_python_file(
         ])
         .arg(vector.dir.join("inputs.json"))
         .args(["--outputs", &vector.inputs.output_slots.to_string()])
-        .args(["--step-limit", &vector.inputs.step_limit.to_string()]);
+        .args(["--step-limit", &vector.inputs.step_limit.to_string()])
+        .args(["--memory-limit", &vector.inputs.memory_limit.to_string()]);
     let output = command
         .arg(program_path)
         .current_dir(repo_root)
@@ -627,7 +708,10 @@ fn run_python_file(
     if let Some(error) = parsed.error {
         let fault = fault_from_python(&error.r#type)
             .map_err(|e| format!("{e}\n  python message: {}", error.message))?;
-        return Ok(Outcome::Failure { error: fault });
+        return Ok(Outcome::Failure {
+            error: fault,
+            detail: error.message,
+        });
     }
 
     let outputs = parsed.outputs.ok_or_else(|| {
@@ -712,21 +796,22 @@ pub fn check(actual: &Outcome, expected: &Expected) -> Result<(), String> {
                 );
             }
         }
-        (Outcome::Failure { error }, Expected::Failure { error: exp_error }) => {
+        (Outcome::Failure { error, detail }, Expected::Failure { error: exp_error }) => {
             if error == exp_error {
                 return Ok(());
             }
             let _ = writeln!(
                 msg,
-                "  fault:\n    expected: {}\n    actual:   {}",
+                "  fault:\n    expected: {}\n    actual:   {} -- {detail}",
                 fault_name(*exp_error),
                 fault_name(*error)
             );
         }
-        (Outcome::Failure { error }, Expected::Success { .. }) => {
+        (Outcome::Failure { error, detail }, Expected::Success { .. }) => {
             let _ = writeln!(
                 msg,
-                "  expected the program to run to completion, but it faulted with {}",
+                "  expected the program to run to completion, but it faulted \
+                 with {} -- {detail}",
                 fault_name(*error)
             );
         }
@@ -831,6 +916,7 @@ mod tests {
     fn check_reports_a_fault_where_success_was_expected() {
         let actual = Outcome::Failure {
             error: Fault::DivisionByZero,
+            detail: "DivisionByZero { pos: 12 }".to_owned(),
         };
         let expected = Expected::Success {
             outputs: vec![Some(1)],
@@ -893,6 +979,7 @@ mod tests {
     fn check_accepts_a_matching_fault() {
         let actual = Outcome::Failure {
             error: Fault::DivisionByZero,
+            detail: "DivisionByZero { pos: 12 }".to_owned(),
         };
         let expected = Expected::Failure {
             error: Fault::DivisionByZero,
@@ -904,6 +991,7 @@ mod tests {
     fn check_rejects_the_wrong_fault() {
         let actual = Outcome::Failure {
             error: Fault::StackUnderflow,
+            detail: "StackUnderflow { pos: 3, needed: 2, got: 0 }".to_owned(),
         };
         let expected = Expected::Failure {
             error: Fault::DivisionByZero,
@@ -913,6 +1001,49 @@ mod tests {
             err.contains("DIVISION_BY_ZERO") && err.contains("STACK_UNDERFLOW"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn a_fault_mismatch_reports_what_the_implementation_said() {
+        let actual = Outcome::Failure {
+            error: Fault::ArithmeticOverflow,
+            detail: "ArithmeticOverflow { pos: 49 }".to_owned(),
+        };
+        let expected = Expected::Failure {
+            error: Fault::DivisionByZero,
+        };
+        let err = check(&actual, &expected).expect_err("mismatch");
+        assert!(err.contains("pos: 49"), "got: {err}");
+    }
+
+    #[test]
+    fn a_fault_where_success_was_expected_reports_the_detail_too() {
+        let actual = Outcome::Failure {
+            error: Fault::ArithmeticOverflow,
+            detail: "ArithmeticOverflow { pos: 49 }".to_owned(),
+        };
+        let expected = Expected::Success {
+            outputs: vec![Some(1)],
+            final_stack: vec![],
+            steps: None,
+        };
+        let err = check(&actual, &expected).expect_err("mismatch");
+        assert!(err.contains("pos: 49"), "got: {err}");
+    }
+
+    #[test]
+    fn outcomes_compare_on_the_fault_identity_alone() {
+        // What the bytecode round-trip comparisons rest on: source and
+        // decoded runs report the same fault from different byte offsets.
+        let source = Outcome::Failure {
+            error: Fault::ArithmeticOverflow,
+            detail: "ArithmeticOverflow { pos: 49 }".to_owned(),
+        };
+        let bytecode = Outcome::Failure {
+            error: Fault::ArithmeticOverflow,
+            detail: "ArithmeticOverflow { pos: 12 }".to_owned(),
+        };
+        assert_eq!(source, bytecode);
     }
 }
 

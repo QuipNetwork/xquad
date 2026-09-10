@@ -245,7 +245,11 @@ pub const DEFAULT_STEP_LIMIT: u64 = 10_000_000;
 /// bounding what a hostile program can ask a host for. Embedders that run
 /// untrusted bytecode -- the Substrate pallet above all -- should set a much
 /// smaller budget with [`Vm::set_memory_limit`].
-const DEFAULT_MEMORY_LIMIT: u64 = 1 << 30;
+///
+/// Public for the same reason [`DEFAULT_STEP_LIMIT`] is: `xqcli run`, the
+/// conformance harness and `xqvm_py` all carry this budget's default, and
+/// each restating the literal is how the two halves of a limit drift apart.
+pub const DEFAULT_MEMORY_LIMIT: u64 = 1 << 30;
 
 /// Bytes charged per XQMX variable.
 ///

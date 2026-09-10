@@ -1,0 +1,10 @@
+; next_outside_loop: NEXT with no frame on the loop stack raises
+; NO_ACTIVE_LOOP.
+;
+; spec/xqvm/SPEC.md:195 gives the fault to NEXT, LIDX and LVAL alike. It
+; was unassertable until QUI-1289: xqvm_py raised one LoopError class for
+; this and for UNMATCHED_LOOP, so the harness could not resolve the class
+; to either identity and left both unmapped.
+
+NEXT
+HALT

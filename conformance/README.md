@@ -51,7 +51,8 @@ pre-assembled bytecode artifact is committed.
 {
   "calldata": [6, 7],
   "output_slots": 16,
-  "step_limit": 50
+  "step_limit": 50,
+  "memory_limit": 1048576
 }
 ```
 
@@ -63,6 +64,12 @@ default itself and passes it to both runners, because the two
 implementations disagree on what an omitted budget means and a vector
 that left it out used to run bounded on Rust and unbounded on Python.
 Set it only for a vector that is specifically exercising the budget.
+
+`memory_limit` is the same arrangement for the allocation budget: optional,
+defaulting to 1073741824 (`xqvm::DEFAULT_MEMORY_LIMIT`), resolved once by
+the harness and passed to both runners. It is what makes the
+allocation-charge half of the fault-ordering rule below assertable, since
+those faults are only reachable against a budget the charge exhausts.
 
 ### `expected.json`
 
@@ -116,13 +123,13 @@ bug ever motivates them.
 | `DIVISION_BY_ZERO` | `DivisionByZero` | `DivisionByZero` |
 | `ARITHMETIC_OVERFLOW` | `ArithmeticOverflow` | `ArithmeticOverflow` |
 | `INDEX_OUT_OF_BOUNDS` | `IndexOutOfBounds` | `IndexOutOfBounds` |
-| `NO_ACTIVE_LOOP` | `NoActiveLoop` | -- (see below) |
-| `UNMATCHED_LOOP` | `UnmatchedLoop` | -- (see below) |
-| `BAD_JUMP_TARGET` | `BadJumpTarget` | `TargetNotFound` |
-| `INVALID_LABEL` | `InvalidLabel` | -- |
+| `NO_ACTIVE_LOOP` | `NoActiveLoop` | `NoActiveLoop` |
+| `UNMATCHED_LOOP` | `UnmatchedLoop` | `UnmatchedLoop` |
+| `BAD_JUMP_TARGET` | `BadJumpTarget` | -- |
+| `INVALID_LABEL` | `InvalidLabel` | `TargetNotFound` |
 | `BAD_OPCODE` | `BadOpcode` | `InvalidOpcode` |
 | `TRUNCATED_INSTRUCTION` | `TruncatedInstruction` | `TruncatedInstruction` |
-| `CALL_DATA_INDEX` | `CallDataIndex` | -- |
+| `CALL_DATA_INDEX` | `CallDataIndex` | `CallDataIndex` |
 | `OUTPUT_INDEX` | `OutputIndex` | `OutputIndex` |
 | `SIZE_MISMATCH` | `SizeMismatch` | `SizeMismatch` |
 | `VEC_LENGTH_MISMATCH` | `VecLengthMismatch` | `VecLengthMismatch` |
@@ -143,10 +150,13 @@ name and is necessarily partial: a `--` above means that implementation
 has no distinct class for the fault yet, and a vector asserting it will
 fail loudly on the Python runner until one exists.
 
-`LoopError` is the notable gap: Python raises the same class for both
-`NO_ACTIVE_LOOP` and `UNMATCHED_LOOP`, so it is left unmapped rather than
-resolved arbitrarily to one of them. Splitting it is a prerequisite for
-any loop-fault vector.
+The loop faults were that gap until QUI-1289: `xqvm_py` raised one
+`LoopError` class for both `NO_ACTIVE_LOOP` and `UNMATCHED_LOOP`, which
+the harness could not resolve to either identity without picking
+arbitrarily, so it mapped neither. The class is now split into
+`NoActiveLoop` and `UnmatchedLoop`, and each identity is pinned by its own
+vector: `vectors/control-flow/next_outside_loop` and
+`vectors/control-flow/range_empty_unmatched`.
 
 ### Fault ordering (QUI-1178)
 
@@ -162,12 +172,12 @@ Of the 22 opcodes reordered, the second route reaches:
 | Opcode(s) | Fault raised ahead of the register read | Pinned by |
 |---|---|---|
 | `RESIZE` | `InvalidGridDimensions`, unconditional | `vectors/xqmx-grid/resize_type_after_dimension_check` |
-| `VECPUSH`, `SETLINE`, `ADDLINE`, `SETQUAD`, `ADDQUAD`, `EXCLUDE`, `IMPLIES`, `REDUCE` | `MemoryLimitExceeded`, only against a near-exhausted budget | `xqvm_py/tests/test_executor.py` -- `Inputs` carries no `memory_limit`, so a vector cannot express these |
+| `VECPUSH`, `SETLINE`, `ADDLINE`, `SETQUAD`, `ADDQUAD`, `EXCLUDE`, `IMPLIES`, `REDUCE` | `MemoryLimitExceeded`, only against a near-exhausted budget | `vectors/metering/vecpush_charge_before_type_check` pins `VECPUSH`; the other seven by `xqvm_py/tests/test_executor.py` alone |
 | `ATLEAST` | `IndexOutOfBounds` on `k`, unconditional | `vectors/constraints/atleast_k_range_before_model_type` |
 | `ATLEASTW` | `VecLengthMismatch`, unconditional | `vectors/constraints/atleastw_length_before_model_type` |
 | `EQUALITY` | `VecLengthMismatch`, unconditional -- the vec lengths are compared before the model register is discriminated, and the charge follows both vec reads | `vectors/constraints/equality_length_mismatch_beats_model_type` |
 | `VECGET`, `VECSET`, `GETLINE`, `GETQUAD`, `ROWFIND`, `COLFIND`, `ROWSUM`, `COLSUM` | none -- Rust type-checks immediately after its pops | short stack only, not verifier-clean |
-| `ONEHOTR`, `ONEHOTC` | none, since QUI-1202 -- the charge is sized from a model-only peek on both VMs, so a sample sizes it at zero | `xqvm_py/tests/test_executor.py` -- `test_onehot_does_not_charge_for_a_sample`; `Inputs` carries no `memory_limit`, so a vector cannot express it |
+| `ONEHOTR`, `ONEHOTC` | none, since QUI-1202 -- the charge is sized from a model-only peek on both VMs, so a sample sizes it at zero | `xqvm_py/tests/test_executor.py` -- `test_onehot_does_not_charge_for_a_sample`; a vector could express it now that `Inputs` carries `memory_limit` |
 
 The `ONEHOTR`/`ONEHOTC` row read "none" before QUI-1202 as well, on a
 justification that did not hold. `exec_one_hot_r` sizes its charge from a

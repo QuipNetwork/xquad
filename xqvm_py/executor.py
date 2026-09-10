@@ -711,7 +711,7 @@ class Executor:
         skipped instructions are metered but not dispatched, so they do not
         count towards `instructions`.
         """
-        from .errors import LoopError
+        from .errors import UnmatchedLoop
 
         depth = 1
         scan_pc = self.state.pc + 1
@@ -726,7 +726,7 @@ class Executor:
                     self.state.jump_to(scan_pc + 1)
                     return
             scan_pc += 1
-        raise LoopError("unmatched RANGE: no matching NEXT found")
+        raise UnmatchedLoop(self.state.pc)
 
     def _runner_ITER(self, instr: Instruction) -> None:
         """ITER: Start vec iteration. Pop end_idx, start_idx -> iterate vec[start:end]."""
@@ -769,9 +769,9 @@ class Executor:
         """NEXT: Advance loop index, jump back if more, else pop frame."""
         frame = self.state.jc.current_loop()
         if frame is None:
-            from .errors import LoopError
+            from .errors import NoActiveLoop
 
-            raise LoopError("NEXT outside of loop")
+            raise NoActiveLoop("NEXT")
 
         if self.state.jc.advance_loop():
             # More iterations: jump back to loop start

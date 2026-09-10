@@ -23,9 +23,14 @@ Each vector directory holds three files:
   assembler is authoritative: whatever `xqasm::assemble_source()` produces
   from this file *is* the canonical bytecode, assembled in-process on
   every run. No pre-assembled bytecode artifact is committed.
-- **`inputs.json`** -- calldata and output slot count, for example
-  `{"calldata": [6, 7], "output_slots": 16}`. `output_slots` is optional
-  and defaults to 16, matching `xquad run`.
+- **`inputs.json`** -- calldata, output slot count and the two budgets the
+  run is given, for example `{"calldata": [6, 7], "output_slots": 16}`.
+  Every key but `calldata` is optional: `output_slots` defaults to 16,
+  `step_limit` to 10000000 and `memory_limit` to 1073741824, each matching
+  `xquad run`. The harness resolves the defaults itself and passes them to
+  both VMs, so a budget is a property of the vector rather than of whichever
+  default each runner carries. Set one only for a vector that is about that
+  budget.
 - **`expected.json`** -- the recorded result, for example
   `{"outputs": [42], "final_stack": []}`. `outputs` is a sparse map: each
   entry is an `i64` written by `OUTPUT`, or `null` for a slot that was
@@ -35,17 +40,19 @@ Each vector directory holds three files:
   slots `OUTPUT` never touched disappear. `final_stack` is the residual
   stack at `HALT`, bottom to top.
 
-Vectors are grouped, for human navigation, into six directories under
+Vectors are grouped, for human navigation, into eight directories under
 `conformance/vectors/`: `arithmetic`, `constraints`, `control-flow`,
-`energy`, `vector-ops`, and `xqmx-grid`. These names are not the same
-vocabulary as
+`energy`, `index-math`, `metering`, `vector-ops`, and `xqmx-grid`. These
+names are not the same vocabulary as
 [`opcodes.yaml`](https://gitlab.com/quip.network/xquad/-/blob/main/conformance/opcodes.yaml)'s
-own `category` field, which has 14 values and matches `spec/xqvm/SPEC.md`'s
-section names, not the vector directories. Only four names happen to
-coincide (`arithmetic`, `control-flow`, `vector-ops`, `xqmx-grid`);
-`constraints` and `energy` have no matching YAML category at all -- the
-constraint opcodes are catalogued under `xqmx-high-level`, and so is
-`ENERGY` itself. Don't expect a vector directory to line up with an
+own `category` field, which has 15 values and matches `spec/xqvm/SPEC.md`'s
+section names, not the vector directories. Only five names happen to
+coincide (`arithmetic`, `control-flow`, `index-math`, `vector-ops`,
+`xqmx-grid`);
+`constraints`, `energy` and `metering` have no matching YAML category at
+all -- the constraint opcodes are catalogued under `xqmx-high-level`, and so
+is `ENERGY` itself, while a metering vector is about a budget rather than
+about any one opcode. Don't expect a vector directory to line up with an
 `opcodes.yaml` category by name.
 
 ## Running the Harness Locally

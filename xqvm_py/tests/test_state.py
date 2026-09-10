@@ -23,7 +23,7 @@ import pytest
 
 from xqvm_py.errors import (
     CallDataIndex,
-    LoopError,
+    NoActiveLoop,
     OutputIndex,
     RegisterNotFound,
     StackOverflow,
@@ -371,21 +371,21 @@ class TestLoopErrors:
     """Tests for loop error conditions."""
 
     def test_current_loop_value_outside_loop(self):
-        """current_loop_value outside loop raises LoopError."""
+        """current_loop_value outside loop raises NoActiveLoop."""
         jc = JumpControl()
-        with pytest.raises(LoopError):
+        with pytest.raises(NoActiveLoop):
             jc.current_loop_value()
 
     def test_advance_loop_outside_loop(self):
-        """advance_loop outside loop raises LoopError."""
+        """advance_loop outside loop raises NoActiveLoop."""
         jc = JumpControl()
-        with pytest.raises(LoopError):
+        with pytest.raises(NoActiveLoop):
             jc.advance_loop()
 
     def test_pop_loop_outside_loop(self):
-        """pop_loop outside loop raises LoopError."""
+        """pop_loop outside loop raises NoActiveLoop."""
         jc = JumpControl()
-        with pytest.raises(LoopError):
+        with pytest.raises(NoActiveLoop):
             jc.pop_loop()
 
     def test_in_loop_false_initially(self):

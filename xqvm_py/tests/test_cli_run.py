@@ -26,7 +26,7 @@ import json
 import pytest
 
 from xqvm_py.cli.run import main
-from xqvm_py.executor import DEFAULT_STEP_LIMIT
+from xqvm_py.executor import DEFAULT_MEMORY_LIMIT, DEFAULT_STEP_LIMIT
 
 DIVIDE_BY_ZERO = """
 PUSH 1
@@ -120,3 +120,16 @@ class TestRunReporting:
         from xqffi.vm import DEFAULT_STEP_LIMIT as RUST_DEFAULT
 
         assert DEFAULT_STEP_LIMIT == RUST_DEFAULT
+
+    def test_the_memory_default_matches_the_rust_vm(self):
+        """The same equality for the allocation budget.
+
+        `--memory-limit` defaults to `DEFAULT_MEMORY_LIMIT`, which restates
+        `xqvm::DEFAULT_MEMORY_LIMIT` in Python. Without this assertion,
+        moving the Rust constant would move `xquad run` and leave
+        `xqvm_py run` on the old budget with nothing failing -- the drift
+        that made the Rust constant public in the first place.
+        """
+        from xqffi.vm import DEFAULT_MEMORY_LIMIT as RUST_DEFAULT
+
+        assert DEFAULT_MEMORY_LIMIT == RUST_DEFAULT

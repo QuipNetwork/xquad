@@ -41,7 +41,7 @@ from typing import Any
 
 from xqvm_py import Executor, Program, program_from_bytecode, program_from_xqasm
 from xqvm_py.errors import XQVMError
-from xqvm_py.executor import DEFAULT_STEP_LIMIT
+from xqvm_py.executor import DEFAULT_MEMORY_LIMIT, DEFAULT_STEP_LIMIT
 
 
 def _load_program(path: Path, *, text: bool) -> Program:
@@ -122,6 +122,18 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     run.add_argument(
+        "--memory-limit",
+        type=int,
+        default=DEFAULT_MEMORY_LIMIT,
+        help=(
+            "Allocation budget in bytes, charged against every allocating "
+            "instruction before it allocates. Unlike --step-limit there is no "
+            f"unlimited form: pass a large value. Defaults to {DEFAULT_MEMORY_LIMIT}, "
+            "matching the Rust VM."
+        ),
+    )
+
+    run.add_argument(
         "--unlimited-steps",
         action="store_true",
         help=(
@@ -152,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
             program,
             input_data=input_data,
             step_limit=step_limit,
+            memory_limit=args.memory_limit,
             output_slots=args.outputs,
         )
     except XQVMError as exc:

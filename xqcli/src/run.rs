@@ -72,6 +72,15 @@ pub(crate) struct Args {
     unlimited_steps: bool,
 
     /// Allocation budget in bytes for models, samples and vectors.
+    // Restates `xqvm::DEFAULT_MEMORY_LIMIT` rather than naming it, unlike
+    // `--step-limit` above. `release:validate` runs `cargo publish
+    // --dry-run --workspace`, which builds this crate against the
+    // *published* `xqvm` rather than the workspace path, so a constant this
+    // crate names has to exist in the last published `xqvm` --
+    // `DEFAULT_MEMORY_LIMIT` became public in the same MR as this comment
+    // (QUI-1289) and is not published yet. Name it once an `xqvm` carrying
+    // it is on crates.io. Not a doc comment: clap renders those as
+    // `--help` text, and this is build-system state a user has no use for.
     #[arg(long, default_value = "1073741824")]
     memory_limit: u64,
 

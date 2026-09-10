@@ -299,11 +299,36 @@ class LoopStackOverflow(XQVMError):
         super().__init__(f"Loop stack overflow: maximum nesting depth {max_depth} exceeded")
 
 
-class LoopError(XQVMError):
-    """Raised for loop-related errors (e.g., NEXT outside loop)."""
+class NoActiveLoop(XQVMError):
+    """Raised when NEXT, LVAL or LIDX runs with no frame on the loop stack.
 
-    def __init__(self, message: str):
-        super().__init__(message)
+    Mirrors Rust's `xqvm::Error::NoActiveLoop`. This and `UnmatchedLoop`
+    were one `LoopError` class until QUI-1289: the conformance harness
+    resolves a Python exception to a fault identity by class name, so a
+    single class for two spec faults left both unassertable.
+
+    The mnemonic is required. Only the raise site knows which instruction
+    asked, and the harness surfaces the message as the whole detail of a
+    fault mismatch.
+    """
+
+    def __init__(self, op: str):
+        self.op = op
+        super().__init__(f"No active loop: {op} requires an open loop frame")
+
+
+class UnmatchedLoop(XQVMError):
+    """Raised when the empty-loop skip runs off the end of the stream.
+
+    A RANGE with a non-positive count, or an ITER over an empty slice,
+    skips its body by scanning forward for the matching NEXT. Reaching the
+    end of the program without finding one means the loop was never
+    closed. Mirrors Rust's `xqvm::Error::UnmatchedLoop`.
+    """
+
+    def __init__(self, pc: int):
+        self.pc = pc
+        super().__init__(f"Unmatched loop header at {pc}: no matching NEXT found")
 
 
 class XQMXModeError(XQVMError):
