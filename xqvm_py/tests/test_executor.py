@@ -28,12 +28,13 @@ from xqvm_py.errors import (
     IndexOutOfBounds,
     InvalidDiscreteK,
     InvalidShift,
-    LoopError,
     MemoryLimitExceeded,
+    NoActiveLoop,
     RegisterNotFound,
     StackUnderflow,
     TargetNotFound,
     TypeMismatch,
+    UnmatchedLoop,
     VecLengthMismatch,
     XQMXModeError,
 )
@@ -230,8 +231,8 @@ class TestControlFlow:
         assert ex.state.get_register(0) == 42
 
     def test_range_count_zero_unmatched_raises(self):
-        """RANGE with count=0 and no matching NEXT raises LoopError."""
-        with pytest.raises(LoopError, match="unmatched"):
+        """RANGE with count=0 and no matching NEXT raises UnmatchedLoop."""
+        with pytest.raises(UnmatchedLoop, match="no matching NEXT"):
             run_program(
                 [
                     Instruction(Opcode.PUSH1, (0,)),
@@ -2357,25 +2358,25 @@ class TestErrorHandling:
             Executor().execute(prog)
 
     def test_loop_error_next_outside_loop(self):
-        """NEXT outside loop raises LoopError."""
+        """NEXT outside loop raises NoActiveLoop."""
         prog = make_program(
             [
                 Instruction(Opcode.NEXT),
                 Instruction(Opcode.HALT),
             ]
         )
-        with pytest.raises(LoopError):
+        with pytest.raises(NoActiveLoop):
             Executor().execute(prog)
 
     def test_loop_error_lval_outside_loop(self):
-        """LVAL outside loop raises LoopError."""
+        """LVAL outside loop raises NoActiveLoop."""
         prog = make_program(
             [
                 Instruction(Opcode.LVAL, (0,)),
                 Instruction(Opcode.HALT),
             ]
         )
-        with pytest.raises(LoopError):
+        with pytest.raises(NoActiveLoop):
             Executor().execute(prog)
 
     def test_xqmx_mode_error(self):

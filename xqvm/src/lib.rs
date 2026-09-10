@@ -129,4 +129,4 @@ pub use tracer::{JsonTracer, TextTracer};
 pub use tracer::{NoopTracer, StepState, Tracer};
 pub use value::{IncompatibleTypeError, RegVal, RegValKind};
 pub use verifier::{RegType, VerifierError};
-pub use vm::{DEFAULT_STEP_LIMIT, Vm};
+pub use vm::{DEFAULT_MEMORY_LIMIT, DEFAULT_STEP_LIMIT, Vm};

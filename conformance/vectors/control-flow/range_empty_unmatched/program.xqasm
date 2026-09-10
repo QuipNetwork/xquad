@@ -1,0 +1,15 @@
+; range_empty_unmatched: an empty RANGE whose body has no NEXT raises
+; UNMATCHED_LOOP.
+;
+; A non-positive count skips the body by scanning forward for the matching
+; NEXT (spec/xqvm/ISA.md's empty-loop skip clause). Running off the end of
+; the stream instead means the loop was never closed, which
+; spec/xqvm/SPEC.md:196 gives its own identity -- distinct from the
+; NO_ACTIVE_LOOP a stray NEXT raises. The pair is the reason xqvm_py's
+; single LoopError class had to be split (QUI-1289).
+
+PUSH 0
+PUSH 0
+RANGE          ; loop [0, 0) -- empty, so the body is skipped
+PUSH 99
+HALT
