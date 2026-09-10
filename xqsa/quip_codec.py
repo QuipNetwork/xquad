@@ -133,6 +133,22 @@ class QuipSigningError(QuipError):
     """
 
 
+class QuipMetadataError(QuipError):
+    """Raised when a node's runtime metadata cannot be decoded by this client.
+
+    ``substrate-interface``/``scalecodec`` decode metadata up to V14 and Quip
+    runtimes serve V16, so :mod:`xqsa.quip_metadata` fetches V14 through the
+    versioned runtime API instead. This is raised only when that path and the
+    stock ``state_getMetadata`` both fail, and it names the version the node
+    serves in place of the bare ``Index '16' not present in Enum type mapping``
+    that ``scalecodec`` would otherwise surface.
+
+    Defined here in the dependency-free codec module for the same reason as
+    :class:`QuipSigningError`: it can be re-exported from ``xqsa`` without
+    pulling in the optional ``[quip]`` extra.
+    """
+
+
 @dataclass(frozen=True)
 class AllowedValues:
     """A topology's allowed milli-values for a coefficient field (h, j, or spin).

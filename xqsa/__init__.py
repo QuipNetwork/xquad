@@ -34,7 +34,7 @@ from .quip import (
     QuipTopologyError,
     SolverQuip,
 )
-from .quip_codec import EncodingError, PlacementError, QuipError, QuipSigningError
+from .quip_codec import EncodingError, PlacementError, QuipError, QuipMetadataError, QuipSigningError
 from .registry import DEFAULT_SOLVER, SOLVERS, build_solver
 from .solver import Solver, SolverResult
 
@@ -48,6 +48,7 @@ __all__ = [
     "SolverQuip",
     "QuipError",
     "QuipConnectionError",
+    "QuipMetadataError",
     "QuipSubmissionError",
     "QuipTimeoutError",
     "QuipTopologyError",

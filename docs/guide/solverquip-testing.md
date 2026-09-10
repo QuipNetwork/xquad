@@ -14,9 +14,13 @@ at:
   repo stands up a self-contained single-validator chain plus a faucet and one
   CPU miner. Fast, offline, and you control the whole stack.
 - the public **TestNet** (LiveNet) -- a real multi-node deployment with a
-  third-party GPU solver fleet, a real faucet, and a rolling runtime. This is
+  third-party GPU solver fleet and a rolling runtime. This is
   the target for validation the DevNet cannot fully stand in for (real solvers,
-  real timing, real runtime upgrades).
+  real timing, real runtime upgrades). `faucet.testnet.quip.network` no longer
+  resolves, so the funded tier of the suite skips there; the chain itself is
+  live. A newer deployment, **aglais**, runs the H4 (FN-DSA-512) signature
+  scheme our signing layer does not yet speak -- it arrives with QUI-1258 and
+  QUI-1259.
 
 Both are opt-in and gated on `QUIP_RPC_URL`, so they never run in the default
 `make test` or in CI. The [MR template](../.gitlab/merge_request_templates/default.md)
@@ -129,7 +133,9 @@ the first pull is slow and CPU is higher than native -- expected, not a hang.
 ### Verify the stack
 
 - Blocks + runtime version: `state_getRuntimeVersion` over the RPC should report
-  `specVersion 112`, `transactionVersion 5` (matches the TestNet).
+  `specVersion 112`, `transactionVersion 5`. The DevNet image lags the TestNet
+  (which is on 116 / 6); the pinned DevNet coordinates here are re-validated
+  separately.
 - Containers: `docker ps` -- all `*-localdev` Up, `quip-cpu-localdev` not
   Restarting.
 - Miner healthy: `docker logs quip-cpu-localdev | grep -iE "solver guard: registered|topology .from chain.|mempool=on"`
@@ -199,14 +205,20 @@ propose jobs and a third-party fleet solves them.
   the chain is live. Confirm the node is caught up before trusting reads (see the
   liveness check below), and point `QUIP_RPC_URL` at a different RPC if the one you
   are on is not syncing.
-- **Faucet:** base `https://faucet.testnet.quip.network` (the suite POSTs
-  `.../request`). One dispense per account; rate-limited.
+- **Faucet:** none. `faucet.testnet.quip.network` has no DNS record as of
+  2026-09-10. Leave `QUIP_FAUCET_URL` unset: the funded tier then skips cleanly
+  and the read-only tier still runs. Funding an account is a manual step now, so
+  the tiers past connectivity need a keystore that already holds a balance.
 - **Block time:** ~6s.
-- **Runtime:** advances over time (as of writing, `specVersion 112` /
-  `transactionVersion 5`). ALWAYS re-check with `state_getRuntimeVersion` before
+- **Runtime:** advances over time (`specVersion 116` / `transactionVersion 6`,
+  read live on 2026-09-10). ALWAYS re-check with `state_getRuntimeVersion` before
   assuming a pinned value. The signer reads `transactionVersion` from chain
   metadata dynamically, so a runtime bump does not by itself break submission --
   but confirm rather than assume.
+- **Metadata:** the runtime serves Metadata V16, which `scalecodec` cannot
+  decode. Build clients through `xqsa.quip_metadata.connect`, which pulls V14
+  from the versioned runtime API; a stock `SubstrateInterface` fails with
+  `Index '16' not present in Enum type mapping` (see the gotcha below).
 - **Spec id:** `DEFAULT_ISING_SPEC_ID = 0x8f46f3a3...` (== chain
   `DefaultIsingSpecId`); `MinReward` = 1e12 planck (1 UNIT).
 
@@ -215,8 +227,8 @@ Quick version + liveness check. A synced node reports `isSyncing == false` and
 
     CERT=$(uv run --extra quip python -m certifi)
     RPC=wss://bootnode-1.testnet.quip.network:20049/rpc
-    SSL_CERT_FILE="$CERT" uv run --extra quip python -c "import substrateinterface as si; \
-        s=si.SubstrateInterface(url='$RPC'); \
+    SSL_CERT_FILE="$CERT" uv run --extra quip python -c "from xqsa.quip_metadata import connect; \
+        s=connect('$RPC'); \
         print('runtime', s.rpc_request('state_getRuntimeVersion',[])['result']); \
         print('sync   ', s.rpc_request('system_syncState',[])['result']); \
         print('health ', s.rpc_request('system_health',[])['result'])"
@@ -239,8 +251,7 @@ item entirely skips the check; a present-but-empty set rejects.
     CERT=$(uv run --extra quip python -m certifi)
     SSL_CERT_FILE="$CERT" QUIP_MINER_PROBE_TIMEOUT=180 \
       make test-quip \
-        QUIP_RPC_URL=wss://bootnode-1.testnet.quip.network:20049/rpc \
-        QUIP_FAUCET_URL=https://faucet.testnet.quip.network
+        QUIP_RPC_URL=wss://bootnode-1.testnet.quip.network:20049/rpc
 
 The submit-path tests always run; the `TestEndToEnd` cases are gated behind the
 `solving_miner` probe. If the probe skips (no solution within the window), retry
@@ -259,6 +270,15 @@ once when the fleet is active.
   session; do not hard-code pinned facts. The signer adapts `transactionVersion`
   from metadata, so submission keeps working across bumps -- but re-validate
   after a known upgrade.
+- **Metadata V16 blocks a stock client:** `substrate-interface` decodes through
+  `scalecodec`, whose `MetadataAll` enum ends at V14, so
+  `SubstrateInterface.init_runtime()` raises `ValueError: Index '16' not present
+  in Enum type mapping` against any runtime from `specVersion 116` on. No
+  release of either library decodes V16. `xqsa.quip_metadata` fetches V14
+  through `state_call("Metadata_metadata_at_version", 14)` instead, and
+  `SolverQuip` builds its client that way; ad-hoc scripts must do the same. The
+  shim falls back to `state_getMetadata` for older DevNet images, and raises
+  `QuipMetadataError` naming the served version when neither path decodes.
 - **Watch for a lagging RPC node:** a node that has fallen behind the chain tip
   serves a frozen snapshot, and every read then looks wrong -- balances at 0,
   funded accounts "missing", submitted extrinsics that never land -- while the

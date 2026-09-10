@@ -50,7 +50,7 @@ import time
 
 import pytest
 
-substrateinterface = pytest.importorskip(
+pytest.importorskip(
     "substrateinterface",
     reason="substrate-interface not installed (run `uv sync --extra quip`)",
 )
@@ -70,7 +70,8 @@ from xqsa.quip_codec import (
     DEFAULT_ISING_SPEC_ID,
     model_to_ising,
 )
-from xqsa.quip_signing import load_or_generate_keystore
+from xqsa.quip_metadata import connect as connect_shimmed
+from xqsa.quip_signing import SIGNED_EXTENSIONS, _extension_fields, load_or_generate_keystore
 from xqvm_py.xqmx import XQMX
 
 RPC_URL = os.environ.get("QUIP_RPC_URL")
@@ -109,8 +110,13 @@ MINER_IDLE_SKIP = (
 
 @pytest.fixture(scope="session")
 def chain():
-    """A read-only substrate-interface connection for direct chain assertions."""
-    iface = substrateinterface.SubstrateInterface(url=RPC_URL)
+    """A read-only substrate-interface connection for direct chain assertions.
+
+    Built through ``xqsa.quip_metadata.connect`` for the same reason SolverQuip
+    is: Quip runtimes serve metadata V16, which scalecodec cannot decode, so a
+    stock ``SubstrateInterface`` fails on the first query.
+    """
+    iface = connect_shimmed(RPC_URL)
     yield iface
     iface.close()
 
@@ -141,7 +147,7 @@ def funded_keystore(tmp_path_factory):
         assert resp.status == 200, f"faucet returned {resp.status}"
 
     # Wait for the transfer to land.
-    iface = substrateinterface.SubstrateInterface(url=RPC_URL)
+    iface = connect_shimmed(RPC_URL)
     try:
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
@@ -279,6 +285,43 @@ class TestConnectivity:
         assert default is not None
         solver = make_solver()
         assert solver._topology_hash == _as_hex(default)
+
+    def test_metadata_decodes_through_the_v14_shim(self, chain) -> None:
+        # The shim is what makes every other test in this file possible: Quip
+        # runtimes serve metadata V16 and scalecodec stops at V14, so a stock
+        # client raises "Index '16' not present in Enum type mapping" here.
+        chain.init_runtime()
+        assert chain.metadata is not None
+        assert chain.runtime_version is not None
+
+    def test_signed_extensions_match_chain(self, chain) -> None:
+        # QUI-1257: the encoded order must equal the runtime's own, so the next
+        # extension the runtime inserts fails this test rather than a submission.
+        chain.init_runtime()
+        assert tuple(chain.metadata.get_signed_extensions()) == SIGNED_EXTENSIONS
+
+    def test_empty_signed_extensions_really_encode_nothing(self, chain) -> None:
+        # The order check above catches an insertion or a reorder. It does not
+        # catch an existing extension gaining a field: we would keep encoding
+        # b"" for it and the submission, not the test, would be what fails.
+        # So check the claim directly -- every half we encode as empty must be a
+        # type that decodes from zero bytes.
+        from scalecodec.base import ScaleBytes
+
+        chain.init_runtime()
+        definitions = chain.metadata.get_signed_extensions()
+        fields = _extension_fields(nonce=0, spec_version=1, tx_version=1, genesis_bytes=b"\x00" * 32)
+
+        for name, halves in fields.items():
+            for half, blob in zip(("extrinsic", "additional_signed"), halves, strict=True):
+                if blob:
+                    continue  # we encode bytes for it; emptiness is not claimed.
+                type_string = definitions[name][half]
+                obj = chain.runtime_config.create_scale_object(type_string, data=ScaleBytes(b""))
+                try:
+                    obj.decode()
+                except Exception as exc:  # noqa: BLE001 -- any failure means it wants bytes.
+                    pytest.fail(f"{name}.{half} ({type_string}) is no longer empty on-chain: {exc}")
 
     def test_default_topology_is_mineable(self, make_solver) -> None:
         # The default topology the solver resolves must be in the chain's mineable
