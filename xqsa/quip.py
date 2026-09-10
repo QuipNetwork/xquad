@@ -48,6 +48,12 @@ from its sdist with a local Rust toolchain elsewhere. It is lazy-imported, so
 every other xqsa solver installs and runs without it; only constructing
 ``SolverQuip`` requires the extra.
 
+The chain client is built by :func:`xqsa.quip_metadata.connect`, not by
+``substrateinterface.SubstrateInterface`` directly: Quip runtimes serve Metadata
+V16 and ``scalecodec`` decodes at most V14, so the stock client cannot read the
+chain at all. The shim pulls V14 through the versioned runtime API and is
+confined to the instances built here.
+
 Beta-testnet notice: the Quip devnet/testnet is pre-release. Pallet metadata,
 the signed-extension layout, and economic parameters can change between
 releases; pin a node image and re-validate after upgrades.
@@ -62,12 +68,14 @@ import warnings
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from xqsa import quip_metadata
 from xqsa.quip_codec import (
     _TERMINAL_STATUSES,
     ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH,
     DEFAULT_ISING_SPEC_ID,
     QUIP_COEFFICIENTS_DOC_URL,
     QuipError,
+    QuipMetadataError,
     Topology,
     _as_hex,
     _as_int_or_none,
@@ -180,6 +188,11 @@ class SolverQuip(Solver):
         ValueError: if no RPC URL or signer (seed/keystore) is configured.
         QuipConnectionError: if the node is unreachable or the configured Ising
             spec is not registered on-chain.
+        QuipMetadataError: if the node's runtime metadata cannot be decoded by
+            the installed substrate-interface/scalecodec, even through the V14
+            shim. Raised in its own right rather than folded into
+            QuipConnectionError, because the remedy is a runtime that still
+            serves V14, not a retry.
     """
 
     def __init__(
@@ -201,7 +214,7 @@ class SolverQuip(Solver):
     ) -> None:
         # Two distinct guards, one per piece of the [quip] extra: client + signer.
         try:
-            import substrateinterface
+            import substrateinterface  # noqa: F401 -- presence check; the client is built by quip_metadata.connect.
         except ImportError as exc:
             raise ImportError(
                 "substrate-interface is not installed. Install xqsa with: pip install xqsa[quip]"
@@ -232,7 +245,20 @@ class SolverQuip(Solver):
         self._quip_signing = quip_signing
 
         try:
-            self._iface = substrateinterface.SubstrateInterface(url=resolved_url)
+            # Not substrateinterface.SubstrateInterface directly: Quip runtimes
+            # serve metadata V16, which scalecodec cannot decode. The subclass
+            # pulls V14 through the versioned runtime API instead, and confines
+            # that to instances we build. See xqsa.quip_metadata.
+            self._iface = quip_metadata.connect(resolved_url)
+            # Resolve metadata here rather than letting the first storage read
+            # trigger it: a node whose metadata this client cannot decode must
+            # fail as QuipMetadataError, and every read below wraps its faults
+            # as "could not read <pallet constant>", which names the wrong
+            # cause. Doing it once, in the open, also makes the failure
+            # independent of which resolve step happens to run first.
+            self._iface.init_runtime()
+        except QuipMetadataError:
+            raise  # a client/runtime metadata mismatch is not a connection fault.
         except Exception as exc:  # noqa: BLE001 -- any connect failure is a connection error.
             raise QuipConnectionError(f"could not connect to the Quip node at {resolved_url}: {exc}") from exc
         self._url = resolved_url
@@ -291,9 +317,13 @@ class SolverQuip(Solver):
         Raises:
             QuipConnectionError: if reading the constant fails (as opposed to the
                 constant simply not being defined on this runtime).
+            QuipMetadataError: propagated unchanged; undecodable metadata is not
+                an unreadable constant.
         """
         try:
             const = self._iface.get_constant("QuantumComputeMempool", "DefaultIsingSpecId")
+        except QuipMetadataError:
+            raise  # undecodable metadata, not an unreadable constant.
         except Exception as exc:  # noqa: BLE001 -- a fault, not a genuine absence.
             raise QuipConnectionError(
                 f"could not read the QuantumComputeMempool.DefaultIsingSpecId constant: {exc}"
@@ -340,9 +370,13 @@ class SolverQuip(Solver):
         Raises:
             QuipConnectionError: if the storage read fails for any reason other
                 than the item being absent from the runtime.
+            QuipMetadataError: propagated unchanged; undecodable metadata is not
+                an absent storage item.
         """
         try:
             entry = self._iface.query("QuantumPow", "DefaultTopology")
+        except QuipMetadataError:
+            raise  # undecodable metadata, not an absent storage item.
         except Exception as exc:  # noqa: BLE001 -- classify absence vs. fault below.
             if _is_storage_absent(exc):
                 return None  # the runtime does not define this storage item.
@@ -423,9 +457,13 @@ class SolverQuip(Solver):
             QuipConnectionError: if reading the storage map fails for any reason
                 other than the item being absent from the runtime, or if the map
                 returns entries that none decode to a canonical hash.
+            QuipMetadataError: propagated unchanged; undecodable metadata is not
+                an absent storage item.
         """
         try:
             entries = self._iface.query_map("QuantumPow", MINEABLE_TOPOLOGIES_STORAGE)
+        except QuipMetadataError:
+            raise  # undecodable metadata, not an absent storage item.
         except Exception as exc:  # noqa: BLE001 -- classify absence vs. fault below.
             if _is_storage_absent(exc):
                 return None  # the runtime does not define this storage item.

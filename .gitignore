@@ -102,6 +102,9 @@ CLAUDE.md
 CLAUDE.local.md
 AGENTS.local.md
 
+# Developer-local make wrapper; `include`s the shared Makefile.
+Makefile.local
+
 # Developer artifacts (directories)
 # No trailing slashes: git worktrees may symlink these back to the primary
 # checkout, and a trailing-slash pattern matches directories only -- never a

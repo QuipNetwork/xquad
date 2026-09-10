@@ -40,8 +40,9 @@ applies it before calling ``sign``.
 The extrinsic layout is adapted from ``quip.network/faucet`` and the
 ``quip-protocol`` miner's ``shared/substrate_client.py``; it conforms to
 protocol-rs ``v0.2`` and is validated by ``test_quip_signing.py`` plus live
-submission (the signed-extension extras order is the one item only a live
-metadata check can confirm -- see the plan's verification procedure #5c).
+submission. The signed-extension order in :data:`SIGNED_EXTENSIONS` is the one
+item only a live metadata check can confirm, so ``test_quip_live.py`` asserts it
+against the chain's own metadata.
 """
 
 from __future__ import annotations
@@ -67,6 +68,32 @@ MULTI_ADDRESS_ID = 0x00  # ``MultiAddress::Id`` discriminator (32-byte account i
 # Substrate signs ``blake2_256(payload)`` instead of the raw payload once the
 # encoded ``SignedPayload`` exceeds this many bytes (``using_encoded`` rule).
 SIGNED_PAYLOAD_HASH_THRESHOLD = 256
+
+# The runtime's signed extensions, in metadata order. Confirmed live against
+# aglais (``specVersion`` 117) and the outgoing testnet (116) on 2026-09-09.
+# ``EthSetOrigin`` (``pallet_revive::evm::tx_extension::SetOrigin``) is empty in
+# both the ``extra`` and ``additional`` halves, so it costs no wire bytes today,
+# but its position matters the moment a runtime gives it a payload.
+#
+# ``_extension_fields`` carries both halves per extension and
+# ``_signed_extensions`` concatenates each of them in this order, and
+# ``test_quip_live.py::TestConnectivity::test_signed_extensions_match_chain``
+# asserts it against live metadata -- so the next insertion fails a test rather
+# than a submission.
+SIGNED_EXTENSIONS: tuple[str, ...] = (
+    "AuthorizeCall",
+    "CheckNonZeroSender",
+    "CheckSpecVersion",
+    "CheckTxVersion",
+    "CheckGenesis",
+    "CheckMortality",
+    "CheckNonce",
+    "CheckWeight",
+    "ChargeTransactionPayment",
+    "CheckMetadataHash",
+    "EthSetOrigin",
+    "WeightReclaim",
+)
 
 # ``quip_signer`` byte-length invariants (see the binding's parity tests).
 MASTER_SEED_LEN = 32
@@ -426,6 +453,43 @@ _WAIT_STAGES = frozenset({"sent", "inblock", "finalized"})
 _TERMINAL_POOL_FAILURES = frozenset({"dropped", "invalid", "usurped", "retracted", "finalitytimeout"})
 
 
+def _extension_fields(
+    *,
+    nonce: int,
+    spec_version: int,
+    tx_version: int,
+    genesis_bytes: bytes,
+    tip: int = 0,
+) -> dict[str, tuple[bytes, bytes]]:
+    """Return each signed extension's ``(extra, additional)`` contribution.
+
+    One entry per extension, keyed by the identifier the runtime metadata uses,
+    in :data:`SIGNED_EXTENSIONS` order. Most extensions contribute nothing to
+    either half (``AuthorizeCall``, ``CheckNonZeroSender``, ``CheckWeight``,
+    ``EthSetOrigin``, ``WeightReclaim``).
+
+    One table rather than two parallel ones: the halves are what the runtime
+    defines together, and splitting them let a name be added to one and missed
+    in the other. ``test_quip_signing.py`` asserts this table's keys against
+    :data:`SIGNED_EXTENSIONS`, and ``test_quip_live.py`` asserts the empty
+    entries really encode nothing on-chain.
+    """
+    return {
+        "AuthorizeCall": (b"", b""),
+        "CheckNonZeroSender": (b"", b""),
+        "CheckSpecVersion": (b"", spec_version.to_bytes(4, "little")),
+        "CheckTxVersion": (b"", tx_version.to_bytes(4, "little")),
+        "CheckGenesis": (b"", genesis_bytes),
+        "CheckMortality": (b"\x00", genesis_bytes),  # Era::Immortal -> genesis hash
+        "CheckNonce": (encode_compact_u32(nonce), b""),
+        "CheckWeight": (b"", b""),
+        "ChargeTransactionPayment": (encode_compact_u128(tip), b""),
+        "CheckMetadataHash": (b"\x00", b"\x00"),  # Mode::Disabled / Option::None
+        "EthSetOrigin": (b"", b""),
+        "WeightReclaim": (b"", b""),
+    }
+
+
 def _signed_extensions(
     *,
     nonce: int,
@@ -436,40 +500,21 @@ def _signed_extensions(
 ) -> tuple[bytes, bytes]:
     """Return the ``(extra, additional)`` signed-extension blobs in metadata order.
 
-    The order and 0-byte encodings match the Quip ``v0.2`` runtime's signed
-    extensions. Most extensions contribute nothing to the wire (``AuthorizeCall``,
-    ``CheckNonZeroSender``, ``CheckSpecVersion``/``CheckTxVersion``/``CheckGenesis``
-    have empty ``extra``; ``CheckWeight``/``WeightReclaim`` are empty in both
-    halves). This exact order is re-confirmed against live metadata during live
-    validation (plan verification #5c).
+    Both halves are concatenated from :func:`_extension_fields` in
+    :data:`SIGNED_EXTENSIONS` order, so the declared order, the two encoded
+    orders, and the set of extensions cannot drift apart.
     """
-    extra = (
-        b""  # AuthorizeCall
-        + b""  # CheckNonZeroSender
-        + b""  # CheckSpecVersion
-        + b""  # CheckTxVersion
-        + b""  # CheckGenesis
-        + b"\x00"  # CheckMortality: Era::Immortal
-        + encode_compact_u32(nonce)  # CheckNonce
-        + b""  # CheckWeight
-        + encode_compact_u128(tip)  # ChargeTransactionPayment
-        + b"\x00"  # CheckMetadataHash: Mode::Disabled
-        + b""  # WeightReclaim
+    fields = _extension_fields(
+        nonce=nonce,
+        spec_version=spec_version,
+        tx_version=tx_version,
+        genesis_bytes=genesis_bytes,
+        tip=tip,
     )
-    additional = (
-        b""  # AuthorizeCall
-        + b""  # CheckNonZeroSender
-        + spec_version.to_bytes(4, "little")  # CheckSpecVersion
-        + tx_version.to_bytes(4, "little")  # CheckTxVersion
-        + genesis_bytes  # CheckGenesis
-        + genesis_bytes  # CheckMortality (immortal -> genesis hash)
-        + b""  # CheckNonce
-        + b""  # CheckWeight
-        + b""  # ChargeTransactionPayment
-        + b"\x00"  # CheckMetadataHash: Option::None
-        + b""  # WeightReclaim
+    return (
+        b"".join(fields[name][0] for name in SIGNED_EXTENSIONS),
+        b"".join(fields[name][1] for name in SIGNED_EXTENSIONS),
     )
-    return extra, additional
 
 
 def _compose_call_bytes(iface: Any, call_module: str, call_function: str, call_params: dict) -> bytes:

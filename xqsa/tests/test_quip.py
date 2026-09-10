@@ -754,14 +754,26 @@ class FakeSubstrate:
         events: list | None = None,
         maps: dict | None = None,
         head: int = 0,
+        init_runtime_raises: Exception | None = None,
+        get_constant_raises: Exception | None = None,
     ) -> None:
         self.constants = dict(constants or {})
         self.storage = dict(storage or {})
         self.events = list(events or [])
         self.maps = dict(maps or {})
         self.head = head
+        self._init_runtime_raises = init_runtime_raises
+        self._get_constant_raises = get_constant_raises
+
+    def init_runtime(self, block_hash: str | None = None, block_id: int | None = None) -> None:
+        # SolverQuip resolves metadata explicitly at construction; the real
+        # method is where an undecodable-metadata failure surfaces.
+        if self._init_runtime_raises is not None:
+            raise self._init_runtime_raises
 
     def get_constant(self, module: str, name: str):
+        if self._get_constant_raises is not None:
+            raise self._get_constant_raises
         # Real SubstrateInterface.get_constant returns None for a constant absent
         # from the runtime metadata (it only raises on a transport/decode fault).
         if (module, name) not in self.constants:
@@ -803,12 +815,20 @@ def _job_proposed_event(order_id: int, *, attrs_form: str = "mapping") -> dict:
 def _fake_substrate_module(iface: object, *, raises: Exception | None = None) -> types.ModuleType:
     module = types.ModuleType("substrateinterface")
 
-    def _ctor(url: str | None = None):
-        if raises is not None:
-            raise raises
-        return iface
+    class _FakeSubstrateInterface:
+        """A class, not a factory: ``quip_metadata`` subclasses whatever this is.
 
-    module.SubstrateInterface = _ctor  # type: ignore[attr-defined]
+        ``__new__`` hands back the preconfigured ``iface`` rather than a fresh
+        instance, so ``solver._iface`` stays the ``FakeSubstrate`` the test
+        configured and asserts against.
+        """
+
+        def __new__(cls, url: str | None = None, **kwargs):
+            if raises is not None:
+                raise raises
+            return iface
+
+    module.SubstrateInterface = _FakeSubstrateInterface  # type: ignore[attr-defined]
     return module
 
 
@@ -1019,6 +1039,58 @@ class TestSolverQuipConstruction:
         solver._iface.get_constant = _boom
         with pytest.raises(QuipConnectionError, match="DefaultIsingSpecId"):
             solver._chain_default_spec_id()
+
+
+class TestSolverQuipMetadataErrors:
+    """QuipMetadataError reaches the caller instead of being renamed en route.
+
+    Every chain read in the constructor wraps its faults with a message about
+    the pallet item it was reading. Undecodable metadata is not that fault, and
+    it has a different remedy (a runtime that still serves V14), so it must keep
+    its own type and message rather than arrive as "could not read
+    QuantumComputeMempool.DefaultIsingSpecId".
+    """
+
+    def test_construction_surfaces_it_from_init_runtime(self, monkeypatch) -> None:
+        from xqsa.quip import QuipMetadataError
+
+        iface = _default_iface()
+        iface._init_runtime_raises = QuipMetadataError("serves V16 runtime metadata")
+        with pytest.raises(QuipMetadataError, match="serves V16"):
+            _make_solver(monkeypatch, iface=iface)
+
+    def test_construction_surfaces_it_from_a_constant_read(self, monkeypatch) -> None:
+        # Belt and braces: init_runtime re-runs on a runtime upgrade mid-session,
+        # so a later read can be the first to hit it.
+        from xqsa.quip import QuipMetadataError
+
+        iface = _default_iface()
+        iface._get_constant_raises = QuipMetadataError("serves V16 runtime metadata")
+        with pytest.raises(QuipMetadataError, match="serves V16"):
+            _make_solver(monkeypatch, iface=iface)
+
+    def test_an_ordinary_fault_still_becomes_a_connection_error(self, monkeypatch) -> None:
+        from xqsa.quip import QuipConnectionError
+
+        iface = _default_iface()
+        iface._init_runtime_raises = RuntimeError("rpc timeout")
+        with pytest.raises(QuipConnectionError, match="could not connect"):
+            _make_solver(monkeypatch, iface=iface)
+
+    def test_storage_reads_propagate_it_unchanged(self, monkeypatch) -> None:
+        from xqsa.quip import QuipMetadataError
+
+        solver = _make_solver(monkeypatch, spec_id=DEFAULT_ISING_SPEC_ID, topology="0x" + "ab" * 32)
+
+        def _undecodable(module, name, params=None):
+            raise QuipMetadataError("serves V16 runtime metadata")
+
+        solver._iface.query = _undecodable
+        solver._iface.query_map = _undecodable
+        with pytest.raises(QuipMetadataError, match="serves V16"):
+            solver._chain_default_topology()
+        with pytest.raises(QuipMetadataError, match="serves V16"):
+            solver._mineable_topologies()
 
 
 class TestSolverQuipChainReads:

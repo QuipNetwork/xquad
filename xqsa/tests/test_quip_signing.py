@@ -253,6 +253,32 @@ class TestSignedExtensions:
         )
         assert extra == b"\x00" + b"\x00" + encode_compact_u128(1000) + b"\x00"
 
+    def test_eth_set_origin_sits_between_metadata_hash_and_weight_reclaim(self) -> None:
+        # QUI-1257: the live runtime lists 12 extensions, with EthSetOrigin
+        # (pallet_revive's SetOrigin) in this slot. test_quip_live.py asserts the
+        # whole tuple against chain metadata; this pins the position offline.
+        order = quip_signing.SIGNED_EXTENSIONS
+        assert order.index("EthSetOrigin") == order.index("CheckMetadataHash") + 1
+        assert order.index("WeightReclaim") == order.index("EthSetOrigin") + 1
+        assert len(order) == 12
+
+    def test_the_field_table_matches_the_declared_order(self) -> None:
+        # SIGNED_EXTENSIONS is the declared order; _extension_fields is what is
+        # actually encoded. A name in one and not the other fails at signing time
+        # with a bare KeyError, which is exactly the drift the live test above
+        # prompts someone to fix.
+        fields = quip_signing._extension_fields(nonce=0, spec_version=117, tx_version=7, genesis_bytes=GENESIS)
+        assert tuple(fields) == quip_signing.SIGNED_EXTENSIONS
+
+    def test_eth_set_origin_contributes_no_wire_bytes(self) -> None:
+        # It is a zero-field composite with an empty additional_signed, so adding
+        # it changes no payload -- it is a latent hazard, not a live bug.
+        extra, additional = quip_signing._signed_extensions(
+            nonce=3, spec_version=117, tx_version=7, genesis_bytes=GENESIS
+        )
+        assert len(extra) == 4
+        assert len(additional) == 4 + 4 + 32 + 32 + 1
+
 
 # ---------------------------------------------------------------------------
 # Keystore
