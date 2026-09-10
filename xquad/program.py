@@ -35,6 +35,14 @@ __all__ = ["Program", "RunResult", "Session"]
 
 
 def _validate_calldata_element(item: object) -> None:
+    """Reject a calldata element whose type no slot can hold.
+
+    Deliberately type-only: an `XqmxSample` arriving here is already
+    in-domain. Its constructor rejects out-of-domain values and the class
+    exposes only getters, so no instance can exist that would fail a value
+    scan. Re-scanning here would be dead code that reads like a live guard.
+    See `xqffi/src/vm.rs`, `PyXqmxSample::new`.
+    """
     if item is None or isinstance(item, (int, XqmxModel, XqmxSample)):
         return
     if isinstance(item, list):

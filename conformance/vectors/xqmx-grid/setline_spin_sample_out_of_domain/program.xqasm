@@ -1,0 +1,19 @@
+; setline_spin_sample_out_of_domain: spin is {-1, +1}, which is not a range.
+;
+; This is the vector a bounds-only domain check fails. Spin's envelope is
+; [-1, 1] and 0 sits inside it, so `low <= v <= high` admits a value that is
+; not a spin at all -- an assignment no Ising solver can read. Domain::contains
+; is therefore defined per domain rather than derived from Domain::bounds,
+; and Domain::step exists to say the thing the envelope cannot: spin strides
+; by 2.
+;
+; 0 is also the default for the other two domains, which makes it exactly the
+; value a guard written once and reused everywhere would let through.
+
+PUSH 4
+SSMX r0          ; spin sample, domain {-1, +1}, defaults to -1
+
+PUSH 1
+PUSH 0           ; inside the envelope, outside the domain
+SETLINE r0
+HALT

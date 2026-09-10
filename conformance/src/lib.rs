@@ -203,6 +203,8 @@ pub enum Fault {
     InvalidGridDimensions,
     /// An `XQMX`/`XSMX` allocation used `k < 2`.
     InvalidDiscreteK,
+    /// A `SETLINE`/`ADDLINE` write put a value outside a sample's domain.
+    SampleOutOfDomain,
     /// An operation was invalid for the model's current mode.
     XqmxMode,
     /// A tracer refused a step.
@@ -557,6 +559,7 @@ fn fault_from_rust(error: &xqvm::Error) -> Fault {
         E::InvalidShift { .. } => Fault::InvalidShift,
         E::InvalidGridDimensions { .. } => Fault::InvalidGridDimensions,
         E::InvalidDiscreteK { .. } => Fault::InvalidDiscreteK,
+        E::SampleOutOfDomain { .. } => Fault::SampleOutOfDomain,
         E::TraceFailed { .. } => Fault::TraceFailed,
         E::InvalidAllocation { .. } => Fault::InvalidAllocation,
         E::LoopStackOverflow { .. } => Fault::LoopStackOverflow,
@@ -595,6 +598,7 @@ fn fault_from_python(class_name: &str) -> Result<Fault, String> {
         "XQMXModeError" => Ok(Fault::XqmxMode),
         "InvalidAllocation" => Ok(Fault::InvalidAllocation),
         "InvalidDiscreteK" => Ok(Fault::InvalidDiscreteK),
+        "SampleOutOfDomain" => Ok(Fault::SampleOutOfDomain),
         "InvalidShift" => Ok(Fault::InvalidShift),
         "SizeMismatch" => Ok(Fault::SizeMismatch),
         "VecLengthMismatch" => Ok(Fault::VecLengthMismatch),

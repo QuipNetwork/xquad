@@ -20,14 +20,14 @@ or vice versa.
 To populate a sample with concrete variable assignments, construct an
 `xqvm::XqmxSample` in the host and pass it to the program through a
 calldata slot, then `INPUT` it into a register before calling `ENERGY`.
-At the VM level, `SETLINE` and `ADDLINE` can also write a sample's
-per-variable assignment values in place, the same way they write a
-model's linear bias map -- see [Coefficient Access](coefficient-access.md).
-`xquad verify` requires a `Model` register for that instruction family,
-though, so a program that mutates a sample this way cannot pass
-verification; building a new `XqmxSample` in the host and passing it in
-through calldata is the supported way to change what a verified program
-evaluates.
+`SETLINE` and `ADDLINE` can also write a sample's per-variable assignment
+values in place, the same way they write a model's linear bias map, and
+`xquad verify` accepts them -- see
+[Coefficient Access](coefficient-access.md). Each write is checked against
+the sample's domain, so a program can only build assignments the variables
+can actually take. Constructing an `XqmxSample` in the host and passing it
+through calldata remains the way to hand a verified program a whole
+candidate solution at once.
 
 ## Hamiltonian
 

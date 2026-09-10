@@ -20,7 +20,7 @@ XQVM XQMX Types and Operations
 
 XQMX represents quadratic models (QUBO/Ising) with:
 - mode: MODEL (for building constraints/objectives) or SAMPLE (for solutions)
-- domain: BINARY [0,1], SPIN [-1,+1], or DISCRETE [-k, k-1] (signed, centred)
+- domain: BINARY {0, 1}, SPIN {-1, +1}, or DISCRETE {0, ..., k-1}
 - Grid operations for row/column indexing
 - High-level functions (HLF)
 """
@@ -36,6 +36,7 @@ from .errors import (
     InvalidAllocation,
     InvalidDiscreteK,
     InvalidGridDimensions,
+    SampleOutOfDomain,
     SizeMismatch,
     VecLengthMismatch,
     XQMXModeError,
@@ -53,9 +54,50 @@ class XQMXMode(Enum):
 class XQMXDomain(Enum):
     """XQMX variable domain types."""
 
-    BINARY = auto()  # [0, 1] - QUBO/BQM
-    SPIN = auto()  # [-1, +1] - Ising
-    DISCRETE = auto()  # [-k, k-1] - signed centred range, 2k values
+    BINARY = auto()  # {0, 1} - QUBO/BQM
+    SPIN = auto()  # {-1, +1} - Ising
+    DISCRETE = auto()  # {0, ..., k-1} - k values
+
+
+def domain_default(domain: XQMXDomain) -> int:
+    """Return the value a freshly allocated sample variable holds.
+
+    Always a member of the domain. Mirrors ``Domain::default_value`` in
+    ``xqvm/src/model.rs``.
+    """
+    if domain == XQMXDomain.SPIN:
+        return -1
+    return 0
+
+
+def domain_contains(domain: XQMXDomain, k: int, value: int) -> bool:
+    """Return whether a sample variable in ``domain`` may hold ``value``.
+
+    Defined directly rather than as an inclusive range test, because
+    spin has a hole at ``0`` that an inclusive range check would wrongly
+    admit. ``k`` is read only for the discrete domain, where it is the number
+    of values and not a half-width.
+
+    Mirrors ``Domain::contains`` in ``xqvm/src/model.rs``.
+    """
+    if domain == XQMXDomain.BINARY:
+        return value in (0, 1)
+    if domain == XQMXDomain.SPIN:
+        return value in (-1, 1)
+    return 0 <= value < k
+
+
+def domain_description(domain: XQMXDomain, k: int = 2) -> str:
+    """Render a domain the way the Rust ``Display`` impl does.
+
+    The two implementations raise the same fault with the same domain text,
+    so the description lives beside the predicate that produces it.
+    """
+    if domain == XQMXDomain.BINARY:
+        return "binary {0, 1}"
+    if domain == XQMXDomain.SPIN:
+        return "spin {-1, +1}"
+    return f"discrete {{0, ..., {k - 1}}}"
 
 
 @dataclass
@@ -65,7 +107,7 @@ class XQMX:
 
     XQMX represents a quadratic model (QUBO/Ising) with:
     - mode: MODEL (for building constraints/objectives) or SAMPLE (for solutions)
-    - domain: BINARY [0,1], SPIN [-1,+1], or DISCRETE [-k, k-1] (signed, centred)
+    - domain: BINARY {0, 1}, SPIN {-1, +1}, or DISCRETE {0, ..., k-1}
     - dimensions: size (total variables), rows, cols (for grid indexing)
     - linear: dict mapping variable index -> linear coefficient
     - quadratic: dict mapping (i, j) tuple -> coupling coefficient (i < j)
@@ -80,7 +122,7 @@ class XQMX:
     cols: int = 0  # Grid cols (0 if not grid-indexed)
     linear: dict[int, int] = field(default_factory=dict)
     quadratic: dict[tuple[int, int], int] = field(default_factory=dict)
-    discrete_k: int = 2  # For DISCRETE domain: half-width of the range [-k, k-1]
+    discrete_k: int = 2  # For DISCRETE domain: the number of values, {0, ..., k-1}
 
     def __post_init__(self) -> None:
         if self.size < 0:
@@ -89,10 +131,20 @@ class XQMX:
             raise InvalidGridDimensions(self.rows, self.cols)
         if self.domain == XQMXDomain.DISCRETE and self.discrete_k < 2:
             raise InvalidDiscreteK(self.discrete_k)
+        if self.mode == XQMXMode.SAMPLE:
+            # Direct construction is a write path too. `set_linear` and
+            # `add_linear` guard the opcodes, but a caller that passes
+            # `linear=` here would otherwise bypass them, and so would the
+            # Python backend's calldata path. Absent entries need no check:
+            # `_absent_linear` reads them as the domain's own default.
+            # Runs after the k guard so a bad k names itself rather than
+            # surfacing as a domain complaint about every value.
+            for index, value in self.linear.items():
+                self._check_domain(index, value)
 
     @classmethod
     def binary_model(cls, size: int, rows: int = 0, cols: int = 0) -> XQMX:
-        """Create a binary [0,1] model XQMX."""
+        """Create a binary {0, 1} model XQMX."""
         return cls(
             mode=XQMXMode.MODEL,
             domain=XQMXDomain.BINARY,
@@ -103,7 +155,7 @@ class XQMX:
 
     @classmethod
     def spin_model(cls, size: int, rows: int = 0, cols: int = 0) -> XQMX:
-        """Create a spin [-1,+1] model XQMX."""
+        """Create a spin {-1, +1} model XQMX."""
         return cls(
             mode=XQMXMode.MODEL,
             domain=XQMXDomain.SPIN,
@@ -114,7 +166,7 @@ class XQMX:
 
     @classmethod
     def discrete_model(cls, size: int, k: int, rows: int = 0, cols: int = 0) -> XQMX:
-        """Create a discrete model XQMX over the signed centred range [-k, k-1]."""
+        """Create a discrete model XQMX over the domain {0, ..., k-1}."""
         return cls(
             mode=XQMXMode.MODEL,
             domain=XQMXDomain.DISCRETE,
@@ -126,7 +178,7 @@ class XQMX:
 
     @classmethod
     def binary_sample(cls, size: int, rows: int = 0, cols: int = 0) -> XQMX:
-        """Create a binary [0,1] sample XQMX."""
+        """Create a binary {0, 1} sample XQMX."""
         return cls(
             mode=XQMXMode.SAMPLE,
             domain=XQMXDomain.BINARY,
@@ -137,12 +189,11 @@ class XQMX:
 
     @classmethod
     def spin_sample(cls, size: int, rows: int = 0, cols: int = 0) -> XQMX:
-        """Create a spin [-1,+1] sample XQMX with all positions at -1.
+        """Create a spin {-1, +1} sample XQMX with all positions at -1.
 
-        Pre-populates `linear` so a fresh sample is a valid spin state,
-        matching Rust's `exec_ssmx` (`vec![-1; size]`). Binary and
-        discrete samples have a default of 0, which is already the
-        sparse-dict fallback — only spin needs pre-population.
+        Stays sparse: `_absent_linear` supplies the -1 that Rust's
+        `exec_ssmx` writes densely (`vec![-1; size]`), so a fresh sample is
+        a valid spin state without an entry per variable.
         """
         return cls(
             mode=XQMXMode.SAMPLE,
@@ -150,14 +201,13 @@ class XQMX:
             size=size,
             rows=rows,
             cols=cols,
-            linear={i: -1 for i in range(size)},
         )
 
     @classmethod
     def discrete_sample(cls, size: int, k: int, rows: int = 0, cols: int = 0) -> XQMX:
-        """Create a discrete sample XQMX over the signed centred range [-k, k-1].
+        """Create a discrete sample XQMX over the domain {0, ..., k-1}.
 
-        Values default to 0, which the centred range always contains.
+        Values default to 0, the bottom of the domain.
         """
         return cls(
             mode=XQMXMode.SAMPLE,
@@ -176,6 +226,15 @@ class XQMX:
         """Check if this is a sample (vs model)."""
         return self.mode == XQMXMode.SAMPLE
 
+    def domain_contains(self, value: int) -> bool:
+        """Return whether ``value`` lies in this xqmx's declared domain.
+
+        Delegates to :func:`domain_contains` with this xqmx's domain and
+        ``discrete_k``. Only meaningful for SAMPLE mode: model coefficients
+        are unbounded by design.
+        """
+        return domain_contains(self.domain, self.discrete_k, value)
+
     def _check_index(self, i: int) -> None:
         """Raise unless ``i`` addresses one of this xqmx's declared variables.
 
@@ -193,16 +252,40 @@ class XQMX:
         if i < 0 or i >= self.size:
             raise IndexOutOfBounds(i, self.size)
 
+    def _check_domain(self, i: int, value: int) -> None:
+        """Raise unless ``value`` is a member of a sample's declared domain.
+
+        A no-op in MODEL mode: model coefficients are unbounded by design,
+        and only sample values carry a domain. Mirrors ``check_write_domain``
+        in ``xqvm/src/vm.rs``, including its scope -- the invariant is on the
+        write, not on the register.
+        """
+        if self.mode != XQMXMode.SAMPLE:
+            return
+        if not domain_contains(self.domain, self.discrete_k, value):
+            raise SampleOutOfDomain(i, value, domain_description(self.domain, self.discrete_k))
+
+    def _absent_linear(self) -> int:
+        """Return what an absent ``linear`` entry means for this xqmx.
+
+        A sample's absent entry is the domain's default value, which is the
+        state `exec_bsmx`/`exec_ssmx`/`exec_xsmx` write densely on the Rust
+        side. A model's absent entry is a zero coefficient, which is not a
+        domain question at all -- a spin model's unset bias is `0`, not `-1`.
+        """
+        return domain_default(self.domain) if self.is_sample() else 0
+
     def get_linear(self, i: int) -> int:
         """Get linear coefficient/value for variable i."""
         self._check_index(i)
-        return self.linear.get(i, 0)
+        return self.linear.get(i, self._absent_linear())
 
     def set_linear(self, i: int, value: int) -> None:
         """Set linear coefficient/value for variable i."""
         self._check_index(i)
 
         check_i64(value, f"linear[{i}]")
+        self._check_domain(i, value)
         if value == 0:
             self.linear.pop(i, None)
         else:
@@ -212,8 +295,11 @@ class XQMX:
         """Add to linear coefficient for variable i."""
         self._check_index(i)
 
-        current = self.linear.get(i, 0)
+        current = self.linear.get(i, self._absent_linear())
         new_value = check_i64(current + delta, f"linear[{i}]")
+        # The domain applies to the result, not the delta, and the overflow
+        # check runs first so the fault precedence matches `exec_add_line`.
+        self._check_domain(i, new_value)
 
         if new_value == 0:
             self.linear.pop(i, None)

@@ -33,18 +33,19 @@ decision, not an implementation detail:
   annealers, which minimise an Ising Hamiltonian directly. Allocate the
   domain the target backend expects rather than assuming a QUBO model can
   be handed to an Ising-only backend unchanged.
-- **`XQMX`** allocates a discrete model: variables take one of
-  \\(2k\\) signed, centered integer values, \\(x_i \in \\{-k, -(k{-}1),
-  \ldots, k{-}2, k{-}1\\}\\). This generalises past binary and spin to give
-  a variable more than two states directly, suited to a quantity with a
-  natural ordering or magnitude -- a position in a small enumerated set --
-  without one-hot-encoding it into several binary variables first. It does
-  not encode an unordered categorical choice such as a
-  colour: a quadratic form over integer variables cannot express that two
-  values merely differ without also expressing by how much. `XQMX` errors
-  with `InvalidDiscreteK` when \\(k < 2\\), since \\(k = 1\\) gives the
-  two-point domain \\(\\{-1, 0\\}\\), which degenerates to a binary
-  choice that `BQMX` already covers, not a genuinely discrete one.
+- **`XQMX`** allocates a discrete model: variables take one of \\(k\\)
+  values, \\(x_i \in \\{0, 1, \ldots, k{-}1\\}\\). A discrete variable is
+  a case index, the same convention D-Wave's DQM and Potts models use, so
+  \\(k\\) is a count and not a half-width. This generalises past binary and
+  spin to give a variable more than two states directly, suited to a
+  quantity with a natural ordering or magnitude -- a position in a small
+  enumerated set -- without one-hot-encoding it into several binary
+  variables first. It does not encode an unordered categorical choice such
+  as a colour: a quadratic form over integer variables cannot express that
+  two values merely differ without also expressing by how much. `XQMX`
+  errors with `InvalidDiscreteK` when \\(k < 2\\), since a domain needs at
+  least two values to carry a decision: \\(k = 1\\) leaves the single value
+  \\(\\{0\\}\\), which is a constant rather than a variable.
 
 ## Sample Allocators
 
@@ -60,7 +61,13 @@ in-domain without a special case: binary and discrete samples default every
 variable to \\(0\\), and spin samples default every variable to \\(-1\\)
 (spin-down), since \\(0\\) is not a member of \\(\\{-1, 1\\}\\). The discrete
 default of \\(0\\) is always valid because the domain
-\\(\\{-k, \ldots, k{-}1\\}\\) is centered on zero for every \\(k \ge 2\\).
+\\(\\{0, \ldots, k{-}1\\}\\) starts at zero for every \\(k \ge 2\\).
+
+Those defaults are not merely conventional. `SETLINE` and `ADDLINE` check
+every write into a sample against its domain and raise `SampleOutOfDomain`
+otherwise, so a freshly allocated sample has to be in-domain from the start
+or the first read of an untouched variable would return a value the same
+register could not have been written.
 
 ## Vec Allocators
 
@@ -78,7 +85,7 @@ assembly where the type is obvious from what gets pushed next.
 |--------|----------------|-------|--------|
 | Binary | \\(\\{0, 1\\}\\) | `BQMX` | `BSMX` |
 | Spin | \\(\\{-1, 1\\}\\) | `SQMX` | `SSMX` |
-| Discrete(\\(k\\)) | \\(\\{-k, -(k{-}1), \ldots, k{-}2, k{-}1\\}\\), \\(k \ge 2\\) | `XQMX` | `XSMX` |
+| Discrete(\\(k\\)) | \\(\\{0, 1, \ldots, k{-}1\\}\\), \\(k \ge 2\\) | `XQMX` | `XSMX` |
 
 ## Example
 
@@ -90,5 +97,5 @@ XQMX r0     ; errors: InvalidDiscreteK, k = 1 is not >= 2
 
 `XQMX` and `XSMX` both check `k` only after popping both operands, so the
 stack is consumed either way; on `k < 2` they fault `InvalidDiscreteK`
-with the message `XQMX/XSMX requires k >= 2 for the [-k, k-1] domain, got
-k = 1`.
+with the message `XQMX/XSMX requires k >= 2 for the {0, ..., k-1} domain,
+got k = 1`.

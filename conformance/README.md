@@ -138,6 +138,7 @@ bug ever motivates them.
 | `INVALID_SHIFT` | `InvalidShift` | `InvalidShift` |
 | `INVALID_GRID_DIMENSIONS` | `InvalidGridDimensions` | `InvalidGridDimensions` |
 | `INVALID_DISCRETE_K` | `InvalidDiscreteK` | `InvalidDiscreteK` |
+| `SAMPLE_OUT_OF_DOMAIN` | `SampleOutOfDomain` | `SampleOutOfDomain` |
 | `XQMX_MODE` | -- | `XQMXModeError` |
 | `TRACE_FAILED` | `TraceFailed` | -- |
 | `INVALID_ALLOCATION` | `InvalidAllocation` | `InvalidAllocation` |

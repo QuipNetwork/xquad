@@ -45,6 +45,8 @@ use alloc::string::String;
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
+use crate::model::Domain;
+
 #[cfg(feature = "std")]
 use crate::bytecode::Program;
 #[cfg(feature = "std")]
@@ -242,11 +244,38 @@ pub enum Error {
     InvalidGridDimensions { pos: usize, rows: i64, cols: i64 },
 
     /// `XQMX`/`XSMX` was called with a discrete-domain `k` smaller than 2.
-    /// The signed domain `[-k, k-1]` collapses to a single value at `k = 1`
-    /// and is empty at `k <= 0`, so neither carries useful semantics; the
-    /// reference (`spec/xqvm/SPEC.md`) requires `k >= 2`.
-    #[error("XQMX/XSMX requires k >= 2 for the [-k, k-1] domain, got k = {k} at byte {pos:#06x}")]
+    /// `k` is the number of values in the domain `{0, ..., k-1}`, so `k = 1`
+    /// leaves a variable with one value and no decision to make, and
+    /// `k <= 0` leaves it with none at all; the reference
+    /// (`spec/xqvm/SPEC.md`) requires `k >= 2`.
+    #[error(
+        "XQMX/XSMX requires k >= 2 for the {{0, ..., k-1}} domain, \
+         got k = {k} at byte {pos:#06x}"
+    )]
     InvalidDiscreteK { pos: usize, k: i64 },
+
+    /// `SETLINE` or `ADDLINE` tried to write a value outside the domain the
+    /// sample's allocator declared.
+    ///
+    /// The invariant is on the *write*, not on the register: a Rust embedder
+    /// calling `Vm::set_calldata` directly can still install an out-of-domain
+    /// sample, which `GETLINE` then reads back. Model coefficients are
+    /// unbounded `i64` by design and never raise this.
+    ///
+    /// `ADDLINE` checks the result of the addition rather than the delta, so
+    /// a write that leaves the domain raises while one that returns to it
+    /// succeeds. `IndexOutOfBounds` and `ArithmeticOverflow` both take
+    /// precedence over this fault.
+    #[error(
+        "sample value {value} at variable {index} is outside the {domain} domain \
+         at byte {pos:#06x}"
+    )]
+    SampleOutOfDomain {
+        pos: usize,
+        index: usize,
+        value: i64,
+        domain: Domain,
+    },
 
     /// A RANGE or ITER skip-forward scan reached end-of-stream without
     /// finding a matching NEXT (nesting depth never reached zero).
@@ -335,6 +364,7 @@ impl Error {
             | Self::InvalidShift { pos, .. }
             | Self::InvalidGridDimensions { pos, .. }
             | Self::InvalidDiscreteK { pos, .. }
+            | Self::SampleOutOfDomain { pos, .. }
             | Self::UnmatchedLoop { pos }
             | Self::LoopStackOverflow { pos }
             | Self::TraceFailed { pos, .. }

@@ -1,0 +1,18 @@
+; setline_index_beats_domain: the index is checked before the value.
+;
+; Both faults are available here -- index 10 is past a size-4 sample and 5 is
+; outside {0, 1} -- so the vector pins which one a program sees. The index
+; wins because a write that addresses no variable has no domain to be
+; measured against: the domain is a property of the slot being written.
+;
+; This is the ordering that breaks if the domain check is hoisted above
+; bounded_index, which is a natural thing to do when the value is already on
+; the stack and the index still needs converting.
+
+PUSH 4
+BSMX r0          ; binary sample, size 4
+
+PUSH 10          ; past the end
+PUSH 5           ; and out of domain
+SETLINE r0
+HALT

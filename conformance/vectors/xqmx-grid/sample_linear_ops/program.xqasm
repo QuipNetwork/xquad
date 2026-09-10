@@ -1,13 +1,23 @@
 ; sample_linear_ops: exercise GETLINE / SETLINE / ADDLINE on a Sample.
 ;
-; Spec reference: SPEC.md §281 "XQMX Coefficient Access" — the linear
+; Spec reference: SPEC.md §281 "XQMX Coefficient Access" -- the linear
 ; opcodes accept either MODEL or SAMPLE mode. Samples store values
 ; densely (`values[i]`); models store biases sparsely (`linear[i]`).
 ; Both surfaces read `0` for uninitialised entries.
 ;
 ; This vector regresses the Rust-side fix for QUI-461's §281 linear
 ; widening (pre-fix: Rust rejected Sample here with
-; RegisterType { expected: "model" }).
+; RegisterType { expected: "model" }). It also regresses the verifier rule
+; QUI-1168 corrected: reg_type.rs required a Model register for all three
+; linear opcodes, so this program assembled and ran but could not pass
+; `xquad verify`.
+;
+; Every write stays inside the binary domain {0, 1}. An earlier revision
+; wrote 3 and accumulated to 8 into this same binary sample, which reads as
+; a deliberate assertion that the domain is unenforced; it is enforced now.
+; ADDLINE is checked on its result, so the -1 below is legal precisely
+; because it lands back on 0 -- addline_sample_leaves_domain covers the
+; other direction.
 
 PUSH 4
 BSMX r0              ; r0 = binary sample, size 4, all zeros
@@ -17,30 +27,30 @@ PUSH 2
 GETLINE r0
 STOW r1              ; r1 = sample.values[2] (0)
 
-; --- SETLINE writes to sample.values[1] = 3 ---
+; --- SETLINE writes to sample.values[1] = 1 ---
 PUSH 1
-PUSH 3
+PUSH 1
 SETLINE r0
 
 ; --- GETLINE confirms the write ---
 PUSH 1
 GETLINE r0
-STOW r2              ; r2 = sample.values[1] (3)
+STOW r2              ; r2 = sample.values[1] (1)
 
-; --- ADDLINE adds to sample.values[1] += 5 ---
+; --- ADDLINE takes sample.values[1] back down to 0 ---
 PUSH 1
-PUSH 5
+PUSH -1
 ADDLINE r0
 
 ; --- GETLINE confirms the accumulated value ---
 PUSH 1
 GETLINE r0
-STOW r3              ; r3 = sample.values[1] (8)
+STOW r3              ; r3 = sample.values[1] (0)
 
 PUSH 0
 OUTPUT r1            ; outputs[0] = 0 (initial GETLINE)
 PUSH 1
-OUTPUT r2            ; outputs[1] = 3 (post-SETLINE)
+OUTPUT r2            ; outputs[1] = 1 (post-SETLINE)
 PUSH 2
-OUTPUT r3            ; outputs[2] = 8 (post-ADDLINE)
+OUTPUT r3            ; outputs[2] = 0 (post-ADDLINE)
 HALT

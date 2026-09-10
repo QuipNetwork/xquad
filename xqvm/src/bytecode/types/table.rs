@@ -199,17 +199,17 @@ macro_rules! opcodes {
             // ---------------------------------------------------------------
             // Allocators
             // ---------------------------------------------------------------
-            (0x40, Bqmx,    "BQMX",     "Pop size; allocate a binary QUBO model ([0, 1] domain) into a register.",
+            (0x40, Bqmx,    "BQMX",     "Pop size; allocate a binary QUBO model ({0, 1} domain) into a register.",
              -1_i8, {reg: $crate::Register}),
-            (0x41, Sqmx,    "SQMX",     "Pop size; allocate a spin Ising model ([-1, 1] domain) into a register.",
+            (0x41, Sqmx,    "SQMX",     "Pop size; allocate a spin Ising model ({-1, +1} domain) into a register.",
              -1_i8, {reg: $crate::Register}),
-            (0x42, Xqmx,    "XQMX",     "Pop k then size; allocate a discrete model with signed centered domain [-k, k-1] into a register. Errors when k < 2.",
+            (0x42, Xqmx,    "XQMX",     "Pop k then size; allocate a discrete model with domain {0, ..., k-1} into a register. Errors when k < 2.",
              -2_i8, {reg: $crate::Register}),
-            (0x43, Bsmx,    "BSMX",     "Pop size; allocate a binary sample ([0, 1] domain) into a register.",
+            (0x43, Bsmx,    "BSMX",     "Pop size; allocate a binary sample ({0, 1} domain) into a register.",
              -1_i8, {reg: $crate::Register}),
-            (0x44, Ssmx,    "SSMX",     "Pop size; allocate a spin sample ([-1, 1] domain) into a register.",
+            (0x44, Ssmx,    "SSMX",     "Pop size; allocate a spin sample ({-1, +1} domain) into a register.",
              -1_i8, {reg: $crate::Register}),
-            (0x45, Xsmx,    "XSMX",     "Pop k then size; allocate a discrete sample with signed centered domain [-k, k-1] into a register. Errors when k < 2.",
+            (0x45, Xsmx,    "XSMX",     "Pop k then size; allocate a discrete sample with domain {0, ..., k-1} into a register. Errors when k < 2.",
              -2_i8, {reg: $crate::Register}),
             // ---------------------------------------------------------------
             // Vec Allocators
@@ -243,11 +243,11 @@ macro_rules! opcodes {
             // ---------------------------------------------------------------
             // XQMX Coefficient Access
             // ---------------------------------------------------------------
-            (0x60, GetLine, "GETLINE",  "Pop i; push `linear[i]` from the register's model (0 if absent), or a sample's assignment at i; `xquad verify` requires a model.",
+            (0x60, GetLine, "GETLINE",  "Pop i; push `linear[i]` from the register's model (0 if absent), or a sample's assignment at i.",
              0, {reg: $crate::Register}),
-            (0x61, SetLine, "SETLINE",  "Pop value and i; set `linear[i]` in the register's model, or a sample's assignment at i; `xquad verify` requires a model.",
+            (0x61, SetLine, "SETLINE",  "Pop value and i; set `linear[i]` in the register's model, or a sample's assignment at i; a sample value outside its domain raises `SampleOutOfDomain`.",
              -2_i8, {reg: $crate::Register}),
-            (0x62, AddLine, "ADDLINE",  "Pop delta and i; add delta to `linear[i]` in the register's model, or a sample's assignment at i; `xquad verify` requires a model.",
+            (0x62, AddLine, "ADDLINE",  "Pop delta and i; add delta to `linear[i]` in the register's model, or a sample's assignment at i; a sample result outside its domain raises `SampleOutOfDomain`.",
              -2_i8, {reg: $crate::Register}),
             (0x63, GetQuad, "GETQUAD",  "Pop j and i; push `quadratic[i, j]` from the register's model (0 if absent).",
              -1_i8, {reg: $crate::Register}),

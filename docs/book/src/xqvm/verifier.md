@@ -36,8 +36,11 @@ computes at run time. An allocator size, a grid extent, a loop bound, a
 shift amount, a calldata or output index and every arithmetic operand are
 all ordinary popped stack values, which is why `InvalidAllocation`,
 `InvalidGridDimensions`, `InvalidDiscreteK`, `InvalidShift`,
-`ArithmeticOverflow`, `IndexOutOfBounds`, `LoopStackOverflow` and the two
-budget faults exist only at runtime and have no verifier counterpart.
+`ArithmeticOverflow`, `IndexOutOfBounds`, `SampleOutOfDomain`,
+`LoopStackOverflow` and the two budget faults exist only at runtime and
+have no verifier counterpart. `SampleOutOfDomain` is the clearest of them:
+`SETLINE` on a sample is well-typed whatever it writes, and only the value
+the program computes decides whether the write is in domain.
 That is a boundary rather than a gap: an embedder gets its bound from the
 step and allocation budgets it sets, not from a verification pass.
 

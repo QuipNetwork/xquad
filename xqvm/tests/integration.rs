@@ -1762,8 +1762,9 @@ fn xqmx_minimum_k_is_two() {
 
 #[test]
 fn xqmx_rejects_k_one() {
-    // k = 1 collapses the [-k, k-1] range to a single value (-1) and is
-    // explicitly forbidden by the spec.
+    // k is the number of values in {0, ..., k-1}, so k = 1 leaves a variable
+    // with one value and no decision to make. Explicitly forbidden by the
+    // spec.
     let err = run_err(|b| {
         b.emit_push(2).emit_push(1).emit_xqmx(Register(0));
         b.emit_halt();
@@ -1800,8 +1801,8 @@ fn xqmx_rejects_negative_k() {
 
 #[test]
 fn xsmx_allocates_discrete_sample() {
-    // XSMX: pops k (top) then size. Default values are zero, which lies in
-    // the centered domain [-k, k-1] for any k >= 2.
+    // XSMX: pops k (top) then size. Default values are zero, the bottom of
+    // the domain {0, ..., k-1} for any k >= 2.
     let vm = run(|b| {
         b.emit_push(3).emit_push(4).emit_xsmx(Register(0));
         b.emit_halt();
@@ -3852,4 +3853,210 @@ fn constraint_helpers_pay_for_the_coefficients_they_write() {
             .emit(Instruction::Reduce { model: Register(0) });
     });
     assert_eq!(reduce - baseline, dispatch + 4 * coeff);
+}
+
+// ---------------------------------------------------------------------------
+// Sample value domain (QUI-1168)
+//
+// The conformance vectors compare fault identity only, so the exact payload
+// -- which variable, which value, which domain -- is asserted here and
+// nowhere else.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn setline_rejects_out_of_domain_binary_value() {
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bsmx(Register(0));
+        b.emit_push(1).emit_push(2).emit_set_line(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::SampleOutOfDomain {
+                index: 1,
+                value: 2,
+                domain: Domain::Binary,
+                ..
+            }
+        ),
+        "expected SampleOutOfDomain, got {err:?}"
+    );
+}
+
+#[test]
+fn setline_rejects_zero_on_a_spin_sample() {
+    // 0 is the default for the other two domains and sits inside spin's
+    // envelope, so it is the value a shared bounds check would let through.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_ssmx(Register(0));
+        b.emit_push(3).emit_push(0).emit_set_line(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::SampleOutOfDomain {
+                index: 3,
+                value: 0,
+                domain: Domain::Spin,
+                ..
+            }
+        ),
+        "expected SampleOutOfDomain, got {err:?}"
+    );
+}
+
+#[test]
+fn setline_rejects_negative_on_a_discrete_sample() {
+    // Legal under the signed centred reading QUI-1150 replaced.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_push(3).emit_xsmx(Register(0));
+        b.emit_push(0).emit_push(-1).emit_set_line(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::SampleOutOfDomain {
+                index: 0,
+                value: -1,
+                domain: Domain::Discrete(3),
+                ..
+            }
+        ),
+        "expected SampleOutOfDomain, got {err:?}"
+    );
+}
+
+#[test]
+fn setline_rejects_k_itself_on_a_discrete_sample() {
+    let err = run_err(|b| {
+        b.emit_push(4).emit_push(3).emit_xsmx(Register(0));
+        b.emit_push(0).emit_push(3).emit_set_line(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::SampleOutOfDomain {
+                value: 3,
+                domain: Domain::Discrete(3),
+                ..
+            }
+        ),
+        "expected SampleOutOfDomain, got {err:?}"
+    );
+}
+
+#[test]
+fn addline_rejects_a_result_outside_the_domain() {
+    // The delta is 1, a perfectly good binary value; the sum is not.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bsmx(Register(0));
+        b.emit_push(1).emit_push(1).emit_set_line(Register(0));
+        b.emit_push(1).emit_push(1).emit_add_line(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::SampleOutOfDomain {
+                index: 1,
+                value: 2,
+                domain: Domain::Binary,
+                ..
+            }
+        ),
+        "expected SampleOutOfDomain, got {err:?}"
+    );
+}
+
+#[test]
+fn addline_rejects_a_result_outside_a_spin_domain() {
+    // -1 + 1 = 0, the spin gap. Both operands are in-domain values.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_ssmx(Register(0));
+        b.emit_push(2).emit_push(1).emit_add_line(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::SampleOutOfDomain {
+                index: 2,
+                value: 0,
+                domain: Domain::Spin,
+                ..
+            }
+        ),
+        "expected SampleOutOfDomain, got {err:?}"
+    );
+}
+
+#[test]
+fn addline_accepts_a_result_that_returns_to_the_domain() {
+    // -1 is not a binary value, but 1 + -1 is. The check is on the result.
+    let vm = run(|b| {
+        b.emit_push(4).emit_bsmx(Register(0));
+        b.emit_push(1).emit_push(1).emit_set_line(Register(0));
+        b.emit_push(1).emit_push(-1).emit_add_line(Register(0));
+        b.emit_push(1).emit_get_line(Register(0));
+        b.emit_halt();
+    });
+    assert_eq!(vm.stack(), &[0]);
+}
+
+#[test]
+fn setline_leaves_the_sample_unchanged_on_rejection() {
+    // The write is rejected before it lands, so the slot keeps its default
+    // rather than being partially updated.
+    let mut b = InstructionBuilder::new();
+    b.emit_push(4).emit_bsmx(Register(0));
+    b.emit_push(1).emit_push(2).emit_set_line(Register(0));
+    b.emit_halt();
+    let bytecode = b.build().expect("builder build");
+
+    let mut vm = Vm::new();
+    let _ = vm.run(&bytecode).expect_err("expected error");
+
+    if let RegVal::Sample(s) = vm.register(0) {
+        assert_eq!(s.values, vec![0, 0, 0, 0]);
+    } else {
+        panic!("expected sample register");
+    }
+}
+
+#[test]
+fn model_setline_accepts_any_i64() {
+    // A bias is not an assignment. A binary model routinely carries values
+    // no binary variable could take.
+    let vm = run(|b| {
+        b.emit_push(2).emit_bqmx(Register(0));
+        b.emit_push(0)
+            .emit_push(i64::MIN)
+            .emit_set_line(Register(0));
+        b.emit_push(1)
+            .emit_push(i64::MAX)
+            .emit_set_line(Register(0));
+        b.emit_push(0).emit_get_line(Register(0));
+        b.emit_push(1).emit_get_line(Register(0));
+        b.emit_halt();
+    });
+    assert_eq!(vm.stack(), &[i64::MIN, i64::MAX]);
+}
+
+#[test]
+fn setline_index_is_checked_before_the_value() {
+    // Both faults are available; a write that addresses no variable has no
+    // domain to be measured against.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bsmx(Register(0));
+        b.emit_push(10).emit_push(5).emit_set_line(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(err, Error::IndexOutOfBounds { index: 10, .. }),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
 }

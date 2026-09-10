@@ -145,6 +145,20 @@ impl PyXqmxSample {
         k: Option<i64>,
     ) -> PyResult<Self> {
         let dom = domain_from_str(domain, k)?;
+        // Independent guards rather than one fused condition, so the extent
+        // checks (QUI-1164) drop in beside this one.
+        //
+        // The VM's own check is on SETLINE and ADDLINE, which a host-supplied
+        // sample never passes through: `Vm::set_calldata` is infallible by
+        // design and stays the trusted-embedder path. Closing that gap is
+        // this constructor's job -- and because the type exposes only
+        // getters, a sample that constructs cannot afterwards be mutated out
+        // of domain, so nothing downstream has to re-scan it.
+        if let Some((index, value)) = values.iter().enumerate().find(|(_, v)| !dom.contains(**v)) {
+            return Err(PyValueError::new_err(format!(
+                "sample value {value} at variable {index} is outside the {dom} domain"
+            )));
+        }
         let mut inner = XqmxSample::new(dom, values);
         inner.rows = rows;
         inner.cols = cols;
@@ -212,6 +226,12 @@ impl PyVm {
     /// - Python `list[int]` (or any sequence of ints) → [`RegVal::VecInt`]
     /// - [`XqmxModel`](PyXqmxModel) → [`RegVal::Model`]
     /// - [`XqmxSample`](PyXqmxSample) → [`RegVal::Sample`]
+    ///
+    /// An [`XqmxSample`](PyXqmxSample) reaching here holds only in-domain
+    /// values: its constructor rejects the rest, and the type exposes no
+    /// setter. `xqvm::Vm::set_calldata` underneath stays infallible and is
+    /// the trusted-embedder path, so this boundary is where a host's values
+    /// are checked, not the VM.
     ///
     /// # Errors
     ///

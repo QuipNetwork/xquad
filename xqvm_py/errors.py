@@ -176,16 +176,43 @@ class IndexOutOfBounds(XQVMError):
 
 
 class InvalidDiscreteK(XQVMError):
-    """Raised when a discrete XQMX is allocated with a half-width below 2.
+    """Raised when a discrete XQMX is allocated with fewer than 2 values.
 
     Mirrors Rust's `xqvm::Error::InvalidDiscreteK`. `XQMX` and `XSMX` take
-    `k` off the value stack, and a domain of `[-k, k-1]` needs at least two
-    values to be a domain at all.
+    `k` off the value stack, where it is the number of values in the domain
+    `{0, ..., k-1}`. A domain of one value encodes no decision, and `k <= 0`
+    is empty, so neither is a domain at all.
     """
 
     def __init__(self, k: int):
         self.k = k
         super().__init__(f"Invalid discrete k: {k} (requires k >= 2)")
+
+
+class SampleOutOfDomain(XQVMError, ValueError):
+    """Raised when a sample write puts a value outside the sample's domain.
+
+    Mirrors Rust's `xqvm::Error::SampleOutOfDomain`. The invariant is on the
+    write, not on the register: a host that installs an out-of-domain sample
+    as calldata can still have `GETLINE` read it back. Model coefficients are
+    unbounded by design and never raise this.
+
+    Also a `ValueError`, alone among the faults here, because it is the one
+    that a host boundary raises on both backends: the `XqmxSample`
+    constructor in `xqffi` raises `PyValueError` for the same rejection.
+    Without this, a caller wrapping calldata setup in `except ValueError`
+    would catch the RUST backend's refusal and miss the PYTHON one.
+
+    `domain_desc` is the rendering `xqvm_py.xqmx.domain_description` produces,
+    so both implementations name the domain the same way. It is passed in
+    rather than derived here because `xqvm_py.xqmx` imports this module.
+    """
+
+    def __init__(self, index: int, value: int, domain_desc: str):
+        self.index = index
+        self.value = value
+        self.domain_desc = domain_desc
+        super().__init__(f"Sample value {value} at variable {index} is outside the {domain_desc} domain")
 
 
 class InvalidShift(XQVMError):

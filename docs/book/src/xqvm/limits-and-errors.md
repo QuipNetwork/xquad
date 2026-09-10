@@ -19,6 +19,7 @@ this reason.
 | Grid dimensions | rows and cols must be > 0, and `rows * cols` must not exceed the register's declared size | VM: `InvalidGridDimensions` |
 | Loop nesting | 8,192 frames | VM: `LoopStackOverflow` |
 | Discrete domain size (`XQMX`/`XSMX`) | `k >= 2` | VM: `InvalidDiscreteK` |
+| Sample assignment value | a member of the register's domain: `{0, 1}` binary, `{-1, +1}` spin, `{0, ..., k-1}` discrete | VM: `SampleOutOfDomain` on `SETLINE`/`ADDLINE`. Model coefficients are unbounded and never raise it |
 
 ## Configurable Limits
 
@@ -147,7 +148,8 @@ which disassembles the program and points at the failing instruction.
 | `InvalidGridDimensions` | `RESIZE` with rows or cols <= 0, `RESIZE` with `rows * cols` past the register's declared size, or a grid-reading opcode on a register with no grid |
 | `InvalidAllocation` | An allocator given a negative size, or -- only above the budget bound `spec/xqvm/SPEC.md` records -- one too large for the executing target to address |
 | `LoopStackOverflow` | `RANGE`/`ITER` nesting past 8,192 frames |
-| `InvalidDiscreteK` | `XQMX`/`XSMX` called with `k < 2` -- at `k = 1` the signed `[-k, k-1]` domain is `{-1, 0}`, which degenerates to a binary choice `BQMX` already covers |
+| `InvalidDiscreteK` | `XQMX`/`XSMX` called with `k < 2` -- `k` counts the values in `{0, ..., k-1}`, so `k = 1` leaves a single value and no decision to make |
+| `SampleOutOfDomain` | `SETLINE`/`ADDLINE` wrote a value outside a sample's domain. `ADDLINE` checks the result of the addition rather than the delta. Sample registers only: a model's `linear[i]` is a bias, not an assignment, and is unbounded |
 | `UnmatchedLoop` | A `RANGE`/`ITER` skip-forward scan reached the end of the stream without a matching `NEXT` |
 | `TraceFailed` | A tracer callback returned an error (for example an I/O write failure) |
 

@@ -27,6 +27,7 @@ from xqvm_py.errors import (
     InvalidAllocation,
     InvalidDiscreteK,
     InvalidGridDimensions,
+    SampleOutOfDomain,
     SizeMismatch,
     VecLengthMismatch,
     XQMXModeError,
@@ -40,6 +41,9 @@ from xqvm_py.xqmx import (
     col_indices,
     col_sum,
     compute_energy,
+    domain_contains,
+    domain_default,
+    domain_description,
     expand_equality,
     expand_exclude,
     expand_implies,
@@ -93,7 +97,9 @@ class TestXQMXConstruction:
         assert x.domain == XQMXDomain.SPIN
         assert x.size == 12
         assert all(x.get_linear(i) == -1 for i in range(12))
-        assert len(x.linear) == 12
+        # Sparse: the -1 comes from the domain's default on read, not from
+        # an entry per variable (QUI-1168).
+        assert x.linear == {}
 
     def test_discrete_sample(self):
         """discrete_sample creates correct XQMX."""
@@ -800,3 +806,126 @@ class TestAccumulationOrder:
             reverse.set_linear(i, i + 1)
 
         assert list(forward.iter_linear()) == list(reverse.iter_linear())
+
+
+# ---------------------------------------------------------------------------
+# Domain helpers and sample-write enforcement (QUI-1168)
+# ---------------------------------------------------------------------------
+
+
+class TestDomainHelpers:
+    """Mirrors of the Rust `Domain` methods in `xqvm/src/model.rs`."""
+
+    def test_default_is_always_in_domain(self):
+        for domain, k in [
+            (XQMXDomain.BINARY, 2),
+            (XQMXDomain.SPIN, 2),
+            (XQMXDomain.DISCRETE, 2),
+            (XQMXDomain.DISCRETE, 7),
+        ]:
+            default = domain_default(domain)
+            assert domain_contains(domain, k, default), (domain, k, default)
+
+    def test_binary_contains_only_zero_and_one(self):
+        assert domain_contains(XQMXDomain.BINARY, 2, 0)
+        assert domain_contains(XQMXDomain.BINARY, 2, 1)
+        assert not domain_contains(XQMXDomain.BINARY, 2, -1)
+        assert not domain_contains(XQMXDomain.BINARY, 2, 2)
+
+    def test_spin_excludes_the_gap_at_zero(self):
+        # The reason contains is not derived from bounds: 0 is inside the
+        # envelope and is not a spin value.
+        assert domain_contains(XQMXDomain.SPIN, 2, -1)
+        assert domain_contains(XQMXDomain.SPIN, 2, 1)
+        assert not domain_contains(XQMXDomain.SPIN, 2, 0)
+
+    def test_discrete_runs_zero_to_k_minus_one(self):
+        assert [v for v in range(-2, 5) if domain_contains(XQMXDomain.DISCRETE, 3, v)] == [0, 1, 2]
+
+    def test_description_matches_the_rust_display(self):
+        assert domain_description(XQMXDomain.BINARY) == "binary {0, 1}"
+        assert domain_description(XQMXDomain.SPIN) == "spin {-1, +1}"
+        assert domain_description(XQMXDomain.DISCRETE, 3) == "discrete {0, ..., 2}"
+
+
+class TestSampleDomainEnforcement:
+    def test_set_linear_rejects_out_of_domain_binary(self):
+        sample = XQMX.binary_sample(4)
+        with pytest.raises(SampleOutOfDomain) as excinfo:
+            sample.set_linear(1, 2)
+        assert excinfo.value.index == 1
+        assert excinfo.value.value == 2
+
+    def test_set_linear_rejects_zero_on_spin(self):
+        sample = XQMX.spin_sample(4)
+        with pytest.raises(SampleOutOfDomain):
+            sample.set_linear(0, 0)
+
+    def test_set_linear_rejects_below_and_at_k_on_discrete(self):
+        sample = XQMX.discrete_sample(4, 3)
+        with pytest.raises(SampleOutOfDomain):
+            sample.set_linear(0, -1)
+        with pytest.raises(SampleOutOfDomain):
+            sample.set_linear(0, 3)
+        sample.set_linear(0, 2)
+        assert sample.get_linear(0) == 2
+
+    def test_add_linear_checks_the_result_not_the_delta(self):
+        sample = XQMX.binary_sample(4)
+        sample.set_linear(1, 1)
+        with pytest.raises(SampleOutOfDomain):
+            sample.add_linear(1, 1)
+        # -1 is not a binary value, but 1 + -1 is.
+        sample.add_linear(1, -1)
+        assert sample.get_linear(1) == 0
+
+    def test_add_linear_overflow_precedes_the_domain_fault(self):
+        sample = XQMX.spin_sample(2)
+        with pytest.raises(ArithmeticOverflow):
+            sample.add_linear(0, I64_MIN)
+
+    def test_post_init_rejects_a_directly_constructed_sample(self):
+        # Construction is a write path too, and the Python backend hands
+        # calldata through untouched.
+        with pytest.raises(SampleOutOfDomain):
+            XQMX(mode=XQMXMode.SAMPLE, domain=XQMXDomain.BINARY, size=2, linear={0: 2})
+        with pytest.raises(SampleOutOfDomain):
+            XQMX(mode=XQMXMode.SAMPLE, domain=XQMXDomain.SPIN, size=2, linear={0: 0})
+        with pytest.raises(SampleOutOfDomain):
+            XQMX(
+                mode=XQMXMode.SAMPLE,
+                domain=XQMXDomain.DISCRETE,
+                size=2,
+                discrete_k=3,
+                linear={0: 3},
+            )
+
+    def test_post_init_reports_a_bad_k_before_a_bad_value(self):
+        # Otherwise a k below 2 surfaces as a domain complaint about every
+        # value rather than naming itself.
+        with pytest.raises(InvalidDiscreteK):
+            XQMX(
+                mode=XQMXMode.SAMPLE,
+                domain=XQMXDomain.DISCRETE,
+                size=2,
+                discrete_k=1,
+                linear={0: 9},
+            )
+
+    def test_allocators_produce_in_domain_defaults(self):
+        for sample in [
+            XQMX.binary_sample(3),
+            XQMX.spin_sample(3),
+            XQMX.discrete_sample(3, 4),
+        ]:
+            for i in range(3):
+                assert sample.domain_contains(sample.get_linear(i))
+
+    def test_model_coefficients_are_unbounded(self):
+        model = XQMX.binary_model(2)
+        model.set_linear(0, I64_MIN)
+        model.set_linear(1, I64_MAX)
+        assert model.get_linear(0) == I64_MIN
+        assert model.get_linear(1) == I64_MAX
+        model.set_quadratic(0, 1, -12345)
+        assert model.get_quadratic(0, 1) == -12345

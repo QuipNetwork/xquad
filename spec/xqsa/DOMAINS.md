@@ -6,13 +6,13 @@
 |--------|------|-----------------|----------------|-----------------|----------------|
 | Binary | `XQMXDomain.BINARY` | `{0, 1}` | `0` | `BQMX` | Supported |
 | Spin | `XQMXDomain.SPIN` | `{-1, +1}` | `-1` | `SQMX` | Supported |
-| Discrete | `XQMXDomain.DISCRETE` | `{-k, ..., -1, 0, 1, ..., k-1}` | `0` | `XQMX` | Reserved |
+| Discrete | `XQMXDomain.DISCRETE` | `{0, 1, ..., k-1}` | `0` | `XQMX` | Reserved |
 
 **Binary (QUBO):** variables take values 0 or 1. The standard domain for Quadratic Unconstrained Binary Optimization. All solvers must support this domain.
 
 **Spin (Ising):** variables take values -1 or +1. Maps directly to physical qubits on quantum annealers. All solvers must support this domain.
 
-**Discrete (reserved):** variables take values in the signed centred range `-k` through `k-1`, where `k` is the model's `discrete_k` parameter and the range therefore holds `2k` values. The range is centred rather than starting at 0 so that the sample default `0` is always in-domain; `spec/xqvm/SPEC.md` and `spec/xqvm/ISA.md` state the same range, and this file previously contradicted both. This domain is defined at the XQMX type level and the encoding semantics are specified here, but no solver currently supports it. `_validate_model()` rejects DISCRETE with `ValueError`. Future solver implementations may add support without changing this specification -- they need only relax the validation check.
+**Discrete (reserved):** variables take values in `{0, ..., k-1}`, where `k` is the model's `discrete_k` parameter and is the number of values the domain holds rather than a half-width. A discrete variable is therefore a case index, which is what D-Wave's DQM and Potts case indexing both use, and what lets a discrete model lower into binary without an encoder-side shift. `spec/xqvm/SPEC.md` and `spec/xqvm/ISA.md` state the same domain. This domain is defined at the XQMX type level and the encoding semantics are specified here, but no solver currently supports it. `_validate_model()` rejects DISCRETE with `ValueError`. Future solver implementations may add support without changing this specification -- they need only relax the validation check.
 
 ## Sample Encoding
 
@@ -29,11 +29,11 @@ sample.linear: dict[int, int]   # variable_index -> assignment_value
 
 **Access:**
 - `sample.get_linear(i)` -- returns the assignment for variable `i`, or the domain default if unset
-- `sample.set_linear(i, value)` -- sets the assignment for variable `i`
+- `sample.set_linear(i, value)` -- sets the assignment for variable `i`, raising `SampleOutOfDomain` when `value` is not in the domain
 
 Variable indices range from `0` to `size - 1`. Out-of-range access raises `IndexError`.
 
-**Domain validation:** the spec does not require solvers to validate that returned variable assignments are within the domain's value set. The verifier program handles constraint validation independently.
+**Domain validation:** the VM enforces the domain on sample writes -- `SETLINE` and `ADDLINE` raise `SampleOutOfDomain` -- but that is a rule about programs, not about solvers. A solver-returned assignment reaches the host directly and is not checked by anything here, so the spec still does not require solvers to validate what they return. The verifier program handles constraint validation independently.
 
 ## Grid Metadata
 

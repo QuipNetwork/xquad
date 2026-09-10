@@ -1,0 +1,18 @@
+; addline_overflow_beats_domain: overflow is checked before the domain.
+;
+; A spin sample defaults to -1, so this add leaves the i64 range entirely.
+; There is no result to measure against the domain, which is why the order
+; is forced rather than chosen: the domain check reads the sum, and the sum
+; does not exist.
+;
+; Both implementations compute the checked add first and raise
+; ArithmeticOverflow from it, so the precedence is a shared property rather
+; than a coincidence of two orderings.
+
+PUSH 4
+SSMX r0          ; spin sample, defaults to -1
+
+PUSH 0
+PUSH -9223372036854775808   ; i64::MIN; -1 + i64::MIN has no i64 result
+ADDLINE r0
+HALT

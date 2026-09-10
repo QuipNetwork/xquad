@@ -141,12 +141,12 @@ Total: **93 opcodes**.
 
 | Code | Mnemonic | Operands | Stack | Description |
 |------|----------|----------|-------|-------------|
-| `0x40` | `BQMX` | `reg: Register` | `1 → 0` | Pop size; allocate a binary QUBO model ([0, 1] domain) into a register. |
-| `0x41` | `SQMX` | `reg: Register` | `1 → 0` | Pop size; allocate a spin Ising model ([-1, 1] domain) into a register. |
-| `0x42` | `XQMX` | `reg: Register` | `2 → 0` | Pop k then size; allocate a discrete model with signed centered domain [-k, k-1] into a register. Errors when k < 2. |
-| `0x43` | `BSMX` | `reg: Register` | `1 → 0` | Pop size; allocate a binary sample ([0, 1] domain) into a register. |
-| `0x44` | `SSMX` | `reg: Register` | `1 → 0` | Pop size; allocate a spin sample ([-1, 1] domain) into a register. |
-| `0x45` | `XSMX` | `reg: Register` | `2 → 0` | Pop k then size; allocate a discrete sample with signed centered domain [-k, k-1] into a register. Errors when k < 2. |
+| `0x40` | `BQMX` | `reg: Register` | `1 → 0` | Pop size; allocate a binary QUBO model ({0, 1} domain) into a register. |
+| `0x41` | `SQMX` | `reg: Register` | `1 → 0` | Pop size; allocate a spin Ising model ({-1, +1} domain) into a register. |
+| `0x42` | `XQMX` | `reg: Register` | `2 → 0` | Pop k then size; allocate a discrete model with domain {0, ..., k-1} into a register. Errors when k < 2. |
+| `0x43` | `BSMX` | `reg: Register` | `1 → 0` | Pop size; allocate a binary sample ({0, 1} domain) into a register. |
+| `0x44` | `SSMX` | `reg: Register` | `1 → 0` | Pop size; allocate a spin sample ({-1, +1} domain) into a register. |
+| `0x45` | `XSMX` | `reg: Register` | `2 → 0` | Pop k then size; allocate a discrete sample with domain {0, ..., k-1} into a register. Errors when k < 2. |
 | `0x4A` | `VEC` | `reg: Register` | `0 → 0` | Create an empty `vec<int>` in a register, identical to VECI. |
 | `0x4B` | `VECI` | `reg: Register` | `0 → 0` | Create an empty `vec<int>` in a register. |
 | `0x4C` | `VECX` | `reg: Register` | `0 → 0` | Create an empty `vec<xqmx>` in a register. |
@@ -178,9 +178,9 @@ Total: **93 opcodes**.
 
 | Code | Mnemonic | Operands | Stack | Description |
 |------|----------|----------|-------|-------------|
-| `0x60` | `GETLINE` | `reg: Register` | `1 → 1` | Pop i; push `linear[i]` from the register's model, or a sample's assignment at i; raises IndexOutOfBounds outside [0, size); `xquad verify` requires a model. |
-| `0x61` | `SETLINE` | `reg: Register` | `2 → 0` | Pop value and i; set `linear[i]` in the register's model, or a sample's assignment at i; `xquad verify` requires a model. |
-| `0x62` | `ADDLINE` | `reg: Register` | `2 → 0` | Pop delta and i; add delta to `linear[i]` in the register's model, or a sample's assignment at i; `xquad verify` requires a model. |
+| `0x60` | `GETLINE` | `reg: Register` | `1 → 1` | Pop i; push `linear[i]` from the register's model, or a sample's assignment at i; raises IndexOutOfBounds outside [0, size). |
+| `0x61` | `SETLINE` | `reg: Register` | `2 → 0` | Pop value and i; set `linear[i]` in the register's model, or a sample's assignment at i; a sample value outside its domain raises `SampleOutOfDomain`. |
+| `0x62` | `ADDLINE` | `reg: Register` | `2 → 0` | Pop delta and i; add delta to `linear[i]` in the register's model, or a sample's assignment at i; a sample result outside its domain raises `SampleOutOfDomain`. |
 | `0x63` | `GETQUAD` | `reg: Register` | `2 → 1` | Pop j and i; push `quadratic[i, j]` from the register's model; raises IndexOutOfBounds outside [0, size). |
 | `0x64` | `SETQUAD` | `reg: Register` | `3 → 0` | Pop value, j, and i; set `quadratic[i, j]` in the register's model; raises IndexOutOfBounds outside [0, size). |
 | `0x65` | `ADDQUAD` | `reg: Register` | `3 → 0` | Pop delta, j, and i; add delta to `quadratic[i, j]` in the register's model; raises IndexOutOfBounds outside [0, size). |

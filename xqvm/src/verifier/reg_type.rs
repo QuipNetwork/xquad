@@ -178,11 +178,11 @@ pub(crate) fn check_reads(
             check_reg(pos, coeffs.slot(), R::VecInt, regs)?;
         }
 
-        // XQMX coefficient access + high-level constraint helpers: all require Model.
-        Instruction::GetLine { reg }
-        | Instruction::SetLine { reg }
-        | Instruction::AddLine { reg }
-        | Instruction::GetQuad { reg }
+        // Quadratic coefficient access and the high-level constraint helpers
+        // require Model. A coupling term and a penalty expansion are both
+        // statements about the problem, and a sample carries no place to put
+        // one: it holds one value per variable and nothing else.
+        Instruction::GetQuad { reg }
         | Instruction::SetQuad { reg }
         | Instruction::AddQuad { reg }
         | Instruction::OneHotR { reg }
@@ -190,8 +190,17 @@ pub(crate) fn check_reads(
         | Instruction::Exclude { reg }
         | Instruction::Implies { reg } => check_reg(pos, reg.slot(), R::Model, regs)?,
 
-        // XQMX grid operations accept both Model and Sample.
-        Instruction::Resize { reg }
+        // Linear coefficient access and the grid operations accept both Model
+        // and Sample. A sample's dense values and a model's sparse biases are
+        // the same addressable surface, which is what `spec/xqvm/ISA.md`
+        // states and what both interpreters have done since QUI-454 and
+        // QUI-461. This rule was the lone dissenter until QUI-1168: it
+        // rejected every program that wrote into a sample, which made the
+        // sample-domain check unreachable through a verified program.
+        Instruction::GetLine { reg }
+        | Instruction::SetLine { reg }
+        | Instruction::AddLine { reg }
+        | Instruction::Resize { reg }
         | Instruction::RowFind { reg }
         | Instruction::ColFind { reg }
         | Instruction::RowSum { reg }

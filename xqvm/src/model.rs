@@ -26,20 +26,84 @@ use alloc::{collections::BTreeMap, vec::Vec};
 use std::collections::BTreeMap;
 
 /// Variable domain for an XQMX model or sample.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The domain constrains the values a *sample* variable may hold; model
+/// coefficients are unbounded `i64` by design. [`Domain::contains`] is the
+/// predicate the VM enforces on `SETLINE` and `ADDLINE` writes into a sample.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Domain {
     /// Binary domain: variables take values in `{0, 1}`.
     Binary,
-    /// Spin domain: variables take values in `{-1, 1}`.
+    /// Spin domain: variables take values in `{-1, +1}`.
     Spin,
-    /// Discrete (chromatic) domain: variables take values in the signed
-    /// centered range `{-k, -(k-1), ..., k-2, k-1}`.
+    /// Discrete (chromatic) domain: variables take values in `{0, ..., k-1}`.
     ///
-    /// `k` is required to be at least 2; the VM rejects `XQMX`/`XSMX`
-    /// allocations with smaller `k` via [`crate::Error::InvalidDiscreteK`].
-    /// This range matches the `spec/xqvm/SPEC.md` reference and is symmetric
-    /// around zero, so the default sample value `0` is always in-domain.
+    /// `k` is the number of values the domain holds, not a half-width. It is
+    /// required to be at least 2; the VM rejects `XQMX`/`XSMX` allocations
+    /// with smaller `k` via [`crate::Error::InvalidDiscreteK`], because a
+    /// domain of one value encodes no decision.
     Discrete(i64),
+}
+
+impl Domain {
+    /// The value a freshly allocated sample variable holds.
+    ///
+    /// Always a member of the domain. The three sample allocators fill their
+    /// value vectors with this, which makes "a fresh sample is in-domain" a
+    /// structural property rather than three separate coincidences.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use xqvm::Domain;
+    ///
+    /// assert_eq!(Domain::Binary.default_value(), 0);
+    /// assert_eq!(Domain::Spin.default_value(), -1);
+    /// assert_eq!(Domain::Discrete(3).default_value(), 0);
+    /// ```
+    pub const fn default_value(&self) -> i64 {
+        match self {
+            Self::Binary | Self::Discrete(_) => 0,
+            Self::Spin => -1,
+        }
+    }
+
+    /// Whether a sample variable in this domain may hold `v`.
+    ///
+    /// Defined directly rather than as an inclusive range test, for two
+    /// reasons: spin has a hole at `0` that a range would wrongly admit, and
+    /// a direct `Discrete` test is overflow-free for every `k`, including
+    /// values no allocator would produce.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use xqvm::Domain;
+    ///
+    /// assert!(Domain::Binary.contains(1));
+    /// assert!(!Domain::Binary.contains(2));
+    /// assert!(!Domain::Spin.contains(0));
+    /// assert!(Domain::Discrete(3).contains(2));
+    /// assert!(!Domain::Discrete(3).contains(3));
+    /// assert!(!Domain::Discrete(3).contains(-1));
+    /// ```
+    pub const fn contains(&self, v: i64) -> bool {
+        match self {
+            Self::Binary => v == 0 || v == 1,
+            Self::Spin => v == -1 || v == 1,
+            Self::Discrete(k) => v >= 0 && v < *k,
+        }
+    }
+}
+
+impl core::fmt::Display for Domain {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Binary => write!(f, "binary {{0, 1}}"),
+            Self::Spin => write!(f, "spin {{-1, +1}}"),
+            Self::Discrete(k) => write!(f, "discrete {{0, ..., {}}}", k.saturating_sub(1)),
+        }
+    }
 }
 
 /// A quadratic optimization model (QUBO/Ising/discrete).
@@ -284,6 +348,81 @@ impl XqmxSample {
 mod tests {
     use super::{Domain, XqmxModel};
     use crate::Error;
+
+    #[test]
+    fn binary_contains_only_zero_and_one() {
+        assert!(Domain::Binary.contains(0));
+        assert!(Domain::Binary.contains(1));
+        assert!(!Domain::Binary.contains(-1));
+        assert!(!Domain::Binary.contains(2));
+    }
+
+    #[test]
+    fn spin_contains_the_two_poles_and_not_the_gap() {
+        assert!(Domain::Spin.contains(-1));
+        assert!(Domain::Spin.contains(1));
+        // The whole reason `contains` is not a range test: 0 lies inside
+        // the envelope [-1, 1] and is not a spin value.
+        assert!(!Domain::Spin.contains(0));
+        assert!(!Domain::Spin.contains(2));
+    }
+
+    #[test]
+    fn discrete_contains_zero_through_k_minus_one() {
+        let d = Domain::Discrete(3);
+        assert!(d.contains(0));
+        assert!(d.contains(1));
+        assert!(d.contains(2));
+        // Below the domain, and legal under the centred reading QUI-1150
+        // replaced.
+        assert!(!d.contains(-1));
+        // k itself: the off-by-one a `v <= k` guard admits.
+        assert!(!d.contains(3));
+    }
+
+    #[test]
+    fn default_value_is_always_in_domain() {
+        for d in [
+            Domain::Binary,
+            Domain::Spin,
+            Domain::Discrete(2),
+            Domain::Discrete(7),
+        ] {
+            assert!(
+                d.contains(d.default_value()),
+                "{d} does not contain its own default {}",
+                d.default_value()
+            );
+        }
+    }
+
+    #[test]
+    fn degenerate_discrete_k_does_not_overflow() {
+        // `Domain` is publicly re-exported, so an embedder can build a `k`
+        // no allocator would produce. `contains` is defined directly rather
+        // than as a range test, so it does not panic on one.
+        assert!(!Domain::Discrete(i64::MIN).contains(0));
+        assert!(!Domain::Discrete(0).contains(0));
+    }
+
+    #[test]
+    fn domain_display_matches_error_message() {
+        assert_eq!(format!("{}", Domain::Binary), "binary {0, 1}");
+        assert_eq!(format!("{}", Domain::Spin), "spin {-1, +1}");
+        assert_eq!(format!("{}", Domain::Discrete(3)), "discrete {0, ..., 2}");
+        // The fault's display string embeds it, so the two move together.
+        let err = Error::SampleOutOfDomain {
+            pos: 0x25,
+            index: 1,
+            value: 7,
+            domain: Domain::Discrete(3),
+        };
+        assert_eq!(
+            format!("{err}"),
+            "sample value 7 at variable 1 is outside the discrete {0, ..., 2} domain \
+             at byte 0x0025"
+        );
+    }
 
     #[test]
     fn add_linear_raises_past_i64_max() {

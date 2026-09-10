@@ -21,6 +21,7 @@
 use alloc::vec::Vec;
 use core::fmt;
 
+use crate::model::Domain;
 pub(crate) use crate::model::{XqmxModel, XqmxSample};
 
 /// Discriminant tag for a [`RegVal`] variant.
@@ -314,12 +315,46 @@ impl XqmxGridRefMut<'_> {
         }
     }
 
+    /// The domain a write into this grid must satisfy, or `None` for a model.
+    ///
+    /// Model coefficients are unbounded `i64` by design -- only sample values
+    /// carry a domain the VM enforces, so `None` here means "no check", not
+    /// "no domain". Callers use it to decide whether to check at all.
+    pub(crate) fn write_domain(&self) -> Option<&Domain> {
+        match self {
+            Self::Model(_) => None,
+            Self::Sample(s) => Some(&s.domain),
+        }
+    }
+
+    /// Read `linear[idx]` -- the mutable view's twin of
+    /// [`XqmxGridRef::linear`].
+    ///
+    /// `ADDLINE` needs the current value to check the *result* of the add
+    /// against the domain, and it already holds the mutable borrow by the
+    /// time it can, so it cannot reach for the shared view.
+    pub(crate) fn linear(&self, idx: usize) -> i64 {
+        match self {
+            Self::Model(m) => m.get_linear(idx),
+            Self::Sample(s) => s.values.get(idx).copied().unwrap_or(0),
+        }
+    }
+
     /// Write `linear[idx] = val`. Indexing is sparse for models
     /// (zero values drop the entry) and dense for samples.
+    ///
+    /// The domain check is a precondition of this call, not a property of it:
+    /// `exec_set_line` and `exec_add_line` reject an out-of-domain sample
+    /// value before reaching here, which is why this returns `()`.
     pub(crate) fn linear_set(&mut self, idx: usize, val: i64) {
         match self {
             Self::Model(m) => m.set_linear(idx, val),
             Self::Sample(s) => {
+                debug_assert!(
+                    s.domain.contains(val),
+                    "linear_set must not be reached with an out-of-domain sample \
+                     value; exec_set_line checks first (QUI-1168)"
+                );
                 if let Some(slot) = s.values.get_mut(idx) {
                     *slot = val;
                 }
@@ -339,9 +374,15 @@ impl XqmxGridRefMut<'_> {
             Self::Model(m) => m.add_linear(idx, delta),
             Self::Sample(s) => {
                 if let Some(slot) = s.values.get_mut(idx) {
-                    *slot = slot
+                    let updated = slot
                         .checked_add(delta)
                         .ok_or(crate::Error::ArithmeticOverflow { pos: None })?;
+                    debug_assert!(
+                        s.domain.contains(updated),
+                        "linear_add must not be reached with a result outside the \
+                         sample's domain; exec_add_line checks first (QUI-1168)"
+                    );
+                    *slot = updated;
                 }
                 Ok(())
             }

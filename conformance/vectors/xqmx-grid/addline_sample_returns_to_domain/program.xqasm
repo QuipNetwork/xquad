@@ -1,0 +1,26 @@
+; addline_sample_returns_to_domain: a delta that lands back in the domain is
+; legal.
+;
+; The mirror of addline_sample_leaves_domain. Both start from values[1] = 1
+; and move by one; only the direction differs, and only the result decides.
+; This is the vector that fails if the check is written against the delta,
+; or against its sign, rather than against the sum -- -1 is not a binary
+; value, but 1 + -1 is.
+
+PUSH 4
+BSMX r0          ; binary sample, domain {0, 1}
+
+PUSH 1
+PUSH 1
+SETLINE r0       ; values[1] = 1
+
+PUSH 1
+PUSH -1
+ADDLINE r0       ; 1 + -1 = 0, back inside the domain
+
+PUSH 1
+GETLINE r0
+STOW r1
+PUSH 0
+OUTPUT r1        ; outputs[0] = 0
+HALT
