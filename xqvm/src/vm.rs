@@ -3565,4 +3565,63 @@ mod tests {
             "expected ArithmeticOverflow, got {err:?}"
         );
     }
+
+    /// Emit `PUSH 4 / BSMX r0 / PUSH 0 / PUSH 1` plus the named quadratic
+    /// opcode (and its value operand, where it takes one).
+    fn quad_on_a_sample(op: &str) -> crate::Program {
+        let r = Register(0);
+        let mut b = InstructionBuilder::new();
+        let _ = b.emit_push(4).emit_bsmx(r).emit_push(0).emit_push(1);
+        let _ = match op {
+            "SETQUAD" => b.emit_push(5).emit_set_quad(r),
+            "ADDQUAD" => b.emit_push(5).emit_add_quad(r),
+            _ => b.emit_get_quad(r),
+        };
+        let _ = b.emit_halt();
+        b.build().unwrap()
+    }
+
+    /// The quadratic trio requires a model: a sample carries no quadratic
+    /// storage. `xqvm_py` accepted the write until QUI-1160 and grew a map
+    /// its own accessors never read back.
+    ///
+    /// The budget half is the QUI-1178 failure class: if the charge ran
+    /// before the register was discriminated *and* were sized from the
+    /// sample's real extent, a tight budget would turn this into
+    /// `MemoryLimitExceeded` on one implementation only. `charge_coefficient`
+    /// is model-gated on both, so the identity must survive a budget with no
+    /// headroom past the `BSMX` allocation itself.
+    #[test]
+    fn quadratic_opcodes_reject_a_sample_at_any_budget() {
+        for op in ["SETQUAD", "ADDQUAD", "GETQUAD"] {
+            let program = quad_on_a_sample(op);
+
+            // The smallest budget that still pays for `BSMX 4`, so the opcode
+            // itself runs with exactly zero headroom.
+            let floor = (1..=1024u64)
+                .find(|n| {
+                    let mut probe = Vm::new();
+                    let _ = probe.set_memory_limit(*n);
+                    !matches!(probe.run(&program), Err(Error::MemoryLimitExceeded { .. }))
+                })
+                .expect("BSMX 4 must fit in 1 KiB");
+
+            for budget in [floor, u64::MAX] {
+                let mut vm = Vm::new();
+                let _ = vm.set_memory_limit(budget);
+                let err = vm.run(&program).unwrap_err();
+                assert!(
+                    matches!(
+                        err,
+                        Error::RegisterType {
+                            reg: 0,
+                            expected: "model",
+                            got: "sample"
+                        }
+                    ),
+                    "{op} at budget {budget}: expected RegisterType model/sample, got {err:?}"
+                );
+            }
+        }
+    }
 }

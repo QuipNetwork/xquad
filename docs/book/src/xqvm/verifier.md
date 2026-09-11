@@ -98,6 +98,19 @@ catches that case. Reading an `Unset` register is rejected, and so is a type
 mismatch, for example reading a `Model` register where an instruction
 requires `Int`.
 
+A join is held back from that permissiveness, because `Any` satisfies every
+requirement. Joining a model with a sample gives `model or sample`, and
+joining the two vector types gives `vec<int> or vec<xqmx>`; each satisfies
+only what its two members have in common -- the grid operations and the
+linear coefficient trio for the first, `ITER` and `VECLEN` for the second.
+Any other pair of types gives `conflicting types`, which satisfies nothing
+but a read that accepts any set register, such as `OUTPUT`. A program that
+allocates a model on one branch and a sample on the other and then writes a
+quadratic coefficient is rejected, which is the point: it would fault at run
+time on one of its two paths. Answering unrelated pairs this way is also
+what keeps the result the same however many branches meet, and whatever
+order they are in.
+
 `DROP` is a special case worth knowing. At runtime it resets the register to
 `Unset`, and the verifier models that faithfully:
 `DROP` resets the register's tracked type to `Unset`, so a read after

@@ -318,6 +318,224 @@ fn reg_type_bsmx_then_setquad_mismatch() {
     assert_eq!(err.variant_name(), "RegisterTypeMismatch");
 }
 
+// --- Branch joins of a related pair (QUI-1160) ---
+//
+// `meet_reg` used to discard any two differing types to `RegType::Any`, and
+// `Any` satisfies every requirement. So a join of two *related* types lost
+// the capability they share and handed out the ones they do not: a
+// `BQMX`/`BSMX` join satisfied `SETQUAD`'s Model requirement, and the
+// program reached a quadratic write on a sample using nothing but its own
+// instructions. The meet now keeps the intersection instead.
+//
+// A third branch of an unrelated type used to undo that: `Grid` met with
+// `Int` collapsed back to `Any`, so the same bypass returned with one more
+// branch, and which of the three came first decided the verdict. Unrelated
+// types now meet to `Conflict`, which satisfies `NonUnset` and nothing else,
+// and the meet is associative over the concrete types.
+//
+// The positive cases are the ones that catch an over-tightening; the
+// negative ones alone would pass even if the new variants satisfied nothing.
+
+/// Emit one block per entry in `branches`, each writing r0, all joined at a
+/// common `tail`.
+///
+/// Branch `i` is selected by `INPUT r(i+1) / LOAD / JUMPI`, so every block is
+/// a real predecessor of the join and every path is reachable at run time.
+/// The order the branches appear in is the order the CFG records their edges,
+/// and so the order the solver folds them: a meet that is not associative
+/// lets that order decide the verdict.
+fn joined_branches(branches: &[Instruction], tail: &[Instruction]) -> Program {
+    let mut b = InstructionBuilder::new();
+    let after = b.label();
+
+    let (last, dispatched) = branches.split_last().expect("at least one branch");
+    for (branch, (slot, reg)) in dispatched.iter().zip((0i64..).zip(1u8..)) {
+        let next = b.label();
+        let _ = b.emit_push(slot);
+        let _ = b.emit_input(Register(reg));
+        let _ = b.emit_load(Register(reg));
+        let _ = b.emit_jump_if(next);
+
+        let _ = b.emit_push(4);
+        let _ = b.emit(*branch);
+        let _ = b.emit_jump(after);
+
+        let _ = b.place(next).unwrap();
+    }
+    let _ = b.emit_push(4);
+    let _ = b.emit(*last);
+
+    let _ = b.place(after).unwrap();
+    for instr in tail {
+        let _ = b.emit(*instr);
+    }
+    let _ = b.emit_halt();
+    b.build().unwrap()
+}
+
+#[test]
+fn reg_type_model_sample_join_rejects_a_model_only_opcode() {
+    let code = joined_branches(
+        &[
+            Instruction::Bqmx { reg: Register(0) },
+            Instruction::Bsmx { reg: Register(0) },
+        ],
+        &[
+            Instruction::Push1 { val: [0] },
+            Instruction::Push1 { val: [1] },
+            Instruction::Push1 { val: [1] },
+            Instruction::SetQuad { reg: Register(0) },
+        ],
+    );
+    let err = RegisterTypePhase.run(&code).unwrap_err();
+    assert_eq!(err.variant_name(), "RegisterTypeMismatch");
+}
+
+#[test]
+fn reg_type_model_sample_join_rejects_a_sample_only_opcode() {
+    // ENERGY's second operand must be a Sample; the join is not one.
+    let code = joined_branches(
+        &[
+            Instruction::Bqmx { reg: Register(0) },
+            Instruction::Bsmx { reg: Register(0) },
+        ],
+        &[
+            Instruction::Push1 { val: [4] },
+            Instruction::Bqmx { reg: Register(2) },
+            Instruction::Energy {
+                model: Register(2),
+                sample: Register(0),
+            },
+        ],
+    );
+    let err = RegisterTypePhase.run(&code).unwrap_err();
+    assert_eq!(err.variant_name(), "RegisterTypeMismatch");
+}
+
+#[test]
+fn reg_type_model_sample_join_still_accepts_a_grid_opcode() {
+    // RESIZE, ROWSUM and the linear trio address the surface both members
+    // share, so the join must keep satisfying them.
+    let code = joined_branches(
+        &[
+            Instruction::Bqmx { reg: Register(0) },
+            Instruction::Bsmx { reg: Register(0) },
+        ],
+        &[
+            Instruction::Push1 { val: [2] },
+            Instruction::Push1 { val: [2] },
+            Instruction::Resize { reg: Register(0) },
+            Instruction::Push1 { val: [0] },
+            Instruction::RowSum { reg: Register(0) },
+            Instruction::Pop {},
+            Instruction::Push1 { val: [0] },
+            Instruction::GetLine { reg: Register(0) },
+            Instruction::Pop {},
+        ],
+    );
+    assert!(RegisterTypePhase.run(&code).is_ok());
+}
+
+#[test]
+fn reg_type_vec_join_rejects_a_vecint_only_opcode() {
+    let code = joined_branches(
+        &[
+            Instruction::Vec { reg: Register(0) },
+            Instruction::VecX { reg: Register(0) },
+        ],
+        &[
+            Instruction::Push1 { val: [1] },
+            Instruction::VecPush { reg: Register(0) },
+        ],
+    );
+    let err = RegisterTypePhase.run(&code).unwrap_err();
+    assert_eq!(err.variant_name(), "RegisterTypeMismatch");
+}
+
+#[test]
+fn reg_type_vec_join_still_accepts_veclen() {
+    let code = joined_branches(
+        &[
+            Instruction::Vec { reg: Register(0) },
+            Instruction::VecX { reg: Register(0) },
+        ],
+        &[
+            Instruction::VecLen { reg: Register(0) },
+            Instruction::Pop {},
+        ],
+    );
+    assert!(RegisterTypePhase.run(&code).is_ok());
+}
+
+#[test]
+fn reg_type_three_way_join_rejects_a_model_only_opcode() {
+    // Both orders, and for the same reason: the edge order is the fold
+    // order, so an associative meet is the only thing that makes these two
+    // programs agree. Before `Conflict` the first accepted and the second
+    // rejected.
+    for branches in [
+        [
+            Instruction::Bqmx { reg: Register(0) },
+            Instruction::Bsmx { reg: Register(0) },
+            Instruction::Stow { reg: Register(0) },
+        ],
+        [
+            Instruction::Bqmx { reg: Register(0) },
+            Instruction::Stow { reg: Register(0) },
+            Instruction::Bsmx { reg: Register(0) },
+        ],
+    ] {
+        let code = joined_branches(
+            &branches,
+            &[
+                Instruction::Push1 { val: [0] },
+                Instruction::Push1 { val: [1] },
+                Instruction::Push1 { val: [1] },
+                Instruction::SetQuad { reg: Register(0) },
+            ],
+        );
+        let err = RegisterTypePhase.run(&code).unwrap_err();
+        assert_eq!(err.variant_name(), "RegisterTypeMismatch", "{branches:?}");
+    }
+}
+
+#[test]
+fn reg_type_three_way_vec_join_rejects_a_vecint_only_opcode() {
+    // The vec twin: `AnyVec` met with `Int` is a conflict, not a vec.
+    let code = joined_branches(
+        &[
+            Instruction::Vec { reg: Register(0) },
+            Instruction::VecX { reg: Register(0) },
+            Instruction::Stow { reg: Register(0) },
+        ],
+        &[
+            Instruction::Push1 { val: [1] },
+            Instruction::VecPush { reg: Register(0) },
+        ],
+    );
+    let err = RegisterTypePhase.run(&code).unwrap_err();
+    assert_eq!(err.variant_name(), "RegisterTypeMismatch");
+}
+
+#[test]
+fn reg_type_conflicting_join_still_accepts_output() {
+    // `Conflict` is not `Unset`: the register is written on every path, so
+    // the requirement both branches do share must keep passing. Without this
+    // the tightening would be indistinguishable from rejecting the join
+    // outright.
+    let code = joined_branches(
+        &[
+            Instruction::Bqmx { reg: Register(0) },
+            Instruction::Stow { reg: Register(0) },
+        ],
+        &[
+            Instruction::Push1 { val: [0] },
+            Instruction::Output { reg: Register(0) },
+        ],
+    );
+    assert!(RegisterTypePhase.run(&code).is_ok());
+}
+
 #[test]
 fn reg_type_bsmx_then_onehotr_mismatch() {
     // The same guard for the high-level constraint group: a penalty

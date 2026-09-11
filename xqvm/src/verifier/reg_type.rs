@@ -40,6 +40,18 @@ pub enum RegType {
     Model,
     /// Holds an `XqmxSample`.
     Sample,
+    /// A `Model` or a `Sample`, which one not known statically. Produced by
+    /// a branch join of the two, and satisfies only what they share: the
+    /// grid surface, not `Model` or `Sample` on its own.
+    Grid,
+    /// A `VecInt` or a `VecXqmx`, which one not known statically. The vec
+    /// twin of [`Grid`](Self::Grid); satisfies `AnyVec` but not `VecInt`.
+    AnyVec,
+    /// A branch join of two types with nothing in common. The register is
+    /// set, and that is all that is known: every requirement past
+    /// `NonUnset` would fault at run time on at least one of the joined
+    /// paths.
+    Conflict,
     /// Set to an unknown type (e.g. after `INPUT` or `LVAL`). Satisfies any
     /// read requirement so the verifier does not emit false positives.
     Any,
@@ -55,6 +67,9 @@ impl RegType {
             Self::VecXqmx => "vec<xqmx>",
             Self::Model => "model",
             Self::Sample => "sample",
+            Self::Grid => "model or sample",
+            Self::AnyVec => "vec<int> or vec<xqmx>",
+            Self::Conflict => "conflicting types",
             Self::Any => "any",
         }
     }
@@ -64,6 +79,15 @@ impl RegType {
     /// `Unset` never satisfies any requirement. `Any` always does (it is
     /// non-unset, just of unknown specific type). All other types match
     /// only the requirements they implement.
+    ///
+    /// [`Grid`](Self::Grid) and [`AnyVec`](Self::AnyVec) stand for a pair
+    /// whose member is not known statically, so each matches exactly the
+    /// intersection of what its two members match. That is the whole point
+    /// of having them: a join of `Model` and `Sample` that collapsed to
+    /// `Any` would satisfy `Model`, and a program could reach `SETQUAD`
+    /// with a sample without the verifier objecting (QUI-1160).
+    /// [`Conflict`](Self::Conflict) is the same rule for a pair that shares
+    /// nothing: the intersection is `NonUnset` alone.
     pub(crate) fn satisfies(self, req: RegTypeReq) -> bool {
         match self {
             Self::Unset => false,
@@ -75,7 +99,9 @@ impl RegType {
                     RegTypeReq::NonUnset | RegTypeReq::VecInt | RegTypeReq::AnyVec
                 )
             }
-            Self::VecXqmx => matches!(req, RegTypeReq::NonUnset | RegTypeReq::AnyVec),
+            Self::VecXqmx | Self::AnyVec => {
+                matches!(req, RegTypeReq::NonUnset | RegTypeReq::AnyVec)
+            }
             Self::Model => {
                 matches!(
                     req,
@@ -88,6 +114,8 @@ impl RegType {
                     RegTypeReq::NonUnset | RegTypeReq::Sample | RegTypeReq::Grid
                 )
             }
+            Self::Grid => matches!(req, RegTypeReq::NonUnset | RegTypeReq::Grid),
+            Self::Conflict => matches!(req, RegTypeReq::NonUnset),
         }
     }
 }

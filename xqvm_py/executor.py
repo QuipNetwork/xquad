@@ -1237,7 +1237,12 @@ class Executor:
         """GETQUAD: Get quadratic coefficient."""
         reg = instr.operands[0]
         j, i = self.state.pop_n(2)
-        xqmx = self._get_register_as_xqmx(reg)
+        # Samples carry no quadratic storage, so the trio is MODEL-only
+        # (`spec/xqvm/ISA.md`). Rust's `as_model_mut()` is the counterpart.
+        # Resolving before the charge does not split the fault the way it
+        # did for ONEHOTR (QUI-1202): `_charge_coefficient` is model-gated
+        # on both VMs, so a sample is charged zero in either order.
+        xqmx = self._get_register_as_model(reg, "GETQUAD")
         value = xqmx.get_quadratic(i, j)
         self.state.push(value)
 
@@ -1245,7 +1250,7 @@ class Executor:
         """SETQUAD: Set quadratic coefficient."""
         reg = instr.operands[0]
         value, j, i = self.state.pop_n(3)
-        xqmx = self._get_register_as_xqmx(reg)
+        xqmx = self._get_register_as_model(reg, "SETQUAD")
         self._charge_coefficient(xqmx, QUAD_ENTRY_BYTES)
         self._charge_coefficient_steps(xqmx)
         xqmx.set_quadratic(i, j, value)
@@ -1254,7 +1259,7 @@ class Executor:
         """ADDQUAD: Add to quadratic coefficient."""
         reg = instr.operands[0]
         delta, j, i = self.state.pop_n(3)
-        xqmx = self._get_register_as_xqmx(reg)
+        xqmx = self._get_register_as_model(reg, "ADDQUAD")
         self._charge_coefficient(xqmx, QUAD_ENTRY_BYTES)
         self._charge_coefficient_steps(xqmx)
         xqmx.add_quadratic(i, j, delta)

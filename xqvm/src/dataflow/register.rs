@@ -37,12 +37,37 @@
 //! |---|---|---|
 //! | `Any` | `T` | `T` (`Any` is the lattice top, identity for meet) |
 //! | `T` | `T` | `T` (same type, kept) |
-//! | `T` | `U` (T ≠ U) | `Any` (different types → unknown; permissive) |
+//! | `Model`/`Sample`/`Grid` | ditto | `Grid` (the shared grid surface) |
+//! | `VecInt`/`VecXqmx`/`AnyVec` | ditto | `AnyVec` (the shared vec surface) |
+//! | `Unset` | `T` | `Any` (permissive; see below) |
+//! | `T` | `U` (T ≠ U) | `Conflict` (nothing shared but non-unset-ness) |
 //!
-//! This includes `meet(Unset, Int) = Any`.  As a consequence, a register
-//! written on only one branch is treated as `Any` (not `Unset`) at the join,
-//! so reads after the join are not flagged.  A separate dedicated
-//! "uninitialized register" pass can catch that case if needed.
+//! The join keeps what both sides share, and never more. `Any` satisfies
+//! every requirement, so answering a join with it hands out capabilities
+//! neither branch has: a `BQMX`/`BSMX` join used to meet to `Any` and so
+//! satisfy `SETQUAD`'s `Model` requirement, which let a program reach a
+//! quadratic write on a sample using nothing but its own instructions
+//! (QUI-1160). `Grid` and `AnyVec` name the two pairs that do share a
+//! surface; `Conflict` is the answer for every other pair, and satisfies
+//! `NonUnset` alone.
+//!
+//! Answering unrelated pairs with `Conflict` rather than `Any` is also what
+//! makes the meet associative over the concrete types, so the verdict at a
+//! join of three or more predecessors does not depend on the order the CFG
+//! recorded their edges. Without it `meet(meet(Model, Sample), Int)` is
+//! `Any` where `meet(Model, meet(Sample, Int))` is `Model`, and a third
+//! branch of an unrelated type reopens the bypass the pair rows close.
+//!
+//! `Unset` is the one row left out of that: `meet(Unset, Int) = Any`, so a
+//! register written on only one branch is treated as `Any` (not `Unset`) at
+//! the join and reads after the join are not flagged here. That row is not a
+//! way back in, because [`UninitRegisterPhase`] rejects every read of a
+//! register left unset on any path, and it runs on the same program. Its
+//! cost is that this one row is not associative, so a join mixing an
+//! unwritten branch with two related types can be rejected by either phase
+//! depending on edge order. Both outcomes reject.
+//!
+//! [`UninitRegisterPhase`]: crate::verifier::UninitRegisterPhase
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
@@ -90,13 +115,25 @@ impl Lattice for RegTypeValue {
     }
 }
 
-/// Per-register meet: `Any` is the top element (identity); different concrete
-/// types (including `Unset` vs a concrete type) meet to `Any`.
+/// Per-register meet: `Any` is the top element (identity); two concrete types
+/// meet to what they share, which is `Grid` or `AnyVec` for the two related
+/// pairs and `Conflict` for everything else. `Unset` against a concrete type
+/// is the one row that still meets to `Any`. See the module docs' meet table.
 fn meet_reg(a: RegType, b: RegType) -> RegType {
+    use RegType as T;
     match (a, b) {
-        (RegType::Any, x) | (x, RegType::Any) => x,
+        (T::Any, x) | (x, T::Any) => x,
         (x, y) if x == y => x,
-        _ => RegType::Any,
+        // Keep what the pair shares rather than discarding to the top, which
+        // satisfies everything.
+        (T::Model | T::Sample | T::Grid, T::Model | T::Sample | T::Grid) => T::Grid,
+        (T::VecInt | T::VecXqmx | T::AnyVec, T::VecInt | T::VecXqmx | T::AnyVec) => T::AnyVec,
+        // A register written on only one branch stays permissive here; the
+        // must-init pass is what rejects the read. Keeping this row above
+        // the catch-all is what stops `Conflict` from swallowing it.
+        (T::Unset, _) | (_, T::Unset) => T::Any,
+        // Nothing in common: `NonUnset` is all that survives the join.
+        _ => T::Conflict,
     }
 }
 
@@ -123,6 +160,17 @@ impl Analysis for RegTypeAnalysis {
     }
 
     fn transfer(&self, node: &BlockId, input: &RegTypeValue) -> RegTypeValue {
+        // A block no path reaches contributes nothing to a join. Its input is
+        // the meet over an empty or equally unreachable predecessor set, which
+        // is `top` -- the same test the replay loop uses to skip it -- and the
+        // boundary node is excluded because its input is the all-`Unset`
+        // boundary value, never `top`. Applying the writes of dead code here
+        // would poison every join it falls through into: the `VECI r0` after
+        // an unconditional `JUMP` would meet with the live `Model` and answer
+        // `Conflict`, rejecting a program whose only fault is unreachable.
+        if input == &RegTypeValue::top() {
+            return RegTypeValue::top();
+        }
         let mut state = input.clone();
         if let Some(writes) = self.block_writes.get(node) {
             for &(slot, reg_type) in writes {
@@ -280,6 +328,80 @@ mod tests {
 
     fn prog(instrs: &[Instruction]) -> Program {
         Program::new(instrs.iter().flat_map(codec::encode).collect())
+    }
+
+    // --- meet laws (QUI-1160) ---
+    //
+    // The join at a CFG node is a fold over predecessors, so the meet has to
+    // be commutative and associative or the edge order decides the verdict.
+    // `Unset` is left out on purpose: its row answers `Any` to keep a
+    // one-branch write from being flagged here, which is not associative, and
+    // `UninitRegisterPhase` is what rejects those reads instead.
+
+    /// Every type the meet is required to be a semilattice over.
+    const CONCRETE: [RegType; 8] = [
+        RegType::Int,
+        RegType::VecInt,
+        RegType::VecXqmx,
+        RegType::AnyVec,
+        RegType::Model,
+        RegType::Sample,
+        RegType::Grid,
+        RegType::Conflict,
+    ];
+
+    #[test]
+    fn meet_is_commutative_and_idempotent() {
+        for a in CONCRETE {
+            assert_eq!(meet_reg(a, a), a, "{a:?} is not idempotent");
+            for b in CONCRETE {
+                assert_eq!(meet_reg(a, b), meet_reg(b, a), "{a:?} vs {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn meet_is_associative() {
+        for a in CONCRETE {
+            for b in CONCRETE {
+                for c in CONCRETE {
+                    assert_eq!(
+                        meet_reg(meet_reg(a, b), c),
+                        meet_reg(a, meet_reg(b, c)),
+                        "{a:?}, {b:?}, {c:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn any_is_the_identity() {
+        for a in CONCRETE {
+            assert_eq!(meet_reg(RegType::Any, a), a);
+            assert_eq!(meet_reg(a, RegType::Any), a);
+        }
+    }
+
+    #[test]
+    fn unrelated_types_meet_to_conflict() {
+        // The pairs keep their shared surface; everything else keeps only
+        // non-unset-ness, which is what stops a third branch from handing
+        // `Any` back out.
+        assert_eq!(meet_reg(RegType::Model, RegType::Sample), RegType::Grid);
+        assert_eq!(meet_reg(RegType::VecInt, RegType::VecXqmx), RegType::AnyVec);
+        assert_eq!(meet_reg(RegType::Grid, RegType::Int), RegType::Conflict);
+        assert_eq!(meet_reg(RegType::AnyVec, RegType::Int), RegType::Conflict);
+        assert_eq!(meet_reg(RegType::Model, RegType::VecInt), RegType::Conflict);
+    }
+
+    #[test]
+    fn unset_against_a_concrete_type_stays_permissive() {
+        for a in CONCRETE {
+            assert_eq!(meet_reg(RegType::Unset, a), RegType::Any);
+            assert_eq!(meet_reg(a, RegType::Unset), RegType::Any);
+        }
+        assert_eq!(meet_reg(RegType::Unset, RegType::Unset), RegType::Unset);
     }
 
     // --- basic valid programs ---

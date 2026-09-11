@@ -118,7 +118,7 @@ bug ever motivates them.
 | --- | --- | --- |
 | `STACK_UNDERFLOW` | `StackUnderflow` | `StackUnderflow` |
 | `STACK_OVERFLOW` | `StackOverflow` | `StackOverflow` |
-| `TYPE_MISMATCH` | `RegisterType`, `IncompatibleType` | `TypeMismatch` |
+| `TYPE_MISMATCH` | `RegisterType`, `IncompatibleType` | `TypeMismatch`, `XQMXModeError` |
 | `UNSET_REGISTER` | `UnsetRegister` | `RegisterNotFound` |
 | `DIVISION_BY_ZERO` | `DivisionByZero` | `DivisionByZero` |
 | `ARITHMETIC_OVERFLOW` | `ArithmeticOverflow` | `ArithmeticOverflow` |
@@ -139,7 +139,6 @@ bug ever motivates them.
 | `INVALID_GRID_DIMENSIONS` | `InvalidGridDimensions` | `InvalidGridDimensions` |
 | `INVALID_DISCRETE_K` | `InvalidDiscreteK` | `InvalidDiscreteK` |
 | `SAMPLE_OUT_OF_DOMAIN` | `SampleOutOfDomain` | `SampleOutOfDomain` |
-| `XQMX_MODE` | -- | `XQMXModeError` |
 | `TRACE_FAILED` | `TraceFailed` | -- |
 | `INVALID_ALLOCATION` | `InvalidAllocation` | `InvalidAllocation` |
 | `LOOP_STACK_OVERFLOW` | `LoopStackOverflow` | `LoopStackOverflow` |
@@ -193,7 +192,7 @@ both VMs now, and the budget can no longer decide the fault.
 That mattered because the register reaches `ONEHOTR` as a sample without
 the verifier objecting. `check_reads` requires `R::Model` there, and a
 register the verifier knows is a `Sample` is rejected statically -- but it
-does not always know. Two routes get past it:
+does not always know. Two routes got past it, of which one is still open:
 
 - **Host calldata.** `Vm::set_calldata` takes any `RegVal`, samples
   included ("This allows passing models, samples, and vectors between
@@ -203,17 +202,18 @@ does not always know. Two routes get past it:
   arrives holding whatever the embedder supplied. The `--calldata` CLI flag
   parses i64s and cannot express this; the embedding API is the reachable
   surface, and on a chain runtime it is the host that fills those slots.
-- **A branch join.** `meet_reg` merges `Model` and `Sample` to
-  `RegType::Any` (`xqvm/src/dataflow/register.rs:95`), so a program that
-  writes `BQMX` on one branch and `BSMX` on the other, joins, and calls
-  `ONEHOTR` verifies clean using nothing but its own instructions.
+- **A branch join.** `meet_reg` merged `Model` and `Sample` to
+  `RegType::Any`, so a program that wrote `BQMX` on one branch and `BSMX`
+  on the other, joined, and called `ONEHOTR` verified clean using nothing
+  but its own instructions. QUI-1160 closed that: the join now yields
+  `RegType::Grid`, which satisfies the grid operations and not `R::Model`.
+  Host calldata is the remaining route, and it is open by design.
 
-What survives is the `XqmxMode` carve-out, which is not this table's
-business: `xqvm_py` rejects the sample with `XQMXModeError` and the Rust
-VM with `RegisterType`. `spec/xqvm/SPEC.md`'s Faults table records that
-row as its one unresolved entry and says neither identity is safe
-to write a vector against until it is settled, which is why the test above
-pins the charge rather than the name.
+The name the surviving fault carries is settled as of QUI-1160:
+`xqvm_py` rejects the sample with `XQMXModeError` and the Rust VM with
+`RegisterType`, and both map onto `TYPE_MISMATCH`. The test above still
+pins the charge rather than the name, because the charge is what QUI-1202
+fixed; the name is pinned by the coefficient-access vectors instead.
 
 ## Authoring a new vector
 
