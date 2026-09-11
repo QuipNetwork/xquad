@@ -1,10 +1,17 @@
-# Copied to the root of public/ by the `pages` job. See .gitlab/ci/docs.yml.
+# Copied to the root of public/ by the `docs:publish` job. See
+# .gitlab/ci/docs.yml.
 #
-# Crawling is deliberately allowed while the book is still pre-launch. The
-# indexing gate is the noindex meta tag in docs/book/theme/head.hbs: a crawler
-# has to fetch a page to see that tag, so disallowing it here would leave the
-# URLs eligible for URL-only indexing instead of blocking them.
+# This host holds no content of its own since QUI-1331 -- every path redirects to
+# developers.quip.network/docs. Crawling stays allowed so crawlers can follow
+# those redirects to the canonical host and retire these URLs.
+#
+# The file has to exist rather than be left to the /* catch-all in _redirects:
+# gitlab-pages serves a real file before any redirect, so this is what keeps
+# /robots.txt from 301ing to a path the docs host does not have.
+#
+# No Sitemap line. A sitemap belongs to the host that serves the pages, and the
+# book's now lives with the book, at
+# developers.quip.network/docs/xquad/sitemap.xml. The indexing gate for the book
+# is still the noindex meta tag in docs/book/theme/head.hbs (QUI-988).
 User-agent: *
 Allow: /
-
-Sitemap: https://docs.quip.network/xquad/sitemap.xml

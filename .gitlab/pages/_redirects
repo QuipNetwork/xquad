@@ -1,26 +1,21 @@
-# GitLab Pages redirect rules, copied to the root of public/ by the `pages`
-# job. See .gitlab/ci/docs.yml.
+# GitLab Pages redirect rules, copied to the root of public/ by the
+# `docs:publish` job. See .gitlab/ci/docs.yml.
 #
-# The book is served from /xquad/, so the host root would otherwise be a dead
-# end. Send it to the main Quip documentation, which as of QUI-1272 is served
-# from developers.quip.network/docs rather than quip.gitbook.io/docs.
-# Domain-level (external) redirects are generally available since GitLab 17.4
-# and accept only 301/302.
+# This host serves no content of its own. The main Quip documentation moved to
+# developers.quip.network/docs under QUI-1272, and the XQuad book followed it to
+# developers.quip.network/docs/xquad/ under QUI-1331, so every path here is a
+# redirect. Domain-level (external) redirects are generally available since
+# GitLab 17.4 and accept only 301/302.
 #
-# The documentation's six top-level groups are listed individually rather than
-# covered by a catch-all. A /* rule would also claim /xquad/toolchain, which
-# this host correctly 404s but the docs host serves as a different document
-# inside the book's own prefix. It would also leave public/404.html
-# unreachable for every path, because ServeNotFoundHTTP runs only after both
-# tryFile and tryRedirects miss.
+# QUI-1272 landed the six documentation groups individually rather than as a
+# catch-all, because a /* rule would have claimed /xquad/toolchain -- a path this
+# host correctly 404'd while the book lived here, but which the docs host serves
+# as a different document inside the book's own prefix. That objection is spent:
+# the book is on the docs host now, /docs/xquad/toolchain redirects to
+# /docs/xquad-toolchain there, and nothing is left here for a catch-all to shadow.
 #
-# QUI-1331 moves the book to developers.quip.network/docs/xquad/. Once that
-# lands this host holds no content of its own, and these rules collapse to a
-# single catch-all.
-/                          https://developers.quip.network/docs                               301
-/getting-started/*         https://developers.quip.network/docs/getting-started/:splat         301
-/quip-interlock-protocol/* https://developers.quip.network/docs/quip-interlock-protocol/:splat 301
-/compute/*                 https://developers.quip.network/docs/compute/:splat                 301
-/basics/*                  https://developers.quip.network/docs/basics/:splat                  301
-/network/*                 https://developers.quip.network/docs/network/:splat                 301
-/nodes/*                   https://developers.quip.network/docs/nodes/:splat                   301
+# public/404.html is deliberately gone with it. A /* rule makes it unreachable
+# anyway, since ServeNotFoundHTTP runs only after both tryFile and tryRedirects
+# miss, and a host with no content of its own has nothing to render a 404 for.
+/  https://developers.quip.network/docs          301
+/* https://developers.quip.network/docs/:splat   301

@@ -20,22 +20,23 @@
 #
 # mdBook emits no sitemap of its own. The mdbook-sitemap-generator crate was
 # considered and rejected: it is a standalone CLI last published in 2023, it
-# takes a bare domain with no way to express the /xquad/ path prefix this book
-# is served under, and adding it to scripts/cargo-tools.lock would invalidate
-# the .cargo/bin/ cache for every Rust CI job.
+# takes a bare domain with no way to express the /docs/xquad/ path prefix this
+# book is served under, and adding it to scripts/cargo-tools.lock would
+# invalidate the .cargo/bin/ cache for every Rust CI job.
 #
 # Directory indexes are emitted at their directory URL rather than as
 # .../index.html, so the canonical form matches what a visitor lands on.
 # The 404 and print pages are excluded.
 #
-# Deliberately POSIX sh with no bashisms: the `pages` job runs on alpine:3,
-# whose /bin/sh is busybox ash.
+# Deliberately POSIX sh with no bashisms. It ran in the alpine:3 Pages job
+# until QUI-1331 moved it into docs:build, and staying portable to busybox ash
+# costs nothing, so it is kept that way.
 #
 # Usage:
 #   scripts/gen-sitemap.sh <build-dir> <base-url> > sitemap.xml
 #
 # Example:
-#   scripts/gen-sitemap.sh public/xquad https://docs.quip.network/xquad
+#   scripts/gen-sitemap.sh docs/book/build https://developers.quip.network/docs/xquad
 #
 # Exit codes:
 #   0  -- sitemap written to stdout

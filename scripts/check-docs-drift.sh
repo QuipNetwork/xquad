@@ -429,7 +429,7 @@ check_page_links() {
                     *://* | mailto:* | "#"*) continue ;;
                     /*)
                         failed=1
-                        echo "error: page-link: ${rel}:${lineno}: ${link} is an absolute path; the book is served under /xquad/, so links between pages must be relative" >&2
+                        echo "error: page-link: ${rel}:${lineno}: ${link} is an absolute path; the book is served under a path prefix, so links between pages must be relative" >&2
                         continue
                         ;;
                 esac

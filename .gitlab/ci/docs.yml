@@ -1,6 +1,8 @@
 # Documentation pipeline -- checks generated-docs freshness and handwritten
-# book drift, builds the mdBook site, then publishes it to GitLab Pages at
-# https://docs.quip.network/xquad/ (QUI-988).
+# book drift, then builds the mdBook site. The built book is delivered as the
+# docs:build artifact and served from https://developers.quip.network/docs/xquad/
+# (QUI-1331); GitLab Pages now publishes only the redirect shim that points
+# docs.quip.network at that host.
 #
 # All four jobs `needs:` every verify:*, test:*, and hardware:* job (see
 # setup.yml's "Dependency gating" section) -- docs publish only once the
@@ -88,12 +90,27 @@ docs:build:
     timeout: 15m
     script:
         - make -k build-docs
+        # The sitemap is generated here rather than at publish time because the
+        # artifact is now the delivered product: the portal unpacks this whole
+        # tree at its own build time (QUI-1331), so anything the published book
+        # needs has to be inside it.
+        - sh scripts/gen-sitemap.sh docs/book/build https://developers.quip.network/docs/xquad > docs/book/build/sitemap.xml
     artifacts:
         paths:
             - docs/book/build/
 
-# Publish the book. Reuses the docs:build artifact rather than rebuilding, so
-# this job needs no Rust toolchain and no cargo cache.
+# Publish the redirect shim, and tell the docs host to pick up a new book.
+#
+# This job used to publish the book itself. Since QUI-1331 the book is served
+# from developers.quip.network/docs/xquad/, which owns the documentation
+# canonical, and this host holds no content of its own. That is not a tidy-up:
+# gitlab-pages resolves a request with tryFile before tryRedirects, so while a
+# copy of the book still sat in public/xquad/ the /xquad/* rule in _redirects
+# could never fire and docs.quip.network/xquad/<path> would keep serving a
+# second copy instead of redirecting to the canonical one.
+#
+# It still `needs:` docs:build without taking its artifacts, so the build hook
+# below cannot fire for a pipeline whose book failed to build.
 #
 # `pages: true` is what tells GitLab this job is a Pages deployment -- GA on
 # gitlab.com since 17.9. Before that property existed, GitLab detected a
@@ -107,7 +124,7 @@ docs:build:
 # recognises by name. It only runs on direct pushes to main, so merge
 # request and tag pipelines build the book without publishing it.
 #
-# Five inline shell lines instead of a `make` target: every other job in
+# Inline shell instead of a `make` target: every other job in
 # this repo's CI calls `make -k <target>` so the CI definition and the
 # local workflow stay identical, but a Pages deploy has no local meaning
 # to converge on -- there is no local GitLab Pages environment to publish
@@ -122,19 +139,26 @@ docs:publish:
     needs:
         - !reference [.needs-gates, verify-test-and-hardware]
         - job: docs:build
-          artifacts: true
+          artifacts: false
     environment:
         name: pages
-        url: https://docs.quip.network/xquad/
+        url: https://docs.quip.network/
     script:
-        - mkdir -p public/xquad
-        - cp -r docs/book/build/. public/xquad/
-        # On a custom domain GitLab Pages serves only /404.html, from the root
-        # of public/ -- public/xquad/404.html is never reached. The copy at the
-        # root resolves its assets through book.toml's site-url.
-        - cp docs/book/build/404.html public/404.html
+        - mkdir -p public
         - cp .gitlab/pages/_redirects .gitlab/pages/robots.txt public/
-        - sh scripts/gen-sitemap.sh public/xquad https://docs.quip.network/xquad > public/xquad/sitemap.xml
+        # Ask Netlify to rebuild the docs host, which pulls this pipeline's
+        # docs:build artifact and unpacks it at /docs/xquad/.
+        #
+        # The pipeline id travels in the POST body. Netlify exposes it to the
+        # portal build as INCOMING_HOOK_BODY, and the portal resolves docs:build
+        # inside that pipeline and downloads the artifact by job id. It must
+        # not use the by-ref endpoint (/jobs/artifacts/main/download?job=...)
+        # instead: that one serves the latest *successful* pipeline, and this
+        # pipeline cannot be successful while this job is still running, so
+        # it would hand Netlify the previous push's book on nearly every merge.
+        # docs:build itself is guaranteed complete here by the `needs:` edge.
+        - test -n "${NETLIFY_BUILD_HOOK}" || { echo "NETLIFY_BUILD_HOOK is not set; the docs host will not pick up this book."; exit 1; }
+        - wget -q -O /dev/null --post-data="pipeline_id=${CI_PIPELINE_ID}" "${NETLIFY_BUILD_HOOK}"
     artifacts:
         paths:
             - public

@@ -1,9 +1,13 @@
 {{!--
     Pre-launch indexing gate (QUI-988).
 
-    The book is deployed at docs.quip.network/xquad but not yet announced,
-    and QUI-977 is still correcting content. Deleting the meta tag below is
-    the launch flip.
+    The book is deployed at developers.quip.network/docs/xquad/ but not yet
+    announced, and QUI-977 is still correcting content. Deleting the meta tag
+    below is the launch flip.
+
+    The docs host checks for this tag when it unpacks the book and fails its
+    build if it is missing, so removing it here is a two-repo change and cannot
+    happen by accident.
 
     Do not gate this in robots.txt instead: a disallowed page is never
     fetched, so a crawler never sees this tag, and the URL stays eligible
