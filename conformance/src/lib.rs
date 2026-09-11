@@ -163,7 +163,8 @@ pub enum Fault {
     StackUnderflow,
     /// The value stack exceeded its depth limit.
     StackOverflow,
-    /// An operand had the wrong value kind.
+    /// An operand had the wrong value kind, including a model-only
+    /// opcode applied to a sample register (or the reverse).
     TypeMismatch,
     /// A register was read while unset.
     UnsetRegister,
@@ -205,8 +206,6 @@ pub enum Fault {
     InvalidDiscreteK,
     /// A `SETLINE`/`ADDLINE` write put a value outside a sample's domain.
     SampleOutOfDomain,
-    /// An operation was invalid for the model's current mode.
-    XqmxMode,
     /// A tracer refused a step.
     TraceFailed,
     /// An allocator was handed a size that is not an allocation.
@@ -576,7 +575,12 @@ fn fault_from_python(class_name: &str) -> Result<Fault, String> {
     match class_name {
         "StackUnderflow" => Ok(Fault::StackUnderflow),
         "StackOverflow" => Ok(Fault::StackOverflow),
-        "TypeMismatch" => Ok(Fault::TypeMismatch),
+        // `xqvm_py` names the model-only-opcode-on-a-sample fault after
+        // the XQMX mode; the Rust VM has no notion of mode -- `Model` and
+        // `Sample` are distinct `RegVal` variants -- so it raises
+        // `RegisterType`. `spec/xqvm/SPEC.md` settles the shared identity
+        // as `TypeMismatch` (QUI-1160).
+        "TypeMismatch" | "XQMXModeError" => Ok(Fault::TypeMismatch),
         "RegisterNotFound" => Ok(Fault::UnsetRegister),
         "DivisionByZero" => Ok(Fault::DivisionByZero),
         "OutputIndex" => Ok(Fault::OutputIndex),
@@ -595,7 +599,6 @@ fn fault_from_python(class_name: &str) -> Result<Fault, String> {
         "TargetNotFound" => Ok(Fault::InvalidLabel),
         "StepLimitExceeded" => Ok(Fault::StepLimitExceeded),
         "MemoryLimitExceeded" => Ok(Fault::MemoryLimitExceeded),
-        "XQMXModeError" => Ok(Fault::XqmxMode),
         "InvalidAllocation" => Ok(Fault::InvalidAllocation),
         "InvalidDiscreteK" => Ok(Fault::InvalidDiscreteK),
         "SampleOutOfDomain" => Ok(Fault::SampleOutOfDomain),

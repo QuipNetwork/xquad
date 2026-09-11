@@ -3,12 +3,13 @@
 ;
 ; exec_at_least resolves the indices vec and rejects k <= 0 before it ever
 ; looks at what r0 holds, so a sample register with k = 0 raises
-; IndexOutOfBounds. xqvm_py checked the mode first and raised XqmxMode.
+; IndexOutOfBounds. xqvm_py checked the mode first and raised its mode
+; fault.
 ;
-; This is outside SPEC.md's XqmxMode carve-out, which licenses XqmxMode
-; against TypeMismatch for the same program. Here the Rust VM never reaches
-; its register check at all, so the disagreement was over which rule fired
-; rather than what to call the mode fault.
+; What this pins is which rule fires, not what the mode fault is called.
+; The Rust VM never reaches its register check at all here, so the two
+; disagreed about ordering rather than about an identity -- and the
+; identity is settled as TypeMismatch in any case (QUI-1160).
 
 PUSH 4
 BSMX r0          ; a sample, not a model

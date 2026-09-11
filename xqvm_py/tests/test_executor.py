@@ -37,6 +37,7 @@ from xqvm_py.errors import (
     UnmatchedLoop,
     VecLengthMismatch,
     XQMXModeError,
+    XQVMError,
 )
 from xqvm_py.executor import DEFAULT_MEMORY_LIMIT, VEC_ELEMENT_BYTES, Executor
 from xqvm_py.opcodes import Opcode
@@ -1556,6 +1557,61 @@ class TestXQMXAccess:
             ]
         )
         assert ex.state.peek(0) == 7
+
+    @pytest.mark.parametrize(
+        "opcode,operands",
+        [
+            (Opcode.GETQUAD, (0, 1)),
+            (Opcode.SETQUAD, (0, 1, 5)),
+            (Opcode.ADDQUAD, (0, 1, 5)),
+        ],
+    )
+    def test_quadratic_opcodes_reject_a_sample(self, opcode, operands):
+        """The quadratic trio requires MODEL mode (QUI-1160).
+
+        A sample carries no quadratic storage. Before this, the runners
+        resolved through `_get_register_as_xqmx`, which accepts a sample, so
+        SETQUAD grew a `quadratic` map the sample's own accessors never read
+        back: the write was accepted and GETQUAD returned 0. Rust rejected
+        the same programs through `as_model_mut()`.
+
+        The budget floor is the smallest one that still pays for `BSMX 4`,
+        so the opcode runs with no headroom. It is derived rather than
+        written down, the way the Rust twin derives it, so that a change to
+        what the allocation costs cannot quietly turn this into a test that
+        runs with room to spare. The fault must not become
+        `MemoryLimitExceeded` there: that is the QUI-1178 failure class, and
+        it stays out because `_charge_coefficient` is model-gated on both VMs
+        and bills a sample nothing.
+        """
+        prog = make_program(
+            [Instruction(Opcode.PUSH1, (4,)), Instruction(Opcode.BSMX, (0,))]
+            + [Instruction(Opcode.PUSH1, (v,)) for v in operands]
+            + [Instruction(opcode, (0,)), Instruction(Opcode.HALT)]
+        )
+        for limit in (_budget_floor(prog), DEFAULT_MEMORY_LIMIT):
+            with pytest.raises(XQMXModeError):
+                Executor().execute(prog, memory_limit=limit)
+
+
+def _budget_floor(prog, ceiling: int = 1024) -> int:
+    """Smallest memory budget `prog` runs under without exhausting it.
+
+    The twin of the probe in `quadratic_opcodes_reject_a_sample_at_any_budget`
+    (`xqvm/src/vm.rs`): raise the budget until the run stops raising
+    `MemoryLimitExceeded`, and return the first budget that clears. Any other
+    fault means the budget was already enough, which is the case a caller
+    pinning a non-memory fault at the floor is after.
+    """
+    for limit in range(1, ceiling + 1):
+        try:
+            Executor().execute(prog, memory_limit=limit)
+        except MemoryLimitExceeded:
+            continue
+        except XQVMError:
+            return limit
+        return limit
+    raise AssertionError(f"program still exhausts a {ceiling}-byte budget")
 
 
 class TestXQMXGrid:
@@ -3592,9 +3648,8 @@ class TestConstraintCheckOrder:
     def test_atleast_k_range_beats_the_register_mode(self):
         """`k` is range-checked before the model register is discriminated.
 
-        `exec_at_least` never reaches its register check for k = 0, so the
-        disagreement was over which rule fired rather than what to call the
-        mode fault -- outside SPEC.md's XqmxMode carve-out.
+        `exec_at_least` never reaches its register check for k = 0, so what
+        this pins is which rule fires, not what the mode fault is called.
         """
         prog = make_program(
             [Instruction(Opcode.PUSH1, (4,)), Instruction(Opcode.BSMX, (0,))]
@@ -3845,21 +3900,19 @@ class TestFaultOrdering:
         that the fault is *not* MemoryLimitExceeded: before the fix the
         register resolved first and a sample was billed 240 bytes for its
         real 3x3 extent, which raised MemoryLimitExceeded here where the Rust
-        VM raised its type error -- and it is verifier-clean, since `INPUT`
-        and a `BQMX`/`BSMX` branch join both write `RegType::Any`, which
-        satisfies ONEHOT's `R::Model` requirement. Both routes are covered:
-        the in-program `BSMX` below pins the runner, and the calldata sample
-        after it pins the surface an embedder reaches, since
+        VM raised its type error -- and the calldata route is still
+        verifier-clean, since `INPUT` writes `RegType::Any`, which satisfies
+        ONEHOT's `R::Model` requirement. (A `BQMX`/`BSMX` branch join was a
+        second such route until QUI-1160 made the join yield `Grid`.) Both
+        are covered: the in-program `BSMX` below pins the runner, and the
+        calldata sample after it pins the surface an embedder reaches, since
         `Vm::set_calldata` takes any `RegVal` -- samples included, as its own
         docs say.
 
-        Which identity the surviving fault carries is deliberately not
-        asserted beyond Python's own: `spec/xqvm/SPEC.md`'s Faults table
-        records `XqmxMode` as its one unresolved row -- `xqvm_py`
-        raises it where the Rust VM raises `TypeMismatch`, no `xqvm::Error`
-        maps to it, and the spec says neither identity is safe to write a
-        vector against until that is settled. What this pins is the charge,
-        which is settled: the same fault now comes out at any budget.
+        What this pins is the charge, not the fault identity: the same
+        fault now comes out at any budget. The identity itself is settled
+        (`TypeMismatch` on both VMs, QUI-1160) and pinned by the
+        coefficient-access conformance vectors.
 
         An int in the register cannot pin this. `_get_register_as_xqmx`
         rejects it before the charge either way, so a test written against

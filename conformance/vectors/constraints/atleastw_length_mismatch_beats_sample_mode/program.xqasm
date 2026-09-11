@@ -5,7 +5,7 @@
 ; ordering: exec_at_least_w resolves both vec operands and compares their
 ; lengths before it reaches the register, so a sample in r0 with mismatched
 ; vecs raises VecLengthMismatch. xqvm_py checked the mode first and raised
-; XqmxMode, which is a rule that had not fired yet on the other VM.
+; its mode fault, which is a rule that had not fired yet on the other VM.
 ;
 ; ISA.md's ATLEASTW row says "both implementations raise VecLengthMismatch
 ; otherwise". This vector is what holds it to that unconditionally, rather

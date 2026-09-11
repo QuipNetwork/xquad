@@ -237,7 +237,7 @@ Read and write the linear (bias) and quadratic (coupling) coefficients of an XQM
 
 **Index precondition.** Every index in this section is bounded against the register's declared size, and every opcode here raises `IndexOutOfBounds` for one outside `[0, size)` -- reads as well as writes. Within that range a missing entry reads as `0`; outside it there is no entry to be missing, because the variable is not one the allocator declared. The bound is the declared size and not the extent of the sparse map, so a read of an absent in-range coefficient and a read past the end are different outcomes rather than the same `0`. An unbounded write is the case this rules out: the sparse map would accept the key and the model would carry a coefficient over a variable that does not exist, leaving a constraint that constrains nothing on a model that still solves cleanly.
 
-The linear opcodes (`GETLINE`, `SETLINE`, `ADDLINE`) accept either MODEL or SAMPLE mode — sample values are stored densely in `values[i]`, model biases sparsely in `linear[i]`. A sample write is additionally checked against the register's domain, which a model write is not: a model's `linear[i]` is a bias coefficient and carries no domain. The quadratic opcodes (`GETQUAD`, `SETQUAD`, `ADDQUAD`) require MODEL mode: samples carry no quadratic storage, and `reg` must hold an XQMX in MODEL mode. A sample register raises `XqmxMode` on `xqvm_py` and `TypeMismatch` on the Rust `xqvm` VM, whose error type has no mode-specific variant.
+The linear opcodes (`GETLINE`, `SETLINE`, `ADDLINE`) accept either MODEL or SAMPLE mode — sample values are stored densely in `values[i]`, model biases sparsely in `linear[i]`. A sample write is additionally checked against the register's domain, which a model write is not: a model's `linear[i]` is a bias coefficient and carries no domain. The quadratic opcodes (`GETQUAD`, `SETQUAD`, `ADDQUAD`) require MODEL mode: samples carry no quadratic storage, and `reg` must hold an XQMX in MODEL mode. A sample register raises `TypeMismatch` on both implementations.
 
 ### Linear Coefficients
 
@@ -275,7 +275,7 @@ An XQMX register (model or sample) can optionally be given 2-D grid dimensions s
 
 ## XQMX High-Level Functions
 
-These instructions inject QUBO penalty terms for common combinatorial constraints, expanding into linear and quadratic coefficient deltas automatically. `reg` must hold an XQMX in MODEL mode. A SAMPLE-mode XQMX raises `XqmxMode` on `xqvm_py` and `TypeMismatch` on the Rust `xqvm` VM, whose error type has no mode-specific variant.
+These instructions inject QUBO penalty terms for common combinatorial constraints, expanding into linear and quadratic coefficient deltas automatically. `reg` must hold an XQMX in MODEL mode. A SAMPLE-mode XQMX raises `TypeMismatch` on both implementations.
 
 | Code | Mnemonic | Arguments | Stack effect | Register effect | Interpretation |
 |------|----------|-----------|--------------|-----------------|----------------|

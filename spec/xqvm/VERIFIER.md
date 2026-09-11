@@ -94,13 +94,34 @@ Errors: `NoActiveLoop`, `UnmatchedLoop`.
 A CFG-based forward analysis over `[RegType; 256]` (one slot per register).
 Each register starts as `Unset`. Instructions that write a register advance its
 slot to a concrete type (`Int`, `VecInt`, `VecXqmx`, `Model`, `Sample`) or
-`Any`. Instructions that read a register are checked against a `RegTypeReq`
+`Any`. A join can additionally produce `Grid`, `AnyVec` or `Conflict`, none of
+which any instruction writes directly. Instructions that read a register are checked against a `RegTypeReq`
 requirement.
 
-At join points the per-register meet is permissive: `meet(T, U) = Any` when
-types disagree (including `meet(Unset, Int) = Any`). This avoids false
-positives for registers written on only one branch of a conditional; the
-must-init pass (Phase 3) covers that gap.
+At join points the per-register meet answers what both sides share, and never
+more. `Any` satisfies every requirement, so answering a join with it hands out
+capabilities neither branch has: `meet(Model, Sample) = Grid` and
+`meet(VecInt, VecXqmx) = AnyVec` name the two pairs that do share a surface --
+the grid surface and the vec surface -- and each satisfies exactly the
+intersection of what its members satisfy, neither `Model`, `Sample` nor
+`VecInt` on its own. Every other pair of types meets to `Conflict`, which
+satisfies `NonUnset` and nothing else. Without these rows a program could
+allocate a model on one branch and a sample on the other, join, and reach
+`SETQUAD` with a sample while verifying clean (QUI-1160).
+
+`Conflict` rather than `Any` for unrelated types is also what makes the meet
+associative, so a join of three or more predecessors does not depend on the
+order the CFG recorded their edges. With `meet(T, U) = Any` for unrelated
+types, `meet(meet(Model, Sample), Int)` is `Any` while
+`meet(Model, meet(Sample, Int))` is `Model`, and one branch of an unrelated
+type reopens the bypass the pair rows close.
+
+`Unset` is the exception: `meet(Unset, T) = Any`, which avoids false positives
+for a register written on only one branch of a conditional. That row is not a
+way back in, because the must-init pass (Phase 3) rejects every read of a
+register left unset on any path. Its cost is that the row is not associative,
+so a join mixing an unwritten branch with two related types can be rejected by
+either phase depending on edge order. Both outcomes reject.
 
 Preconditions enforced:
 

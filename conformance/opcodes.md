@@ -181,9 +181,9 @@ Total: **93 opcodes**.
 | `0x60` | `GETLINE` | `reg: Register` | `1 → 1` | Pop i; push `linear[i]` from the register's model, or a sample's assignment at i; raises IndexOutOfBounds outside [0, size). |
 | `0x61` | `SETLINE` | `reg: Register` | `2 → 0` | Pop value and i; set `linear[i]` in the register's model, or a sample's assignment at i; a sample value outside its domain raises `SampleOutOfDomain`. |
 | `0x62` | `ADDLINE` | `reg: Register` | `2 → 0` | Pop delta and i; add delta to `linear[i]` in the register's model, or a sample's assignment at i; a sample result outside its domain raises `SampleOutOfDomain`. |
-| `0x63` | `GETQUAD` | `reg: Register` | `2 → 1` | Pop j and i; push `quadratic[i, j]` from the register's model; raises IndexOutOfBounds outside [0, size). |
-| `0x64` | `SETQUAD` | `reg: Register` | `3 → 0` | Pop value, j, and i; set `quadratic[i, j]` in the register's model; raises IndexOutOfBounds outside [0, size). |
-| `0x65` | `ADDQUAD` | `reg: Register` | `3 → 0` | Pop delta, j, and i; add delta to `quadratic[i, j]` in the register's model; raises IndexOutOfBounds outside [0, size). |
+| `0x63` | `GETQUAD` | `reg: Register` | `2 → 1` | Pop j and i; push `quadratic[i, j]` from the register's model; requires MODEL mode -- a sample register raises `TypeMismatch`; raises IndexOutOfBounds outside [0, size). |
+| `0x64` | `SETQUAD` | `reg: Register` | `3 → 0` | Pop value, j, and i; set `quadratic[i, j]` in the register's model; requires MODEL mode -- a sample register raises `TypeMismatch`; raises IndexOutOfBounds outside [0, size). |
+| `0x65` | `ADDQUAD` | `reg: Register` | `3 → 0` | Pop delta, j, and i; add delta to `quadratic[i, j]` in the register's model; requires MODEL mode -- a sample register raises `TypeMismatch`; raises IndexOutOfBounds outside [0, size). |
 
 ---
 

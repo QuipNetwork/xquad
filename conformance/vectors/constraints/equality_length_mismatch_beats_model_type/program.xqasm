@@ -8,9 +8,10 @@
 ; spec/xqvm/SPEC.md's Faults table makes a divergence rather than a
 ; formatting difference.
 ;
-; r0 deliberately holds an int rather than a sample: a sample would put the
-; disagreement inside SPEC.md's XqmxMode carve-out and prove nothing about
-; the ordering. An int is outside it, so this vector pins the rule.
+; r0 deliberately holds an int rather than a sample. Both registers are
+; rejected as TypeMismatch now (QUI-1160), so either would pin the rule,
+; but an int keeps the vector about the ordering alone: there is no mode
+; to read into it.
 
 PUSH 0
 STOW r0          ; r0 is an int, not a model

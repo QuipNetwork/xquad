@@ -1,0 +1,14 @@
+; getquad_sample_register: GETQUAD requires MODEL mode.
+;
+; The read of the trio, and the one that charges nothing on either VM. It
+; is here because a read-only opcode is the case where "a sample has no
+; quadratic storage" is easiest to answer with 0 instead of a fault --
+; which is exactly what xqvm_py did before QUI-1160.
+
+PUSH 4
+BSMX r0          ; a SAMPLE, not a model
+
+PUSH 0           ; i
+PUSH 1           ; j
+GETQUAD r0
+HALT
