@@ -2,9 +2,25 @@
 # job. See .gitlab/ci/docs.yml.
 #
 # The book is served from /xquad/, so the host root would otherwise be a dead
-# end. Send it to the main Quip documentation. Domain-level (external)
-# redirects are generally available since GitLab 17.4 and accept only 301/302.
+# end. Send it to the main Quip documentation, which as of QUI-1272 is served
+# from developers.quip.network/docs rather than quip.gitbook.io/docs.
+# Domain-level (external) redirects are generally available since GitLab 17.4
+# and accept only 301/302.
 #
-# The rule matches the root path exactly, so /robots.txt, /404.html and
-# everything under /xquad/ are unaffected.
-/ https://quip.gitbook.io/docs 301
+# The documentation's six top-level groups are listed individually rather than
+# covered by a catch-all. A /* rule would also claim /xquad/toolchain, which
+# this host correctly 404s but the docs host serves as a different document
+# inside the book's own prefix. It would also leave public/404.html
+# unreachable for every path, because ServeNotFoundHTTP runs only after both
+# tryFile and tryRedirects miss.
+#
+# QUI-1331 moves the book to developers.quip.network/docs/xquad/. Once that
+# lands this host holds no content of its own, and these rules collapse to a
+# single catch-all.
+/                          https://developers.quip.network/docs                               301
+/getting-started/*         https://developers.quip.network/docs/getting-started/:splat         301
+/quip-interlock-protocol/* https://developers.quip.network/docs/quip-interlock-protocol/:splat 301
+/compute/*                 https://developers.quip.network/docs/compute/:splat                 301
+/basics/*                  https://developers.quip.network/docs/basics/:splat                  301
+/network/*                 https://developers.quip.network/docs/network/:splat                 301
+/nodes/*                   https://developers.quip.network/docs/nodes/:splat                   301
