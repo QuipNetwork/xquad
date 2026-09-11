@@ -47,8 +47,8 @@ docs/book/build/
 /docs/book/mermaid-init.js
 
 ### GitLab Pages ###
-# Assembled by the `pages` job from the docs/book/build/ artifact; also the
-# output path when replicating that job locally.
+# Assembled by the `docs:publish` job (the redirect shim); also the output
+# path when replicating that job locally.
 /public/
 
 ### Python ###

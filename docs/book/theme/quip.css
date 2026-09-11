@@ -16,13 +16,15 @@
 /*
  * The four faces are served from quip.network/fonts/, which sends
  * `Access-Control-Allow-Origin` for an allowlist of Quip origins. The book
- * is published to docs.quip.network, which is on that list.
+ * is published to developers.quip.network, which is on that list (checked
+ * with `curl -sI -H 'Origin: https://developers.quip.network'` against a
+ * font URL: the header echoes the origin back; an unlisted origin gets none).
  *
  * Two consequences worth knowing before debugging a missing face:
  *
  * 1. The URLs must be absolute. quip.network's own stylesheet uses `/fonts/`,
- *    which is same-origin for it but would resolve to docs.quip.network/fonts/
- *    here, where nothing is served.
+ *    which is same-origin for it but would resolve to
+ *    developers.quip.network/fonts/ here, where nothing is served.
  * 2. `localhost` is not on the allowlist, so a plain local build silently
  *    falls back to the stacks below rather than erroring. To preview the real
  *    faces, copy the built site to a scratch directory, download the woff2

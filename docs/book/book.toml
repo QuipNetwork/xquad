@@ -42,5 +42,8 @@ preferred-dark-theme = "coal"
 # site-url the generated 404 page resolves its assets relative to whatever
 # path the visitor missed, so it renders unstyled and without navigation.
 # The theme directory carries the pre-launch noindex gate (QUI-988).
-site-url = "/xquad/"
+#
+# The host is developers.quip.network, which owns the documentation canonical
+# since QUI-1272. docs.quip.network now only redirects here (QUI-1331).
+site-url = "/docs/xquad/"
 theme    = "theme"
