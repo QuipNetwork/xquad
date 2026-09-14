@@ -26,7 +26,7 @@ The umbrella `xquad` package forwards `[cuda]`, `[dwave]`, and
 its own -- install it against `xqsa` directly. The extra brings in
 `substrate-interface` (the chain RPC client) and `quip-signer`, a
 native extension providing the chain's hybrid signature scheme
-(sr25519 plus ML-DSA-44), which `substrate-interface` alone cannot
+(sr25519 plus FN-DSA-512), which `substrate-interface` alone cannot
 produce. `quip-signer` resolves a prebuilt wheel on Linux and builds
 from source with a local Rust toolchain on macOS and Windows. Both
 guards are lazy: `import xqsa` and every other solver in this chapter
@@ -96,12 +96,13 @@ Placement is deterministic, computed from the model alone, so nothing
 about it needs to be persisted or looked up later.
 
 The target topology is resolved once, at construction, from the
-chain's `QuantumPow.DefaultTopology` (falling back to a pinned
-`ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH` if that read fails), or overridden
-explicitly with `topology=`. Because the same topology shape hashes
-differently per deployment -- each network's allowed-value
-specifications fold into the hash -- a hash from one Quip deployment is
-not portable to another. Before reserving the reward, `solve()` also
+chain's `QuantumPow.DefaultTopology`, or overridden explicitly with
+`topology=`. Because the same topology shape hashes differently per
+deployment -- each network's allowed-value specifications fold into the
+hash -- a hash from one Quip deployment is not portable to another.
+That is why nothing is pinned in the codebase: the chain read is the
+only authoritative source, and a topology that resolves from neither
+source raises rather than selecting a hash no chain would accept. Before reserving the reward, `solve()` also
 checks the resolved hash against `QuantumPow.MineableTopologies`, the
 subset of registered topologies miners actually match jobs against, and
 raises `QuipTopologyError` if the hash is registered but not mineable
