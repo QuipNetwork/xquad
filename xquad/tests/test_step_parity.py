@@ -70,18 +70,27 @@ def test_step_count_parity(label: str, vector_dir: Path) -> None:
 
     calldata = inputs.get("calldata", [])
     output_slots = inputs.get("output_slots", 16)
+    # The allocation budget is a property of the vector, the way calldata
+    # and the slot count are, so it is resolved here rather than left to
+    # whichever default each backend carries. Leaving it out ran a vector
+    # whose `inputs.json` asks for a larger budget at the 1 GiB default
+    # instead, so the run faulted with MemoryLimitExceeded and the step
+    # comparison never happened -- the vector read as broken when it was
+    # this walk that was not reading its inputs. The step budget stays
+    # unset on purpose: see the fault-vector skip above.
+    memory_limit = inputs.get("memory_limit")
 
-    rust_vm = VM(backend=VMBackend.RUST)
-    rust_vm.set_calldata(calldata)
-    rust_vm.set_output_slots(output_slots)
-    rust_vm.run(source)
-    rust_steps = rust_vm.steps()
+    def _vm(backend: VMBackend) -> VM:
+        vm = VM(backend=backend)
+        vm.set_calldata(calldata)
+        vm.set_output_slots(output_slots)
+        if memory_limit is not None:
+            vm.set_memory_limit(memory_limit)
+        vm.run(source)
+        return vm
 
-    py_vm = VM(backend=VMBackend.PYTHON)
-    py_vm.set_calldata(calldata)
-    py_vm.set_output_slots(output_slots)
-    py_vm.run(source)
-    py_steps = py_vm.steps()
+    rust_steps = _vm(VMBackend.RUST).steps()
+    py_steps = _vm(VMBackend.PYTHON).steps()
 
     assert rust_steps > 0, f"{label}: Rust VM reported 0 steps"
     assert py_steps > 0, f"{label}: Python VM reported 0 steps"

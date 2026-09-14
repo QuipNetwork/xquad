@@ -1,0 +1,24 @@
+; charge_cost_overflows_the_budget_word: an allocation whose byte cost does
+; not fit the budget's own integer width is refused, not admitted.
+;
+; The allocation budget is a u64 in the Rust VM and an unbounded integer in
+; xqvm_py. A size of 9223372036854775807 costs 8 bytes per variable, which
+; is about 7.4e19 and does not fit a u64 at all. Rust used to compute that
+; product with saturating arithmetic and accumulate it with a saturating
+; add, so the charge read as u64::MAX -- and at the budget set here, also
+; u64::MAX, a total of u64::MAX is not *greater than* the limit and the
+; charge was admitted. The budget stopped binding exactly where the request
+; was largest, and the run went on to fault on the size instead, while
+; xqvm_py's exact arithmetic refused at the charge.
+;
+; A cost that does not fit a u64 exceeds every u64 budget by definition, so
+; MemoryLimitExceeded is forced rather than chosen. This vector pins it at
+; the only budget that can reach the condition.
+;
+; Reaching the charge at all needs a budget no host would set. That is the
+; point: the vector exists so the top of the range is specified rather than
+; left to whichever arithmetic an implementation happens to use.
+
+PUSH 9223372036854775807
+BQMX r0
+HALT

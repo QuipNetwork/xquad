@@ -1,0 +1,40 @@
+; model_copy_price_refused: one model copy has one price, and this is the
+; budget one byte below it.
+;
+; spec/xqvm/SPEC.md's Allocation budget section states the rule: copying a
+; model costs its declared size at the variable rate plus one linear entry
+; per live linear coefficient and one quadratic entry per live quadratic
+; one -- exactly what the allocator and the coefficient writes charged to
+; build it. The same number is the charge wherever the copy happens, so a
+; program cannot pick a cheap route to the same duplication.
+;
+; Sizing. BQMX of size 4 charges 4 * 8 = 32. One SETLINE on a model
+; register charges one linear entry, 32. OUTPUT then copies the whole
+; model across the host boundary and is charged model_bytes = 4 * 8 + 32 =
+; 64, taking the run to 128. A budget of 127 admits everything up to the
+; copy and refuses the copy itself, so the fault lands on OUTPUT and pins
+; the copy price from below.
+;
+; This vector exists because the model copy rate had no cross-
+; implementation pin at all (QUI-1163). It was asserted by two crate-local
+; Rust tests and by nothing on the Python side, against a schedule whose
+; whole point is that both implementations charge the same. Its sibling
+; model_copy_price_admitted pins the same number from above; neither alone
+; pins a number, since `expected.json` asserts faults and outputs rather
+; than bytes.
+;
+; The copy is priced over the live coefficient map rather than the
+; declared size alone, which is why the SETLINE is here: without it the
+; copy would cost 32 and the vector would not distinguish the model rate
+; from the bare variable rate.
+
+PUSH 4
+BQMX r0          ; charges 4 * VARIABLE_BYTES = 32
+
+PUSH 0
+PUSH 1
+SETLINE r0       ; charges LINEAR_ENTRY_BYTES = 32, total 64
+
+PUSH 0
+OUTPUT r0        ; wants model_bytes = 64, total 128, refused at 127
+HALT

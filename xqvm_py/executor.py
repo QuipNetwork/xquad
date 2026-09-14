@@ -43,6 +43,11 @@ from .errors import (
     TypeMismatch,
     VecLengthMismatch,
 )
+
+# `MAX_ALLOCATION_SIZE` is re-exported: it is part of this module's public
+# surface and the tests import it from here.
+from .limits import MAX_ALLOCATION_SIZE as MAX_ALLOCATION_SIZE
+from .limits import check_model_size
 from .metering import (
     BASE_STEPS,
     COEFF_WRITE_STEPS,
@@ -430,16 +435,24 @@ class Executor:
     def _allocation_size(self, size: int) -> int:
         """Validate and charge for an allocator's size operand.
 
-        Mirrors Rust's `Vm::allocation_size`: reject a size that is not an
-        allocation, then charge the budget. Rust's third step -- narrowing to
-        `usize` -- has no counterpart here, because Python integers are
-        unbounded; charging before that narrowing is what makes the two agree
-        on a 32-bit target as well as on a 64-bit one.
+        Mirrors Rust's `Vm::allocation_size`, in the same three steps and the
+        same order: reject a size that is not an allocation, charge the
+        budget, then range-check against `MAX_ALLOCATION_SIZE`. The order
+        matters -- charging before the range check means a program that
+        exceeds the maximum under a normal budget still faults with
+        `MemoryLimitExceeded` at the charge step, exactly as it does today;
+        only a budget at or above 32 GiB ever reaches the range check at all.
+        Rust's third step is a `usize` narrowing conversion that becomes
+        infallible now that the operand is bounded below `u32::MAX`, so it
+        stays in place there but can no longer fail; this explicit check is
+        what replaces it here, since Python integers are unbounded and never
+        narrow on their own. With it, the two interpreters agree at any
+        budget, not only below 32 GiB.
         """
         if size < 0:
             raise InvalidAllocation(size)
         self._charge(size * VARIABLE_BYTES)
-        return size
+        return check_model_size(size)
 
     def _charge_equality_expansion(self, n: int) -> None:
         """Charge the worst-case cost of an equality expansion over `n` terms."""
@@ -1448,7 +1461,7 @@ class Executor:
         # from a peek rather than the resolved register: Rust charges before
         # it discriminates, so an unset or wrong-typed slot is charged
         # against a size of zero and faults after the budget, not before it.
-        needed = max(indices) + 1 if indices else 0
+        needed = max(max(indices) + 1, 0) if indices else 0
         self._charge_variables(needed - self._peek_model_size(model_reg))
         self._charge_equality_expansion(len(indices))
         self._charge_steps(equality_expansion_steps(len(indices)))
@@ -1456,7 +1469,13 @@ class Executor:
         # model until `as_model_mut()` has succeeded, so a sample must not be
         # left resized by a call that goes on to reject it.
         model = self._get_register_as_model(model_reg, "EQUALITY")
-        model.size = max(model.size, needed)
+        # Range-checked after the charge and after the register has been
+        # discriminated, so `MemoryLimitExceeded` and `RegisterType` both
+        # still precede `InvalidAllocation`. Rust narrows `needed` to a
+        # `usize` here and so has to bound it first; this has nothing to
+        # narrow and checks anyway, which is what keeps the two equal above
+        # a 32 GiB budget.
+        model.size = max(model.size, check_model_size(needed))
         expand_equality(model, indices, coeffs, target, penalty)
 
     def _runner_ATLEAST(self, instr: Instruction) -> None:
@@ -1482,7 +1501,7 @@ class Executor:
             expand_equality(model, orig_indices, [1] * n, k, penalty)
             return
         slack_start = model.size
-        model.size += num_slacks
+        model.size = check_model_size(model.size + num_slacks)
         combined_indices = orig_indices + [slack_start + i for i in range(num_slacks)]
         combined_coeffs = [1] * n + [-(1 << i) for i in range(num_slacks)]
         expand_equality(model, combined_indices, combined_coeffs, k, penalty)
@@ -1519,7 +1538,7 @@ class Executor:
             expand_equality(model, orig_indices, weights, k, penalty)
             return
         slack_start = model.size
-        model.size += num_slacks
+        model.size = check_model_size(model.size + num_slacks)
         combined_indices = orig_indices + [slack_start + i for i in range(num_slacks)]
         combined_coeffs = weights + [-(1 << i) for i in range(num_slacks)]
         expand_equality(model, combined_indices, combined_coeffs, k, penalty)

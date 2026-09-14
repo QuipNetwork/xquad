@@ -1,0 +1,34 @@
+; model_growth_past_the_maximum: a model already at the maximum allocator
+; size cannot grow, and both implementations say so by the same name.
+;
+; spec/xqvm/SPEC.md's "Allocator validation order" bounds an allocator's
+; size operand at MAX_ALLOCATION_SIZE = 2^32 - 1 = 4294967295. An operand
+; is not the only path to a model size: REDUCE appends one auxiliary
+; variable to a model that already exists, so a model sitting at the
+; maximum has nowhere to put it.
+;
+; That growth used to be unchecked, justified by the allocation budget
+; having paid for the model. The budget bounds a model in bytes, not in
+; the executing target's usize, and MAX_ALLOCATION_SIZE is u32::MAX --
+; which on wasm32, where pallet-xqvm runs, is also usize::MAX. So the
+; addition trapped or wrapped to zero there while a 64-bit host grew the
+; model to 2^32 and carried on, and xqvm_py, whose integers are
+; unbounded, did the same. This vector pins InvalidAllocation on all of
+; them.
+;
+; BQMX at the maximum costs 4294967295 * 8 = 34359738360 bytes = 32 GiB
+; to charge, so the budget is 68719476736 (64 GiB): the charge succeeds
+; and the growth is what decides the fault. A model is sparse, so this
+; budget costs no real memory.
+;
+; REDUCE pops P_aux, then var_b, then var_a, so the pushes are var_a = 0,
+; var_b = 1, P_aux = 5. Both indices are inside the declared size, so the
+; bounds checks pass and the growth is reached.
+
+PUSH 4294967295
+BQMX r0
+PUSH 0
+PUSH 1
+PUSH 5
+REDUCE r0
+HALT

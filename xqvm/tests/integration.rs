@@ -2383,6 +2383,136 @@ fn the_default_budget_rejects_an_allocation_larger_than_itself() {
 }
 
 #[test]
+fn a_size_past_the_maximum_is_not_an_allocation_at_any_budget() {
+    // The case the maximum exists for (QUI-1315). Below a 32 GiB budget the
+    // charge refuses first and the test above is what happens; raise the
+    // budget past what 2^32 variables cost and the charge is paid, leaving
+    // the size itself to be judged.
+    //
+    // Before the maximum, that judgement was the `usize` conversion, so the
+    // same three instructions gave three answers: `InvalidAllocation` on
+    // wasm32 where `usize` is 32 bits, a sparse model on a 64-bit host, and
+    // a sparse model in `xqvm_py`, whose integers never narrow. wasm32 is
+    // the target the pallet executes in, so the split ran between a chain
+    // node and every other machine replaying the same bytecode.
+    //
+    // Nothing is allocated on the success path either: `XqmxModel` is
+    // sparse and stores the size as a number, which is exactly why the
+    // 64-bit host accepted this and why the divergence was silent.
+    let (vm, result) = run_with_memory_limit(64 << 30, |b| {
+        b.emit_push(xqvm::MAX_ALLOCATION_SIZE + 1)
+            .emit_bqmx(Register(0))
+            .emit_halt();
+    });
+    let err = result.expect_err("expected a size past the maximum to be refused");
+    assert!(
+        matches!(err, Error::InvalidAllocation { size, .. } if size == 4_294_967_296),
+        "expected InvalidAllocation carrying the pushed i64, got {err:?}"
+    );
+    assert_eq!(
+        vm.memory_used(),
+        34_359_738_368,
+        "the charge precedes the range check, so it stays banked"
+    );
+}
+
+#[test]
+fn a_size_at_the_maximum_is_an_allocation() {
+    // The other half of the boundary. One less than the size above is
+    // admitted, so the maximum is a boundary rather than a ban on large
+    // models, and the `usize` conversion left in `allocation_size` has
+    // nothing to refuse on any target the toolchain supports.
+    let (_vm, result) = run_with_memory_limit(64 << 30, |b| {
+        b.emit_push(xqvm::MAX_ALLOCATION_SIZE)
+            .emit_bqmx(Register(0))
+            .emit_halt();
+    });
+    result.expect("expected the maximum itself to be an allocation");
+}
+
+#[test]
+fn growing_a_model_past_the_maximum_is_not_an_allocation() {
+    // The maximum bounds the allocator operand (QUI-1315); this is the same
+    // bound applied to a model that grows after it was allocated. `REDUCE`
+    // appends one auxiliary variable, so a model already sitting at the
+    // maximum has nowhere to put it.
+    //
+    // The unchecked `model.size += 1` this replaces was justified by the
+    // allocation budget, which bounds a model in bytes and not in the
+    // executing target's `usize`. `MAX_ALLOCATION_SIZE` is `u32::MAX`, which
+    // on wasm32 is also `usize::MAX`, so that addition trapped or wrapped to
+    // zero on the one target the pallet runs in, while a 64-bit host grew the
+    // model to 2^32 and carried on. The native suite cannot observe the trap;
+    // what it can pin is that the size is now refused by name everywhere.
+    let (_vm, result) = run_with_memory_limit(64 << 30, |b| {
+        b.emit_push(xqvm::MAX_ALLOCATION_SIZE)
+            .emit_bqmx(Register(0))
+            .emit_push(0)
+            .emit_push(1)
+            .emit_push(5)
+            .emit(Instruction::Reduce { model: Register(0) })
+            .emit_halt();
+    });
+    let err = result.expect_err("expected growth past the maximum to be refused");
+    assert!(
+        matches!(err, Error::InvalidAllocation { size, .. } if size == 4_294_967_296),
+        "expected InvalidAllocation carrying the grown size, got {err:?}"
+    );
+}
+
+#[test]
+fn growing_a_model_onto_the_maximum_is_an_allocation() {
+    // The other half of the boundary. One variable below the maximum,
+    // `REDUCE` lands exactly on it and is admitted, so the bound is a
+    // boundary rather than a ban on growing a large model.
+    let (_vm, result) = run_with_memory_limit(64 << 30, |b| {
+        b.emit_push(xqvm::MAX_ALLOCATION_SIZE - 1)
+            .emit_bqmx(Register(0))
+            .emit_push(0)
+            .emit_push(1)
+            .emit_push(5)
+            .emit(Instruction::Reduce { model: Register(0) })
+            .emit_halt();
+    });
+    result.expect("expected growth onto the maximum to be an allocation");
+}
+
+#[test]
+fn an_equality_index_past_the_maximum_is_not_an_allocation() {
+    // `EQUALITY` grows the model to cover the largest index it was handed, so
+    // that index is a size and the maximum applies to it.
+    //
+    // It used to be narrowed with `usize::try_from(..).ok()` and a failure
+    // collapsed it to zero. On wasm32 an index past a 32-bit width therefore
+    // charged nothing and fell through to `IndexOutOfBounds`, while a 64-bit
+    // host and `xqvm_py` charged the full growth and raised
+    // `MemoryLimitExceeded`. That split was reachable at the shipped default
+    // budget, unlike the allocator operand's, which needs a host to raise the
+    // budget past 32 GiB first.
+    //
+    // The budget here pays the ~34 GiB growth charge, so what the run reaches
+    // is the range check rather than the budget.
+    let (_vm, result) = run_with_memory_limit(64 << 30, |b| {
+        b.emit_push(1).emit_bqmx(Register(0));
+        b.emit_vec_i(Register(1)).emit_vec_i(Register(2));
+        b.emit_push(xqvm::MAX_ALLOCATION_SIZE)
+            .emit_vec_push(Register(1));
+        b.emit_push(1).emit_vec_push(Register(2));
+        b.emit_push(1).emit_push(1).emit(Instruction::Equality {
+            model: Register(0),
+            indices: Register(1),
+            coeffs: Register(2),
+        });
+        b.emit_halt();
+    });
+    let err = result.expect_err("expected the grown size to be refused");
+    assert!(
+        matches!(err, Error::InvalidAllocation { size, .. } if size == 4_294_967_296),
+        "expected InvalidAllocation carrying the grown size, got {err:?}"
+    );
+}
+
+#[test]
 fn model_allocators_charge_their_declared_size() {
     // A model stores coefficients sparsely, but its declared size is an
     // obligation every consumer has to materialise, so it is charged.

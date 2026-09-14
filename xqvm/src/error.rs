@@ -286,15 +286,19 @@ pub enum Error {
     #[error("trace failed at byte {pos:#06x}: {message}")]
     TraceFailed { pos: usize, message: String },
 
-    /// An allocator was handed a negative size, or -- only above the memory
-    /// limit `Vm::allocation_size` documents -- one too large for the
-    /// executing target to address.
+    /// An allocator was handed a negative size, or one past
+    /// [`MAX_ALLOCATION_SIZE`](crate::MAX_ALLOCATION_SIZE).
+    ///
+    /// Both halves are properties of the operand rather than of the machine
+    /// running it: the maximum is a fixed number, not the executing target's
+    /// address space, so the same size is an allocation everywhere or an
+    /// allocation nowhere.
     ///
     /// The size is carried as the `i64` the program pushed, not as a `usize`,
     /// so the fault reports what the program asked for on every target. See
-    /// `Vm::allocation_size` for the validate-charge-convert order that keeps
-    /// this identity target-independent, and for the limit above which it
-    /// stops doing so.
+    /// `Vm::allocation_size` for the reject-charge-range-check-convert order
+    /// and for why the range check follows the charge rather than preceding
+    /// it.
     #[error("invalid allocation size {size} at byte {pos:#06x}")]
     InvalidAllocation { pos: usize, size: i64 },
 

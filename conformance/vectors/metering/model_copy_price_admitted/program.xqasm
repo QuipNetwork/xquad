@@ -1,0 +1,46 @@
+; model_copy_price_admitted: the same model copy, at exactly the budget it
+; costs.
+;
+; The upper half of the pair model_copy_price_refused opens. That vector
+; refuses the copy at 127 bytes; this one admits the whole program at 136,
+; so between them the model copy price is pinned to a number rather than
+; bounded on one side. `expected.json` has no bytes field -- a vector
+; asserts a fault or an outcome -- so a boundary pair is how a charge is
+; pinned across implementations.
+;
+; Sizing. BQMX of size 4 charges 32, SETLINE charges one linear entry at
+; 32, and OUTPUT charges model_bytes = 4 * 8 + 32 = 64, which is the 128
+; the refused vector sits one byte under. The trailing int write adds one
+; more copy at the variable rate, 8, for 136.
+;
+; That trailing write is not decoration. OUTPUT leaves a model in output
+; slot 0, and the conformance format renders a non-scalar output as a
+; sentinel rather than a value, so a vector that halted there would assert
+; nothing useful about what it produced. Overwriting slot 0 with an int
+; leaves a slot the format can state, while the model copy it is pinning
+; has already been charged.
+;
+; Why this path rather than ITER over a vec<xqmx>, which is the other
+; opcode the one-price rule names: no instruction appends a model to a
+; vec. VECX creates an empty vec<xqmx> and VECPUSH takes an int, so a
+; populated vec<xqmx> is reachable only by host injection and cannot be
+; expressed as bytecode plus calldata. The Rust suite pins ITER against
+; OUTPUT directly (iterating_a_model_vec_costs_what_outputting_the_same_
+; model_costs); this pair pins OUTPUT across implementations, and the two
+; together carry the rule to both.
+
+PUSH 4
+BQMX r0          ; charges 4 * VARIABLE_BYTES = 32
+
+PUSH 0
+PUSH 1
+SETLINE r0       ; charges LINEAR_ENTRY_BYTES = 32, total 64
+
+PUSH 0
+OUTPUT r0        ; charges model_bytes = 64, total 128
+
+PUSH 5
+STOW r1
+PUSH 0
+OUTPUT r1        ; charges VARIABLE_BYTES = 8, total 136
+HALT

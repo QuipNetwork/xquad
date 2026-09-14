@@ -119,9 +119,10 @@ class InvalidAllocation(XQVMError):
     Mirrors Rust's `xqvm::Error::InvalidAllocation`. The six XQMX allocators
     take their size straight off the value stack, where a negative value is
     one PUSH away; a size that is not an allocation is a program error, not a
-    request for an empty model. Rust additionally raises this for a size too
-    large for the executing target to address, which cannot arise here
-    because Python integers are unbounded.
+    request for an empty model. This also covers a size past
+    `MAX_ALLOCATION_SIZE`: the maximum is a fixed number rather than a
+    property of the executing target, so both implementations raise this for
+    the same sizes on every target, not only on a 32-bit one.
     """
 
     def __init__(self, size: int):

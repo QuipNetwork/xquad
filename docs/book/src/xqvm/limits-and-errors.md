@@ -17,6 +17,7 @@ this reason.
 | Jump label range | 0-65,535 (`u16`), 65,536 labels max | Assembler: `TooManyTargets`. Verifier: `UndefinedJumpTarget`. VM: `InvalidLabel` |
 | Shift amount | 0-63 bits | VM: `InvalidShift` |
 | Grid dimensions | rows and cols must be > 0, and `rows * cols` must not exceed the register's declared size | VM: `InvalidGridDimensions` |
+| XQMX size | 4,294,967,295 (`2^32 - 1`) variables, and the allocation budget | VM: `InvalidAllocation` past the maximum, `MemoryLimitExceeded` when the budget cannot pay. Applies to a size an allocator was given and to one `ATLEAST`, `ATLEASTW`, `REDUCE` or `EQUALITY` grew a model to |
 | Loop nesting | 8,192 frames | VM: `LoopStackOverflow` |
 | Discrete domain size (`XQMX`/`XSMX`) | `k >= 2` | VM: `InvalidDiscreteK` |
 | Sample assignment value | a member of the register's domain: `{0, 1}` binary, `{-1, +1}` spin, `{0, ..., k-1}` discrete | VM: `SampleOutOfDomain` on `SETLINE`/`ADDLINE`. Model coefficients are unbounded and never raise it |
@@ -146,7 +147,7 @@ which disassembles the program and points at the failing instruction.
 | `MemoryLimitExceeded` | An allocating instruction exceeded the configured allocation budget |
 | `InvalidShift` | `SHL`/`SHR` shift amount outside `[0, 64)` |
 | `InvalidGridDimensions` | `RESIZE` with rows or cols <= 0, `RESIZE` with `rows * cols` past the register's declared size, or a grid-reading opcode on a register with no grid |
-| `InvalidAllocation` | An allocator given a negative size, or -- only above the budget bound `spec/xqvm/SPEC.md` records -- one too large for the executing target to address |
+| `InvalidAllocation` | An allocator given a negative size, or one past the maximum allocator size `2^32 - 1`; also a constraint that would grow a model past it, since `ATLEAST`, `ATLEASTW`, `REDUCE` and `EQUALITY` all append variables. Both are properties of the operand rather than of the machine running it, so the same size is refused everywhere. Under an ordinary budget an oversized size raises `MemoryLimitExceeded` first, since the charge precedes the range check |
 | `LoopStackOverflow` | `RANGE`/`ITER` nesting past 8,192 frames |
 | `InvalidDiscreteK` | `XQMX`/`XSMX` called with `k < 2` -- `k` counts the values in `{0, ..., k-1}`, so `k = 1` leaves a single value and no decision to make |
 | `SampleOutOfDomain` | `SETLINE`/`ADDLINE` wrote a value outside a sample's domain. `ADDLINE` checks the result of the addition rather than the delta. Sample registers only: a model's `linear[i]` is a bias, not an assignment, and is unbounded |

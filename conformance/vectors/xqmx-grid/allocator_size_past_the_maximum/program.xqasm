@@ -1,0 +1,28 @@
+; allocator_size_past_the_maximum: a size one past the maximum allocator
+; size raises InvalidAllocation on both implementations, under a budget
+; large enough that the charge is not what decides it.
+;
+; spec/xqvm/SPEC.md's "Allocator validation order" (Allocation budget
+; section, QUI-1315) resolves an allocator's size operand in a fixed
+; order: reject a negative size, charge the budget for it, then reject a
+; size past MAX_ALLOCATION_SIZE = 2^32 - 1 = 4294967295, and only then
+; narrow it to the target's native width. Step 3 sits after the charge on
+; purpose, so under any budget below 32 GiB a size past the maximum
+; exhausts the budget at step 2 first and the fault is
+; MemoryLimitExceeded -- unchanged behaviour. Step 3 is reachable only
+; above that budget; before this ticket what happened there was
+; target-dependent: InvalidAllocation on a 32-bit target (wasm32, where
+; the Substrate pallet runs), a sparse allocation on 64-bit Rust, and a
+; sparse allocation on xqvm_py's unbounded integers. This vector reaches
+; step 3 on every implementation and pins InvalidAllocation everywhere.
+;
+; size = 4294967296 = 2^32, one past the maximum. Charging it costs
+; size * 8 = 34359738368 bytes = 32 GiB, so the vector's budget is set to
+; 68719476736 bytes (64 GiB) -- comfortably above the 32 GiB charge, so
+; the charge at step 2 succeeds and step 3 is what decides the fault.
+; BQMX allocates a sparse model (XqmxModel::new stores size as a number
+; and materialises no buffer), so this budget costs no real memory.
+
+PUSH 4294967296
+BQMX r0
+HALT
