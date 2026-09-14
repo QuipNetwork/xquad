@@ -13,14 +13,16 @@ at:
 - a local **DevNet** -- `make localdev` in the sibling `nodes.quip.network`
   repo stands up a self-contained single-validator chain plus a faucet and one
   CPU miner. Fast, offline, and you control the whole stack.
-- the public **TestNet** (LiveNet) -- a real multi-node deployment with a
-  third-party GPU solver fleet and a rolling runtime. This is
-  the target for validation the DevNet cannot fully stand in for (real solvers,
-  real timing, real runtime upgrades). `faucet.testnet.quip.network` no longer
-  resolves, so the funded tier of the suite skips there; the chain itself is
-  live. A newer deployment, **aglais**, runs the H4 (FN-DSA-512) signature
-  scheme our signing layer does not yet speak -- it arrives with QUI-1258 and
-  QUI-1259.
+- the public **aglais** network -- a real multi-node deployment with a
+  third-party GPU solver fleet and a rolling runtime. This is the target for
+  validation the DevNet cannot fully stand in for (real solvers, real timing,
+  real runtime upgrades). Its faucet is healthy, so the funded tier runs there
+  too.
+
+The older public **TestNet** is retired and is no longer a target. It ran the
+H3 suite (sr25519 + ML-DSA-44) that this signing layer no longer speaks, and
+its faucet stopped resolving before it was shut down. Nothing in this guide
+points at it.
 
 Both are opt-in and gated on `QUIP_RPC_URL`, so they never run in the default
 `make test` or in CI. The [MR template](../.gitlab/merge_request_templates/default.md)
@@ -46,7 +48,7 @@ self-install the `[quip]` extra via `uv run --extra quip`.
 
 | Variable | When | Meaning |
 | --- | --- | --- |
-| `QUIP_RPC_URL` | required for e2e | chain RPC, `ws://` (DevNet) or `wss://` (TestNet). `make test-quip` / `make test-quip-e2e` pass it through explicitly. |
+| `QUIP_RPC_URL` | required for e2e | chain RPC, `ws://` (DevNet) or `wss://` (aglais). `make test-quip` / `make test-quip-e2e` pass it through explicitly. |
 | `QUIP_FAUCET_URL` | optional | faucet **base** URL; the funded fixture POSTs to `<QUIP_FAUCET_URL>/request`. Without it only the read-only connectivity tests run. |
 | `QUIP_MINER_PROBE_TIMEOUT` | optional (default 60) | how long the `solving_miner` probe waits before skipping the end-to-end tier. Raise it on a slow or remote fleet. |
 | `SSL_CERT_FILE` | macOS + `wss://` only | CA bundle for the TLS handshake (see [macOS TLS](#macos-tls-wss-only)). |
@@ -70,11 +72,18 @@ the two the recipe forwards.
 ## Common prerequisites
 
 - `uv sync --extra quip` in this repo (installs `substrate-interface` + the
-  `quip-signer` wheel; on macOS the signer sdist builds from Rust in ~15s). The
-  make targets do this for you via `uv run --extra quip`.
-- A hybrid keystore (sr25519 + ML-DSA-44). The funded test fixture generates one
-  on demand; for a manual solve, `load_or_generate_keystore(path)` creates a
-  `0600` seed file.
+  `quip-signer` extension). The make targets do this for you via
+  `uv run --extra quip`.
+- **Apple Silicon:** `quip-signer` 0.3.0 publishes no macOS wheel, so the first
+  sync after the pin moved builds it from the sdist and needs a local Rust
+  toolchain. Expect minutes, not seconds. Slow here is expected; a failure is
+  not, and almost always means no `cargo` on `PATH`.
+- A hybrid keystore (sr25519 + FN-DSA-512). The funded test fixture generates
+  one on demand; for a manual solve, `load_or_generate_keystore(path)` creates a
+  `0600` seed file. A keystore written under the old H3 suite is worthless: the
+  format check rejects it, and H4 derives a different account id from the same
+  master seed, so the balance does not carry over either. Generate a fresh one
+  and fund that.
 
 ### macOS TLS (`wss://` only)
 
@@ -83,20 +92,28 @@ handshakes fail on macOS unless you point OpenSSL at certifi's bundle:
 
     export SSL_CERT_FILE=$(uv run --extra quip python -m certifi)
 
-Export it for every command that touches the TestNet (REPL, tests, scripts). It
+Export it for every command that touches aglais (REPL, tests, scripts). It
 is harmless on Linux and unnecessary for the `ws://` DevNet.
 
 ## Option A -- local DevNet
 
 The DevNet is the fast, offline way to exercise the full propose -> discover ->
-solve -> submit path without the public TestNet. It runs the identical `:v0.2`
-node image the TestNet runs, so a spec-matched DevNet is a good pre-flight
-before a TestNet run.
+solve -> submit path without a public chain. It runs the same node image the
+public stack runs, so a spec-matched DevNet is a good pre-flight before an
+aglais run.
+
+There are no pinned `:v0.2` image tags any more. `make localdev` resolves the
+newest published tag per image at run time (`scripts/newest-tags.py` writes
+`data/localdev.tags.env`), because CI does not move `latest` for rc builds and
+tracking `latest` would silently hold localdev on an old build. The public
+stack selects images by `CHANNEL` instead, defaulting to `beta`; `stable` and
+`beta` both run aglais and differ only in how far ahead of the release line
+they sit. A `QUIP_*_TAG` pinned in `.env` passes through either path untouched.
 
 Sibling repos under `~/code/gitlab.com/quip.network/`:
 
-- `nodes.quip.network` -- DevNet orchestration (compose, Makefile, seed script);
-  this is where you run `make localdev`.
+- `nodes.quip.network` -- DevNet orchestration (compose, Makefile, coordinator
+  invocation); this is where you run `make localdev`.
 - `quip-protocol` -- Python miner image source (only needed to read miner
   internals).
 - `quip-validator` -- the substrate node (runtime, pallets) + the `quip_signer`
@@ -116,9 +133,11 @@ From `nodes.quip.network`:
     make localdev                # wipe + pull + seed topology + bring up the stack
 
 `make localdev` is idempotent and destructive by design: it tears down, wipes
-the chain, force-pulls the current `:v0.2` images, brings up the validator +
-faucet, seeds the `advantage2_system1` topology (4577 nodes / 41515 edges) +
-difficulty via `//Alice` sudo, then starts the miner. Success prints
+the chain, resolves and pulls the newest published image tags, brings up the
+validator + faucet, seeds the `advantage2_system1` topology + difficulty via
+`//Alice` sudo, then starts the miner. Seeding now lives inside the coordinator
+binary (`quip-coordinator seed-chain`); the old
+`scripts/seed-advantage2-topology.py` is gone. Success prints
 `localdev stack up` with the dashboard / RPC / faucet URLs. The miner
 self-bootstraps: it faucet-funds its account, registers as a PoW miner, and
 auto-registers as a mempool solver (`mempool solver guard: registered (cpu)`).
@@ -132,15 +151,21 @@ the first pull is slow and CPU is higher than native -- expected, not a hang.
 
 ### Verify the stack
 
-- Blocks + runtime version: `state_getRuntimeVersion` over the RPC should report
-  `specVersion 112`, `transactionVersion 5`. The DevNet image lags the TestNet
-  (which is on 116 / 6); the pinned DevNet coordinates here are re-validated
-  separately.
+- Blocks + runtime version: read `state_getRuntimeVersion` over the RPC and
+  record what it says. Nothing is pinned here on purpose -- localdev tracks the
+  newest published image, so its runtime moves whenever one is published, and a
+  figure written down in this guide would be stale within the week. aglais was
+  on `specVersion 117` / `transactionVersion 7` on 2026-09-15; a localdev stack
+  brought up from current images should be at or ahead of that.
 - Containers: `docker ps` -- all `*-localdev` Up, `quip-cpu-localdev` not
   Restarting.
 - Miner healthy: `docker logs quip-cpu-localdev | grep -iE "solver guard: registered|topology .from chain.|mempool=on"`
-  -- expect the solver registered, the DevNet `DefaultTopology` hash
-  (`0xfb91813b...`, deployment-specific), and mempool on.
+  -- expect the solver registered, the DevNet `DefaultTopology` hash, and
+  mempool on. `make localdev` seeds the coordinator's built-in
+  `advantage2-system1` preset (`allowed_h = [-1000, 0, 1000]`, hashing to
+  `0xfb91813b...`), which is a different topology from the `allowed_h = [0]`
+  one aglais runs. `SolverQuip` reads whichever the chain reports, so nothing
+  in xquad needs to know which you are on -- but never carry a hash across.
 
 ### Host access
 
@@ -151,9 +176,11 @@ The stack exposes everything through Caddy on `:20049`:
   `.../request`).
 
 If you prefer raw ports, add a `ports:` mapping for `quip-validator`
-(`9944:9944`) and `quip-faucet` (`8087:8087`) in a personal
-`docker-compose.override.yml` -- the localdev stack does not publish them by
-default.
+(`9944:9944`) and `quip-faucet` (`8087:8087`) -- the localdev stack does not
+publish them by default. Note that `docker-compose.override.yml` is no longer
+the file to put that in: the localdev overrides moved to the explicit
+`docker-compose.localdev.yml`, which plain `docker compose` does not auto-load,
+so use a differently-named override and pass it with `-f`.
 
 ### Run the suite
 
@@ -178,12 +205,16 @@ is non-persistent and order ids reset, so never hard-code one.
   leftover) that defeats the built-in fallback. On latest `main`,
   `make localdev` overwrites the config; if you hand-edited it, delete the
   `validators` line or set `validators = ["ws://quip-validator:9944"]`.
-- **"Works differently than the TestNet" / 0 solutions with a healthy-looking
-  miner:** you are almost certainly on a STALE cached image. `:v0.2` is a
-  rolling tag; an old cache can be a pre-migration node and/or a pre-T7 miner
-  that behaves nothing like the current fleet. `make localdev` force-pulls;
-  confirm the running node reports `specVersion 112` and the miner logs the
-  `mempool_producer` / `work_scheduler` stack.
+- **Stale checkout of `nodes.quip.network`:** a checkout still on the `v0.2`
+  line does not merely lag, it fails. The miner images moved to a separate
+  `v0.3` repository line, `data/config.toml` changed schema (`make updateconfig`
+  migrates it), and chain seeding moved into the coordinator. Pull `main` before
+  blaming the stack.
+- **0 solutions with a healthy-looking miner:** confirm the node's runtime with
+  `state_getRuntimeVersion` and that the miner logs the `mempool_producer` /
+  `work_scheduler` stack. `make localdev` resolves the newest published tags on
+  every run, so a stale image is far less likely than it used to be; a stale
+  `.env` pinning `QUIP_*_TAG` is the remaining way to get one.
 - **macOS miner crash-loop before any app logs:** `PGID=20` group collision --
   set `PUID=0` / `PGID=0`.
 - **Faucet:** on a fresh bring-up the miner's first requests hit
@@ -191,27 +222,29 @@ is non-persistent and order ids reset, so never hard-code one.
   (expected). A repeat request for the same account returns HTTP 429
   (rate-limited); use a fresh keystore per test if you hit the limit.
 
-## Option B -- public TestNet
+## Option B -- the public aglais network
 
-The public TestNet is a real, multi-node deployment with a registered solver
-fleet (~20 GPU solvers). You do not control the solvers or the topology -- you
-propose jobs and a third-party fleet solves them.
+aglais is a real, multi-node deployment with a registered solver fleet. You do
+not control the solvers or the topology -- you propose jobs and a third-party
+fleet solves them. It runs the H4 hybrid suite (sr25519 + FN-DSA-512), which is
+what the signing layer speaks.
 
 ### Coordinates (verify before a run -- these move)
 
-- **RPC:** use a validator node, e.g. `wss://bootnode-1.testnet.quip.network:20049/rpc`.
+- **RPC:** use a validator node, e.g. `wss://bootnode-1.aglais.quip.network:20049/rpc`
+  (bootnode-2 and bootnode-3 serve the same chain).
   Any node can fall behind the chain tip and serve a stale, frozen view -- balances
   read as 0 and freshly submitted extrinsics look like they never land, even though
   the chain is live. Confirm the node is caught up before trusting reads (see the
   liveness check below), and point `QUIP_RPC_URL` at a different RPC if the one you
   are on is not syncing.
-- **Faucet:** none. `faucet.testnet.quip.network` has no DNS record as of
-  2026-09-10. Leave `QUIP_FAUCET_URL` unset: the funded tier then skips cleanly
-  and the read-only tier still runs. Funding an account is a manual step now, so
-  the tiers past connectivity need a keystore that already holds a balance.
+- **Faucet:** `https://faucet.aglais.quip.network`, healthy as of 2026-09-15
+  (`/health` returns `{"status":"ok"}`; the bare root returns 404, which is not a
+  fault). Set `QUIP_FAUCET_URL` to it and the funded tier runs. A repeat request
+  for the same account is rate-limited, so use a fresh keystore per run.
 - **Block time:** ~6s.
-- **Runtime:** advances over time (`specVersion 116` / `transactionVersion 6`,
-  read live on 2026-09-10). ALWAYS re-check with `state_getRuntimeVersion` before
+- **Runtime:** advances over time (`specVersion 117` / `transactionVersion 7`,
+  read live on 2026-09-15). ALWAYS re-check with `state_getRuntimeVersion` before
   assuming a pinned value. The signer reads `transactionVersion` from chain
   metadata dynamically, so a runtime bump does not by itself break submission --
   but confirm rather than assume.
@@ -226,7 +259,7 @@ Quick version + liveness check. A synced node reports `isSyncing == false` and
 `currentBlock == highestBlock`; if it is behind, its state reads are stale:
 
     CERT=$(uv run --extra quip python -m certifi)
-    RPC=wss://bootnode-1.testnet.quip.network:20049/rpc
+    RPC=wss://bootnode-1.aglais.quip.network:20049/rpc
     SSL_CERT_FILE="$CERT" uv run --extra quip python -c "from xqsa.quip_metadata import connect; \
         s=connect('$RPC'); \
         print('runtime', s.rpc_request('state_getRuntimeVersion',[])['result']); \
@@ -237,11 +270,12 @@ Quick version + liveness check. A synced node reports `isSyncing == false` and
 
 The same `advantage2_system1` graph hashes differently per deployment (each
 network's allowed-value specs fold into the hash), so `SolverQuip` resolves the
-topology from chain `QuantumPow.DefaultTopology` at construction -- the pinned
-`ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH` is only a fallback, and `topology=` overrides.
-On the TestNet `DefaultTopology` is `0xe66d3dfa...` and is the sole
-`MineableTopologies` entry, so jobs against it are eligible to be mined. Never
-assume the DevNet hash on the TestNet or vice versa. `solve()` pre-validates that
+topology from chain `QuantumPow.DefaultTopology` at construction. That read is
+the only source: there is no pinned fallback in the codebase, and a topology
+that resolves from neither the chain nor an explicit `topology=` raises rather
+than selecting a hash no chain would accept. On aglais `DefaultTopology` is
+`0xcbec1eb4...` over 4577 nodes / 41514 edges, read live on 2026-09-15. Never
+assume the DevNet hash on aglais or vice versa. `solve()` pre-validates that
 the resolved hash is in `MineableTopologies` before reserving the reward (raising
 `QuipTopologyError`). Only a runtime that lacks the `MineableTopologies` storage
 item entirely skips the check; a present-but-empty set rejects.
@@ -251,7 +285,8 @@ item entirely skips the check; a present-but-empty set rejects.
     CERT=$(uv run --extra quip python -m certifi)
     SSL_CERT_FILE="$CERT" QUIP_MINER_PROBE_TIMEOUT=180 \
       make test-quip \
-        QUIP_RPC_URL=wss://bootnode-1.testnet.quip.network:20049/rpc
+        QUIP_RPC_URL=wss://bootnode-1.aglais.quip.network:20049/rpc \
+        QUIP_FAUCET_URL=https://faucet.aglais.quip.network
 
 The submit-path tests always run; the `TestEndToEnd` cases are gated behind the
 `solving_miner` probe. If the probe skips (no solution within the window), retry
@@ -289,7 +324,7 @@ once when the fleet is active.
   tightened to `first_solution_at + block_wait` once a first solution lands. An
   order that expires with zero solutions can be auto-reclaimed (SolverQuip does
   this and raises a job-failed error, releasing the reserved reward).
-- **Fleet answers can be valid but suboptimal:** the TestNet fleet runs
+- **Fleet answers can be valid but suboptimal:** the aglais fleet runs
   heuristic GPU solvers and may return a correct, chain-consistent assignment
   that is not the global optimum -- observed: a 3-var binary model whose true
   optimum is -2 came back as -1, while the controlled DevNet CPU fleet returns
@@ -306,11 +341,11 @@ once when the fleet is active.
 ## Manual smoke solve (optional)
 
 Beyond the pytest suite, a single small model round-trips the propose + decode +
-energy-canary path. Export the same env you used above (for the TestNet also
+energy-canary path. Export the same env you used above (for aglais also
 export `SSL_CERT_FILE` and set `QUIP_RPC_URL`/`QUIP_KEYSTORE`), fund a keystore,
 then:
 
-    export QUIP_RPC_URL=ws://localhost:20049/rpc     # or wss://bootnode-1.testnet.quip.network:20049/rpc (TestNet)
+    export QUIP_RPC_URL=ws://localhost:20049/rpc     # or wss://bootnode-1.aglais.quip.network:20049/rpc (aglais)
     export QUIP_KEYSTORE=/tmp/quip-ks.json
     uv run --extra quip python - <<'PY'
     from xqsa.quip import SolverQuip
@@ -341,8 +376,9 @@ the large `ising_params` arrays when dumping orders.
 ## Which to use when
 
 - **DevNet** for fast, deterministic, offline iteration and as a spec-matched
-  pre-flight before a TestNet run. You control the fleet, so a fresh order
+  pre-flight before an aglais run. You control the fleet, so a fresh order
   always solves quickly.
-- **TestNet** for the real-solver, real-timing, real-runtime validation the
+- **aglais** for the real-solver, real-timing, real-runtime validation the
   DevNet cannot reproduce -- run it before landing a SolverQuip change that
-  touches submission, decoding, or the lifecycle.
+  touches submission, decoding, or the lifecycle. It is the only public target;
+  the older TestNet is retired.
