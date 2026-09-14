@@ -82,10 +82,11 @@ pytestmark = [
     pytest.mark.skipif(not RPC_URL, reason="QUIP_RPC_URL unset; live devnet tests skipped"),
 ]
 
-# advantage2_system1 on the v0.2 devnet (pinned in quip_codec), confirmed live.
-# (These are the live counts, not the pre-live 4578 / 41531 estimate.)
+# advantage2_system1 as registered on aglais, read live on 2026-09-15 from the
+# chain's own QuantumPow.DefaultTopology (nothing is pinned in quip_codec any
+# more). The v0.2 devnet carried 41515 edges; aglais carries one fewer.
 EXPECTED_NODES = 4577
-EXPECTED_EDGES = 41515
+EXPECTED_EDGES = 41514
 UNIT = 10**12
 
 # Tighter lifecycle bounds than the production defaults so a live solve reaches
