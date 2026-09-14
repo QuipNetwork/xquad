@@ -719,6 +719,9 @@ def test_i32_overflow_error_carries_doc_link() -> None:
 # mock accepts anything.
 VALID_SEED = "0x" + "01" * 32
 UNIT = 1_000_000_000_000  # 1 tQUIP in planck (chain MinReward default).
+# Stand-in for a deployment's QuantumPow.DefaultTopology. The real hash is
+# per-deployment and read from the chain; nothing is pinned in the codebase.
+DEFAULT_TOPOLOGY_HASH = "0x" + "cb" * 32
 
 # A topology carrying allowed-value sets, so check_allowed_values has data.
 TOPO_WITH_SETS = Topology.of(
@@ -847,7 +850,10 @@ def _default_iface(*, with_default_spec_const: bool = False, balance: int | None
     constants: dict = {("QuantumComputeMempool", "MinReward"): UNIT}
     if with_default_spec_const:
         constants[("QuantumComputeMempool", "DefaultIsingSpecId")] = DEFAULT_ISING_SPEC_ID
-    storage: dict = {("QuantumComputeMempool", "JobSpecs"): {"spec": "ok"}}
+    storage: dict = {
+        ("QuantumComputeMempool", "JobSpecs"): {"spec": "ok"},
+        ("QuantumPow", "DefaultTopology"): DEFAULT_TOPOLOGY_HASH,
+    }
     if balance is not None:
         storage[("System", "Account")] = {"data": {"free": balance}}
     return FakeSubstrate(constants=constants, storage=storage)
@@ -976,17 +982,22 @@ class TestSolverQuipConstruction:
         assert _make_solver(monkeypatch)._reward == UNIT
 
     def test_topology_defaults_to_chain_default(self, monkeypatch) -> None:
-        # No topology arg -> chain QuantumPow.DefaultTopology (the pinned
-        # constant is deployment-specific and must not be assumed).
+        # No topology arg -> chain QuantumPow.DefaultTopology. The chain read is
+        # the only source; the topology hash is deployment-specific.
         chain_default = "0x" + "e6" * 32
         iface = _default_iface()
         iface.storage[("QuantumPow", "DefaultTopology")] = chain_default
         solver = _make_solver(monkeypatch, iface=iface)
         assert solver._topology_hash == chain_default
 
-    def test_topology_falls_back_to_pinned_when_default_unset(self, monkeypatch) -> None:
-        # DefaultTopology unset on-chain -> the pinned fallback constant.
-        assert _make_solver(monkeypatch)._topology_hash == ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH
+    def test_topology_unresolvable_raises(self, monkeypatch) -> None:
+        # No topology arg and no chain default -> a clear error, not a silent
+        # fall-through to a pinned hash that no deployment would accept.
+        assert ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH is None
+        iface = _default_iface()
+        del iface.storage[("QuantumPow", "DefaultTopology")]
+        with pytest.raises(ValueError, match="no topology hash available"):
+            _make_solver(monkeypatch, iface=iface)
 
     def test_topology_explicit_arg_wins(self, monkeypatch) -> None:
         explicit = "0x" + "ab" * 32

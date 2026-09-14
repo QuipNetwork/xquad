@@ -80,20 +80,21 @@ QUIP_COEFFICIENTS_DOC_URL = (
     "https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqsa/SOLVERS.md#coefficient-encoding-and-allowed-values"
 )
 
-# Genesis default plain-Ising job spec (QUI-567). Verified against localdev
-# ``QuantumComputeMempool.JobSpecs`` during live validation.
+# Genesis default plain-Ising job spec (QUI-567). Confirmed against aglais
+# ``QuantumComputeMempool.DefaultIsingSpecId`` on 2026-09-15. The value is a
+# genesis constant and has not moved across deployments.
 DEFAULT_ISING_SPEC_ID = "0x8f46f3a31321d1d093314fc769c42cbe7a83d71a0b69e6571a0f68e2a04067f0"
 
-# BLAKE2b-256 topology hash of advantage2_system1, pinned from live validation
-# (QUI-569 Step 8) against the v0.2 localdev devnet. Two derivations agree:
-#   1. Chain: ``QuantumPow.DefaultTopology`` (== the ``RegisteredTopologies``
-#      storage key and the ``MineableTopologies`` entry the miner matches on).
-#   2. ``quip-protocol shared/topology_hash.py`` over the registered
-#      ``(sorted nodes, sorted edges, canonical allowed-value specs)`` -- the
-#      Python mirror of the pallet's ``hash_topology``.
-# The v0.2 image's advantage2_system1 dataset is 4577 nodes / 41515 edges; the
-# hash binds those exact arrays (an earlier 4578 / 41531 figure was pre-live).
-ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH: str | None = "0xfb91813bc4268d00e35813c8fcdb67675a08ef74240dbb25bcd35dd1478c7ec4"
+# BLAKE2b-256 topology hash of advantage2_system1. There is deliberately no
+# pinned fallback: the hash is per-deployment, binding the exact registered
+# ``(sorted nodes, sorted edges, canonical allowed-value specs)`` arrays of the
+# chain that carries it, so it moves whenever a deployment is rebuilt. The
+# chain read -- ``QuantumPow.DefaultTopology``, which is also the
+# ``RegisteredTopologies`` storage key and the ``MineableTopologies`` entry the
+# miner matches on -- is the only authoritative source. A stale pin is worse
+# than none, because it resolves to a topology no chain accepts; leaving this
+# ``None`` makes an unresolvable topology raise instead.
+ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH: str | None = None
 
 # On-chain order statuses (``QuantumComputeMempool`` ``OrderStatus``).
 ORDER_STATUS_OPENED = "Opened"

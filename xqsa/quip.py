@@ -39,7 +39,7 @@ Provide exactly one of ``seed`` or ``keystore`` (a keystore is generated on
 first use if absent). The account must be funded; on localdev the faucet at
 ``QUIP_FAUCET_URL`` tops it up.
 
-Signing is hybrid (sr25519 + ML-DSA-44): the chain's ``Signature`` is
+Signing is hybrid (sr25519 + FN-DSA-512): the chain's ``Signature`` is
 ``HybridTxSignature``, which ``substrate-interface`` cannot produce, so all
 crypto is delegated to the ``quip_signer`` extension and extrinsic assembly to
 :mod:`xqsa.quip_signing`. Install both with ``pip install xqsa[quip]`` (or
@@ -335,25 +335,26 @@ class SolverQuip(Solver):
         """Resolve the topology hash to target.
 
         Prefers the explicit ``topology`` argument, then the chain's
-        ``QuantumPow.DefaultTopology``, then the pinned
-        :data:`ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH` fallback. Resolved once at
-        construction so :meth:`solve` and :meth:`query` on the same instance
-        agree on the topology even if the chain default later changes.
+        ``QuantumPow.DefaultTopology``. Resolved once at construction so
+        :meth:`solve` and :meth:`query` on the same instance agree on the
+        topology even if the chain default later changes.
 
-        Reading the chain default keeps the solver deployment-agnostic: the
-        same advantage2 graph hashes differently across networks (the hash
-        folds in each deployment's allowed-value specs), so a single pinned
-        constant cannot be correct everywhere.
+        There is no pinned fallback. The same advantage2 graph hashes
+        differently across deployments (the hash folds in each deployment's
+        allowed-value specs), so a pinned constant cannot be correct
+        everywhere, and a stale one resolves to a topology no chain accepts.
+        :data:`ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH` is retained as ``None`` and
+        consulted last so an operator can pin one locally if they must.
 
         Raises:
-            ValueError: if none of the three sources yields a hash.
+            ValueError: if neither source yields a hash.
         """
         resolved = topology or self._chain_default_topology() or ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH
         if not resolved:
             raise ValueError(
                 "no topology hash available: pass topology=, or seed "
-                "QuantumPow.DefaultTopology on-chain (the pinned "
-                "ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH fallback is unset)."
+                "QuantumPow.DefaultTopology on-chain (there is no pinned "
+                "ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH fallback)."
             )
         return _as_hex(resolved)
 
@@ -362,10 +363,10 @@ class SolverQuip(Solver):
 
         Distinguishes a genuinely-absent default (the storage item is not part of
         the runtime, or decodes to ``None``) from a transport/decode fault: only
-        the former falls back to the pinned constant. A transient failure must not
-        be mistaken for "no default" -- doing so would target the pinned localdev
-        hash on another network and waste the reserved reward on a job that can
-        never be solved, with no signal that the fallback was a fault.
+        the former is reported as absent. A transient failure must not be
+        mistaken for "no default" -- doing so would silently drop to whatever
+        fallback an operator pinned and waste the reserved reward on a job that
+        can never be solved, with no signal that the fallback was a fault.
 
         Raises:
             QuipConnectionError: if the storage read fails for any reason other

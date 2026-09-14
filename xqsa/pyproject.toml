@@ -21,12 +21,13 @@ dependencies = [
 cuda  = [ "cupy-cuda12x>=13.0", "nvidia-cuda-nvrtc-cu12", "nvidia-cuda-runtime-cu12" ]
 dwave = [ "dwave-system>=1.0" ]
 metal = [ "pyobjc-framework-Metal>=11.0; sys_platform == 'darwin'" ]
-# `quip-signer` is the hybrid sr25519 + ML-DSA-44 signing extension. Linux
-# installs resolve a manylinux wheel; macOS and Windows build it from the sdist
-# with a local Rust toolchain (the same policy as xquad's own native packages).
-# SolverQuip lazy-imports it, so `import xqsa` and every other solver stay
-# healthy without this extra. Pin `>=0.2.2`: 0.2.1 shipped a broken wheel.
-quip = [ "substrate-interface>=1.7.4,<2", "quip-signer>=0.2.2" ]
+# `quip-signer` is the hybrid sr25519 + FN-DSA-512 (Falcon-512) signing
+# extension. Linux installs resolve a manylinux wheel; macOS and Windows build
+# it from the sdist with a local Rust toolchain (the same policy as xquad's own
+# native packages). SolverQuip lazy-imports it, so `import xqsa` and every other
+# solver stay healthy without this extra. Pin `>=0.3.0`: that is the first
+# release carrying the H4 suite, and `>=0.2.2` accepted H3 and H4 alike.
+quip = [ "substrate-interface>=1.7.4,<2", "quip-signer>=0.3.0" ]
 
 [tool.uv.sources]
 xqvm_py.workspace = true
