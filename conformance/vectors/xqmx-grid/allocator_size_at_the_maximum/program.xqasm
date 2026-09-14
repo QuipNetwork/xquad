@@ -1,0 +1,24 @@
+; allocator_size_at_the_maximum: a size exactly at the maximum allocator
+; size succeeds on both implementations, under a budget large enough that
+; the charge is not what decides it.
+;
+; Paired with allocator_size_past_the_maximum, which pins the same
+; boundary's rejecting side; together they pin the boundary itself rather
+; than only the rejection. spec/xqvm/SPEC.md's "Allocator validation
+; order" (Allocation budget section, QUI-1315) resolves an allocator's
+; size operand as: reject a negative size, charge the budget for it,
+; reject a size past MAX_ALLOCATION_SIZE = 2^32 - 1 = 4294967295, and only
+; then narrow it to the target's native width -- infallible once step 3
+; has passed. size = 4294967295 is exactly the maximum, so step 3 admits
+; it and BQMX allocates.
+;
+; size = 4294967295 costs size * 8 = 34359738360 bytes to charge, just
+; under 32 GiB. The vector's budget is set to 68719476736 bytes (64 GiB),
+; the same as its sibling vector, so the charge at step 2 succeeds well
+; before step 3 is reached. BQMX allocates a sparse model
+; (XqmxModel::new stores size as a number and materialises no buffer), so
+; this budget costs no real memory despite the size.
+
+PUSH 4294967295
+BQMX r0
+HALT

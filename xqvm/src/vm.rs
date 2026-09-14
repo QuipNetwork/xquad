@@ -279,6 +279,31 @@ pub const DEFAULT_STEP_LIMIT: u64 = 10_000_000;
 /// each restating the literal is how the two halves of a limit drift apart.
 pub const DEFAULT_MEMORY_LIMIT: u64 = 1 << 30;
 
+/// Largest `size` an allocator may be given.
+///
+/// The six XQMX allocators take their size straight off the value stack, so
+/// the operand is an `i64` and most of its range is not an allocation any
+/// target could serve. This is the bound that makes "not an allocation" mean
+/// the same thing everywhere: `2^32 - 1` is the largest value a 32-bit
+/// `usize` can hold -- not the memory such a target can address, which
+/// `2^32 - 1` *variables* is well past at 32 GiB of charge -- so a size
+/// within it narrows to `usize` on every target the toolchain supports and a
+/// size past it is refused on every target alike.
+///
+/// The rate constants below explain why a charge may not be derived from the
+/// executing target's pointer width. This limit is the same rule applied to
+/// the operand rather than to a rate: spelled as `u32::MAX` it is a fixed
+/// number that happens to coincide with a 32-bit address space, not a
+/// measurement of the host the VM is running on. Deriving it from
+/// `usize::MAX` would make a five-billion-variable request an
+/// `InvalidAllocation` on a chain node and a successful allocation on the
+/// 64-bit machine beside it, which is the divergence this closes.
+///
+/// It is public because `xqvm_py` carries the same limit and `spec/xqvm`
+/// states it normatively: as with [`DEFAULT_MEMORY_LIMIT`], each restating of
+/// the literal is how the halves of a limit drift apart.
+pub const MAX_ALLOCATION_SIZE: i64 = u32::MAX as i64;
+
 /// Bytes charged per XQMX variable.
 ///
 /// A variable costs one `i64` in a sample's value buffer. Model allocators are
@@ -902,8 +927,29 @@ impl Vm {
     /// instead is not an option for the embedders that matter: inside a Wasm
     /// runtime a failed allocation traps the whole execution rather than
     /// returning an error the host can map to a dispatch error.
+    ///
+    /// The accumulation is exact rather than saturating. A saturating total
+    /// is not merely imprecise at the top of the range, it stops refusing:
+    /// at `memory_limit = u64::MAX` the saturated total is `u64::MAX` too,
+    /// which is not *greater than* the limit, so the charge is admitted and
+    /// the budget stops binding at its own ceiling. A cost that does not fit
+    /// a `u64` exceeds every `u64` budget by definition, so overflow is
+    /// [`Error::MemoryLimitExceeded`] and there is no second answer to pick.
+    ///
+    /// The step budget in [`Vm::charge_steps_at`] deliberately does *not*
+    /// match: it saturates, and `xqvm_py._charge_steps` clamps to mirror it,
+    /// because a step count is observable through conformance in a way a
+    /// byte count is not. Changing that is a specification decision rather
+    /// than a bug fix, so the two budgets differ here on purpose.
     fn charge(&mut self, pos: usize, bytes: u64) -> Result<(), Error> {
-        let total = self.memory_used.saturating_add(bytes);
+        let Some(total) = self.memory_used.checked_add(bytes) else {
+            return Err(Error::MemoryLimitExceeded {
+                pos,
+                requested: bytes,
+                used: self.memory_used,
+                limit: self.memory_limit,
+            });
+        };
         if total > self.memory_limit {
             return Err(Error::MemoryLimitExceeded {
                 pos,
@@ -918,34 +964,70 @@ impl Vm {
 
     /// Charge for `count` XQMX variables. See [`VARIABLE_BYTES`].
     fn charge_variables(&mut self, pos: usize, count: usize) -> Result<(), Error> {
-        let count = u64::try_from(count).unwrap_or(u64::MAX);
-        self.charge(pos, count.saturating_mul(VARIABLE_BYTES))
+        self.charge_variable_count(pos, widen(count))
+    }
+
+    /// Charge for `count` XQMX variables given as a charge-width count.
+    ///
+    /// The one place the byte cost of a variable count is computed, so that
+    /// an allocator's operand and a model's growth are priced identically.
+    ///
+    /// A cost that does not fit a `u64` is refused rather than clamped. A
+    /// clamp would read as `u64::MAX` bytes, which at `memory_limit =
+    /// u64::MAX` is affordable -- the budget would stop binding exactly
+    /// where the request is largest. The true cost exceeds every `u64`
+    /// budget, so the refusal is forced rather than chosen, and it is the
+    /// answer `xqvm_py` already gives from unbounded integers.
+    fn charge_variable_count(&mut self, pos: usize, count: u64) -> Result<(), Error> {
+        match count.checked_mul(VARIABLE_BYTES) {
+            Some(bytes) => self.charge(pos, bytes),
+            // `requested` is reported saturated: the field is a `u64` and
+            // the true cost is what will not fit one. Conformance compares
+            // fault identity and never reads it.
+            None => Err(Error::MemoryLimitExceeded {
+                pos,
+                requested: u64::MAX,
+                used: self.memory_used,
+                limit: self.memory_limit,
+            }),
+        }
     }
 
     /// Validate, charge for, and convert an allocator's size operand.
     ///
     /// The order is normative and the whole point of the helper: reject a
-    /// negative size, then charge the budget off the `i64`, and only then
-    /// narrow to `usize`. Charging before the conversion is what keeps the
-    /// fault identity target-independent -- a negative size raises
+    /// negative size, charge the budget off the `i64`, range-check against
+    /// [`MAX_ALLOCATION_SIZE`], and only then narrow to `usize`. Charging
+    /// before the conversion is what keeps the fault identity
+    /// target-independent -- a negative size raises
     /// [`Error::InvalidAllocation`] on every target and an oversized one
     /// raises [`Error::MemoryLimitExceeded`] on every target, including the
     /// wasm32 runtime the Substrate pallet executes in, where `usize` is 32
     /// bits wide and a `usize::try_from` would otherwise decide the answer.
     ///
-    /// That holds while the charge is certain to refuse first, which is
-    /// every memory limit below `2^32 * VARIABLE_BYTES` (32 GiB) -- far
-    /// above the default. Above it the `usize::try_from` below does decide
-    /// the answer, and the identity splits by target. QUI-1315 closes that
-    /// by giving `size` a maximum that does not mention pointer width;
-    /// `spec/xqvm/SPEC.md`'s Allocation budget section records the bound.
+    /// The charge alone only carried that as far as the budgets that make
+    /// it certain to refuse first, which is every limit below
+    /// `2^32 * VARIABLE_BYTES` (32 GiB). Above that a size past a 32-bit
+    /// target's address space was charged successfully and then decided by
+    /// the narrowing: `InvalidAllocation` on wasm32, a sparse model on a
+    /// 64-bit host, and a sparse model again in `xqvm_py`, whose integers
+    /// are unbounded and which therefore has no narrowing at all. The
+    /// [`MAX_ALLOCATION_SIZE`] range check closes that at every budget, and
+    /// closes it to `InvalidAllocation` on all three.
+    ///
+    /// It sits after the charge rather than before it so that no program
+    /// which runs today changes its fault identity: under any ordinary
+    /// budget an oversized size still exhausts the budget at step two and
+    /// raises [`Error::MemoryLimitExceeded`], exactly as it did before. The
+    /// `usize::try_from` below is kept as the type-level proof that the
+    /// conversion is total -- the range check leaves it no way to fail.
     fn allocation_size(&mut self, pos: usize, size: i64) -> Result<usize, Error> {
         if size < 0 {
             return Err(Error::InvalidAllocation { pos, size });
         }
-        let bytes = u64::try_from(size).unwrap_or(u64::MAX);
-        self.charge(pos, bytes.saturating_mul(VARIABLE_BYTES))?;
-        usize::try_from(size).map_err(|_| Error::InvalidAllocation { pos, size })
+        // The sign was rejected above, so this conversion is total.
+        self.charge_variable_count(pos, u64::try_from(size).unwrap_or(0))?;
+        model_size(size, pos)
     }
 
     /// Charge `bytes` for one coefficient written into `reg`, but only when
@@ -2726,13 +2808,50 @@ impl Vm {
             RegVal::Model(m) => m.size,
             _ => 0,
         };
+        // `needed` stays an `i64` until it has been charged for, and is
+        // narrowed only after `model_size` has passed it -- the allocator
+        // validation order in `spec/xqvm/SPEC.md`, which governs a grown
+        // size as much as an allocated one.
+        //
+        // Narrowing here instead, as this did, let the executing target
+        // decide the fault: on wasm32 an index past a 32-bit width failed
+        // `usize::try_from`, collapsed `needed` to zero and charged
+        // nothing, leaving `indices_to_usize` below to raise
+        // `IndexOutOfBounds`, while a 64-bit host and `xqvm_py` charged the
+        // full growth and raised `MemoryLimitExceeded`. That split was
+        // reachable at the default budget, not only above the 32 GiB one
+        // `allocation_size` needs, and wasm32 is where the pallet runs.
+        //
+        // A negative maximum index clamps to zero rather than faulting, so
+        // an all-negative index vec still grows the model by nothing and
+        // raises `IndexOutOfBounds` at `indices_to_usize`, as before.
+        //
+        // `max_idx + 1` overflows only at `i64::MAX`, and that one index
+        // clamps up rather than down. Clamping it to zero, as this did,
+        // charged nothing and fell through to `IndexOutOfBounds` while
+        // `xqvm_py` computed `2^63` from unbounded integers and raised
+        // `MemoryLimitExceeded` -- the same divergence the narrowing above
+        // caused, on one index value, at the shipped default budget.
+        // `i64::MAX` is one variable short of Python's `2^63`, which the
+        // charge cannot see: both exceed every `u64` budget by more than a
+        // factor of four, so both are refused for the same reason.
         let needed = idx_vec
             .iter()
             .max()
-            .and_then(|&max_idx| max_idx.checked_add(1))
-            .and_then(|needed| usize::try_from(needed).ok())
-            .unwrap_or(0);
-        self.charge_variables(pos, needed.saturating_sub(current_size))?;
+            .map_or(0, |&max_idx| max_idx.saturating_add(1))
+            .max(0);
+        let current = i64::try_from(current_size).unwrap_or(i64::MAX);
+        let growth = u64::try_from(needed.saturating_sub(current)).unwrap_or(0);
+        // Priced through `charge_variable_count`, the one place a variable
+        // count becomes bytes, rather than the local `saturating_mul` this
+        // was alone in using. A clamped cost reads as `u64::MAX` bytes,
+        // which at `memory_limit = u64::MAX` is affordable; no program
+        // reaches this charge with the budget still untouched, so the clamp
+        // was refused by the accumulating `checked_add` instead and no
+        // vector can tell the two apart. It is priced here the way every
+        // other growth and every allocator operand is priced, so that the
+        // reachability argument is not what the agreement rests on.
+        self.charge_variable_count(pos, growth)?;
         self.charge_equality_expansion(pos, idx_vec.len())?;
         self.charge_steps(pos, equality_expansion_steps(widen(idx_vec.len())))?;
         let m = self
@@ -2743,6 +2862,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        let needed = model_size(needed, pos)?;
         if needed > m.size {
             m.size = needed;
         }
@@ -2753,7 +2873,7 @@ impl Vm {
 
     #[expect(
         clippy::arithmetic_side_effects,
-        reason = "`1 <= k <= n_i64` is checked above so the excess is in `0..n_i64`, `leading_zeros()` returns at most `i64::BITS` so `num_slacks` is at most 63, and the model growth was charged against the allocation budget before the model was touched (`spec/xqvm/SPEC.md`'s Allocation budget), which bounds `m.size + num_slacks`, `slack_start + i` and `1i64 << i` for `i <= 62`"
+        reason = "`1 <= k <= n_i64` is checked above so the excess is in `0..n_i64`, and `leading_zeros()` returns at most `i64::BITS` so `num_slacks` is at most 63. The growth itself goes through `grow_model`, which bounds `m.size + num_slacks` by `MAX_ALLOCATION_SIZE` on every target and so bounds `slack_start + i` with it; `1i64 << i` is in range for `i <= 62`. The allocation budget is deliberately not the justification -- it bounds the model in bytes, not in the target's `usize` (QUI-1315)"
     )]
     fn exec_at_least(
         &mut self,
@@ -2816,7 +2936,7 @@ impl Vm {
         }
         let slack_start = m.size;
         let idx_us = indices_to_usize(&idx_vec, pos, slack_start)?;
-        m.size += num_slacks;
+        grow_model(m, num_slacks, pos)?;
         let mut all_indices = idx_us;
         let mut all_coeffs = vec![1i64; n];
         for i in 0..num_slacks {
@@ -2829,7 +2949,7 @@ impl Vm {
 
     #[expect(
         clippy::arithmetic_side_effects,
-        reason = "`max_excess` comes from a checked subtraction so `leading_zeros()` returns at most `i64::BITS` and `num_slacks` is at most 63, and the model growth was charged against the allocation budget before the model was touched (`spec/xqvm/SPEC.md`'s Allocation budget), which bounds `m.size + num_slacks`, `slack_start + i` and `1i64 << i` for `i <= 62`"
+        reason = "`max_excess` comes from a checked subtraction so `leading_zeros()` returns at most `i64::BITS` and `num_slacks` is at most 63. The growth itself goes through `grow_model`, which bounds `m.size + num_slacks` by `MAX_ALLOCATION_SIZE` on every target and so bounds `slack_start + i` with it; `1i64 << i` is in range for `i <= 62`. The allocation budget is deliberately not the justification -- it bounds the model in bytes, not in the target's `usize` (QUI-1315)"
     )]
     fn exec_at_least_w(
         &mut self,
@@ -2911,7 +3031,7 @@ impl Vm {
         }
         let slack_start = m.size;
         let idx_us = indices_to_usize(&idx_vec, pos, slack_start)?;
-        m.size += num_slacks;
+        grow_model(m, num_slacks, pos)?;
         let mut all_indices = idx_us;
         let mut all_coeffs = coeff_vec.clone();
         for i in 0..num_slacks {
@@ -3090,6 +3210,56 @@ fn at_pos(pos: usize) -> impl Fn(Error) -> Error {
     }
 }
 
+/// Range-check a model size against [`MAX_ALLOCATION_SIZE`] and narrow it.
+///
+/// Steps 3 and 4 of the allocator validation order in `spec/xqvm/SPEC.md`,
+/// lifted out of [`Vm::allocation_size`] so that every path producing a model
+/// size shares one bound. An allocator's operand is not the only such path:
+/// `ATLEAST`, `ATLEASTW` and `REDUCE` append variables to a model that
+/// already exists, and `EQUALITY` grows one to cover the largest index it was
+/// handed.
+///
+/// The size arrives as an `i64` rather than a `usize` for the same reason the
+/// maximum is a literal: `usize` is 32 bits wide on wasm32, where
+/// `pallet-xqvm` executes, so a conversion performed before the check would
+/// let the executing target decide the answer. That is the divergence
+/// QUI-1315 closed for the operand; this is the same check applied to every
+/// other size the VM computes.
+///
+/// # Errors
+/// [`Error::InvalidAllocation`] when `size` exceeds [`MAX_ALLOCATION_SIZE`],
+/// carrying the size as the `i64` it was computed as.
+fn model_size(size: i64, pos: usize) -> Result<usize, Error> {
+    if size > MAX_ALLOCATION_SIZE {
+        return Err(Error::InvalidAllocation { pos, size });
+    }
+    usize::try_from(size).map_err(|_| Error::InvalidAllocation { pos, size })
+}
+
+/// Append `by` variables to a model, bounded by [`MAX_ALLOCATION_SIZE`].
+///
+/// `ATLEAST` and `ATLEASTW` append slack variables and `REDUCE` appends one
+/// auxiliary variable, each to a model the allocation budget has already been
+/// charged for. The budget is not what bounds the sum: it bounds the model in
+/// bytes, while the addition itself happens in the executing target's
+/// `usize`. [`MAX_ALLOCATION_SIZE`] is `u32::MAX`, which on wasm32 is also
+/// `usize::MAX`, so a model sitting at the maximum overflows on the next
+/// variable appended -- a panic under overflow checks and a wrap to zero in
+/// release -- against a 64-bit host that grows the model and carries on.
+///
+/// The sum is taken at the charge width, where it cannot overflow on any
+/// target, and then put through [`model_size`]. That is what makes the fault
+/// identity the same everywhere rather than a property of the machine.
+///
+/// # Errors
+/// [`Error::InvalidAllocation`] when the grown size would exceed
+/// [`MAX_ALLOCATION_SIZE`].
+fn grow_model(model: &mut XqmxModel, by: usize, pos: usize) -> Result<(), Error> {
+    let grown = widen(model.size).saturating_add(widen(by));
+    model.size = model_size(i64::try_from(grown).unwrap_or(i64::MAX), pos)?;
+    Ok(())
+}
+
 /// Convert vector-of-i64 indices to vector-of-usize, validating each is
 /// in `[0, model_size)`. Returns the first out-of-range index as
 /// [`Error::IndexOutOfBounds`].
@@ -3111,10 +3281,6 @@ fn indices_to_usize(idxs: &[i64], pos: usize, model_size: usize) -> Result<Vec<u
 /// Rosenberg degree reduction: replace `x_a·x_b` with auxiliary variable w.
 ///
 /// Allocates w at `model.size`, adds 4 enforcement terms, returns w.
-#[expect(
-    clippy::arithmetic_side_effects,
-    reason = "the one auxiliary variable was charged against the allocation budget before the call (`spec/xqvm/SPEC.md`'s Allocation budget), so `size` is bounded by it"
-)]
 fn expand_reduce(
     model: &mut XqmxModel,
     var_a: usize,
@@ -3125,7 +3291,7 @@ fn expand_reduce(
     let minus_two_p = checked(p_aux.checked_mul(-2), pos)?;
     let three_p = checked(p_aux.checked_mul(3), pos)?;
     let w = model.size;
-    model.size += 1;
+    grow_model(model, 1, pos)?;
     model.add_quad(var_a, var_b, p_aux).map_err(at_pos(pos))?;
     model.add_quad(var_a, w, minus_two_p).map_err(at_pos(pos))?;
     model.add_quad(var_b, w, minus_two_p).map_err(at_pos(pos))?;

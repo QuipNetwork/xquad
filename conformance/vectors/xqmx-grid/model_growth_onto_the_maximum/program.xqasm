@@ -1,0 +1,18 @@
+; model_growth_onto_the_maximum: the other half of the boundary in
+; model_growth_past_the_maximum.
+;
+; One variable below the maximum, REDUCE's auxiliary variable lands
+; exactly on MAX_ALLOCATION_SIZE = 2^32 - 1 = 4294967295 and is admitted.
+; The pair is what pins the bound: a single refusing vector would pass
+; equally against an implementation that refused every growth.
+;
+; REDUCE pushes the auxiliary variable's index, so the final stack holds
+; 4294967294 -- the size the model had before it grew.
+
+PUSH 4294967294
+BQMX r0
+PUSH 0
+PUSH 1
+PUSH 5
+REDUCE r0
+HALT

@@ -1,0 +1,31 @@
+; equality_grows_past_the_index_width: an index of i64::MAX is charged as a
+; growth, not clamped away, so the fault is the budget's and not the target's.
+;
+; EQUALITY grows the model to cover the largest index it was handed, and the
+; needed size is that index plus one. At i64::MAX that addition overflows the
+; charge width. Rust used to clamp the overflow to zero, which charged
+; nothing, passed the size range check on a size of zero and fell through to
+; IndexOutOfBounds, while xqvm_py computed 2^63 from unbounded integers,
+; charged (2^63 - size) * 8 bytes and raised MemoryLimitExceeded. Same
+; bytecode, the 1 GiB default budget this vector runs at, two fault
+; identities -- the divergence narrowing the index used to cause, surviving
+; on the one index value where the arithmetic itself overflows.
+;
+; The overflow now clamps up, to i64::MAX, one variable short of Python's
+; 2^63. The charge cannot see the difference: both cost more than four times
+; a u64 and are refused for that reason rather than by comparison against
+; any particular budget. MemoryLimitExceeded is therefore the answer at
+; every budget a host can express, which is what this vector pins.
+
+PUSH 1
+BQMX r0
+VECI r1
+VECI r2
+PUSH 9223372036854775807
+VECPUSH r1
+PUSH 1
+VECPUSH r2
+PUSH 1
+PUSH 1
+EQUALITY r0 r1 r2
+HALT

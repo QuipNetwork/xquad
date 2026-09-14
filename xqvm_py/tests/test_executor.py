@@ -26,6 +26,7 @@ from xqvm_py.errors import (
     CallDataIndex,
     DivisionByZero,
     IndexOutOfBounds,
+    InvalidAllocation,
     InvalidDiscreteK,
     InvalidShift,
     MemoryLimitExceeded,
@@ -39,7 +40,13 @@ from xqvm_py.errors import (
     XQMXModeError,
     XQVMError,
 )
-from xqvm_py.executor import DEFAULT_MEMORY_LIMIT, VEC_ELEMENT_BYTES, Executor
+from xqvm_py.executor import (
+    DEFAULT_MEMORY_LIMIT,
+    LINEAR_ENTRY_BYTES,
+    MAX_ALLOCATION_SIZE,
+    VEC_ELEMENT_BYTES,
+    Executor,
+)
 from xqvm_py.opcodes import Opcode
 from xqvm_py.program import Instruction, make_program, run_program
 from xqvm_py.program import program_from_xqasm as assemble
@@ -2986,6 +2993,158 @@ class TestAllocationBudget:
     def test_sample_allocators_charge_eight_bytes_per_variable(self, instructions):
         ex = self._run([*instructions, Instruction(Opcode.HALT)], 1 << 20)
         assert ex.memory_used == 800
+
+    def test_an_iter_over_a_model_vec_charges_what_each_model_holds(self):
+        """QUI-1163: one model copy has one price, whichever opcode copies it.
+
+        Mirrors the Rust crate's test of the same name. `ITER` used to
+        charge a fixed header plus entries while `_value_bytes` -- what
+        `INPUT` and `OUTPUT` charge -- billed the declared size at the
+        variable rate plus entries, so the same model cost a different
+        number of bytes depending on which opcode copied it.
+
+        The Rust test installs the `vec<xqmx>` host-side, because no
+        instruction appends a model to a vec: `VECX` creates an empty one
+        and `VECPUSH` takes an int. Here the vec arrives as calldata
+        instead, since `execute` resets the register file. That means
+        `INPUT` copies it once and `ITER` copies it again, so the run pays
+        the same model twice and the total is exactly two copies of it --
+        which is the equality this is really about.
+        """
+        model = XQMX.binary_model(4)
+        model.set_linear(0, 7)
+        one_copy = 4 * 8 + LINEAR_ENTRY_BYTES
+
+        ex = Executor()
+        ex.execute(
+            assemble("PUSH 0\nINPUT r0\nPUSH 0\nPUSH 1\nITER r0\nNEXT\nHALT"),
+            input_data={0: Vec.from_list([model])},
+            memory_limit=DEFAULT_MEMORY_LIMIT,
+        )
+        assert ex.memory_used == 2 * one_copy, (
+            "four declared variables plus one linear entry, copied by INPUT and again by ITER"
+        )
+
+    def test_iterating_a_model_vec_costs_what_outputting_the_same_model_costs(self):
+        """The equality the previous test's number rests on, asserted directly.
+
+        Each program pays `INPUT` for one copy of the same model, so any
+        difference in the totals is a difference between what `ITER` and
+        `OUTPUT` charge for the copy each of them makes.
+        """
+
+        def model():
+            m = XQMX.binary_model(6)
+            m.set_linear(0, 7)
+            m.set_quadratic(0, 1, 3)
+            return m
+
+        iter_ex = Executor()
+        iter_ex.execute(
+            assemble("PUSH 0\nINPUT r0\nPUSH 0\nPUSH 1\nITER r0\nNEXT\nHALT"),
+            input_data={0: Vec.from_list([model()])},
+            memory_limit=DEFAULT_MEMORY_LIMIT,
+        )
+
+        output_ex = Executor()
+        output_ex.execute(
+            assemble("PUSH 0\nINPUT r0\nPUSH 0\nOUTPUT r0\nHALT"),
+            input_data={0: model()},
+            memory_limit=DEFAULT_MEMORY_LIMIT,
+            output_slots=1,
+        )
+
+        assert iter_ex.memory_used == output_ex.memory_used, "ITER and OUTPUT must price one model copy identically"
+
+    def test_a_size_past_the_maximum_is_not_an_allocation_at_any_budget(self):
+        """QUI-1315: the maximum is judged after the charge, so a large
+        budget reaches it.
+
+        Below a 32 GiB budget the charge refuses an oversized size first and
+        the fault is `MemoryLimitExceeded`. Raise the budget past what 2^32
+        variables cost and the charge is paid, leaving the size itself to be
+        judged. That judgement used to be Rust's `usize` conversion, which
+        this interpreter has no counterpart for, so the same three
+        instructions raised `InvalidAllocation` on wasm32 and allocated a
+        sparse model here and on a 64-bit host. wasm32 is the target the
+        pallet executes in.
+        """
+        ex = Executor()
+        with pytest.raises(InvalidAllocation) as excinfo:
+            ex.execute(
+                assemble(f"PUSH {MAX_ALLOCATION_SIZE + 1}\nBQMX r0\nHALT"),
+                memory_limit=64 << 30,
+            )
+        assert excinfo.value.size == MAX_ALLOCATION_SIZE + 1
+        assert ex.memory_used == (MAX_ALLOCATION_SIZE + 1) * 8, (
+            "the charge precedes the range check, so it stays banked"
+        )
+
+    def test_a_size_at_the_maximum_is_an_allocation(self):
+        """The other half of the boundary: the maximum itself is admitted."""
+        ex = Executor()
+        ex.execute(
+            assemble(f"PUSH {MAX_ALLOCATION_SIZE}\nBQMX r0\nHALT"),
+            memory_limit=64 << 30,
+        )
+        assert ex.state.has_register(0)
+
+    def test_growing_a_model_past_the_maximum_is_not_an_allocation(self):
+        """The maximum bounds a grown model size, not only an allocator operand.
+
+        Mirrors the Rust crate's test of the same name. `REDUCE` appends one
+        auxiliary variable, so a model already sitting at the maximum has
+        nowhere to put it.
+
+        Rust performs that addition in the executing target's `usize`, and
+        `MAX_ALLOCATION_SIZE` is `u32::MAX`, which on wasm32 is also
+        `usize::MAX` -- so the growth trapped or wrapped to zero on the
+        target the pallet runs in. Python integers are unbounded and would
+        simply have grown the model to 2^32 and carried on, which is the
+        divergence this check closes.
+        """
+        ex = Executor()
+        with pytest.raises(InvalidAllocation) as excinfo:
+            ex.execute(
+                assemble(f"PUSH {MAX_ALLOCATION_SIZE}\nBQMX r0\nPUSH 0\nPUSH 1\nPUSH 5\nREDUCE r0\nHALT"),
+                memory_limit=64 << 30,
+            )
+        assert excinfo.value.size == MAX_ALLOCATION_SIZE + 1
+
+    def test_growing_a_model_onto_the_maximum_is_an_allocation(self):
+        """The other half of the boundary: growth that lands on it is admitted."""
+        ex = Executor()
+        ex.execute(
+            assemble(f"PUSH {MAX_ALLOCATION_SIZE - 1}\nBQMX r0\nPUSH 0\nPUSH 1\nPUSH 5\nREDUCE r0\nHALT"),
+            memory_limit=64 << 30,
+        )
+        assert ex.state.get_register(0).size == MAX_ALLOCATION_SIZE
+
+    def test_an_equality_index_past_the_maximum_is_not_an_allocation(self):
+        """EQUALITY grows the model to cover its largest index, so that is a size.
+
+        Rust narrowed the index with `usize::try_from(..).ok()` and swallowed
+        the failure, so on wasm32 an index past a 32-bit width collapsed the
+        size to zero, charged nothing and raised `IndexOutOfBounds`, while
+        this interpreter and a 64-bit host charged the full growth and raised
+        `MemoryLimitExceeded`. That split was reachable at the default budget.
+
+        The budget here pays the growth charge, so what the run reaches is
+        the range check rather than the budget -- the half of the fix this
+        interpreter is able to observe.
+        """
+        ex = Executor()
+        with pytest.raises(InvalidAllocation) as excinfo:
+            ex.execute(
+                assemble(
+                    "PUSH 1\nBQMX r0\nVECI r1\nVECI r2\n"
+                    f"PUSH {MAX_ALLOCATION_SIZE}\nVECPUSH r1\n"
+                    "PUSH 1\nVECPUSH r2\n"
+                    "PUSH 1\nPUSH 1\nEQUALITY r0 r1 r2\nHALT"
+                ),
+                memory_limit=64 << 30,
+            )
+        assert excinfo.value.size == MAX_ALLOCATION_SIZE + 1
 
     def test_model_allocators_charge_their_declared_size(self):
         """A model is sparse, but its declared size is an obligation consumers must meet."""

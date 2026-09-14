@@ -1,0 +1,33 @@
+; equality_index_past_the_maximum: EQUALITY grows the model to cover the
+; largest index it was handed, so that index is a model size and
+; MAX_ALLOCATION_SIZE = 2^32 - 1 = 4294967295 bounds it.
+;
+; An index of 4294967295 needs a model of 4294967296 variables, one past
+; the maximum, so the grown size is refused with InvalidAllocation. The
+; budget is 68719476736 (64 GiB), above the 34359738360-byte growth
+; charge, so the charge succeeds and the range check is what decides.
+;
+; The fault this pins used to be decided by the target. Rust narrowed the
+; index with usize::try_from and swallowed the failure, so on wasm32 --
+; where pallet-xqvm runs -- an index past a 32-bit width collapsed the
+; needed size to zero, charged nothing, and fell through to
+; IndexOutOfBounds, while 64-bit Rust and xqvm_py charged the full growth
+; and raised MemoryLimitExceeded. Unlike the allocator operand's split,
+; that one was reachable at the shipped 1 GiB default budget and not only
+; above 32 GiB.
+;
+; EQUALITY pops penalty then target, and reads its indices and coeffs
+; from the two vec registers named in the operands.
+
+PUSH 1
+BQMX r0
+VECI r1
+VECI r2
+PUSH 4294967295
+VECPUSH r1
+PUSH 1
+VECPUSH r2
+PUSH 1
+PUSH 1
+EQUALITY r0 r1 r2
+HALT

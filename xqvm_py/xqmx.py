@@ -41,7 +41,7 @@ from .errors import (
     VecLengthMismatch,
     XQMXModeError,
 )
-from .limits import check_i64
+from .limits import check_i64, check_model_size
 
 
 class XQMXMode(Enum):
@@ -706,7 +706,7 @@ def expand_reduce(model: XQMX, var_a: int, var_b: int, p_aux: int) -> int:
         raise IndexOutOfBounds(var_b, model.size)
 
     w = model.size
-    model.size += 1
+    model.size = check_model_size(model.size + 1)
 
     minus_two_p = check_i64(-2 * p_aux, "REDUCE -2*p_aux")
     three_p = check_i64(3 * p_aux, "REDUCE 3*p_aux")

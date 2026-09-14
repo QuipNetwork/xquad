@@ -29,10 +29,23 @@ it too, and ``state`` already imports ``xqmx``.
 
 from __future__ import annotations
 
-from .errors import ArithmeticOverflow
+from .errors import ArithmeticOverflow, InvalidAllocation
 
 I64_MIN = -(2**63)
 I64_MAX = (2**63) - 1
+
+#: Largest size a model may take, whether it was allocated at that size or
+#: grown to it. This is the largest value a 32-bit ``usize`` can hold --
+#: ``pallet-xqvm`` runs on wasm32 -- so it is written as a literal rather
+#: than derived from either implementation's own integer width: deriving it
+#: from ``usize::MAX`` or ``sys.maxsize`` would make the two interpreters
+#: agree only on hosts that happen to share a pointer width, not on the
+#: target that actually matters. ``xqvm::MAX_ALLOCATION_SIZE`` carries the
+#: same literal and ``spec/xqvm/SPEC.md`` states it normatively.
+#:
+#: It lives here rather than in ``executor`` for the reason ``check_i64``
+#: does: ``xqmx`` needs it too, and ``executor`` already imports ``xqmx``.
+MAX_ALLOCATION_SIZE = 2**32 - 1
 
 
 def check_i64(value: int, context: str = "") -> int:
@@ -44,3 +57,24 @@ def check_i64(value: int, context: str = "") -> int:
     if value < I64_MIN or value > I64_MAX:
         raise ArithmeticOverflow(value, context)
     return value
+
+
+def check_model_size(size: int) -> int:
+    """Return ``size`` if it is a model size, else raise `InvalidAllocation`.
+
+    Steps 3 and 4 of the allocator validation order in `spec/xqvm/SPEC.md`,
+    and the counterpart to Rust's `model_size`. Every path that produces a
+    model size shares this bound, not only an allocator's operand: `REDUCE`,
+    `ATLEAST` and `ATLEASTW` append variables to a model that already exists,
+    and `EQUALITY` grows one to cover the largest index it was handed.
+
+    Python integers are unbounded, so nothing here would overflow on its own.
+    The check exists to keep the fault identity equal: Rust performs the same
+    addition in the executing target's `usize`, which on wasm32 is 32 bits
+    wide, and `MAX_ALLOCATION_SIZE` is exactly `usize::MAX` there. Without
+    this, a model grown past the maximum would raise `InvalidAllocation` in
+    Rust and carry on here.
+    """
+    if size > MAX_ALLOCATION_SIZE:
+        raise InvalidAllocation(size)
+    return size
