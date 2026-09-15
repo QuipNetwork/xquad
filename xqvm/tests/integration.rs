@@ -1730,7 +1730,7 @@ fn reset_clears_state() {
 }
 
 #[test]
-fn xqmx_discrete_model() {
+fn xqmx_integer_model() {
     // XQMX: pops k (top) then size. push size=2, k=3.
     let vm = run(|b| {
         b.emit_push(2).emit_push(3).emit_xqmx(Register(0)); // size=2, k=3
@@ -1738,7 +1738,7 @@ fn xqmx_discrete_model() {
     });
     let reg = vm.register(0);
     if let RegVal::Model(m) = reg {
-        assert_eq!(m.domain, Domain::Discrete(3));
+        assert_eq!(m.domain, Domain::Integer(3));
         assert_eq!(m.size, 2);
     } else {
         panic!("expected model register");
@@ -1747,13 +1747,13 @@ fn xqmx_discrete_model() {
 
 #[test]
 fn xqmx_minimum_k_is_two() {
-    // k = 2 is the smallest legal discrete domain ([-2, 1]).
+    // k = 2 is the smallest legal integer domain ({0, 1}).
     let vm = run(|b| {
         b.emit_push(4).emit_push(2).emit_xqmx(Register(0));
         b.emit_halt();
     });
     if let RegVal::Model(m) = vm.register(0) {
-        assert_eq!(m.domain, Domain::Discrete(2));
+        assert_eq!(m.domain, Domain::Integer(2));
         assert_eq!(m.size, 4);
     } else {
         panic!("expected model register");
@@ -1770,8 +1770,8 @@ fn xqmx_rejects_k_one() {
         b.emit_halt();
     });
     assert!(
-        matches!(err, Error::InvalidDiscreteK { k: 1, .. }),
-        "expected InvalidDiscreteK, got {err:?}"
+        matches!(err, Error::InvalidIntegerK { k: 1, .. }),
+        "expected InvalidIntegerK, got {err:?}"
     );
 }
 
@@ -1782,8 +1782,8 @@ fn xqmx_rejects_zero_k() {
         b.emit_halt();
     });
     assert!(
-        matches!(err, Error::InvalidDiscreteK { k: 0, .. }),
-        "expected InvalidDiscreteK, got {err:?}"
+        matches!(err, Error::InvalidIntegerK { k: 0, .. }),
+        "expected InvalidIntegerK, got {err:?}"
     );
 }
 
@@ -1794,13 +1794,13 @@ fn xqmx_rejects_negative_k() {
         b.emit_halt();
     });
     assert!(
-        matches!(err, Error::InvalidDiscreteK { k: -3, .. }),
-        "expected InvalidDiscreteK, got {err:?}"
+        matches!(err, Error::InvalidIntegerK { k: -3, .. }),
+        "expected InvalidIntegerK, got {err:?}"
     );
 }
 
 #[test]
-fn xsmx_allocates_discrete_sample() {
+fn xsmx_allocates_integer_sample() {
     // XSMX: pops k (top) then size. Default values are zero, the bottom of
     // the domain {0, ..., k-1} for any k >= 2.
     let vm = run(|b| {
@@ -1808,7 +1808,7 @@ fn xsmx_allocates_discrete_sample() {
         b.emit_halt();
     });
     if let RegVal::Sample(s) = vm.register(0) {
-        assert_eq!(s.domain, Domain::Discrete(4));
+        assert_eq!(s.domain, Domain::Integer(4));
         assert_eq!(s.values, vec![0, 0, 0]);
     } else {
         panic!("expected sample register");
@@ -1822,8 +1822,8 @@ fn xsmx_rejects_k_below_two() {
         b.emit_halt();
     });
     assert!(
-        matches!(err, Error::InvalidDiscreteK { k: 1, .. }),
-        "expected InvalidDiscreteK, got {err:?}"
+        matches!(err, Error::InvalidIntegerK { k: 1, .. }),
+        "expected InvalidIntegerK, got {err:?}"
     );
 }
 
@@ -2629,7 +2629,7 @@ fn a_zero_size_allocation_is_still_an_allocation() {
 }
 
 #[test]
-fn discrete_k_is_rejected_before_the_budget_is_charged() {
+fn integer_k_is_rejected_before_the_budget_is_charged() {
     // Error precedence: an invalid domain is a program error regardless of
     // the budget, so it must win over the allocation charge.
     let (_vm, result) = run_with_memory_limit(8, |b| {
@@ -2640,15 +2640,15 @@ fn discrete_k_is_rejected_before_the_budget_is_charged() {
     });
     assert!(matches!(
         result.expect_err("expected an error"),
-        Error::InvalidDiscreteK { .. }
+        Error::InvalidIntegerK { .. }
     ));
 }
 
 #[test]
-fn discrete_k_is_rejected_before_the_allocation_size() {
+fn integer_k_is_rejected_before_the_allocation_size() {
     // Error precedence between the two allocator preconditions, now that
     // both exist. `spec/xqvm/SPEC.md` and `ISA.md` state it: for the
-    // discrete allocators the domain width `k` is validated before the size.
+    // integer allocators the domain width `k` is validated before the size.
     // `PUSH -1 / PUSH 1 / XQMX r0` is invalid twice over and must report the
     // `k` fault.
     for (name, build) in [
@@ -2673,8 +2673,8 @@ fn discrete_k_is_rejected_before_the_allocation_size() {
     ] {
         let err = run_err(build);
         assert!(
-            matches!(err, Error::InvalidDiscreteK { k: 1, .. }),
-            "{name}: expected InvalidDiscreteK, got {err:?}"
+            matches!(err, Error::InvalidIntegerK { k: 1, .. }),
+            "{name}: expected InvalidIntegerK, got {err:?}"
         );
     }
 }
@@ -4038,7 +4038,7 @@ fn setline_rejects_zero_on_a_spin_sample() {
 }
 
 #[test]
-fn setline_rejects_negative_on_a_discrete_sample() {
+fn setline_rejects_negative_on_a_integer_sample() {
     // Legal under the signed centred reading QUI-1150 replaced.
     let err = run_err(|b| {
         b.emit_push(4).emit_push(3).emit_xsmx(Register(0));
@@ -4051,7 +4051,7 @@ fn setline_rejects_negative_on_a_discrete_sample() {
             Error::SampleOutOfDomain {
                 index: 0,
                 value: -1,
-                domain: Domain::Discrete(3),
+                domain: Domain::Integer(3),
                 ..
             }
         ),
@@ -4060,7 +4060,7 @@ fn setline_rejects_negative_on_a_discrete_sample() {
 }
 
 #[test]
-fn setline_rejects_k_itself_on_a_discrete_sample() {
+fn setline_rejects_k_itself_on_a_integer_sample() {
     let err = run_err(|b| {
         b.emit_push(4).emit_push(3).emit_xsmx(Register(0));
         b.emit_push(0).emit_push(3).emit_set_line(Register(0));
@@ -4071,7 +4071,7 @@ fn setline_rejects_k_itself_on_a_discrete_sample() {
             err,
             Error::SampleOutOfDomain {
                 value: 3,
-                domain: Domain::Discrete(3),
+                domain: Domain::Integer(3),
                 ..
             }
         ),

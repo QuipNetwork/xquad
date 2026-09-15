@@ -145,10 +145,10 @@ Total: **93 opcodes**.
 |------|----------|----------|-------|-------------|
 | `0x40` | `BQMX` | `reg: Register` | `1 → 0` | Pop size; allocate a binary QUBO model ({0, 1} domain) into a register. |
 | `0x41` | `SQMX` | `reg: Register` | `1 → 0` | Pop size; allocate a spin Ising model ({-1, +1} domain) into a register. |
-| `0x42` | `XQMX` | `reg: Register` | `2 → 0` | Pop k then size; allocate a discrete model with domain {0, ..., k-1} into a register. Errors when k < 2. |
+| `0x42` | `XQMX` | `reg: Register` | `2 → 0` | Pop k then size; allocate an integer model with domain {0, ..., k-1} into a register. Errors when k < 2. |
 | `0x43` | `BSMX` | `reg: Register` | `1 → 0` | Pop size; allocate a binary sample ({0, 1} domain) into a register. |
 | `0x44` | `SSMX` | `reg: Register` | `1 → 0` | Pop size; allocate a spin sample ({-1, +1} domain) into a register. |
-| `0x45` | `XSMX` | `reg: Register` | `2 → 0` | Pop k then size; allocate a discrete sample with domain {0, ..., k-1} into a register. Errors when k < 2. |
+| `0x45` | `XSMX` | `reg: Register` | `2 → 0` | Pop k then size; allocate an integer sample with domain {0, ..., k-1} into a register. Errors when k < 2. |
 | `0x4A` | `VEC` | `reg: Register` | `0 → 0` | Create an empty `vec<int>` in a register, identical to VECI. |
 | `0x4B` | `VECI` | `reg: Register` | `0 → 0` | Create an empty `vec<int>` in a register. |
 | `0x4C` | `VECX` | `reg: Register` | `0 → 0` | Create an empty `vec<xqmx>` in a register. |

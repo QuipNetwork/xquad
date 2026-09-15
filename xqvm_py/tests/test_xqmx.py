@@ -25,8 +25,8 @@ from xqvm_py.errors import (
     ArithmeticOverflow,
     IndexOutOfBounds,
     InvalidAllocation,
-    InvalidDiscreteK,
     InvalidGridDimensions,
+    InvalidIntegerK,
     SampleOutOfDomain,
     SizeMismatch,
     VecLengthMismatch,
@@ -75,13 +75,13 @@ class TestXQMXConstruction:
         assert x.domain == XQMXDomain.SPIN
         assert x.size == 15
 
-    def test_discrete_model(self):
-        """discrete_model creates correct XQMX."""
-        x = XQMX.discrete_model(size=20, k=4)
+    def test_integer_model(self):
+        """integer_model creates correct XQMX."""
+        x = XQMX.integer_model(size=20, k=4)
         assert x.mode == XQMXMode.MODEL
-        assert x.domain == XQMXDomain.DISCRETE
+        assert x.domain == XQMXDomain.INTEGER
         assert x.size == 20
-        assert x.discrete_k == 4
+        assert x.integer_k == 4
 
     def test_binary_sample(self):
         """binary_sample creates correct XQMX."""
@@ -101,12 +101,12 @@ class TestXQMXConstruction:
         # an entry per variable (QUI-1168).
         assert x.linear == {}
 
-    def test_discrete_sample(self):
-        """discrete_sample creates correct XQMX."""
-        x = XQMX.discrete_sample(size=8, k=3)
+    def test_integer_sample(self):
+        """integer_sample creates correct XQMX."""
+        x = XQMX.integer_sample(size=8, k=3)
         assert x.mode == XQMXMode.SAMPLE
-        assert x.domain == XQMXDomain.DISCRETE
-        assert x.discrete_k == 3
+        assert x.domain == XQMXDomain.INTEGER
+        assert x.integer_k == 3
 
     def test_grid_dimensions(self):
         """Factory methods accept grid dimensions."""
@@ -119,10 +119,10 @@ class TestXQMXConstruction:
         with pytest.raises(InvalidAllocation):
             XQMX.binary_model(size=-1)
 
-    def test_discrete_k_validation(self):
-        """Discrete k < 2 should raise InvalidDiscreteK."""
-        with pytest.raises(InvalidDiscreteK):
-            XQMX.discrete_model(size=10, k=1)
+    def test_integer_k_validation(self):
+        """Integer k < 2 should raise InvalidIntegerK."""
+        with pytest.raises(InvalidIntegerK):
+            XQMX.integer_model(size=10, k=1)
 
 
 class TestXQMXModeChecks:
@@ -751,7 +751,7 @@ class TestXQMXDomain:
         """Domain enum has expected values."""
         assert XQMXDomain.BINARY.value is not None
         assert XQMXDomain.SPIN.value is not None
-        assert XQMXDomain.DISCRETE.value is not None
+        assert XQMXDomain.INTEGER.value is not None
 
     def test_domain_count(self):
         """Should have exactly 3 domains."""
@@ -820,8 +820,8 @@ class TestDomainHelpers:
         for domain, k in [
             (XQMXDomain.BINARY, 2),
             (XQMXDomain.SPIN, 2),
-            (XQMXDomain.DISCRETE, 2),
-            (XQMXDomain.DISCRETE, 7),
+            (XQMXDomain.INTEGER, 2),
+            (XQMXDomain.INTEGER, 7),
         ]:
             default = domain_default(domain)
             assert domain_contains(domain, k, default), (domain, k, default)
@@ -839,13 +839,13 @@ class TestDomainHelpers:
         assert domain_contains(XQMXDomain.SPIN, 2, 1)
         assert not domain_contains(XQMXDomain.SPIN, 2, 0)
 
-    def test_discrete_runs_zero_to_k_minus_one(self):
-        assert [v for v in range(-2, 5) if domain_contains(XQMXDomain.DISCRETE, 3, v)] == [0, 1, 2]
+    def test_integer_runs_zero_to_k_minus_one(self):
+        assert [v for v in range(-2, 5) if domain_contains(XQMXDomain.INTEGER, 3, v)] == [0, 1, 2]
 
     def test_description_matches_the_rust_display(self):
         assert domain_description(XQMXDomain.BINARY) == "binary {0, 1}"
         assert domain_description(XQMXDomain.SPIN) == "spin {-1, +1}"
-        assert domain_description(XQMXDomain.DISCRETE, 3) == "discrete {0, ..., 2}"
+        assert domain_description(XQMXDomain.INTEGER, 3) == "integer {0, ..., 2}"
 
 
 class TestSampleDomainEnforcement:
@@ -861,8 +861,8 @@ class TestSampleDomainEnforcement:
         with pytest.raises(SampleOutOfDomain):
             sample.set_linear(0, 0)
 
-    def test_set_linear_rejects_below_and_at_k_on_discrete(self):
-        sample = XQMX.discrete_sample(4, 3)
+    def test_set_linear_rejects_below_and_at_k_on_integer(self):
+        sample = XQMX.integer_sample(4, 3)
         with pytest.raises(SampleOutOfDomain):
             sample.set_linear(0, -1)
         with pytest.raises(SampleOutOfDomain):
@@ -894,21 +894,21 @@ class TestSampleDomainEnforcement:
         with pytest.raises(SampleOutOfDomain):
             XQMX(
                 mode=XQMXMode.SAMPLE,
-                domain=XQMXDomain.DISCRETE,
+                domain=XQMXDomain.INTEGER,
                 size=2,
-                discrete_k=3,
+                integer_k=3,
                 linear={0: 3},
             )
 
     def test_post_init_reports_a_bad_k_before_a_bad_value(self):
         # Otherwise a k below 2 surfaces as a domain complaint about every
         # value rather than naming itself.
-        with pytest.raises(InvalidDiscreteK):
+        with pytest.raises(InvalidIntegerK):
             XQMX(
                 mode=XQMXMode.SAMPLE,
-                domain=XQMXDomain.DISCRETE,
+                domain=XQMXDomain.INTEGER,
                 size=2,
-                discrete_k=1,
+                integer_k=1,
                 linear={0: 9},
             )
 
@@ -916,7 +916,7 @@ class TestSampleDomainEnforcement:
         for sample in [
             XQMX.binary_sample(3),
             XQMX.spin_sample(3),
-            XQMX.discrete_sample(3, 4),
+            XQMX.integer_sample(3, 4),
         ]:
             for i in range(3):
                 assert sample.domain_contains(sample.get_linear(i))

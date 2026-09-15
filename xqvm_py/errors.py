@@ -176,10 +176,10 @@ class IndexOutOfBounds(XQVMError):
         super().__init__(f"Index {index} out of range [0, {length})")
 
 
-class InvalidDiscreteK(XQVMError):
-    """Raised when a discrete XQMX is allocated with fewer than 2 values.
+class InvalidIntegerK(XQVMError):
+    """Raised when an integer XQMX is allocated with fewer than 2 values.
 
-    Mirrors Rust's `xqvm::Error::InvalidDiscreteK`. `XQMX` and `XSMX` take
+    Mirrors Rust's `xqvm::Error::InvalidIntegerK`. `XQMX` and `XSMX` take
     `k` off the value stack, where it is the number of values in the domain
     `{0, ..., k-1}`. A domain of one value encodes no decision, and `k <= 0`
     is empty, so neither is a domain at all.
@@ -187,7 +187,7 @@ class InvalidDiscreteK(XQVMError):
 
     def __init__(self, k: int):
         self.k = k
-        super().__init__(f"Invalid discrete k: {k} (requires k >= 2)")
+        super().__init__(f"Invalid integer k: {k} (requires k >= 2)")
 
 
 class SampleOutOfDomain(XQVMError, ValueError):

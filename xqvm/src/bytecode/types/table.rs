@@ -203,13 +203,13 @@ macro_rules! opcodes {
              -1_i8, {reg: $crate::Register}),
             (0x41, Sqmx,    "SQMX",     "Pop size; allocate a spin Ising model ({-1, +1} domain) into a register.",
              -1_i8, {reg: $crate::Register}),
-            (0x42, Xqmx,    "XQMX",     "Pop k then size; allocate a discrete model with domain {0, ..., k-1} into a register. Errors when k < 2.",
+            (0x42, Xqmx,    "XQMX",     "Pop k then size; allocate an integer model with domain {0, ..., k-1} into a register. Errors when k < 2.",
              -2_i8, {reg: $crate::Register}),
             (0x43, Bsmx,    "BSMX",     "Pop size; allocate a binary sample ({0, 1} domain) into a register.",
              -1_i8, {reg: $crate::Register}),
             (0x44, Ssmx,    "SSMX",     "Pop size; allocate a spin sample ({-1, +1} domain) into a register.",
              -1_i8, {reg: $crate::Register}),
-            (0x45, Xsmx,    "XSMX",     "Pop k then size; allocate a discrete sample with domain {0, ..., k-1} into a register. Errors when k < 2.",
+            (0x45, Xsmx,    "XSMX",     "Pop k then size; allocate an integer sample with domain {0, ..., k-1} into a register. Errors when k < 2.",
              -2_i8, {reg: $crate::Register}),
             // ---------------------------------------------------------------
             // Vec Allocators

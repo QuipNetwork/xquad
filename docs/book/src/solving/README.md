@@ -116,20 +116,20 @@ different local optima -- but the *model* they were handed, and the
 
 ## The Domain Every Backend Rejects
 
-XQVM has three domains: binary, spin, and discrete. Every current
+XQVM has three domains: binary, spin, and integer. Every current
 `xqsa` solver's `_validate_model()` accepts binary and spin and raises
-`ValueError` on discrete:
+`ValueError` on integer:
 
 ```python
 from xqsa import SolverDWaveCPU
 from xqvm_py.xqmx import XQMX
 
-model = XQMX.discrete_model(size=3, k=4)
+model = XQMX.integer_model(size=3, k=4)
 SolverDWaveCPU().solve(model)
-# ValueError: Unsupported domain for solving: DISCRETE
+# ValueError: Unsupported domain for solving: INTEGER
 ```
 
-A discrete `XqmxModel` is a real thing you can build in XQVM bytecode
+An integer `XqmxModel` is a real thing you can build in XQVM bytecode
 today -- see [Three Domains](../concepts/quadratic-models.md#three-domains)
 -- but nothing in this chapter can solve one. `spec/xqsa/DOMAINS.md`
 calls this "reserved": a future solver may relax the check, but none of

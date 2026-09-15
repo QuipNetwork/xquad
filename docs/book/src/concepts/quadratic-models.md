@@ -83,7 +83,7 @@ affects one thing above all: whether a backend can solve the result.
 |---|---|---|---|
 | Binary | \\(\\{0, 1\\}\\) | `BQMX` | `BSMX` |
 | Spin | \\(\\{-1, 1\\}\\) | `SQMX` | `SSMX` |
-| Discrete(\\(k\\)) | \\(\\{0, \ldots, k{-}1\\}\\), \\(k \ge 2\\) | `XQMX` | `XSMX` |
+| Integer(\\(k\\)) | \\(\\{0, \ldots, k{-}1\\}\\), \\(k \ge 2\\) | `XQMX` | `XSMX` |
 
 **Binary** is QUBO -- Quadratic Unconstrained Binary Optimisation -- the
 domain most combinatorial formulations target directly: a variable is
@@ -102,7 +102,7 @@ in the other; between these two the choice is free, since every current
 `xqsa` solver accepts both, so pick whichever domain the problem is
 natural in.
 
-**Discrete** generalises past two states to give a variable \\(k\\)
+**Integer** generalises past two states to give a variable \\(k\\)
 integer values directly, suited to a quantity with a natural ordering or
 magnitude -- a position in a short list -- without one-hot encoding it
 into several binary variables first. Unlike binary and spin,
@@ -111,8 +111,8 @@ categorical choice, because a quadratic form over integer variables
 cannot express that two values merely differ without also expressing by
 how much.
 
-Discrete is the domain with a real consequence: every current `xqsa`
-solver rejects it. A discrete `XqmxModel` is a real thing you can build in
+Integer is the domain with a real consequence: every current `xqsa`
+solver rejects it. An integer `XqmxModel` is a real thing you can build in
 XQVM bytecode today, but there is no backend yet that can solve one. See
 [Backends](backends.md).
 

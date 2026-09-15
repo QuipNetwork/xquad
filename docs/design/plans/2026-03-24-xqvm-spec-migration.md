@@ -1,3 +1,5 @@
+> Editor's note: the domain this plan calls "discrete" was renamed to "integer" in QUI-1345. The text below is left as written on 2026-03-24.
+
 # XQVM Spec Migration Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

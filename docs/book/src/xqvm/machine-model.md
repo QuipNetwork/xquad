@@ -98,7 +98,7 @@ Each slot holds a typed `RegVal` value.
 | `Int(i64)` | `i64` | Exchanged with the stack via `LOAD`/`STOW`. |
 | `VecInt(Vec<i64>)` | `Vec<i64>` | Integer vector. Created by `VEC`/`VECI`. |
 | `VecXqmx(Vec<XqmxModel>)` | `Vec<XqmxModel>` | Vector of models. Created by `VECX`. |
-| `Model(XqmxModel)` | struct | QUBO/Ising/discrete Hamiltonian. Created by `BQMX`/`SQMX`/`XQMX`. |
+| `Model(XqmxModel)` | struct | QUBO/Ising/integer Hamiltonian. Created by `BQMX`/`SQMX`/`XQMX`. |
 | `Sample(XqmxSample)` | struct | Variable-assignment vector. Created by `BSMX`/`SSMX`/`XSMX`. |
 
 ### Type Checking
@@ -114,11 +114,11 @@ there is no variant to compare against.
 
 ### XqmxModel Structure
 
-A model represents a QUBO/Ising/discrete Hamiltonian:
+A model represents a QUBO/Ising/integer Hamiltonian:
 
 ```
 XqmxModel {
-    domain: Domain,                      // Binary | Spin | Discrete(k)
+    domain: Domain,                      // Binary | Spin | Integer(k)
     size: usize,                         // number of variables
     linear: BTreeMap<usize, i64>,        // bias terms h_i
     quadratic: BTreeMap<(usize,usize), i64>,  // coupling terms J_{ij}

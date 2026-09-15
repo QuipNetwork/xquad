@@ -12,8 +12,8 @@ reference; this page is about the three domains and when each applies.
 
 `BQMX` and `SQMX` each pop a variable count, `size`, and write a fresh
 `XqmxModel` into a register, with empty linear and quadratic coefficient
-maps. `XQMX` pops two values, `k` (top of stack) then `size`, since a
-discrete model also needs the per-variable domain width. The model holds
+maps. `XQMX` pops two values, `k` (top of stack) then `size`, since an
+integer model also needs the per-variable domain width. The model holds
 the Hamiltonian being built up:
 
 $$H(x) = \sum_i \text{linear}[i] \cdot x_i + \sum_{i \le j} \text{quadratic}[i, j] \cdot x_i \cdot x_j$$
@@ -33,19 +33,18 @@ decision, not an implementation detail:
   annealers, which minimise an Ising Hamiltonian directly. Allocate the
   domain the target backend expects rather than assuming a QUBO model can
   be handed to an Ising-only backend unchanged.
-- **`XQMX`** allocates a discrete model: variables take one of \\(k\\)
-  values, \\(x_i \in \\{0, 1, \ldots, k{-}1\\}\\). A discrete variable is
-  a case index, the same convention D-Wave's DQM and Potts models use, so
-  \\(k\\) is a count and not a half-width. This generalises past binary and
-  spin to give a variable more than two states directly, suited to a
-  quantity with a natural ordering or magnitude -- a position in a small
-  enumerated set -- without one-hot-encoding it into several binary
-  variables first. It does not encode an unordered categorical choice such
-  as a colour: a quadratic form over integer variables cannot express that
-  two values merely differ without also expressing by how much. `XQMX`
-  errors with `InvalidDiscreteK` when \\(k < 2\\), since a domain needs at
-  least two values to carry a decision: \\(k = 1\\) leaves the single value
-  \\(\\{0\\}\\), which is a constant rather than a variable.
+- **`XQMX`** allocates an integer model: variables take one of \\(k\\)
+  values, \\(x_i \in \\{0, 1, \ldots, k{-}1\\}\\). \\(k\\) is a count and
+  not a half-width. This generalises past binary and spin to give a
+  variable more than two states directly, suited to a quantity with a
+  natural ordering or magnitude -- a position in a small enumerated set --
+  without one-hot-encoding it into several binary variables first. It does
+  not encode an unordered categorical choice such as a colour: a quadratic
+  form over integer variables cannot express that two values merely differ
+  without also expressing by how much. `XQMX` errors with `InvalidIntegerK`
+  when \\(k < 2\\), since a domain needs at least two values to carry a
+  decision: \\(k = 1\\) leaves the single value \\(\\{0\\}\\), which is a
+  constant rather than a variable.
 
 ## Sample Allocators
 
@@ -57,9 +56,9 @@ coefficient map. A sample is what a solver returns, or what `ENERGY`
 evaluates against a model to score a candidate solution.
 
 The default assignment differs by domain and is chosen so it is always
-in-domain without a special case: binary and discrete samples default every
+in-domain without a special case: binary and integer samples default every
 variable to \\(0\\), and spin samples default every variable to \\(-1\\)
-(spin-down), since \\(0\\) is not a member of \\(\\{-1, 1\\}\\). The discrete
+(spin-down), since \\(0\\) is not a member of \\(\\{-1, 1\\}\\). The integer
 default of \\(0\\) is always valid because the domain
 \\(\\{0, \ldots, k{-}1\\}\\) starts at zero for every \\(k \ge 2\\).
 
@@ -85,17 +84,17 @@ assembly where the type is obvious from what gets pushed next.
 |--------|----------------|-------|--------|
 | Binary | \\(\\{0, 1\\}\\) | `BQMX` | `BSMX` |
 | Spin | \\(\\{-1, 1\\}\\) | `SQMX` | `SSMX` |
-| Discrete(\\(k\\)) | \\(\\{0, 1, \ldots, k{-}1\\}\\), \\(k \ge 2\\) | `XQMX` | `XSMX` |
+| Integer(\\(k\\)) | \\(\\{0, 1, \ldots, k{-}1\\}\\), \\(k \ge 2\\) | `XQMX` | `XSMX` |
 
 ## Example
 
 ```asm
 PUSH 4
 PUSH 1
-XQMX r0     ; errors: InvalidDiscreteK, k = 1 is not >= 2
+XQMX r0     ; errors: InvalidIntegerK, k = 1 is not >= 2
 ```
 
 `XQMX` and `XSMX` both check `k` only after popping both operands, so the
-stack is consumed either way; on `k < 2` they fault `InvalidDiscreteK`
+stack is consumed either way; on `k < 2` they fault `InvalidIntegerK`
 with the message `XQMX/XSMX requires k >= 2 for the {0, ..., k-1} domain,
 got k = 1`.

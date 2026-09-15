@@ -100,7 +100,7 @@ problem.define_model(size=num_items, domain=XQMXDomain.BINARY)
 `domain` is `XQMXDomain.BINARY` or `XQMXDomain.SPIN`; see
 [Quadratic Models](../concepts/quadratic-models.md#three-domains) for what
 each domain means and how to choose between them, since that choice does
-not belong to this page. `XQMXDomain.DISCRETE` raises `NotImplementedError`
+not belong to this page. `XQMXDomain.INTEGER` raises `NotImplementedError`
 -- the CP layer does not support it yet, though the underlying `XQMX`
 allocator does. Binary is the domain every current running example in this
 book uses.

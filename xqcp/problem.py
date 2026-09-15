@@ -161,8 +161,8 @@ class Problem:
         cols: Expr | int | None = None,
     ) -> None:
         """Declare the XQMX model the encoder will build."""
-        if domain == XQMXDomain.DISCRETE:
-            raise NotImplementedError("Discrete domain (XQMX/XSMX) is not yet supported in the CP layer")
+        if domain == XQMXDomain.INTEGER:
+            raise NotImplementedError("Integer domain (XQMX/XSMX) is not yet supported in the CP layer")
 
         if (rows is None) != (cols is None):
             raise ValueError(

@@ -171,7 +171,7 @@ Each quadratic term is evaluated as `(coeff × x_i) × x_j`, not as `coeff × (x
 
 The quadratic table's keys satisfy `i <= j`, not `i < j`: **the diagonal is legal**. `SETQUAD`, `ADDQUAD` and `GETQUAD` normalise a pair by swapping when `i > j` and impose no further restriction, so `PUSH 2 / BQMX r0 / PUSH 1 / PUSH 1 / PUSH 7 / SETQUAD r0` stores `quadratic[(1,1)] = 7`, and `ENERGY` evaluates that entry as `7 × x_1 × x_1` like any other. Both implementations store and evaluate self-couplings.
 
-What a self-coupling means is domain-dependent, and the VM does not interpret it. On binary variables `x² = x`, so a diagonal term acts as a linear bias written through the quadratic table; on spin variables `x² = 1`, so it acts as a constant energy offset; on the discrete domain it is neither. A program that writes one is doing something the VM permits and gives no meaning to.
+What a self-coupling means is domain-dependent, and the VM does not interpret it. On binary variables `x² = x`, so a diagonal term acts as a linear bias written through the quadratic table; on spin variables `x² = 1`, so it acts as a constant energy offset; on the integer domain it is neither. A program that writes one is doing something the VM permits and gives no meaning to.
 
 `IDXTRIU` is unaffected. It enumerates the strictly upper-triangular pairs `i < j`, so no diagonal cell has an index of its own in that enumeration: `IDXTRIU` with `i == j` yields the index of some off-diagonal pair rather than of a diagonal one.
 

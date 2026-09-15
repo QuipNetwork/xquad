@@ -77,6 +77,6 @@ For samples:
 - `sample.get_linear(i)` returns the default value for the domain if variable `i` is not in the dict:
   - BINARY: default `0`
   - SPIN: default `-1`
-  - DISCRETE: default `0`
+  - INTEGER: default `0`
 
 This sparse-with-default convention means only non-default variable assignments need to be stored. The energy formula iterates over the model's coefficients (not the sample's assignments), so unset sample variables contribute their default value.

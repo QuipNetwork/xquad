@@ -2,7 +2,7 @@
 
 ## X-Quadratic Virtual Machine
 
-A specialized virtual machine for encoding, verifying, and decoding quantum optimization problems. Provides a unified instruction set for manipulating quadratic models across variable domains (binary, spin, discrete).
+A specialized virtual machine for encoding, verifying, and decoding quantum optimization problems. Provides a unified instruction set for manipulating quadratic models across variable domains (binary, spin, integer).
 
 ## Three-Program Architecture
 
@@ -94,7 +94,7 @@ A `vec<xqmx>` is host-injected. `VECX` creates an empty one and no instruction a
 
 - Sparse x-quadratic matrix
 - **Mode:** `model` (linear & quadratic are hamiltonian coefficients) or `sample` (linear are variable assignments, quadratic is nil)
-- **Domain:** `{0, 1}` binary, `{-1, +1}` spin, `{0, ..., k-1}` discrete, where `k` is the number of values and not a half-width, so a discrete variable is a case index (`spec/xqsa/DOMAINS.md` states the same domains)
+- **Domain:** `{0, 1}` binary, `{-1, +1}` spin, `{0, ..., k-1}` integer, where `k` is the number of values and not a half-width (`spec/xqsa/DOMAINS.md` states the same domains)
 - **Sample writes are domain-checked.** `SETLINE` and `ADDLINE` raise `SampleOutOfDomain` when the value they would store is not a member of the register's domain. `ADDLINE` checks the result of the addition rather than the delta, so a write that leaves the domain raises while one that returns to it succeeds. `IndexOutOfBounds` and `ArithmeticOverflow` both take precedence
 - **Model coefficients are unbounded.** A model's `linear` entry is a bias and not an assignment, so its magnitude has nothing to do with the values the variable may take. The check above applies in sample mode only
 - **The invariant is on the write, not on the register.** A host that installs a sample through calldata bypasses both opcodes, and `GETLINE` then reads whatever it installed. The reference implementations' host bindings validate at that boundary, but the guarantee this specification makes is about `SETLINE` and `ADDLINE`, not about what a sample register can hold
@@ -190,7 +190,7 @@ A rate must not be derived from the executing target's pointer width, or from an
 
 **Allocator validation order.** An allocator resolves its `size` operand in a fixed order, so that a bad program gets the same fault on every target:
 
-1. Reject a negative `size` with `InvalidAllocation`. For the discrete allocators the domain width `k` is validated before the size.
+1. Reject a negative `size` with `InvalidAllocation`. For the integer allocators the domain width `k` is validated before the size.
 2. Charge the budget for that size, computed from the operand as the i64 the program pushed. `MemoryLimitExceeded` if it does not fit.
 3. Reject a `size` greater than the **maximum allocator size**, `2^32 - 1`, with `InvalidAllocation`.
 4. Only then convert the size to the target's native width and allocate. Step 3 leaves this conversion nothing to refuse on any target the toolchain supports.
@@ -238,7 +238,7 @@ A fault aborts the run. Every fault has an **identity** -- a name from the list 
 | `InvalidAllocation` | An allocator is given a negative size, or one greater than the maximum allocator size `2^32 - 1`. Both are properties of the operand, so the identity does not vary by target. See [Allocator validation order](#allocation-budget). |
 | `InvalidShift` | `SHL` or `SHR` with a shift amount outside `[0, 63]`. |
 | `InvalidGridDimensions` | A grid extent is not positive, does not fit the register's variables, or is required by the opcode and absent. |
-| `InvalidDiscreteK` | `XQMX` or `XSMX` with `k < 2`. |
+| `InvalidIntegerK` | `XQMX` or `XSMX` with `k < 2`. |
 | `SampleOutOfDomain` | `SETLINE` or `ADDLINE` writes a value outside the domain a sample's allocator declared. Sample registers only: model coefficients are unbounded. `ADDLINE` checks the result of the addition, not the delta. |
 
 The list is closed for program faults. A host-side failure that is not the program's doing -- a tracer callback that errors, an I/O failure in the embedder -- is outside it and is not compared. Every identity above has a counterpart in both reference implementations.

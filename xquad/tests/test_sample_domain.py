@@ -45,8 +45,8 @@ BACKENDS = [VMBackend.RUST, VMBackend.PYTHON]
         ("binary", [-1], None),
         ("spin", [0], None),
         ("spin", [2], None),
-        ("discrete", [-1], 3),
-        ("discrete", [3], 3),
+        ("integer", [-1], 3),
+        ("integer", [3], 3),
     ],
 )
 def test_constructor_rejects_out_of_domain_values(domain, values, k):
@@ -60,7 +60,7 @@ def test_constructor_rejects_out_of_domain_values(domain, values, k):
     [
         ("binary", [0, 1, 1, 0], None),
         ("spin", [-1, 1, -1], None),
-        ("discrete", [0, 1, 2], 3),
+        ("integer", [0, 1, 2], 3),
     ],
 )
 def test_constructor_accepts_in_domain_values(domain, values, k):
@@ -127,7 +127,7 @@ def test_setline_out_of_domain_faults_on_both_backends(backend):
         machine.run("PUSH 4\nPUSH 3\nXSMX r0\nPUSH 0\nPUSH 7\nSETLINE r0\nHALT")
     message = str(excinfo.value)
     assert "7" in message
-    assert "iscrete" in message
+    assert "nteger" in message
 
 
 # A directly-constructed `XQMX` is the third write path: `XQMX(mode=SAMPLE,

@@ -9,7 +9,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 > may still change before v1.0. Production use is not recommended yet.
 
 XQuad is a hardware-agnostic toolchain for expressing and running quadratic
-optimization problems (QUBO / Ising / discrete) across quantum annealers and
+optimization problems (QUBO / Ising / integer) across quantum annealers and
 classical solvers. It ships as three Rust crates plus five Python distributions
 built around a single virtual-machine specification.
 

@@ -1,7 +1,7 @@
 # Introduction
 
 XQuad is a hardware-agnostic toolchain for expressing and running quadratic
-optimisation problems -- QUBO, Ising, and discrete formulations -- on quantum
+optimisation problems -- QUBO, Ising, and integer formulations -- on quantum
 annealers and classical solvers. A problem is written once against the XQVM
 instruction set and runs unchanged on any backend the toolchain supports.
 
@@ -58,7 +58,7 @@ and does not cover.
 
 XQVM is a stack-based interpreter with a 256-slot register file. The value
 stack holds `i64` integers; registers hold typed values (`RegVal`): integers,
-integer vectors, QUBO/Ising/discrete models (`XqmxModel`), model vectors, and
+integer vectors, QUBO/Ising/integer models (`XqmxModel`), model vectors, and
 candidate solutions (`XqmxSample`). A dedicated loop stack drives `RANGE` and
 `ITER` iteration.
 

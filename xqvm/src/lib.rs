@@ -38,7 +38,7 @@
 //! | [`bytecode::error`] | Bytecode-layer error types |
 //! | [`Vm`] | The interpreter — stack, registers, loop stack |
 //! | [`Error`] | Runtime fault variants |
-//! | [`XqmxModel`] | QUBO/Ising/discrete optimization model |
+//! | [`XqmxModel`] | QUBO/Ising/integer optimization model |
 //! | [`RegVal`] | Register value type |
 //!
 //! # Quick start

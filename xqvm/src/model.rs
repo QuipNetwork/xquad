@@ -36,13 +36,13 @@ pub enum Domain {
     Binary,
     /// Spin domain: variables take values in `{-1, +1}`.
     Spin,
-    /// Discrete (chromatic) domain: variables take values in `{0, ..., k-1}`.
+    /// Integer domain: variables take values in `{0, ..., k-1}`.
     ///
     /// `k` is the number of values the domain holds, not a half-width. It is
     /// required to be at least 2; the VM rejects `XQMX`/`XSMX` allocations
-    /// with smaller `k` via [`crate::Error::InvalidDiscreteK`], because a
+    /// with smaller `k` via [`crate::Error::InvalidIntegerK`], because a
     /// domain of one value encodes no decision.
-    Discrete(i64),
+    Integer(i64),
 }
 
 impl Domain {
@@ -59,11 +59,11 @@ impl Domain {
     ///
     /// assert_eq!(Domain::Binary.default_value(), 0);
     /// assert_eq!(Domain::Spin.default_value(), -1);
-    /// assert_eq!(Domain::Discrete(3).default_value(), 0);
+    /// assert_eq!(Domain::Integer(3).default_value(), 0);
     /// ```
     pub const fn default_value(&self) -> i64 {
         match self {
-            Self::Binary | Self::Discrete(_) => 0,
+            Self::Binary | Self::Integer(_) => 0,
             Self::Spin => -1,
         }
     }
@@ -72,7 +72,7 @@ impl Domain {
     ///
     /// Defined directly rather than as an inclusive range test, for two
     /// reasons: spin has a hole at `0` that a range would wrongly admit, and
-    /// a direct `Discrete` test is overflow-free for every `k`, including
+    /// a direct `Integer` test is overflow-free for every `k`, including
     /// values no allocator would produce.
     ///
     /// # Examples
@@ -83,15 +83,15 @@ impl Domain {
     /// assert!(Domain::Binary.contains(1));
     /// assert!(!Domain::Binary.contains(2));
     /// assert!(!Domain::Spin.contains(0));
-    /// assert!(Domain::Discrete(3).contains(2));
-    /// assert!(!Domain::Discrete(3).contains(3));
-    /// assert!(!Domain::Discrete(3).contains(-1));
+    /// assert!(Domain::Integer(3).contains(2));
+    /// assert!(!Domain::Integer(3).contains(3));
+    /// assert!(!Domain::Integer(3).contains(-1));
     /// ```
     pub const fn contains(&self, v: i64) -> bool {
         match self {
             Self::Binary => v == 0 || v == 1,
             Self::Spin => v == -1 || v == 1,
-            Self::Discrete(k) => v >= 0 && v < *k,
+            Self::Integer(k) => v >= 0 && v < *k,
         }
     }
 }
@@ -101,12 +101,12 @@ impl core::fmt::Display for Domain {
         match self {
             Self::Binary => write!(f, "binary {{0, 1}}"),
             Self::Spin => write!(f, "spin {{-1, +1}}"),
-            Self::Discrete(k) => write!(f, "discrete {{0, ..., {}}}", k.saturating_sub(1)),
+            Self::Integer(k) => write!(f, "integer {{0, ..., {}}}", k.saturating_sub(1)),
         }
     }
 }
 
-/// A quadratic optimization model (QUBO/Ising/discrete).
+/// A quadratic optimization model (QUBO/Ising/integer).
 ///
 /// Encodes H(x) = `sum_i` linear\[i\] * x\[i\] + sum_{i<j} quadratic\[(i,j)\] * x\[i\] * x\[j\].
 ///
@@ -368,8 +368,8 @@ mod tests {
     }
 
     #[test]
-    fn discrete_contains_zero_through_k_minus_one() {
-        let d = Domain::Discrete(3);
+    fn integer_contains_zero_through_k_minus_one() {
+        let d = Domain::Integer(3);
         assert!(d.contains(0));
         assert!(d.contains(1));
         assert!(d.contains(2));
@@ -385,8 +385,8 @@ mod tests {
         for d in [
             Domain::Binary,
             Domain::Spin,
-            Domain::Discrete(2),
-            Domain::Discrete(7),
+            Domain::Integer(2),
+            Domain::Integer(7),
         ] {
             assert!(
                 d.contains(d.default_value()),
@@ -397,29 +397,29 @@ mod tests {
     }
 
     #[test]
-    fn degenerate_discrete_k_does_not_overflow() {
+    fn degenerate_integer_k_does_not_overflow() {
         // `Domain` is publicly re-exported, so an embedder can build a `k`
         // no allocator would produce. `contains` is defined directly rather
         // than as a range test, so it does not panic on one.
-        assert!(!Domain::Discrete(i64::MIN).contains(0));
-        assert!(!Domain::Discrete(0).contains(0));
+        assert!(!Domain::Integer(i64::MIN).contains(0));
+        assert!(!Domain::Integer(0).contains(0));
     }
 
     #[test]
     fn domain_display_matches_error_message() {
         assert_eq!(format!("{}", Domain::Binary), "binary {0, 1}");
         assert_eq!(format!("{}", Domain::Spin), "spin {-1, +1}");
-        assert_eq!(format!("{}", Domain::Discrete(3)), "discrete {0, ..., 2}");
+        assert_eq!(format!("{}", Domain::Integer(3)), "integer {0, ..., 2}");
         // The fault's display string embeds it, so the two move together.
         let err = Error::SampleOutOfDomain {
             pos: 0x25,
             index: 1,
             value: 7,
-            domain: Domain::Discrete(3),
+            domain: Domain::Integer(3),
         };
         assert_eq!(
             format!("{err}"),
-            "sample value 7 at variable 1 is outside the discrete {0, ..., 2} domain \
+            "sample value 7 at variable 1 is outside the integer {0, ..., 2} domain \
              at byte 0x0025"
         );
     }

@@ -35,7 +35,7 @@ about values, so no phase can decide a question whose answer the program
 computes at run time. An allocator size, a grid extent, a loop bound, a
 shift amount, a calldata or output index and every arithmetic operand are
 all ordinary popped stack values, which is why `InvalidAllocation`,
-`InvalidGridDimensions`, `InvalidDiscreteK`, `InvalidShift`,
+`InvalidGridDimensions`, `InvalidIntegerK`, `InvalidShift`,
 `ArithmeticOverflow`, `IndexOutOfBounds`, `SampleOutOfDomain`,
 `LoopStackOverflow` and the two budget faults exist only at runtime and
 have no verifier counterpart. `SampleOutOfDomain` is the clearest of them:

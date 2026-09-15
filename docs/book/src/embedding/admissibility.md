@@ -243,7 +243,7 @@ wants it.
 constants are mirrored value for value in `xqvm_py/metering.py` under their
 own parity check. The vectors now cover the model-building surface that the
 arithmetic-only suite once missed, including failure paths: constraints
-without a grid, invalid grid dimensions, discrete allocation, index-math
+without a grid, invalid grid dimensions, integer allocation, index-math
 operand ordering, and accumulation overflow in energy and grid sums.
 
 Operand validation order is part of that agreement and is now normative:

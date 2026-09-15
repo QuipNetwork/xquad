@@ -95,16 +95,16 @@ class TestSolver:
         with pytest.raises(ValueError, match="MODEL"):
             solver._validate_model(sample)
 
-    def test_validate_rejects_discrete_domain(self) -> None:
-        """_validate_model rejects DISCRETE domain."""
+    def test_validate_rejects_integer_domain(self) -> None:
+        """_validate_model rejects INTEGER domain."""
 
         class DummySolver(Solver):
             def solve(self, model, **kwargs):
                 pass
 
         solver = DummySolver()
-        model = XQMX.discrete_model(2, k=3)
-        with pytest.raises(ValueError, match="DISCRETE"):
+        model = XQMX.integer_model(2, k=3)
+        with pytest.raises(ValueError, match="INTEGER"):
             solver._validate_model(model)
 
     def test_validate_accepts_binary_model(self) -> None:
