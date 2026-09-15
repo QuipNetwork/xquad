@@ -20,7 +20,7 @@
 //! This pallet is **not** for production use. It exists as a compile-time
 //! and runtime integration gate: if `xqvm`'s public API changes in a way
 //! that breaks Substrate pallet integration, CI fails here before it can
-//! reach `quip-protocol-rs`.
+//! reach `quip-validator`.
 //!
 //! # What it does
 //!
