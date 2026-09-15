@@ -99,7 +99,7 @@ Sibling repos under `~/code/gitlab.com/quip.network/`:
   this is where you run `make localdev`.
 - `quip-protocol` -- Python miner image source (only needed to read miner
   internals).
-- `quip-protocol-rs` -- the substrate node (runtime, pallets) + the `quip_signer`
+- `quip-validator` -- the substrate node (runtime, pallets) + the `quip_signer`
   binding.
 
 ### Bring-up
