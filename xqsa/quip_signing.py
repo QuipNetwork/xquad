@@ -39,9 +39,10 @@ raw bytes, no hashing, no length check), so :func:`build_signed_extrinsic`
 applies it before calling ``sign``.
 
 The extrinsic layout is adapted from ``quip.network/faucet`` and the
-``quip-protocol`` miner's ``shared/substrate_client.py``; it conforms to
-protocol-rs ``v0.2`` and is validated by ``test_quip_signing.py`` plus live
-submission. The signed-extension order in :data:`SIGNED_EXTENSIONS` is the one
+``quip-protocol`` miner's ``shared/substrate_client.py``; it carries the H4
+suite (sr25519 + FN-DSA-512) as published by ``quip-signer`` 0.3.x, and is
+validated by ``test_quip_signing.py`` plus live submission. The
+signed-extension order in :data:`SIGNED_EXTENSIONS` is the one
 item only a live metadata check can confirm, so ``test_quip_live.py`` asserts it
 against the chain's own metadata.
 """
@@ -262,8 +263,8 @@ def build_signed_extrinsic(
     runtime version). ``signer`` is a ``quip_signer.HybridSigner``.
 
     The signed payload is ``call || extra || additional`` (signed-extension
-    extras in metadata order; the empty extensions encode to 0 bytes on
-    ``v0.2``). It is ``blake2_256``-hashed before signing when it exceeds
+    extras in metadata order; the extensions carrying no data encode to 0
+    bytes). It is ``blake2_256``-hashed before signing when it exceeds
     :data:`SIGNED_PAYLOAD_HASH_THRESHOLD` bytes -- the caller's half of the
     contract. ``signer.sign`` returns the full SCALE ``HybridTxSignature``
     envelope (``public || signature``), which is spliced into the wire frame
