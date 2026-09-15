@@ -1616,7 +1616,7 @@ requires-dist = [
     { name = "nvidia-cuda-nvrtc-cu12", marker = "extra == 'cuda'" },
     { name = "nvidia-cuda-runtime-cu12", marker = "extra == 'cuda'" },
     { name = "pyobjc-framework-metal", marker = "sys_platform == 'darwin' and extra == 'metal'", specifier = ">=11.0" },
-    { name = "quip-signer", marker = "extra == 'quip'", specifier = ">=0.3.0" },
+    { name = "quip-signer", marker = "extra == 'quip'", specifier = ">=0.3.0,<0.4" },
     { name = "substrate-interface", marker = "extra == 'quip'", specifier = ">=1.7.4,<2" },
     { name = "xqvm-py", editable = "xqvm_py" },
 ]
