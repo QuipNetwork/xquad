@@ -114,10 +114,13 @@ Sibling repos under `~/code/gitlab.com/quip.network/`:
 
 - `nodes.quip.network` -- DevNet orchestration (compose, Makefile, coordinator
   invocation); this is where you run `make localdev`.
-- `quip-protocol` -- Python miner image source (only needed to read miner
-  internals).
+- `quip-miner` -- the mining stack: the `quip-coordinator`, `quip-miner-exec`
+  and `quip-mock-miner` crates. Only needed to read miner internals, such as
+  whether a miner registers itself as a mempool solver. Renamed from
+  `quip-protocol`, and no longer a Python image source; it is a Rust workspace
+  as of the v0.3 line.
 - `quip-validator` -- the substrate node (runtime, pallets) + the `quip_signer`
-  binding.
+  binding. Renamed from `quip-protocol-rs`.
 
 ### Bring-up
 
