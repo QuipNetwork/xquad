@@ -79,14 +79,9 @@ FAUCET_URL = os.environ.get("QUIP_FAUCET_URL")
 
 pytestmark = [
     pytest.mark.quip,
-    pytest.mark.skipif(not RPC_URL, reason="QUIP_RPC_URL unset; live devnet tests skipped"),
+    pytest.mark.skipif(not RPC_URL, reason="QUIP_RPC_URL unset; live chain tests skipped"),
 ]
 
-# advantage2_system1 as registered on aglais, read live on 2026-09-15 from the
-# chain's own QuantumPow.DefaultTopology (nothing is pinned in quip_codec any
-# more). The v0.2 devnet carried 41515 edges; aglais carries one fewer.
-EXPECTED_NODES = 4577
-EXPECTED_EDGES = 41514
 UNIT = 10**12
 
 # Tighter lifecycle bounds than the production defaults so a live solve reaches
@@ -124,7 +119,7 @@ def chain():
 
 @pytest.fixture(scope="session")
 def funded_keystore(tmp_path_factory):
-    """A fresh keystore funded via the localdev faucet.
+    """A fresh keystore funded via the chain's faucet.
 
     Skips the whole funded tier when ``QUIP_FAUCET_URL`` is unset -- without a
     funder we cannot reserve a reward.
@@ -144,7 +139,7 @@ def funded_keystore(tmp_path_factory):
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 -- localdev faucet
+    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 -- operator-supplied faucet URL
         assert resp.status == 200, f"faucet returned {resp.status}"
 
     # Wait for the transfer to land.
@@ -272,16 +267,31 @@ class TestConnectivity:
         assert const is not None
         assert const.value == DEFAULT_ISING_SPEC_ID
 
-    def test_topology_resolves_to_pinned_graph(self, make_solver) -> None:
+    def test_topology_decodes_to_a_consistent_graph(self, make_solver) -> None:
+        # Deliberately not an exact node/edge count. A count is a fingerprint of
+        # one deployment -- aglais and a localdev DevNet register different
+        # graphs -- so an exact assertion fails on a healthy chain that simply
+        # is not the one it was recorded against. Deployment identity is already
+        # covered by test_solver_topology_tracks_chain_default below, and the
+        # hash it compares binds the exact node and edge arrays.
+        #
+        # What is asserted here is the decode contract, which holds on every
+        # deployment: a non-empty graph whose edges reference real nodes.
+        # Topology.__post_init__ already enforces ordering and uniqueness but
+        # checks neither endpoint membership nor self-loops.
         solver = make_solver()
         topology = solver._fetch_topology()
-        assert len(topology.nodes) == EXPECTED_NODES
-        assert len(topology.edges) == EXPECTED_EDGES
+        assert topology.nodes
+        assert topology.edges
+        nodes = set(topology.nodes)
+        assert all(u in nodes and v in nodes for u, v in topology.edges)
+        assert all(u != v for u, v in topology.edges)
 
     def test_solver_topology_tracks_chain_default(self, chain, make_solver) -> None:
         # With no topology= override, the solver targets the chain's declared
-        # default topology (deployment-agnostic; the pinned constant is only a
-        # fallback and differs per network).
+        # default topology. This is what makes the suite deployment-agnostic:
+        # nothing in the codebase carries a hash, because a hash is only ever
+        # valid on the deployment that registered it.
         default = chain.query("QuantumPow", "DefaultTopology").value
         assert default is not None
         solver = make_solver()
