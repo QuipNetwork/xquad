@@ -33,7 +33,7 @@ whatever comes back.
 
 **Domain support.** Every backend above accepts a binary or spin model and
 rejects anything else: `Solver._validate_model()` raises `ValueError` for
-any domain other than `BINARY` or `SPIN`. XQVM's third domain, discrete
+any domain other than `BINARY` or `SPIN`. XQVM's third domain, integer
 (`XQMX`), has no backend yet. See [Quadratic Models](quadratic-models.md)
 for what the three domains are.
 

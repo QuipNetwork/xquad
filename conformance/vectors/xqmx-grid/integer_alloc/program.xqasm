@@ -1,27 +1,27 @@
-; discrete_alloc: allocate a discrete model and a discrete sample and use
+; integer_alloc: allocate an integer model and an integer sample and use
 ; the domain {0, ..., k-1}.
 ;
-; No vector allocated a discrete model or sample before this one, which is
+; No vector allocated an integer model or sample before this one, which is
 ; why the domain could be documented two different ways -- a signed centred
 ; [-k, k-1] in spec/xqvm/ and {0, ..., k-1} in spec/xqsa/DOMAINS.md and the
 ; xqvm_py docstrings -- without anything failing. QUI-1150 settled it on the
 ; second reading: k is the number of values the domain holds, not a
-; half-width, so a discrete variable is a case index.
+; half-width.
 ;
 ; k = 3, so the domain is {0, 1, 2} and the sample defaults to 0. The two
 ; assignments below walk it from the bottom to the top. A write of -3 was
 ; legal under the centred reading and is out of domain now; SETLINE and
-; ADDLINE enforce that, which the setline_discrete_* vectors pin.
+; ADDLINE enforce that, which the setline_integer_* vectors pin.
 
 PUSH 4           ; size
 PUSH 3           ; k
-XQMX r0          ; discrete model, domain {0, 1, 2}
+XQMX r0          ; integer model, domain {0, 1, 2}
 
 PUSH 4           ; size
 PUSH 3           ; k
-XSMX r1          ; discrete sample, defaults to 0
+XSMX r1          ; integer sample, defaults to 0
 
-; a freshly allocated discrete sample reads its default, the bottom of the
+; a freshly allocated integer sample reads its default, the bottom of the
 ; domain rather than a value the domain merely happens to contain
 PUSH 0
 GETLINE r1
@@ -29,7 +29,7 @@ STOW r2
 PUSH 0
 OUTPUT r2
 
-; an interior case index
+; an interior value
 PUSH 1
 PUSH 1
 SETLINE r1

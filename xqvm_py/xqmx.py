@@ -20,7 +20,7 @@ XQVM XQMX Types and Operations
 
 XQMX represents quadratic models (QUBO/Ising) with:
 - mode: MODEL (for building constraints/objectives) or SAMPLE (for solutions)
-- domain: BINARY {0, 1}, SPIN {-1, +1}, or DISCRETE {0, ..., k-1}
+- domain: BINARY {0, 1}, SPIN {-1, +1}, or INTEGER {0, ..., k-1}
 - Grid operations for row/column indexing
 - High-level functions (HLF)
 """
@@ -34,8 +34,8 @@ from enum import Enum, auto
 from .errors import (
     IndexOutOfBounds,
     InvalidAllocation,
-    InvalidDiscreteK,
     InvalidGridDimensions,
+    InvalidIntegerK,
     SampleOutOfDomain,
     SizeMismatch,
     VecLengthMismatch,
@@ -56,7 +56,7 @@ class XQMXDomain(Enum):
 
     BINARY = auto()  # {0, 1} - QUBO/BQM
     SPIN = auto()  # {-1, +1} - Ising
-    DISCRETE = auto()  # {0, ..., k-1} - k values
+    INTEGER = auto()  # {0, ..., k-1} - k values
 
 
 def domain_default(domain: XQMXDomain) -> int:
@@ -75,7 +75,7 @@ def domain_contains(domain: XQMXDomain, k: int, value: int) -> bool:
 
     Defined directly rather than as an inclusive range test, because
     spin has a hole at ``0`` that an inclusive range check would wrongly
-    admit. ``k`` is read only for the discrete domain, where it is the number
+    admit. ``k`` is read only for the integer domain, where it is the number
     of values and not a half-width.
 
     Mirrors ``Domain::contains`` in ``xqvm/src/model.rs``.
@@ -97,7 +97,7 @@ def domain_description(domain: XQMXDomain, k: int = 2) -> str:
         return "binary {0, 1}"
     if domain == XQMXDomain.SPIN:
         return "spin {-1, +1}"
-    return f"discrete {{0, ..., {k - 1}}}"
+    return f"integer {{0, ..., {k - 1}}}"
 
 
 @dataclass
@@ -107,7 +107,7 @@ class XQMX:
 
     XQMX represents a quadratic model (QUBO/Ising) with:
     - mode: MODEL (for building constraints/objectives) or SAMPLE (for solutions)
-    - domain: BINARY {0, 1}, SPIN {-1, +1}, or DISCRETE {0, ..., k-1}
+    - domain: BINARY {0, 1}, SPIN {-1, +1}, or INTEGER {0, ..., k-1}
     - dimensions: size (total variables), rows, cols (for grid indexing)
     - linear: dict mapping variable index -> linear coefficient
     - quadratic: dict mapping (i, j) tuple -> coupling coefficient (i < j)
@@ -122,15 +122,15 @@ class XQMX:
     cols: int = 0  # Grid cols (0 if not grid-indexed)
     linear: dict[int, int] = field(default_factory=dict)
     quadratic: dict[tuple[int, int], int] = field(default_factory=dict)
-    discrete_k: int = 2  # For DISCRETE domain: the number of values, {0, ..., k-1}
+    integer_k: int = 2  # For INTEGER domain: the number of values, {0, ..., k-1}
 
     def __post_init__(self) -> None:
         if self.size < 0:
             raise InvalidAllocation(self.size)
         if self.rows < 0 or self.cols < 0:
             raise InvalidGridDimensions(self.rows, self.cols)
-        if self.domain == XQMXDomain.DISCRETE and self.discrete_k < 2:
-            raise InvalidDiscreteK(self.discrete_k)
+        if self.domain == XQMXDomain.INTEGER and self.integer_k < 2:
+            raise InvalidIntegerK(self.integer_k)
         if self.mode == XQMXMode.SAMPLE:
             # Direct construction is a write path too. `set_linear` and
             # `add_linear` guard the opcodes, but a caller that passes
@@ -165,15 +165,15 @@ class XQMX:
         )
 
     @classmethod
-    def discrete_model(cls, size: int, k: int, rows: int = 0, cols: int = 0) -> XQMX:
-        """Create a discrete model XQMX over the domain {0, ..., k-1}."""
+    def integer_model(cls, size: int, k: int, rows: int = 0, cols: int = 0) -> XQMX:
+        """Create an integer model XQMX over the domain {0, ..., k-1}."""
         return cls(
             mode=XQMXMode.MODEL,
-            domain=XQMXDomain.DISCRETE,
+            domain=XQMXDomain.INTEGER,
             size=size,
             rows=rows,
             cols=cols,
-            discrete_k=k,
+            integer_k=k,
         )
 
     @classmethod
@@ -204,18 +204,18 @@ class XQMX:
         )
 
     @classmethod
-    def discrete_sample(cls, size: int, k: int, rows: int = 0, cols: int = 0) -> XQMX:
-        """Create a discrete sample XQMX over the domain {0, ..., k-1}.
+    def integer_sample(cls, size: int, k: int, rows: int = 0, cols: int = 0) -> XQMX:
+        """Create an integer sample XQMX over the domain {0, ..., k-1}.
 
         Values default to 0, the bottom of the domain.
         """
         return cls(
             mode=XQMXMode.SAMPLE,
-            domain=XQMXDomain.DISCRETE,
+            domain=XQMXDomain.INTEGER,
             size=size,
             rows=rows,
             cols=cols,
-            discrete_k=k,
+            integer_k=k,
         )
 
     def is_model(self) -> bool:
@@ -230,10 +230,10 @@ class XQMX:
         """Return whether ``value`` lies in this xqmx's declared domain.
 
         Delegates to :func:`domain_contains` with this xqmx's domain and
-        ``discrete_k``. Only meaningful for SAMPLE mode: model coefficients
+        ``integer_k``. Only meaningful for SAMPLE mode: model coefficients
         are unbounded by design.
         """
-        return domain_contains(self.domain, self.discrete_k, value)
+        return domain_contains(self.domain, self.integer_k, value)
 
     def _check_index(self, i: int) -> None:
         """Raise unless ``i`` addresses one of this xqmx's declared variables.
@@ -262,8 +262,8 @@ class XQMX:
         """
         if self.mode != XQMXMode.SAMPLE:
             return
-        if not domain_contains(self.domain, self.discrete_k, value):
-            raise SampleOutOfDomain(i, value, domain_description(self.domain, self.discrete_k))
+        if not domain_contains(self.domain, self.integer_k, value):
+            raise SampleOutOfDomain(i, value, domain_description(self.domain, self.integer_k))
 
     def _absent_linear(self) -> int:
         """Return what an absent ``linear`` entry means for this xqmx.

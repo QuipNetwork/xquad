@@ -271,7 +271,7 @@ After modifying files, run `make fmt` to format everything, or the per-file equi
 
 #### Instruction Set Categories (93 total)
 
-Control flow, stack/register I/O, arithmetic (including `SQR`, `ABS`, `INC`, `DEC`, `MIN`, `MAX`), comparison, logical/bitwise, QUBO/Ising/discrete matrix allocators (`BQMX`, `SQMX`, `XQMX`), sample allocators, vector ops, index math, matrix coefficient access, grid ops, high-level constraints (`ONEHOTR`, `ONEHOTC`, `EXCLUDE`, `IMPLIES`, `EQUALITY`, `ATLEAST`, `ATLEASTW`, `REDUCE`), and `ENERGY`.
+Control flow, stack/register I/O, arithmetic (including `SQR`, `ABS`, `INC`, `DEC`, `MIN`, `MAX`), comparison, logical/bitwise, QUBO/Ising/integer matrix allocators (`BQMX`, `SQMX`, `XQMX`), sample allocators, vector ops, index math, matrix coefficient access, grid ops, high-level constraints (`ONEHOTR`, `ONEHOTC`, `EXCLUDE`, `IMPLIES`, `EQUALITY`, `ATLEAST`, `ATLEASTW`, `REDUCE`), and `ENERGY`.
 
 ## Python
 

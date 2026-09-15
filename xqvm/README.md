@@ -52,7 +52,7 @@ files instead of building bytecode by hand.
 | Layer | Contents |
 |---|---|
 | Bytecode (`no_std`) | `opcodes!` x-macro (single source of truth for the opcode table), `Opcode`, `Instruction`, `Register`, `Program`, `InstructionBuilder`, `InstructionStream`, `bytecode::codec` |
-| Interpreter | `Vm`, `Error`, `RegVal`, `XqmxModel` / `XqmxSample` (QUBO/Ising/discrete models and candidate solutions) |
+| Interpreter | `Vm`, `Error`, `RegVal`, `XqmxModel` / `XqmxSample` (QUBO/Ising/integer models and candidate solutions) |
 | `std`-only | `disasm::Disassembly`, `RuntimeDiagnostic`, `JsonTracer` / `TextTracer` |
 
 ## Wire format

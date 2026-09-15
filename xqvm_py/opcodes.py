@@ -536,7 +536,7 @@ class Opcode(Enum):
         0,
         1,
         (OperandType.REGISTER,),
-        "Create discrete model XQMX",
+        "Create integer model XQMX",
     )
     BSMX = OpcodeMeta(
         0x43,
@@ -560,7 +560,7 @@ class Opcode(Enum):
         0,
         1,
         (OperandType.REGISTER,),
-        "Create discrete sample XQMX",
+        "Create integer sample XQMX",
     )
     VEC = OpcodeMeta(
         0x4A,

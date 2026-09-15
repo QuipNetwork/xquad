@@ -68,7 +68,7 @@ class VMBackend(Enum):
 _DOMAIN_TO_STR: dict[XQMXDomain, str] = {
     XQMXDomain.BINARY: "binary",
     XQMXDomain.SPIN: "spin",
-    XQMXDomain.DISCRETE: "discrete",
+    XQMXDomain.INTEGER: "integer",
 }
 
 _DOMAIN_FROM_STR: dict[str, XQMXDomain] = {v: k for k, v in _DOMAIN_TO_STR.items()}
@@ -80,7 +80,7 @@ _DOMAIN_FROM_STR: dict[str, XQMXDomain] = {v: k for k, v in _DOMAIN_TO_STR.items
 
 def _xqmx_to_model_ffi(xqmx: XQMX) -> ModelFFI:
     domain_str = _DOMAIN_TO_STR[xqmx.domain]
-    k = xqmx.discrete_k if xqmx.domain == XQMXDomain.DISCRETE else None
+    k = xqmx.integer_k if xqmx.domain == XQMXDomain.INTEGER else None
     model = ModelFFI(domain=domain_str, size=xqmx.size, rows=xqmx.rows, cols=xqmx.cols, k=k)
     for idx, coeff in xqmx.linear.items():
         model.set_linear(idx, coeff)
@@ -94,7 +94,7 @@ def _xqmx_to_sample_ffi(xqmx: XQMX) -> SampleFFI:
     # `get_linear` supplies the domain default for an absent entry, so the
     # dense vector Rust expects is built without restating that default here.
     values = [xqmx.get_linear(i) for i in range(xqmx.size)]
-    k = xqmx.discrete_k if xqmx.domain == XQMXDomain.DISCRETE else None
+    k = xqmx.integer_k if xqmx.domain == XQMXDomain.INTEGER else None
     return SampleFFI(domain=domain_str, values=values, rows=xqmx.rows, cols=xqmx.cols, k=k)
 
 
@@ -105,7 +105,7 @@ def _model_ffi_to_xqmx(model: ModelFFI) -> XQMX:
     elif domain == XQMXDomain.SPIN:
         xqmx = XQMX.spin_model(model.size, model.rows, model.cols)
     else:
-        xqmx = XQMX.discrete_model(model.size, model.k, model.rows, model.cols)
+        xqmx = XQMX.integer_model(model.size, model.k, model.rows, model.cols)
     for idx, coeff in model.linear_items():
         xqmx.linear[idx] = coeff
     for (i, j), coeff in model.quadratic_items():
@@ -121,7 +121,7 @@ def _sample_ffi_to_xqmx(sample: SampleFFI) -> XQMX:
     elif domain == XQMXDomain.SPIN:
         xqmx = XQMX.spin_sample(size, sample.rows, sample.cols)
     else:
-        xqmx = XQMX.discrete_sample(size, sample.k, sample.rows, sample.cols)
+        xqmx = XQMX.integer_sample(size, sample.k, sample.rows, sample.cols)
     for i, v in enumerate(sample.values):
         xqmx.set_linear(i, v)
     return xqmx
@@ -163,7 +163,7 @@ def _check_sample_domains(data: list) -> None:
                     raise SampleOutOfDomain(
                         index,
                         value,
-                        domain_description(item.domain, item.discrete_k),
+                        domain_description(item.domain, item.integer_k),
                     )
 
 

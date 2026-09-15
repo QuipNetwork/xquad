@@ -65,7 +65,7 @@ Declare a runtime input. `type` is `Types.Int` (scalar) or `Types.Vec` (vector).
 
 Allocate the XQMX model. `size` is the total number of variables. `domain` is `XQMXDomain.BINARY` or `XQMXDomain.SPIN`. For 2D grid models, provide both `rows` and `cols` -- providing exactly one raises `ValueError`. After this call, `problem.model` and `problem.sample` become available.
 
-`XQMXDomain.DISCRETE` raises `NotImplementedError`.
+`XQMXDomain.INTEGER` raises `NotImplementedError`.
 
 ### `problem.range(start, end)`
 
@@ -130,7 +130,7 @@ For every well-formed XQCP program:
 | `TypeError` | Indexed read `out[i]` on an `OutputRef` | `OutputRef.__getitem__()` |
 | `TypeError` | Indexed write `out[i] = value` on an `OutputRef` | `OutputRef.__setitem__()` |
 | `TypeError` | `problem.output()` with a `type` other than `Types.Vec` | `Problem.output()` |
-| `NotImplementedError` | `define_model()` with `XQMXDomain.DISCRETE` | `Problem.define_model()` |
+| `NotImplementedError` | `define_model()` with `XQMXDomain.INTEGER` | `Problem.define_model()` |
 | `RuntimeError` | `branch()` inside a decoder output block | `compile()` |
 | `RuntimeError` | `iter()` inside a decoder output block | `compile()` |
 | `RuntimeError` | Any other action recorded after the first `output()` | `compile()` |

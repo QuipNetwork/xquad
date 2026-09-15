@@ -31,8 +31,8 @@ from .errors import (
     DivisionByZero,
     IndexOutOfBounds,
     InvalidAllocation,
-    InvalidDiscreteK,
     InvalidGridDimensions,
+    InvalidIntegerK,
     InvalidOpcode,
     InvalidShift,
     MemoryLimitExceeded,
@@ -1104,17 +1104,17 @@ class Executor:
         self.state.set_register(reg, xqmx)
 
     def _runner_XQMX(self, instr: Instruction) -> None:
-        """XQMX: Create discrete model XQMX."""
+        """XQMX: Create integer model XQMX."""
         reg = instr.operands[0]
         k, size = self.state.pop_n(2)
         # Rust's exec_xqmx rejects k < 2 before it validates or charges for
         # the size, so raise here rather than deferring to the XQMX
         # constructor: __post_init__ tests the size first, which would report
-        # InvalidAllocation where Rust reports InvalidDiscreteK.
+        # InvalidAllocation where Rust reports InvalidIntegerK.
         if k < 2:
-            raise InvalidDiscreteK(k)
+            raise InvalidIntegerK(k)
         size = self._allocation_size(size)
-        xqmx = XQMX.discrete_model(size, k)
+        xqmx = XQMX.integer_model(size, k)
         self.state.set_register(reg, xqmx)
 
     def _runner_BSMX(self, instr: Instruction) -> None:
@@ -1134,15 +1134,15 @@ class Executor:
         self.state.set_register(reg, xqmx)
 
     def _runner_XSMX(self, instr: Instruction) -> None:
-        """XSMX: Create discrete sample XQMX."""
+        """XSMX: Create integer sample XQMX."""
         reg = instr.operands[0]
         k, size = self.state.pop_n(2)
         # Same fault order as _runner_XQMX, mirroring Rust's exec_xsmx.
         if k < 2:
-            raise InvalidDiscreteK(k)
+            raise InvalidIntegerK(k)
         size = self._allocation_size(size)
         self._charge_steps(max(size, 0) * SAMPLE_COPY_STEPS)
-        xqmx = XQMX.discrete_sample(size, k)
+        xqmx = XQMX.integer_sample(size, k)
         self.state.set_register(reg, xqmx)
 
     def _runner_VECPUSH(self, instr: Instruction) -> None:

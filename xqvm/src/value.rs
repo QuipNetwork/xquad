@@ -38,7 +38,7 @@ pub enum RegValKind {
     VecInt,
     /// XQMX model vector (`Vec<XqmxModel>`).
     VecXqmx,
-    /// XQMX model (QUBO/Ising/discrete).
+    /// XQMX model (QUBO/Ising/integer).
     Model,
     /// XQMX sample.
     Sample,
@@ -126,7 +126,7 @@ pub enum RegVal {
     VecInt(Vec<i64>),
     /// XQMX model vector, created by `VECX`.
     VecXqmx(Vec<XqmxModel>),
-    /// XQMX model (QUBO/Ising/discrete), created by `BQMX`/`SQMX`/`XQMX`.
+    /// XQMX model (QUBO/Ising/integer), created by `BQMX`/`SQMX`/`XQMX`.
     Model(XqmxModel),
     /// XQMX sample, created by `BSMX`/`SSMX`/`XSMX`.
     Sample(XqmxSample),

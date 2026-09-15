@@ -1,14 +1,14 @@
-; setline_discrete_sample_at_k: k is a count, so k itself is out of domain.
+; setline_integer_sample_at_k: k is a count, so k itself is out of domain.
 ;
 ; The top of a k = 3 domain is 2. Writing 3 is the off-by-one a check
 ; written as `v <= k` lets through, and it is easy to write that way because
-; k is the number on the stack and k-1 is not. discrete_alloc writes 2 into
+; k is the number on the stack and k-1 is not. integer_alloc writes 2 into
 ; the same sample and succeeds, so the pair brackets the bound from both
 ; sides.
 
 PUSH 4
 PUSH 3
-XSMX r0          ; discrete sample, k = 3, domain {0, 1, 2}
+XSMX r0          ; integer sample, k = 3, domain {0, 1, 2}
 
 PUSH 1
 PUSH 3           ; k, one past the top value k-1

@@ -243,7 +243,7 @@ pub enum Error {
     #[error("invalid grid dimensions {rows}x{cols} at byte {pos:#06x}")]
     InvalidGridDimensions { pos: usize, rows: i64, cols: i64 },
 
-    /// `XQMX`/`XSMX` was called with a discrete-domain `k` smaller than 2.
+    /// `XQMX`/`XSMX` was called with an integer-domain `k` smaller than 2.
     /// `k` is the number of values in the domain `{0, ..., k-1}`, so `k = 1`
     /// leaves a variable with one value and no decision to make, and
     /// `k <= 0` leaves it with none at all; the reference
@@ -252,7 +252,7 @@ pub enum Error {
         "XQMX/XSMX requires k >= 2 for the {{0, ..., k-1}} domain, \
          got k = {k} at byte {pos:#06x}"
     )]
-    InvalidDiscreteK { pos: usize, k: i64 },
+    InvalidIntegerK { pos: usize, k: i64 },
 
     /// `SETLINE` or `ADDLINE` tried to write a value outside the domain the
     /// sample's allocator declared.
@@ -367,7 +367,7 @@ impl Error {
             | Self::TruncatedInstruction { pos }
             | Self::InvalidShift { pos, .. }
             | Self::InvalidGridDimensions { pos, .. }
-            | Self::InvalidDiscreteK { pos, .. }
+            | Self::InvalidIntegerK { pos, .. }
             | Self::SampleOutOfDomain { pos, .. }
             | Self::UnmatchedLoop { pos }
             | Self::LoopStackOverflow { pos }

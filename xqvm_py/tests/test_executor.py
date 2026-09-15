@@ -27,7 +27,7 @@ from xqvm_py.errors import (
     DivisionByZero,
     IndexOutOfBounds,
     InvalidAllocation,
-    InvalidDiscreteK,
+    InvalidIntegerK,
     InvalidShift,
     MemoryLimitExceeded,
     NoActiveLoop,
@@ -1307,8 +1307,8 @@ class TestAllocators:
         assert x.is_model()
         assert x.size == 8
 
-    def test_xqmx_creates_discrete_model(self):
-        """XQMX creates discrete model with k values."""
+    def test_xqmx_creates_integer_model(self):
+        """XQMX creates integer model with k values."""
         ex = run_program(
             [
                 Instruction(Opcode.PUSH1, (5,)),  # size
@@ -1319,7 +1319,7 @@ class TestAllocators:
         )
         x = ex.state.get_register(0)
         assert x.is_model()
-        assert x.discrete_k == 3
+        assert x.integer_k == 3
 
     def test_bsmx_creates_binary_sample(self):
         """BSMX creates binary sample XQMX."""
@@ -1345,8 +1345,8 @@ class TestAllocators:
         x = ex.state.get_register(0)
         assert x.is_sample()
 
-    def test_xsmx_creates_discrete_sample(self):
-        """XSMX creates discrete sample with k values."""
+    def test_xsmx_creates_integer_sample(self):
+        """XSMX creates integer sample with k values."""
         ex = run_program(
             [
                 Instruction(Opcode.PUSH1, (5,)),
@@ -1357,7 +1357,7 @@ class TestAllocators:
         )
         x = ex.state.get_register(0)
         assert x.is_sample()
-        assert x.discrete_k == 4
+        assert x.integer_k == 4
 
 
 class TestVectorAccess:
@@ -3158,7 +3158,7 @@ class TestAllocationBudget:
         with pytest.raises(MemoryLimitExceeded):
             Executor().execute(prog, memory_limit=1 << 20)
 
-    def test_discrete_k_is_rejected_before_the_budget_is_charged(self):
+    def test_integer_k_is_rejected_before_the_budget_is_charged(self):
         """Error precedence: an invalid domain wins over the allocation charge."""
         prog = make_program(
             [
@@ -3168,7 +3168,7 @@ class TestAllocationBudget:
                 Instruction(Opcode.HALT),
             ]
         )
-        with pytest.raises(InvalidDiscreteK, match="requires k >= 2"):
+        with pytest.raises(InvalidIntegerK, match="requires k >= 2"):
             Executor().execute(prog, memory_limit=8)
 
     def test_vec_push_is_charged_on_growth(self):

@@ -166,7 +166,7 @@ The two halves of the precondition sit either side of the charge on purpose, and
 |------|----------|-----------|--------------|-----------------|----------------|
 | `0x40` | `BQMX` | `reg` | `[..., size] → [...]` | `write` — `reg ← xqmx(model, binary, size)` | Pop `size`. Create a binary `{0, 1}` model XQMX with `size` variables and empty linear/quadratic tables. Write to `reg`. |
 | `0x41` | `SQMX` | `reg` | `[..., size] → [...]` | `write` — `reg ← xqmx(model, spin, size)` | Pop `size`. Create a spin `{-1, +1}` model XQMX. Write to `reg`. |
-| `0x42` | `XQMX` | `reg` | `[..., size, k] → [...]` | `write` — `reg ← xqmx(model, discrete(k), size)` | Pop `k`, then `size`. Create a discrete `{0, ..., k-1}` model XQMX. Error if `k < 2`. Write to `reg`. |
+| `0x42` | `XQMX` | `reg` | `[..., size, k] → [...]` | `write` — `reg ← xqmx(model, integer(k), size)` | Pop `k`, then `size`. Create an integer `{0, ..., k-1}` model XQMX. Error if `k < 2`. Write to `reg`. |
 
 ### Sample Allocators
 
@@ -174,7 +174,7 @@ The two halves of the precondition sit either side of the charge on purpose, and
 |------|----------|-----------|--------------|-----------------|----------------|
 | `0x43` | `BSMX` | `reg` | `[..., size] → [...]` | `write` — `reg ← xqmx(sample, binary, size)` | Pop `size`. Create a binary `{0, 1}` sample XQMX with `size` variables; every position initialised to `0`. Linear table stores variable assignments. Write to `reg`. |
 | `0x44` | `SSMX` | `reg` | `[..., size] → [...]` | `write` — `reg ← xqmx(sample, spin, size)` | Pop `size`. Create a spin `{-1, +1}` sample XQMX; every position initialised to `-1` (a valid spin state). Write to `reg`. |
-| `0x45` | `XSMX` | `reg` | `[..., size, k] → [...]` | `write` — `reg ← xqmx(sample, discrete(k), size)` | Pop `k`, then `size`. Create a discrete `{0, ..., k-1}` sample XQMX; every position initialised to `0`. Error if `k < 2`. Write to `reg`. |
+| `0x45` | `XSMX` | `reg` | `[..., size, k] → [...]` | `write` — `reg ← xqmx(sample, integer(k), size)` | Pop `k`, then `size`. Create an integer `{0, ..., k-1}` sample XQMX; every position initialised to `0`. Error if `k < 2`. Write to `reg`. |
 
 Sample allocation is dense: after `BSMX`/`SSMX`/`XSMX` every position `i` in `[0, size)` holds its domain-default value. Reads via `GETLINE` see that default until a matching write overrides it. This mirrors the Rust runtime's `vec![default; size]` storage; the Python reference VM pre-populates the equivalent sparse entries (QUI-453).
 

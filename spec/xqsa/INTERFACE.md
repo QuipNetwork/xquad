@@ -58,7 +58,7 @@ Validates that a model is acceptable for solving:
 | Condition | Result |
 |-----------|--------|
 | `model.mode != XQMXMode.MODEL` | `ValueError("Expected MODEL mode, got {mode}")` |
-| `model.domain == XQMXDomain.DISCRETE` | `ValueError("Unsupported domain for solving: {domain}")` |
+| `model.domain == XQMXDomain.INTEGER` | `ValueError("Unsupported domain for solving: {domain}")` |
 | `model.domain` is `BINARY` or `SPIN` | Accepted |
 
 Subclasses may extend validation (e.g. checking problem-size limits) but must preserve these base checks.

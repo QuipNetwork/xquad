@@ -137,7 +137,7 @@ bug ever motivates them.
 | `MEMORY_LIMIT_EXCEEDED` | `MemoryLimitExceeded` | `MemoryLimitExceeded` |
 | `INVALID_SHIFT` | `InvalidShift` | `InvalidShift` |
 | `INVALID_GRID_DIMENSIONS` | `InvalidGridDimensions` | `InvalidGridDimensions` |
-| `INVALID_DISCRETE_K` | `InvalidDiscreteK` | `InvalidDiscreteK` |
+| `INVALID_INTEGER_K` | `InvalidIntegerK` | `InvalidIntegerK` |
 | `SAMPLE_OUT_OF_DOMAIN` | `SampleOutOfDomain` | `SampleOutOfDomain` |
 | `TRACE_FAILED` | `TraceFailed` | -- |
 | `INVALID_ALLOCATION` | `InvalidAllocation` | `InvalidAllocation` |

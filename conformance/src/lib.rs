@@ -203,7 +203,7 @@ pub enum Fault {
     /// Grid dimensions were not positive, or did not fit the model.
     InvalidGridDimensions,
     /// An `XQMX`/`XSMX` allocation used `k < 2`.
-    InvalidDiscreteK,
+    InvalidIntegerK,
     /// A `SETLINE`/`ADDLINE` write put a value outside a sample's domain.
     SampleOutOfDomain,
     /// A tracer refused a step.
@@ -557,7 +557,7 @@ fn fault_from_rust(error: &xqvm::Error) -> Fault {
         E::MemoryLimitExceeded { .. } => Fault::MemoryLimitExceeded,
         E::InvalidShift { .. } => Fault::InvalidShift,
         E::InvalidGridDimensions { .. } => Fault::InvalidGridDimensions,
-        E::InvalidDiscreteK { .. } => Fault::InvalidDiscreteK,
+        E::InvalidIntegerK { .. } => Fault::InvalidIntegerK,
         E::SampleOutOfDomain { .. } => Fault::SampleOutOfDomain,
         E::TraceFailed { .. } => Fault::TraceFailed,
         E::InvalidAllocation { .. } => Fault::InvalidAllocation,
@@ -600,7 +600,7 @@ fn fault_from_python(class_name: &str) -> Result<Fault, String> {
         "StepLimitExceeded" => Ok(Fault::StepLimitExceeded),
         "MemoryLimitExceeded" => Ok(Fault::MemoryLimitExceeded),
         "InvalidAllocation" => Ok(Fault::InvalidAllocation),
-        "InvalidDiscreteK" => Ok(Fault::InvalidDiscreteK),
+        "InvalidIntegerK" => Ok(Fault::InvalidIntegerK),
         "SampleOutOfDomain" => Ok(Fault::SampleOutOfDomain),
         "InvalidShift" => Ok(Fault::InvalidShift),
         "SizeMismatch" => Ok(Fault::SizeMismatch),

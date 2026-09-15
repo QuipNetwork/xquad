@@ -1970,10 +1970,10 @@ impl Vm {
         let k = self.pop(pos)?;
         let size = self.pop(pos)?;
         if k < 2 {
-            return Err(Error::InvalidDiscreteK { pos, k });
+            return Err(Error::InvalidIntegerK { pos, k });
         }
         let size = self.allocation_size(pos, size)?;
-        *self.reg_mut(reg) = RegVal::Model(XqmxModel::new(Domain::Discrete(k), size));
+        *self.reg_mut(reg) = RegVal::Model(XqmxModel::new(Domain::Integer(k), size));
         Ok(StepResult::Continue)
     }
 
@@ -2003,13 +2003,13 @@ impl Vm {
         let k = self.pop(pos)?;
         let size = self.pop(pos)?;
         if k < 2 {
-            return Err(Error::InvalidDiscreteK { pos, k });
+            return Err(Error::InvalidIntegerK { pos, k });
         }
         let size = self.allocation_size(pos, size)?;
         self.charge_steps(pos, widen(size).saturating_mul(SAMPLE_COPY_STEPS))?;
         *self.reg_mut(reg) = RegVal::Sample(XqmxSample::new(
-            Domain::Discrete(k),
-            vec![Domain::Discrete(k).default_value(); size],
+            Domain::Integer(k),
+            vec![Domain::Integer(k).default_value(); size],
         ));
         Ok(StepResult::Continue)
     }

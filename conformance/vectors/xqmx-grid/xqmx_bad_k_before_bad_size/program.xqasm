@@ -1,4 +1,4 @@
-; xqmx_bad_k_before_bad_size: when both operands are bad, the discrete
+; xqmx_bad_k_before_bad_size: when both operands are bad, the integer
 ; domain size is what the fault names.
 ;
 ; XQMX pops k and then size, and both are wrong here: k = 1 is below the
@@ -7,7 +7,7 @@
 ; implementation detail. Rust's exec_xqmx tests k before it ever reaches
 ; allocation_size; xqvm_py used to skip its own size check for a bad k and
 ; let XQMX.__post_init__ raise, and that constructor tests the size first
-; -- so the same two instructions produced INVALID_DISCRETE_K on one
+; -- so the same two instructions produced INVALID_INTEGER_K on one
 ; implementation and INVALID_ALLOCATION on the other, with no vector
 ; anywhere to notice.
 

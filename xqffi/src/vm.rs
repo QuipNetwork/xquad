@@ -22,7 +22,7 @@
 //! - `Vm` — the interpreter. Construct, `set_calldata(list)`,
 //!   `set_output_slots(n)`, `run(bytecode)`, then read `outputs()` /
 //!   `stack()`.
-//! - `XqmxModel` — a quadratic (QUBO/Ising/discrete) optimisation
+//! - `XqmxModel` — a quadratic (QUBO/Ising/integer) optimisation
 //!   model. Passed into `Vm.set_calldata` for programs whose
 //!   `INPUT` reads a model slot, and returned from `Vm.outputs()`
 //!   when the final register held a [`RegVal::Model`].
@@ -48,7 +48,7 @@ struct PyXqmxModel {
 #[pymethods]
 impl PyXqmxModel {
     /// Construct a fresh model. `domain` is `"binary"`, `"spin"`, or
-    /// `"discrete"` (the latter requires `k`).
+    /// `"integer"` (the latter requires `k`).
     #[new]
     #[pyo3(signature = (domain, size, rows = 0, cols = 0, k = None))]
     fn new(domain: &str, size: usize, rows: usize, cols: usize, k: Option<i64>) -> PyResult<Self> {
@@ -67,7 +67,7 @@ impl PyXqmxModel {
     #[getter]
     fn k(&self) -> Option<i64> {
         match &self.inner.domain {
-            Domain::Discrete(k) => Some(*k),
+            Domain::Integer(k) => Some(*k),
             _ => None,
         }
     }
@@ -173,7 +173,7 @@ impl PyXqmxSample {
     #[getter]
     fn k(&self) -> Option<i64> {
         match &self.inner.domain {
-            Domain::Discrete(k) => Some(*k),
+            Domain::Integer(k) => Some(*k),
             _ => None,
         }
     }
@@ -347,16 +347,16 @@ fn domain_from_str(domain: &str, k: Option<i64>) -> PyResult<Domain> {
     match (domain, k) {
         ("binary", None) => Ok(Domain::Binary),
         ("spin", None) => Ok(Domain::Spin),
-        ("discrete", Some(k)) if k >= 2 => Ok(Domain::Discrete(k)),
-        ("discrete", Some(k)) => Err(PyValueError::new_err(format!(
-            "discrete domain requires k >= 2, got k={k}"
+        ("integer", Some(k)) if k >= 2 => Ok(Domain::Integer(k)),
+        ("integer", Some(k)) => Err(PyValueError::new_err(format!(
+            "integer domain requires k >= 2, got k={k}"
         ))),
-        ("discrete", None) => Err(PyValueError::new_err("discrete domain requires k argument")),
+        ("integer", None) => Err(PyValueError::new_err("integer domain requires k argument")),
         ("binary" | "spin", Some(_)) => Err(PyValueError::new_err(format!(
             "domain={domain:?} does not take k"
         ))),
         _ => Err(PyValueError::new_err(format!(
-            "unknown domain {domain:?}; expected \"binary\", \"spin\", or \"discrete\""
+            "unknown domain {domain:?}; expected \"binary\", \"spin\", or \"integer\""
         ))),
     }
 }
@@ -365,7 +365,7 @@ fn domain_name(domain: &Domain) -> &'static str {
     match domain {
         Domain::Binary => "binary",
         Domain::Spin => "spin",
-        Domain::Discrete(_) => "discrete",
+        Domain::Integer(_) => "integer",
     }
 }
 
