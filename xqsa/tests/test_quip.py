@@ -36,7 +36,6 @@ import pytest
 dimod = pytest.importorskip("dimod", reason="dwave-samplers / dimod not installed")
 
 from xqsa.quip_codec import (
-    ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH,
     DEFAULT_ISING_SPEC_ID,
     I32_MAX,
     I32_MIN,
@@ -991,9 +990,9 @@ class TestSolverQuipConstruction:
         assert solver._topology_hash == chain_default
 
     def test_topology_unresolvable_raises(self, monkeypatch) -> None:
-        # No topology arg and no chain default -> a clear error, not a silent
-        # fall-through to a pinned hash that no deployment would accept.
-        assert ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH is None
+        # No topology arg and no chain default -> a clear error. There is no
+        # third source to fall through to: a hash is per-deployment, so any
+        # constant here would be one no other deployment would accept.
         iface = _default_iface()
         del iface.storage[("QuantumPow", "DefaultTopology")]
         with pytest.raises(ValueError, match="no topology hash available"):
@@ -1007,8 +1006,9 @@ class TestSolverQuipConstruction:
         assert solver._topology_hash == explicit
 
     def test_chain_default_topology_transport_error_raises(self, monkeypatch) -> None:
-        # A transient read fault must NOT be masked as "no default configured" and
-        # silently select the pinned localdev hash on another network.
+        # A transient read fault must NOT be masked as "no default configured":
+        # construction would then raise a topology error that blames the chain
+        # for declaring no default, when the read simply never landed.
         from xqsa.quip import QuipConnectionError
 
         solver = _make_solver(monkeypatch, topology="0x" + "ab" * 32)
@@ -1021,8 +1021,8 @@ class TestSolverQuipConstruction:
             solver._chain_default_topology()
 
     def test_chain_default_topology_absent_falls_back(self, monkeypatch) -> None:
-        # A runtime that genuinely lacks the storage item resolves to None (the
-        # caller then uses the pinned fallback).
+        # A runtime that genuinely lacks the storage item resolves to None, which
+        # the caller reports as "no chain default" rather than as a fault.
         solver = _make_solver(monkeypatch, topology="0x" + "ab" * 32)
 
         exc_module = types.ModuleType("substrateinterface.exceptions")

@@ -85,17 +85,6 @@ QUIP_COEFFICIENTS_DOC_URL = (
 # genesis constant and has not moved across deployments.
 DEFAULT_ISING_SPEC_ID = "0x8f46f3a31321d1d093314fc769c42cbe7a83d71a0b69e6571a0f68e2a04067f0"
 
-# BLAKE2b-256 topology hash of advantage2_system1. There is deliberately no
-# pinned fallback: the hash is per-deployment, binding the exact registered
-# ``(sorted nodes, sorted edges, canonical allowed-value specs)`` arrays of the
-# chain that carries it, so it moves whenever a deployment is rebuilt. The
-# chain read -- ``QuantumPow.DefaultTopology``, which is also the
-# ``RegisteredTopologies`` storage key and the ``MineableTopologies`` entry the
-# miner matches on -- is the only authoritative source. A stale pin is worse
-# than none, because it resolves to a topology no chain accepts; leaving this
-# ``None`` makes an unresolvable topology raise instead.
-ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH: str | None = None
-
 # On-chain order statuses (``QuantumComputeMempool`` ``OrderStatus``).
 ORDER_STATUS_OPENED = "Opened"
 ORDER_STATUS_EXPIRED = "Expired"

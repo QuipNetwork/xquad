@@ -71,7 +71,6 @@ from typing import TYPE_CHECKING, Any
 from xqsa import quip_metadata
 from xqsa.quip_codec import (
     _TERMINAL_STATUSES,
-    ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH,
     DEFAULT_ISING_SPEC_ID,
     QUIP_COEFFICIENTS_DOC_URL,
     QuipError,
@@ -178,8 +177,9 @@ class SolverQuip(Solver):
     Constructing the solver connects to the node, resolves the Ising job spec,
     default reward, and target topology from chain state, and builds the hybrid
     signer from a seed or keystore. The topology defaults to the chain's
-    ``QuantumPow.DefaultTopology`` (then the pinned fallback); pass ``topology=``
-    to override. See the module docstring for configuration and installation.
+    ``QuantumPow.DefaultTopology``; pass ``topology=`` to override. An
+    unresolvable topology raises rather than falling through to a hash no chain
+    would accept. See the module docstring for configuration and installation.
 
     Raises:
         ImportError: if the ``[quip]`` extra is not installed
@@ -312,7 +312,8 @@ class SolverQuip(Solver):
         ``get_constant`` returns ``None`` when the constant is absent from the
         runtime metadata (a genuine "no chain default"); a transport/decode fault
         is surfaced as a connection error rather than silently masked as absence,
-        which would let a transient blip select the pinned fallback.
+        which would let a transient blip pass for a chain that declares no
+        default.
 
         Raises:
             QuipConnectionError: if reading the constant fails (as opposed to the
@@ -339,23 +340,18 @@ class SolverQuip(Solver):
         :meth:`solve` and :meth:`query` on the same instance agree on the
         topology even if the chain default later changes.
 
-        There is no pinned fallback. The same advantage2 graph hashes
-        differently across deployments (the hash folds in each deployment's
-        allowed-value specs), so a pinned constant cannot be correct
-        everywhere, and a stale one resolves to a topology no chain accepts.
-        :data:`ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH` is retained as ``None`` and
-        consulted last so an operator can pin one locally if they must.
+        Those two are the only sources, deliberately. The same advantage2
+        graph hashes differently across deployments (the hash folds in each
+        deployment's allowed-value specs), so no constant could be correct
+        everywhere, and a stale one would resolve to a topology no chain
+        accepts. An unresolvable topology raises instead.
 
         Raises:
             ValueError: if neither source yields a hash.
         """
-        resolved = topology or self._chain_default_topology() or ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH
+        resolved = topology or self._chain_default_topology()
         if not resolved:
-            raise ValueError(
-                "no topology hash available: pass topology=, or seed "
-                "QuantumPow.DefaultTopology on-chain (there is no pinned "
-                "ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH fallback)."
-            )
+            raise ValueError("no topology hash available: pass topology=, or seed QuantumPow.DefaultTopology on-chain.")
         return _as_hex(resolved)
 
     def _chain_default_topology(self) -> str | None:
@@ -405,10 +401,10 @@ class SolverQuip(Solver):
     def _fetch_topology(self, topology_hash: str | None = None) -> Topology:
         """Fetch and cache the hardware topology from ``QuantumPow.RegisteredTopologies``.
 
-        ``topology_hash`` defaults to the hash resolved at construction (the
-        chain's ``QuantumPow.DefaultTopology``, else the pinned fallback). The
-        decoded ``TopologyMeta`` carries the graph and the allowed-value sets
-        (captured for the educational warning).
+        ``topology_hash`` defaults to the hash resolved at construction (an
+        explicit ``topology=``, else the chain's ``QuantumPow.DefaultTopology``).
+        The decoded ``TopologyMeta`` carries the graph and the allowed-value
+        sets (captured for the educational warning).
 
         Raises:
             ValueError: if no topology hash is configured.
@@ -417,8 +413,7 @@ class SolverQuip(Solver):
         key = topology_hash or self._topology_hash
         if not key:
             raise ValueError(
-                "no topology hash configured. Pass topology= (the chain "
-                "QuantumPow.DefaultTopology and the pinned fallback both resolved empty)."
+                "no topology hash configured. Pass topology= (the chain QuantumPow.DefaultTopology resolved empty)."
             )
         key = _as_hex(key)
         cached = self._topology_cache.get(key)
@@ -978,8 +973,9 @@ def _require(mapping: Mapping[str, Any], key: str, order_id: int) -> Any:
 def _is_storage_absent(exc: BaseException) -> bool:
     """Whether ``exc`` means a storage item is absent from the runtime metadata.
 
-    Distinguishes an older runtime that simply lacks the storage item (fall back
-    to the pinned default) from a transport/decode fault (surface as an error).
+    Distinguishes an older runtime that simply lacks the storage item (a genuine
+    absence, which the caller reports as "no chain default") from a
+    transport/decode fault (surface as an error).
     The exception type is imported lazily so this module still imports without the
     optional ``[quip]`` extra installed.
     """
