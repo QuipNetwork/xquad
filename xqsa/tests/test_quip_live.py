@@ -309,10 +309,15 @@ class TestConnectivity:
         solver = make_solver()
         raw = chain.query("QuantumPow", "RegisteredTopologies", [solver._topology_hash]).value
         assert raw is not None, "the resolved topology is not registered on this chain"
+        # Superset, not equality. Topology.from_chain reads its three fields with
+        # meta.get(), so its contract is that those names are present -- a fourth
+        # allowed_* field a future runtime adds decodes exactly as well, and
+        # failing on it would report a silent-None that is not happening.
         served = {key for key in raw if key.startswith("allowed_")}
-        assert served == {"allowed_h_values", "allowed_j_values", "allowed_spin_values"}, (
-            f"TopologyMeta's allowed-value fields are {sorted(served)}; "
-            "Topology.from_chain reads allowed_{h,j,spin}_values and would silently decode None"
+        required = {"allowed_h_values", "allowed_j_values", "allowed_spin_values"}
+        assert served >= required, (
+            f"TopologyMeta does not serve {sorted(required - served)} (it serves {sorted(served)}); "
+            "Topology.from_chain reads those names and would silently decode None"
         )
         # A served spec must survive the decode, so a name that matches but a
         # shape that changed also fails here rather than going quiet.
