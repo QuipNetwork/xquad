@@ -213,6 +213,14 @@ def _emit_size_expr(size_expr: Expr, lines: list[str], indent: int) -> None:
     size_expr.emit(lines, indent)
 
 
+# The allocator opcode each domain is built with.
+_ALLOCATOR = {
+    XQMXDomain.BINARY: "BQMX",
+    XQMXDomain.SPIN: "SQMX",
+    XQMXDomain.INTEGER: "XQMX",
+}
+
+
 def _emit_model_allocation(d: dict[str, Any], lines: list[str], indent: int) -> None:
     """Emit model size computation, allocation, and optional grid resize."""
     size_expr: Expr = d["size_expr"]
@@ -223,8 +231,15 @@ def _emit_model_allocation(d: dict[str, Any], lines: list[str], indent: int) -> 
 
     _emit_size_expr(size_expr, lines, indent)
 
-    opcode = "BQMX" if domain == XQMXDomain.BINARY else "SQMX"
-    lines.append(line(f"{opcode} r{model_reg}", indent))
+    # XQMX pops k, then size, so the width goes on last.
+    if domain == XQMXDomain.INTEGER:
+        d["k_expr"].emit(lines, indent)
+    lines.append(line(f"{_ALLOCATOR[domain]} r{model_reg}", indent))
+
+    lo_reg: int | None = d.get("lo_reg")
+    if lo_reg is not None:
+        d["lo_init"].emit(lines, indent)
+        lines.append(line(f"STOW r{lo_reg}", indent))
 
     if is_2d:
         rows_expr: Expr = d["rows_expr"]
@@ -617,10 +632,24 @@ _ENCODER_MODE = _EmitMode(_ENCODER_OPS)
 
 
 # Registers the verifier claims above the encoder's high-water mark.
-_VERIFIER_REG_COUNT = 8
+_VERIFIER_REG_COUNT = 9
 
-# Constraint kinds whose user-level meaning is defined only over 0/1 variables.
-_BINARY_ONLY_KINDS = ("onehot_row", "onehot_col", "exclude", "implies")
+# Constraint kinds xqcp only supports on a binary model.  Every HLF expansion
+# in spec/xqvm/HLF.md is derived under x^2 = x, so on a spin or integer model
+# the encoder would build a penalty that does not say what the user wrote.
+# Whether a correct expansion exists per domain is the open question recorded
+# in scratch/spikes/hlf-domain-generality/brief.md.
+_BINARY_ONLY_KINDS = (
+    "onehot_row",
+    "onehot_col",
+    "exclude",
+    "implies",
+    "equality",
+    "inequality",
+    "atleast",
+    "atleastw",
+    "reduce",
+)
 
 # Constraint kinds that append variables past the model's declared size.
 _GROWING_KINDS = ("atleast", "atleastw", "inequality")
@@ -699,6 +728,9 @@ def compile_verifier(prob: Problem) -> str:
     lines.append("; === Model shape ===")
     _emit_size_expr(model_action.data["size_expr"], lines, 0)
     lines.append(f"STOW r{emitter.size_reg}")
+    if model_action.data["domain"] == XQMXDomain.INTEGER:
+        model_action.data["k_expr"].emit(lines, 0)
+        lines.append(f"STOW r{emitter.k_reg}")
     if model_action.data["is_2d"]:
         model_action.data["cols_expr"].emit(lines, 0)
         lines.append(f"STOW r{model_action.data['cols_reg']}")
@@ -1020,6 +1052,7 @@ class _VerifierEmitter:
         self.pos_reg = base + 5
         self.elem_reg = base + 6
         self.aux_reg = base + 7
+        self.k_reg = base + 8
 
         self.mode = _EmitMode(
             {
@@ -1055,8 +1088,10 @@ class _VerifierEmitter:
         for action, _ in _walk_scoped(body_actions, (), [0]):
             if action.kind in _BINARY_ONLY_KINDS:
                 raise RuntimeError(
-                    f"xqcp: '{action.kind}' has no checkable meaning on a "
-                    f"{self.domain.name.lower()} model, whose variables are not 0/1"
+                    f"xqcp: '{action.kind}' is not supported on a "
+                    f"{self.domain.name.lower()} model; only coefficient writes are. Its "
+                    "penalty expansion is derived under x^2 = x, which holds only for 0/1 "
+                    "variables, so it would not encode the constraint you wrote"
                 )
 
     def _index(self, coord: Any, model: ModelRef, lines: list[str], indent: int) -> None:
@@ -1226,8 +1261,6 @@ class _VerifierEmitter:
         ``define_model``, so slack and auxiliary variables past that size
         are not domain-checked.
         """
-        low, high = ("0", "1") if self.domain == XQMXDomain.BINARY else ("-1", "1")
-
         lines.append(line("PUSH 0", indent))
         lines.append(line(f"LOAD r{self.size_reg}", indent))
         lines.append(line("RANGE", indent))
@@ -1237,12 +1270,25 @@ class _VerifierEmitter:
         lines.append(line(f"LOAD r{self.pos_reg}", body))
         lines.append(line(f"GETLINE r{self.sample_reg}", body))
         lines.append(line("COPY", body))
-        lines.append(line(f"PUSH {low}", body))
-        lines.append(line("EQ", body))
-        lines.append(line("SWAP", body))
-        lines.append(line(f"PUSH {high}", body))
-        lines.append(line("EQ", body))
-        lines.append(line("OR", body))
+        if self.domain == XQMXDomain.INTEGER:
+            # 0 <= x < k, against the k the model was declared with rather
+            # than the one the sample declares for itself, which is the
+            # solver's word and not to be taken.  Comparing against k keeps
+            # k - 1 off the stack entirely.
+            lines.append(line("PUSH 0", body))
+            lines.append(line("GTE", body))
+            lines.append(line("SWAP", body))
+            lines.append(line(f"LOAD r{self.k_reg}", body))
+            lines.append(line("LT", body))
+            lines.append(line("AND", body))
+        else:
+            low, high = ("0", "1") if self.domain == XQMXDomain.BINARY else ("-1", "1")
+            lines.append(line(f"PUSH {low}", body))
+            lines.append(line("EQ", body))
+            lines.append(line("SWAP", body))
+            lines.append(line(f"PUSH {high}", body))
+            lines.append(line("EQ", body))
+            lines.append(line("OR", body))
         self._commit(lines, body)
         lines.append(line("NEXT", indent))
 

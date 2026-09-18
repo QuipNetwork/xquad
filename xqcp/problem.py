@@ -28,12 +28,126 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 from xqvm_py import XQMXDomain
 
-from .expression import Expr, RegLoad, Types, coerce
+from .expression import Expr, Literal, RegLoad, Types, coerce
 from .symbols import InputRef, LoopVar, ModelRef, OutputRef, SampleRef, VecRef
+
+# ---------------------------------------------------------------------------
+# Domain
+# ---------------------------------------------------------------------------
+
+
+class Domain(Enum):
+    """The variable domain a model is declared over.
+
+    Three members wrap the ``XQMXDomain`` the VM allocates.  ``CATEGORICAL``
+    has no VM counterpart: it records a binary ``size x k`` grid with a
+    one-hot constraint per row, so the model a solver receives is binary.
+
+    ``define_model()`` accepts either enum and normalises an ``XQMXDomain``
+    by value, so ``Domain(XQMXDomain.BINARY) is Domain.BINARY``.
+
+    # Examples
+
+    ```python
+    from xqcp import Domain
+
+    assert Domain.INTEGER.value.name == "INTEGER"
+    assert Domain.CATEGORICAL.value is None
+    ```
+    """
+
+    BINARY = XQMXDomain.BINARY
+    SPIN = XQMXDomain.SPIN
+    INTEGER = XQMXDomain.INTEGER
+    CATEGORICAL = None
+
+
+def _check_k_literal(k: Any) -> None:
+    """Reject a literal ``k`` below two.
+
+    An expression is left to the VM, which raises ``InvalidIntegerK`` when
+    it evaluates.
+
+    # Errors
+
+    Raises ``ValueError`` when ``k`` is an ``int`` below 2.
+    """
+    if isinstance(k, int) and k < 2:
+        raise ValueError(
+            f"define_model() needs k= of at least 2, since a domain of one value has nothing to solve for; got {k}"
+        )
+
+
+def _named(*pairs: tuple[str, Any]) -> list[str]:
+    """The names in ``pairs`` whose value was supplied."""
+    return [name for name, value in pairs if value is not None]
+
+
+def _check_domain_args(
+    domain: Domain,
+    rows: Any,
+    cols: Any,
+    k: Any,
+    lo: Any,
+    hi: Any,
+    penalty: Any,
+) -> None:
+    """Reject every ``define_model()`` argument combination the domains refuse.
+
+    One helper, so the rejections here, the tests and the error table in
+    ``spec/xqcp/SPEC.md`` stay the same list.
+
+    # Errors
+
+    Raises ``ValueError`` for a domain argument the domain does not take, a
+    required one left out, ``k=`` given together with ``lo=``/``hi=``, half
+    a range, or a literal domain narrower than two values.
+    """
+    if domain in (Domain.BINARY, Domain.SPIN):
+        extra = _named(("k", k), ("lo", lo), ("hi", hi), ("penalty", penalty))
+        if extra:
+            raise ValueError(
+                f"define_model() does not take {', '.join(f'{n}=' for n in extra)} on a "
+                f"{domain.name.lower()} model; those declare an integer or categorical domain"
+            )
+        return
+
+    if domain is Domain.CATEGORICAL:
+        missing = [n for n, v in (("k", k), ("penalty", penalty)) if v is None]
+        if missing:
+            raise ValueError(f"define_model() requires {' and '.join(f'{n}=' for n in missing)} on a categorical model")
+        extra = _named(("rows", rows), ("cols", cols), ("lo", lo), ("hi", hi))
+        if extra:
+            raise ValueError(
+                f"define_model() does not take {', '.join(f'{n}=' for n in extra)} on a categorical "
+                "model; its size x k grid is implied by k="
+            )
+        _check_k_literal(k)
+        return
+
+    if penalty is not None:
+        raise ValueError(
+            "define_model() does not take penalty= on an integer model; "
+            "it weights the one-hot row a categorical domain adds"
+        )
+    if k is None and lo is None and hi is None:
+        raise ValueError("define_model() requires k= or lo=/hi= on an integer model, to fix the domain's width")
+    if k is not None and (lo is not None or hi is not None):
+        raise ValueError("define_model() takes k= or lo=/hi= on an integer model, never both")
+    if (lo is None) != (hi is None):
+        raise ValueError(
+            f"define_model() requires both lo= and hi= for a ranged integer model; got lo={lo!r} hi={hi!r}"
+        )
+    if k is not None:
+        _check_k_literal(k)
+    elif isinstance(lo, int) and isinstance(hi, int) and hi < lo + 1:
+        raise ValueError(f"define_model() needs hi= of at least lo= + 1 on a ranged integer model; got lo={lo} hi={hi}")
+
 
 # ---------------------------------------------------------------------------
 # Register allocator
@@ -156,13 +270,54 @@ class Problem:
     def define_model(
         self,
         size: Expr | int,
-        domain: XQMXDomain,
+        domain: Domain | XQMXDomain,
         rows: Expr | int | None = None,
         cols: Expr | int | None = None,
+        *,
+        k: Expr | int | None = None,
+        lo: Expr | int | None = None,
+        hi: Expr | int | None = None,
+        penalty: int | None = None,
     ) -> None:
-        """Declare the XQMX model the encoder will build."""
-        if domain == XQMXDomain.INTEGER:
-            raise NotImplementedError("Integer domain (XQMX/XSMX) is not yet supported in the CP layer")
+        """Declare the XQMX model the encoder will build.
+
+        Four forms:
+
+        - ``Domain.BINARY`` or ``Domain.SPIN``: ``size`` variables over
+          {0, 1} or {-1, +1}.
+        - ``Domain.INTEGER, k=``: ``size`` variables over {0, ..., k-1}.
+        - ``Domain.INTEGER, lo=, hi=``: coefficients are written over
+          x in [lo, hi] while the model holds y = x - lo, so each quadratic
+          write also records the two linear corrections that substitution
+          implies.  ``sample.value()`` shifts back on the way out.
+        - ``Domain.CATEGORICAL, k=, penalty=``: ``size`` variables each
+          taking one of ``k`` cases, recorded as a binary ``size x k`` grid
+          with a one-hot row constraint.  Read with ``sample.case()``.
+
+        The uniform energy shift the ranged form drops is unrepresentable,
+        since XQMX carries no offset term; argmin is unaffected.
+
+        # Examples
+
+        ```python
+        problem.define_model(size=n, domain=Domain.INTEGER, k=4)
+        ```
+
+        # Errors
+
+        Raises ``ValueError`` for a domain argument the domain does not
+        take, a required one left out, or a 2D model given only one of
+        ``rows=`` / ``cols=``.
+        """
+        if isinstance(domain, XQMXDomain):
+            domain = Domain(domain)
+        _check_domain_args(domain, rows, cols, k, lo, hi, penalty)
+
+        if domain is Domain.CATEGORICAL:
+            self.define_model(coerce(size) * coerce(k), Domain.BINARY, rows=size, cols=k)
+            with self.range(0, size) as variable:
+                self.model.apply_onehot_row(variable, penalty)
+            return
 
         if (rows is None) != (cols is None):
             raise ValueError(
@@ -178,21 +333,42 @@ class Problem:
             self._cols_expr = coerce(cols)
             cols_reg = self._alloc.alloc()
 
+        k_expr: Expr | None = None
+        lo_init: Expr | None = None
+        lo_reg: int | None = None
+        lo_expr: Expr | None = None
+
+        if domain is Domain.INTEGER:
+            k_expr = coerce(k) if k is not None else coerce(hi) - coerce(lo) + 1
+            if lo is not None:
+                lo_init = coerce(lo)
+                # A literal needs no register: it is substituted wherever the
+                # shift is emitted, which keeps the decoder's one calldata
+                # scalar free for the loop bound every example spends it on.
+                if isinstance(lo_init, Literal):
+                    lo_expr = lo_init
+                else:
+                    lo_reg = self._alloc.alloc()
+                    lo_expr = RegLoad(lo_reg)
+
         model_reg = self._alloc.alloc()
-        self._model = ModelRef(self, model_reg, domain, cols_reg, is_2d)
-        self._sample = SampleRef(model_reg + 100, is_2d)
+        self._model = ModelRef(self, model_reg, domain.value, cols_reg, is_2d, lo_expr)
+        self._sample = SampleRef(model_reg + 100, is_2d, lo_expr)
 
         self._actions.append(
             Action(
                 "define_model",
                 {
                     "model_reg": model_reg,
-                    "domain": domain,
+                    "domain": domain.value,
                     "size_expr": size_expr,
                     "is_2d": is_2d,
                     "cols_reg": cols_reg,
                     "rows_expr": self._rows_expr,
                     "cols_expr": self._cols_expr,
+                    "k_expr": k_expr,
+                    "lo_reg": lo_reg,
+                    "lo_init": lo_init,
                 },
             )
         )
@@ -655,7 +831,7 @@ class Problem:
         problem = Problem("knapsack")
         n = problem.input("n", Types.Int)
         weights = problem.input("weights", Types.Vec)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
 
         assert problem.verifier_calldata() == ["n", "weights", "model", "sample"]
         ```

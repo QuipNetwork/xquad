@@ -19,10 +19,10 @@
 Graph Coloring end-to-end XQuad pipeline example.
 
 Assign one of C colors to each node so that no two adjacent nodes share a
-color (proper graph coloring).  The model is a 2D grid of N*C binary variables
-x[v,c] = 1 if node v gets color c.
+color (proper graph coloring).  Each node is one categorical variable over C
+cases, which define_model() records as the 2D grid of N*C binary variables
+x[v,c] = 1 if node v gets color c, one-hot per row.
 
-ONEHOTR enforces that each node receives exactly one color (one-hot per row).
 EXCLUDE enforces that adjacent nodes do not share a color (per edge per color).
 
 Usage:
@@ -39,19 +39,19 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Problem, Types
+from xquad.cp import Domain, Problem, Types
 from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
-from xquad.types import XQMX, Vec, XQMXDomain
+from xquad.types import XQMX, Vec
 from xquad.vm import VM, VMBackend
 
 
 def build_problem(n: int, num_colors: int, edges: list[tuple[int, int]]) -> Problem:
-    """Construct a Graph Coloring QUBO via ONEHOTR + EXCLUDE on a 2D grid model.
+    """Construct a Graph Coloring QUBO from one categorical variable per node.
 
-    Variables x[v,c] in {0,1}: x[v,c]=1 if node v is assigned color c.
-    Model layout: N rows (nodes) x C cols (colors), size = N*C.
+    ``Domain.CATEGORICAL`` records the N x C binary grid and the one-hot row
+    per node that says each node takes exactly one color.  What is left to
+    write is the part the domain does not imply:
 
-    ONEHOTR per node: sum_c x[v,c] = 1 (each node gets exactly one color).
     EXCLUDE per (edge, color): x[u,c] and x[v,c] cannot both be 1
       (adjacent nodes may not share a color).
     """
@@ -63,15 +63,11 @@ def build_problem(n: int, num_colors: int, edges: list[tuple[int, int]]) -> Prob
     edges_in = problem.input("edges", type=Types.Vec)
 
     problem.define_model(
-        size=num_nodes * num_colors_in,
-        domain=XQMXDomain.BINARY,
-        rows=num_nodes,
-        cols=num_colors_in,
+        size=num_nodes,
+        domain=Domain.CATEGORICAL,
+        k=num_colors_in,
+        penalty=200,
     )
-
-    # One-hot constraint per node: each node gets exactly one color
-    with problem.range(0, num_nodes) as node:
-        problem.model.apply_onehot_row(node, 200)
 
     # Exclusion constraint per edge per color: adjacent nodes cannot share a color
     with problem.range(0, num_edges) as e:
@@ -82,28 +78,12 @@ def build_problem(n: int, num_colors: int, edges: list[tuple[int, int]]) -> Prob
         with problem.range(0, num_colors_in) as c:
             problem.model.apply_exclude((u, c), (v, c), 200)
 
-    # Stow total variable count so the decoder sees a single N reference
-    total_vars = problem.stow("total_vars", num_nodes * num_colors_in)
-
-    # Output: flat 2D assignment [x[0,0], x[0,1], ..., x[N-1,C-1]]
-    assignment = problem.output("assignment", type=Types.Vec)
-    with problem.range(0, total_vars) as k:
-        assignment.append(problem.sample.getline(k))
+    # Output: the color each node took, or -1 where its row stayed empty
+    colors = problem.output("colors", type=Types.Vec)
+    with problem.range(0, num_nodes) as node:
+        colors.append(problem.sample.case(node))
 
     return problem
-
-
-def decode_coloring(flat: list[int], n: int, num_colors: int) -> list[int]:
-    """Return the color index assigned to each node, or -1 if uncolored."""
-    colors = []
-    for v in range(n):
-        assigned = -1
-        for c in range(num_colors):
-            if flat[v * num_colors + c]:
-                assigned = c
-                break
-        colors.append(assigned)
-    return colors
 
 
 def is_valid_coloring(colors: list[int], edges: list[tuple[int, int]]) -> bool:
@@ -130,7 +110,6 @@ def run(
     """Full pipeline on the selected VM backend."""
     flat_edges = flatten_edges(edges)
     m = len(edges)
-    total_vars = n * num_colors
 
     vm = VM(backend=backend)
     vm.set_calldata([n, num_colors, m, flat_edges])
@@ -154,16 +133,16 @@ def run(
     energy, valid = outs[0], outs[1]
 
     vm = VM(backend=backend)
-    vm.set_calldata([sample, total_vars])
+    vm.set_calldata([sample, n])
     vm.set_output_slots(1)
     vm.run(programs.decoder)
-    assign_out = vm.outputs()[0]
-    if isinstance(assign_out, Vec):
-        flat = [assign_out.get(i) for i in range(total_vars)]
+    colors_out = vm.outputs()[0]
+    if isinstance(colors_out, Vec):
+        colors = [colors_out.get(i) for i in range(n)]
     else:
-        flat = list(assign_out)
+        colors = list(colors_out)
 
-    return energy, valid, flat
+    return energy, valid, colors
 
 
 def main() -> int:
@@ -202,8 +181,7 @@ def main() -> int:
     programs = problem.compile()
 
     backend = VMBackend.PYTHON if args.interpreter == "python" else VMBackend.RUST
-    energy, valid, flat = run(programs, args.n, args.colors, edges, args.seed, backend, args.solver)
-    colors = decode_coloring(flat, args.n, args.colors)
+    energy, valid, colors = run(programs, args.n, args.colors, edges, args.seed, backend, args.solver)
 
     result = {
         "_seed": args.seed,

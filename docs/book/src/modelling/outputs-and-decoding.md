@@ -53,17 +53,30 @@ output was allocated with `VECI` in.
 ## Reading a Sample
 
 `problem.sample` is available once `define_model()` has run, and exposes
-five read methods matching the [Grid Operations](../xqvm/instructions/grid.md)
+seven read methods built on the [Grid Operations](../xqvm/instructions/grid.md)
 and [Coefficient Access](../xqvm/instructions/coefficient-access.md)
 instructions a `Sample` register supports:
 
 | Call | Reads |
 | --- | --- |
 | `sample.getline(i)` | Variable `i`'s assignment (1D or flat) |
+| `sample.value(i)` | Variable `i` in the domain you declared it over |
+| `sample.case(v)` | Case variable `v` took, or `-1` (categorical) |
 | `sample.rowfind(row, value)` | Column of the first match for `value` in `row` (2D) |
 | `sample.colfind(col, value)` | Row of the first match for `value` in `col` (2D) |
 | `sample.rowsum(row)` | Sum of every value in `row` (2D) |
 | `sample.colsum(col)` | Sum of every value in `col` (2D) |
+
+`getline` and `value` differ only on a model declared with `lo=`/`hi=`,
+where the stored variable is `y = x - lo` and `value(i)` adds `lo` back
+to give the `x` you wrote coefficients over. Everywhere else they are the
+same call. `getline` is the only raw reader and `value` the only shifted
+one, so nothing shifts unless you ask.
+
+`case(v)` is `rowfind(v, 1)` under a name that says what it means on a
+categorical model: the case variable `v` took, or `-1` where the solver
+left that row empty. It reads the same on any 2D binary grid, whether or
+not `Domain.CATEGORICAL` built it.
 
 Knapsack's flat model only needs `getline`. A 2D grid model -- one variable
 per `(row, col)` pair, the way a one-hot assignment problem is usually

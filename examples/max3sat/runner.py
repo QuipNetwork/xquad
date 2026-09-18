@@ -39,9 +39,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Problem, Types
+from xquad.cp import Domain, Problem, Types
 from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
-from xquad.types import XQMX, Vec, XQMXDomain
+from xquad.types import XQMX, Vec
 from xquad.vm import VM, VMBackend
 
 # Penalty per unsatisfied clause and Rosenberg auxiliary penalty.
@@ -68,7 +68,7 @@ def build_problem(n: int, m: int, clauses: list[tuple[int, int, int]]) -> Proble
     num_clauses = problem.input("num_clauses", type=Types.Int)
     clauses_in = problem.input("clauses", type=Types.Vec)
 
-    problem.define_model(size=num_vars, domain=XQMXDomain.BINARY)
+    problem.define_model(size=num_vars, domain=Domain.BINARY)
 
     with problem.range(0, num_clauses) as c:
         offset = problem.stow("offset", c * 3)

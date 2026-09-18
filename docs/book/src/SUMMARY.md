@@ -49,6 +49,7 @@
   - [Weighted Set Cover](examples/weighted_set_cover.md)
   - [Number Partition](examples/number_partition.md)
   - [Portfolio Optimization](examples/portfolio_opt.md)
+  - [Portfolio Rebalance](examples/portfolio_rebalance.md)
   - [Max-3-SAT](examples/max3sat.md)
   - [Cubic Optimization](examples/cubic_opt.md)
   - [Quartic Optimization](examples/quartic_opt.md)

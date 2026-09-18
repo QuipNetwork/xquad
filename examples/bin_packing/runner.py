@@ -36,9 +36,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Problem, Types, xq_bitlen
+from xquad.cp import Domain, Problem, Types, xq_bitlen
 from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
-from xquad.types import XQMX, Vec, XQMXDomain
+from xquad.types import XQMX, Vec
 from xquad.vm import VM, VMBackend
 
 # Energy charged per bin the packing opens. Small next to the constraint
@@ -73,7 +73,7 @@ def build_problem(n: int, num_bins: int, sizes: list[int], capacity: int) -> Pro
     # Model size = (N + 1) * B  (2D: N item rows plus one indicator row, B columns)
     problem.define_model(
         size=(num_items + 1) * num_bins_in,
-        domain=XQMXDomain.BINARY,
+        domain=Domain.BINARY,
         rows=num_items + 1,
         cols=num_bins_in,
     )

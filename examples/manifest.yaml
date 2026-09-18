@@ -70,6 +70,9 @@ groups:
       - dir: portfolio_opt
         title: Portfolio Optimization
         blurb: Select a fixed-size portfolio while penalising higher-order risk interactions.
+      - dir: portfolio_rebalance
+        title: Portfolio Rebalance
+        blurb: Choose signed integer asset weights against a risk matrix and a budget.
   - id: satisfiability-and-higher-order
     title: Satisfiability and higher-order
     intro: Examples that reduce clauses and higher-order pseudo-Boolean objectives to quadratic models.

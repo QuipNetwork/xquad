@@ -24,7 +24,7 @@ from typing import Any
 
 import pytest
 
-from xqcp import CompiledPrograms, InputRef, OutputRef, Problem, Types, xq_triu
+from xqcp import CompiledPrograms, Domain, InputRef, OutputRef, Problem, Types, xq_triu
 from xqvm_py import XQMXDomain
 
 # ---------------------------------------------------------------------------
@@ -41,7 +41,7 @@ def build_tsp_problem() -> Problem:
 
     problem.define_model(
         size=num_cities * num_cities,
-        domain=XQMXDomain.BINARY,
+        domain=Domain.BINARY,
         rows=num_cities,
         cols=num_cities,
     )
@@ -180,14 +180,14 @@ class TestLifecycleGuards:
 
     def test_input_after_define_model_raises(self) -> None:
         problem = Problem("guard")
-        problem.define_model(size=4, domain=XQMXDomain.BINARY)
+        problem.define_model(size=4, domain=Domain.BINARY)
         with pytest.raises(RuntimeError, match="input.*before.*define_model"):
             problem.input("late", type=Types.Int)
 
     def test_input_before_define_model_ok(self) -> None:
         problem = Problem("guard")
         ref = problem.input("early", type=Types.Int)
-        problem.define_model(size=4, domain=XQMXDomain.BINARY)
+        problem.define_model(size=4, domain=Domain.BINARY)
         assert ref is not None
 
 
@@ -424,7 +424,7 @@ def build_maxcut_problem() -> Problem:
     num_nodes = problem.input("num_nodes", type=Types.Int)
     edges = problem.input("edges", type=Types.Vec)
 
-    problem.define_model(size=num_nodes, domain=XQMXDomain.BINARY)
+    problem.define_model(size=num_nodes, domain=Domain.BINARY)
 
     edge_count = problem.stow("edge_count", edges.veclen() // 3)
 
@@ -713,15 +713,21 @@ def _verify(
     values: dict[int, int],
     *,
     spin: bool = False,
+    integer_k: int | None = None,
 ) -> int:
     """Run the verifier over a sample and return its validity flag.
 
     The sample inherits the model's size and grid, as a solver's would.
+    ``integer_k`` declares the sample's own domain width, which is the
+    solver's word and need not match the model's.
     """
     from xqvm_py import XQMX
 
-    build = XQMX.spin_sample if spin else XQMX.binary_sample
-    sample = build(model.size, rows=model.rows, cols=model.cols)
+    if integer_k is not None:
+        sample = XQMX.integer_sample(model.size, integer_k, rows=model.rows, cols=model.cols)
+    else:
+        build = XQMX.spin_sample if spin else XQMX.binary_sample
+        sample = build(model.size, rows=model.rows, cols=model.cols)
     for index, value in values.items():
         sample.linear[index] = value
 
@@ -752,7 +758,7 @@ class TestVerifierChecksEveryConstraint:
         problem = Problem("Equality")
         n = problem.input("n", type=Types.Int)
         target = problem.input("target", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
 
         indices = problem.vec()
         coeffs = problem.vec()
@@ -774,7 +780,7 @@ class TestVerifierChecksEveryConstraint:
         problem = Problem("SlackEquality")
         n = problem.input("n", type=Types.Int)
         capacity = problem.input("capacity", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
 
         indices = problem.vec()
         coeffs = problem.vec()
@@ -798,7 +804,7 @@ class TestVerifierChecksEveryConstraint:
         problem = Problem("Inequality")
         n = problem.input("n", type=Types.Int)
         capacity = problem.input("capacity", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
 
         indices = problem.vec()
         coeffs = problem.vec()
@@ -830,7 +836,7 @@ class TestVerifierChecksEveryConstraint:
         problem = Problem("InequalityThenEquality")
         n = problem.input("n", type=Types.Int)
         capacity = problem.input("capacity", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
 
         indices = problem.vec()
         coeffs = problem.vec()
@@ -855,7 +861,7 @@ class TestVerifierChecksEveryConstraint:
         problem = Problem("AtLeast")
         n = problem.input("n", type=Types.Int)
         k = problem.input("k", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
 
         indices = problem.vec()
         with problem.range(0, n) as i:
@@ -875,7 +881,7 @@ class TestVerifierChecksEveryConstraint:
         problem = Problem("AtLeastW")
         n = problem.input("n", type=Types.Int)
         k = problem.input("k", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
 
         indices = problem.vec()
         coeffs = problem.vec()
@@ -895,7 +901,7 @@ class TestVerifierChecksEveryConstraint:
         """Two mutually exclusive variables cannot both be set."""
         problem = Problem("Exclude")
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
         problem.model.apply_exclude(0, 1, 100)
 
         programs = problem.compile()
@@ -910,7 +916,7 @@ class TestVerifierChecksEveryConstraint:
         """Setting a forces b."""
         problem = Problem("Implies")
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
         problem.model.apply_implies(0, 1, 100)
 
         programs = problem.compile()
@@ -925,7 +931,7 @@ class TestVerifierChecksEveryConstraint:
         """Every row and column of the grid must sum to one."""
         problem = Problem("OneHot")
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n * n, domain=XQMXDomain.BINARY, rows=n, cols=n)
+        problem.define_model(size=n * n, domain=Domain.BINARY, rows=n, cols=n)
         with problem.range(0, n) as i:
             problem.model.apply_onehot_row(i, 100)
         with problem.range(0, n) as j:
@@ -943,7 +949,7 @@ class TestVerifierChecksEveryConstraint:
         """A Rosenberg auxiliary must equal the product it stands for."""
         problem = Problem("Reduce")
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
         aux = problem.model.reduce(0, 1, 100)
         problem.model.linear[aux].add(-1)
 
@@ -961,7 +967,7 @@ class TestVerifierChecksEveryConstraint:
         """Chained reductions land on consecutive auxiliary indices."""
         problem = Problem("ChainedReduce")
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
         first = problem.model.reduce(0, 1, 100)
         second = problem.model.reduce(first, 2, 100)
         problem.model.linear[second].add(-1)
@@ -979,7 +985,7 @@ class TestVerifierChecksEveryConstraint:
         """A non-binary entry fails even when the problem declares one-hots."""
         problem = Problem("Domain")
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n * n, domain=XQMXDomain.BINARY, rows=n, cols=n)
+        problem.define_model(size=n * n, domain=Domain.BINARY, rows=n, cols=n)
         with problem.range(0, n) as i:
             problem.model.apply_onehot_row(i, 100)
 
@@ -995,7 +1001,7 @@ class TestVerifierChecksEveryConstraint:
         """A spin model is checked against -1/+1, not 0/1."""
         problem = Problem("Spin")
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.SPIN)
+        problem.define_model(size=n, domain=Domain.SPIN)
         problem.model.linear[0].add(1)
 
         programs = problem.compile()
@@ -1009,7 +1015,7 @@ class TestVerifierChecksEveryConstraint:
         """A constraint declared in a loop is checked once per iteration."""
         problem = Problem("PerIteration")
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n * n, domain=XQMXDomain.BINARY, rows=n, cols=n)
+        problem.define_model(size=n * n, domain=Domain.BINARY, rows=n, cols=n)
 
         # One at-least-1 constraint per row, each over its own fresh vectors.
         with problem.range(0, n) as row:
@@ -1038,7 +1044,7 @@ class TestVerifierGuards:
         problem = Problem("Layout")
         problem.input("n", type=Types.Int)
         problem.input("weights", type=Types.Vec)
-        problem.define_model(size=4, domain=XQMXDomain.BINARY)
+        problem.define_model(size=4, domain=Domain.BINARY)
 
         assert problem.verifier_calldata() == ["n", "weights", "model", "sample"]
 
@@ -1046,7 +1052,7 @@ class TestVerifierGuards:
         """The encoder reads a partial model where the verifier reads a whole one."""
         problem = Problem("CoefficientRead")
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
         problem.model.linear[0].add(5)
         problem.stow("bias", problem.model.linear[0])
         problem.model.apply_exclude(0, 1, 100)
@@ -1065,7 +1071,7 @@ class TestVerifierGuards:
         problem = Problem("InequalityScope")
         n = problem.input("n", type=Types.Int)
         capacity = problem.input("capacity", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
 
         indices = problem.vec()
         coeffs = problem.vec()
@@ -1079,17 +1085,17 @@ class TestVerifierGuards:
     def test_binary_only_constraint_on_a_spin_model_is_rejected(self) -> None:
         problem = Problem("SpinExclude")
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.SPIN)
+        problem.define_model(size=n, domain=Domain.SPIN)
         problem.model.apply_exclude(0, 1, 100)
 
-        with pytest.raises(RuntimeError, match="no checkable meaning"):
+        with pytest.raises(RuntimeError, match="not supported on a spin model"):
             problem.compile()
 
     def test_growing_constraint_alongside_a_reduce_is_rejected(self) -> None:
         """ATLEAST grows the model, so the REDUCE shadow counter drifts."""
         problem = Problem("GrowBesideReduce")
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
 
         with problem.range(0, n) as i:
             indices = problem.vec()
@@ -1105,7 +1111,7 @@ class TestVerifierGuards:
         """Objective blocks are emitted first, so this reduce runs first."""
         problem = Problem("ReduceThenGrow")
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
 
         indices = problem.vec()
         with problem.range(0, n) as i:
@@ -1245,17 +1251,17 @@ class TestModelDimensionRejections:
             ValueError,
             match=r"define_model\(\) requires both rows= and cols= for a 2D model",
         ):
-            Problem("RowsOnly").define_model(size=9, domain=XQMXDomain.BINARY, rows=3)
+            Problem("RowsOnly").define_model(size=9, domain=Domain.BINARY, rows=3)
 
         with pytest.raises(
             ValueError,
             match=r"define_model\(\) requires both rows= and cols= for a 2D model",
         ):
-            Problem("ColsOnly").define_model(size=9, domain=XQMXDomain.BINARY, cols=3)
+            Problem("ColsOnly").define_model(size=9, domain=Domain.BINARY, cols=3)
 
     def test_apply_onehot_row_requires_2d_model(self) -> None:
         problem = Problem("FlatOneHotRow")
-        problem.define_model(size=9, domain=XQMXDomain.BINARY)
+        problem.define_model(size=9, domain=Domain.BINARY)
         with pytest.raises(
             ValueError,
             match=r"apply_onehot_row\(\) requires a 2D model; pass rows= and cols= to define_model\(\)",
@@ -1264,7 +1270,7 @@ class TestModelDimensionRejections:
 
     def test_apply_onehot_col_requires_2d_model(self) -> None:
         problem = Problem("FlatOneHotCol")
-        problem.define_model(size=9, domain=XQMXDomain.BINARY)
+        problem.define_model(size=9, domain=Domain.BINARY)
         with pytest.raises(
             ValueError,
             match=r"apply_onehot_col\(\) requires a 2D model; pass rows= and cols= to define_model\(\)",
@@ -1275,7 +1281,7 @@ class TestModelDimensionRejections:
     def _flat_problem(name: str) -> Problem:
         problem = Problem(name)
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
         return problem
 
     def test_colfind_requires_2d_model(self) -> None:
@@ -1317,7 +1323,7 @@ class TestModelDimensionRejections:
     def test_grid_ops_allowed_on_2d_model(self) -> None:
         problem = Problem("GridOps")
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n * n, domain=XQMXDomain.BINARY, rows=n, cols=n)
+        problem.define_model(size=n * n, domain=Domain.BINARY, rows=n, cols=n)
         assert problem.sample.colfind(col=0, value=1) is not None
         assert problem.sample.rowfind(row=0, value=1) is not None
         assert problem.sample.rowsum(0) is not None
@@ -1337,7 +1343,7 @@ class TestBranchArmPartitioning:
     def test_branch_arm_constraint_lands_in_constraints_section(self) -> None:
         problem = Problem("BranchPartition")
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n * n, domain=XQMXDomain.BINARY, rows=n, cols=n)
+        problem.define_model(size=n * n, domain=Domain.BINARY, rows=n, cols=n)
 
         with problem.range(0, n) as i:
             problem.model.linear[(i, i)].add(1)
@@ -1377,7 +1383,7 @@ class TestDecoderBlockRejections:
     def _problem_with_output(name: str) -> tuple[Problem, OutputRef]:
         problem = Problem(name)
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
         return problem, problem.output("out", type=Types.Vec)
 
     def test_branch_inside_output_block_rejected(self) -> None:
@@ -1420,9 +1426,9 @@ class TestDecoderRegisterRemapping:
         problem = Problem(name)
         n = problem.input("n", type=Types.Int)
         if grid:
-            problem.define_model(size=n * n, domain=XQMXDomain.BINARY, rows=n, cols=n)
+            problem.define_model(size=n * n, domain=Domain.BINARY, rows=n, cols=n)
         else:
-            problem.define_model(size=n, domain=XQMXDomain.BINARY)
+            problem.define_model(size=n, domain=Domain.BINARY)
 
         out = problem.output("o", type=Types.Vec)
         with problem.range(0, n) as i:
@@ -1483,7 +1489,7 @@ class TestDecoderRegisterFileIsTotal:
     def _flat(name: str) -> tuple[Problem, InputRef]:
         problem = Problem(name)
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
         return problem, n
 
     # -- loop variables --------------------------------------------------
@@ -1550,7 +1556,7 @@ class TestDecoderRegisterFileIsTotal:
     def test_the_scalar_is_named_in_the_header(self) -> None:
         problem = Problem("DecScalarNamed")
         n = problem.input("n", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
         total = problem.stow("total_vars", n * 2)
         out = problem.output("o", type=Types.Vec)
         with problem.range(0, total) as i:
@@ -1577,7 +1583,7 @@ class TestDecoderRegisterFileIsTotal:
         problem = Problem("DecTwoInputs")
         n = problem.input("n", type=Types.Int)
         m = problem.input("m", type=Types.Int)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
         out = problem.output("o", type=Types.Vec)
         with problem.range(0, m) as i:
             out.append(problem.sample.getline(i) + n)
@@ -1594,7 +1600,7 @@ class TestDecoderRegisterFileIsTotal:
         problem = Problem("DecVecInput")
         n = problem.input("n", type=Types.Int)
         w = problem.input("w", type=Types.Vec)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
         out = problem.output("o", type=Types.Vec)
         with problem.range(0, n) as i:
             out.append(problem.sample.getline(i) + w.get(i))
@@ -1609,7 +1615,7 @@ class TestDecoderRegisterFileIsTotal:
         problem = Problem("DecVecLen")
         n = problem.input("n", type=Types.Int)
         w = problem.input("w", type=Types.Vec)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
         out = problem.output("o", type=Types.Vec)
         with problem.range(0, n) as i:
             out.append(problem.sample.getline(i) + w.veclen())
@@ -1643,7 +1649,7 @@ class TestDecoderRegisterFileIsTotal:
         problem = Problem("DecIter")
         n = problem.input("n", type=Types.Int)
         w = problem.input("w", type=Types.Vec)
-        problem.define_model(size=n, domain=XQMXDomain.BINARY)
+        problem.define_model(size=n, domain=Domain.BINARY)
         out = problem.output("o", type=Types.Vec)
         with problem.iter(w, 0, n) as (_idx, val):
             out.append(val)
@@ -1686,3 +1692,355 @@ class TestDecoderRegisterFileIsTotal:
         assert "VECI r3" in decoder
         assert "VECPUSH r3" in decoder
         assert "PUSH 1\nOUTPUT r3" in decoder
+
+
+# ---------------------------------------------------------------------------
+# Integer and categorical domains
+# ---------------------------------------------------------------------------
+
+
+def _integer_sample(size: int, k: int, values: dict[int, int]) -> object:
+    """An integer sample over {0, ..., k-1} with the given values set."""
+    from xqvm_py import XQMX
+
+    sample = XQMX.integer_sample(size, k)
+    for index, value in values.items():
+        sample.linear[index] = value
+    return sample
+
+
+class TestIntegerDomainKForm:
+    """define_model(domain=Domain.INTEGER, k=...)."""
+
+    def test_it_allocates_an_integer_model(self) -> None:
+        problem = Problem("IntK")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=Domain.INTEGER, k=4)
+        programs = problem.compile()
+
+        model = _encode(programs, [3])
+        assert model.domain is XQMXDomain.INTEGER
+        assert model.size == 3
+        assert model.integer_k == 4
+
+    def test_the_width_is_pushed_after_the_size(self) -> None:
+        # XQMX pops k, then size, so the width is the last thing pushed.
+        problem = Problem("IntOrder")
+        problem.define_model(size=6, domain=Domain.INTEGER, k=3)
+        lines = [text.strip() for text in problem.compile().encoder.splitlines()]
+
+        assert lines.index("PUSH 6") < lines.index("PUSH 3") < lines.index("XQMX r0")
+
+    def test_k_may_be_an_expression(self) -> None:
+        problem = Problem("IntExprK")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=4, domain=Domain.INTEGER, k=n)
+
+        assert _encode(problem.compile(), [5]).integer_k == 5
+
+    def test_the_verifier_accepts_a_sample_inside_the_domain(self) -> None:
+        problem = Problem("IntOk")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=Domain.INTEGER, k=4)
+        programs = problem.compile()
+        model = _encode(programs, [3])
+
+        assert _verify(programs, [3], model, {0: 0, 1: 3, 2: 1}, integer_k=4) == 1
+
+    def test_a_sample_declaring_a_wider_domain_is_still_rejected(self) -> None:
+        # The sample's own k is the solver's word, so the verifier checks
+        # against the k replayed from define_model instead.  A value of 4
+        # needs a sample declared over {0..4} to exist at all; the model
+        # admits only {0..3}.
+        problem = Problem("IntWide")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=Domain.INTEGER, k=4)
+        programs = problem.compile()
+        model = _encode(programs, [3])
+
+        assert _verify(programs, [3], model, {0: 4}, integer_k=5) == 0
+
+    def test_only_the_declared_size_is_domain_checked(self) -> None:
+        problem = Problem("IntTail")
+        problem.define_model(size=2, domain=Domain.INTEGER, k=3)
+        programs = problem.compile()
+        model = _encode(programs, [])
+
+        # Index 2 is past the model's declared size, so its value is the
+        # solver's business and not the domain check's.
+        sample_values = {0: 2, 1: 0, 2: 9}
+        assert _verify(programs, [], model, sample_values, integer_k=10) == 1
+
+
+class TestIntegerDomainRangedForm:
+    """define_model(domain=Domain.INTEGER, lo=..., hi=...)."""
+
+    def test_the_width_is_computed_from_the_bounds(self) -> None:
+        problem = Problem("Ranged")
+        problem.define_model(size=4, domain=Domain.INTEGER, lo=-5, hi=5)
+
+        assert _encode(problem.compile(), []).integer_k == 11
+
+    def test_a_quadratic_write_records_two_linear_corrections(self) -> None:
+        problem = Problem("Shift")
+        problem.define_model(size=4, domain=Domain.INTEGER, lo=-5, hi=5)
+        problem.model.quadratic[0, 1].add(7)
+
+        kinds = [action.kind for action in problem._actions]
+        assert kinds == ["define_model", "add_quadratic", "add_linear", "add_linear"]
+
+        corrected = [action.data["coord"] for action in problem._actions if action.kind == "add_linear"]
+        assert corrected == [0, 1]
+
+    def test_the_corrections_carry_the_weight_times_lo(self) -> None:
+        problem = Problem("ShiftValue")
+        problem.define_model(size=4, domain=Domain.INTEGER, lo=-5, hi=5)
+        problem.model.quadratic[0, 1].add(7)
+        model = _encode(problem.compile(), [])
+
+        assert model.quadratic[(0, 1)] == 7
+        assert model.linear[0] == 7 * -5
+        assert model.linear[1] == 7 * -5
+
+    def test_a_diagonal_write_corrects_twice_on_the_one_index(self) -> None:
+        # Squaring y + lo asks for 2*w*lo, which the two corrections give
+        # without the rule needing a diagonal case.
+        problem = Problem("ShiftDiagonal")
+        problem.define_model(size=4, domain=Domain.INTEGER, lo=-5, hi=5)
+        problem.model.quadratic[2, 2].add(3)
+        model = _encode(problem.compile(), [])
+
+        assert model.linear[2] == 2 * 3 * -5
+
+    def test_a_linear_write_is_not_corrected(self) -> None:
+        problem = Problem("ShiftLinear")
+        problem.define_model(size=4, domain=Domain.INTEGER, lo=-5, hi=5)
+        problem.model.linear[0].add(7)
+
+        kinds = [action.kind for action in problem._actions]
+        assert kinds == ["define_model", "add_linear"]
+        assert _encode(problem.compile(), []).linear[0] == 7
+
+    def test_an_unshifted_model_emits_no_correction(self) -> None:
+        problem = Problem("NoShift")
+        problem.define_model(size=4, domain=Domain.INTEGER, k=11)
+        problem.model.quadratic[0, 1].add(7)
+
+        assert [action.kind for action in problem._actions] == ["define_model", "add_quadratic"]
+
+    def test_value_shifts_and_getline_does_not(self) -> None:
+        problem = Problem("Decode")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=Domain.INTEGER, lo=-5, hi=5)
+        shifted = problem.output("shifted", type=Types.Vec)
+        with problem.range(0, n) as i:
+            shifted.append(problem.sample.value(i))
+        raw = problem.output("raw", type=Types.Vec)
+        with problem.range(0, n) as i:
+            raw.append(problem.sample.getline(i))
+        programs = problem.compile()
+
+        state = _run_program(
+            programs.decoder,
+            {0: _integer_sample(3, 11, {0: 0, 1: 5, 2: 10}), 1: 3},
+        )
+        assert list(state.output[0]) == [-5, 0, 5]
+        assert list(state.output[1]) == [0, 5, 10]
+
+    def test_setting_a_quadratic_coefficient_is_rejected(self) -> None:
+        problem = Problem("SetQuad")
+        problem.define_model(size=4, domain=Domain.INTEGER, lo=-5, hi=5)
+
+        with pytest.raises(ValueError, match="only accumulate"):
+            problem.model.quadratic[0, 1] = 7
+
+    def test_setting_a_linear_coefficient_is_rejected(self) -> None:
+        problem = Problem("SetLinear")
+        problem.define_model(size=4, domain=Domain.INTEGER, lo=-5, hi=5)
+
+        with pytest.raises(ValueError, match="only accumulate"):
+            problem.model.linear[0] = 7
+
+    def test_a_set_cannot_drop_a_correction_a_quadratic_write_left(self) -> None:
+        # SETLINE replaces, so allowing this would encode linear[0] = 7 in
+        # place of the 7 + 3*lo that substituting x = y + lo asks for.
+        problem = Problem("SetOverCorrection")
+        problem.define_model(size=2, domain=Domain.INTEGER, lo=-5, hi=5)
+        problem.model.quadratic[0, 1].add(3)
+
+        with pytest.raises(ValueError, match="only accumulate"):
+            problem.model.linear[0] = 7
+
+        problem.model.linear[0].add(7)
+        assert _encode(problem.compile(), []).linear[0] == 7 + 3 * -5
+
+    def test_a_runtime_lo_collides_with_a_decoder_loop_bound(self) -> None:
+        # The decoder is handed the sample and exactly one scalar, and every
+        # output loop spends it on the bound.
+        problem = Problem("LoCollision")
+        n = problem.input("n", type=Types.Int)
+        lo = problem.input("lo", type=Types.Int)
+        problem.define_model(size=n, domain=Domain.INTEGER, lo=lo, hi=lo + 10)
+        out = problem.output("x", type=Types.Vec)
+        with problem.range(0, n) as i:
+            out.append(problem.sample.value(i))
+
+        with pytest.raises(RuntimeError, match="references two scalars"):
+            problem.compile()
+
+
+class TestCategoricalDomain:
+    """define_model(domain=Domain.CATEGORICAL, k=..., penalty=...)."""
+
+    def test_it_records_a_binary_grid_with_one_hot_rows(self) -> None:
+        problem = Problem("Cat")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=Domain.CATEGORICAL, k=3, penalty=200)
+
+        kinds = [action.kind for action in problem._actions]
+        assert kinds == ["input", "define_model", "range_start", "onehot_row", "range_end"]
+        assert problem.model.domain is XQMXDomain.BINARY
+        assert problem.model.is_2d
+
+        model = _encode(problem.compile(), [4])
+        assert model.size == 12
+        assert (model.rows, model.cols) == (4, 3)
+
+    def test_case_reads_the_hot_column(self) -> None:
+        problem = Problem("CatCase")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=Domain.CATEGORICAL, k=3, penalty=200)
+        out = problem.output("cases", type=Types.Vec)
+        with problem.range(0, n) as v:
+            out.append(problem.sample.case(v))
+        programs = problem.compile()
+
+        from xqvm_py import XQMX
+
+        sample = XQMX.binary_sample(9, rows=3, cols=3)
+        # Variable 0 takes case 2, variable 1 takes case 0, variable 2 none.
+        sample.linear[2] = 1
+        sample.linear[3] = 1
+        state = _run_program(programs.decoder, {0: sample, 1: 3})
+
+        assert list(state.output[0]) == [2, 0, -1]
+
+    def test_a_flat_coefficient_index_is_rejected(self) -> None:
+        problem = Problem("CatFlat")
+        problem.define_model(size=4, domain=Domain.CATEGORICAL, k=3, penalty=200)
+
+        problem.model.linear[0].add(1)
+
+        with pytest.raises(TypeError, match=r"Expected \(row, col\) tuple"):
+            problem.compile()
+
+
+class TestDomainArgumentRejections:
+    """One case per row of the define_model() rejection table."""
+
+    @pytest.mark.parametrize("domain", [Domain.BINARY, Domain.SPIN])
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"k": 4}, "does not take k="),
+            ({"lo": 0, "hi": 3}, "does not take lo=, hi="),
+            ({"penalty": 10}, "does not take penalty="),
+        ],
+    )
+    def test_an_integer_argument_on_a_bare_domain(self, domain: Domain, kwargs: dict, message: str) -> None:
+        problem = Problem("Reject")
+        with pytest.raises(ValueError, match=message):
+            problem.define_model(size=4, domain=domain, **kwargs)
+
+    @pytest.mark.parametrize("width", [{"k": 4}, {"lo": 0, "hi": 3}])
+    def test_integer_with_a_categorical_penalty(self, width: dict) -> None:
+        problem = Problem("Reject")
+        with pytest.raises(ValueError, match="does not take penalty="):
+            problem.define_model(size=4, domain=Domain.INTEGER, penalty=10, **width)
+
+    def test_integer_without_a_width(self) -> None:
+        problem = Problem("Reject")
+        with pytest.raises(ValueError, match="requires k= or lo=/hi="):
+            problem.define_model(size=4, domain=Domain.INTEGER)
+
+    def test_integer_with_both_a_width_and_a_range(self) -> None:
+        problem = Problem("Reject")
+        with pytest.raises(ValueError, match="never both"):
+            problem.define_model(size=4, domain=Domain.INTEGER, k=4, lo=0, hi=3)
+
+    @pytest.mark.parametrize("kwargs", [{"lo": 0}, {"hi": 3}])
+    def test_integer_with_half_a_range(self, kwargs: dict) -> None:
+        problem = Problem("Reject")
+        with pytest.raises(ValueError, match="requires both lo= and hi="):
+            problem.define_model(size=4, domain=Domain.INTEGER, **kwargs)
+
+    def test_a_literal_width_below_two(self) -> None:
+        problem = Problem("Reject")
+        with pytest.raises(ValueError, match="at least 2"):
+            problem.define_model(size=4, domain=Domain.INTEGER, k=1)
+
+    def test_a_literal_range_narrower_than_two_values(self) -> None:
+        problem = Problem("Reject")
+        with pytest.raises(ValueError, match=r"at least lo= \+ 1"):
+            problem.define_model(size=4, domain=Domain.INTEGER, lo=3, hi=3)
+
+    def test_an_expression_width_is_left_to_the_vm(self) -> None:
+        # Only a literal can be checked at record time; the VM raises
+        # InvalidIntegerK for the rest.
+        problem = Problem("ExprK")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=4, domain=Domain.INTEGER, k=n - 10)
+
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"penalty": 10}, "requires k="),
+            ({"k": 3}, "requires penalty="),
+            ({}, "requires k= and penalty="),
+        ],
+    )
+    def test_categorical_missing_an_argument(self, kwargs: dict, message: str) -> None:
+        problem = Problem("Reject")
+        with pytest.raises(ValueError, match=message):
+            problem.define_model(size=4, domain=Domain.CATEGORICAL, **kwargs)
+
+    @pytest.mark.parametrize("kwargs", [{"rows": 2}, {"cols": 2}, {"lo": 0}, {"hi": 3}])
+    def test_categorical_with_a_shape_or_a_range(self, kwargs: dict) -> None:
+        problem = Problem("Reject")
+        with pytest.raises(ValueError, match="does not take"):
+            problem.define_model(size=4, domain=Domain.CATEGORICAL, k=3, penalty=10, **kwargs)
+
+
+class TestDomainEnum:
+    """Domain wraps XQMXDomain, and define_model takes either."""
+
+    @pytest.mark.parametrize("member", list(XQMXDomain))
+    def test_lookup_by_value_normalises(self, member: XQMXDomain) -> None:
+        assert Domain(member).value is member
+
+    def test_define_model_accepts_the_vm_enum(self) -> None:
+        problem = Problem("Either")
+        problem.define_model(size=4, domain=XQMXDomain.BINARY)
+
+        assert problem.model.domain is XQMXDomain.BINARY
+
+    def test_categorical_has_no_vm_counterpart(self) -> None:
+        assert Domain.CATEGORICAL.value is None
+
+
+class TestConstraintsAreBinaryOnly:
+    """Every HLF kind is refused off a binary model, on either domain."""
+
+    @pytest.mark.parametrize("domain_kwargs", [{"domain": Domain.SPIN}, {"domain": Domain.INTEGER, "k": 4}])
+    def test_equality_is_rejected(self, domain_kwargs: dict) -> None:
+        problem = Problem("HLF")
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, **domain_kwargs)
+        indices = problem.vec()
+        coeffs = problem.vec()
+        indices.push(0)
+        coeffs.push(1)
+        problem.model.apply_equality(indices, coeffs, 1, 100)
+
+        with pytest.raises(RuntimeError, match="only coefficient writes are"):
+            problem.compile()

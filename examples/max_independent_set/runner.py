@@ -36,9 +36,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Problem, Types
+from xquad.cp import Domain, Problem, Types
 from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
-from xquad.types import XQMX, Vec, XQMXDomain
+from xquad.types import XQMX, Vec
 from xquad.vm import VM, VMBackend
 
 
@@ -60,7 +60,7 @@ def build_problem(n: int, edges: list[tuple[int, int]]) -> Problem:
     num_edges = problem.input("num_edges", type=Types.Int)
     edges_in = problem.input("edges", type=Types.Vec)
 
-    problem.define_model(size=num_nodes, domain=XQMXDomain.BINARY)
+    problem.define_model(size=num_nodes, domain=Domain.BINARY)
 
     # Objective: minimise -sum(x_i)
     with problem.range(0, num_nodes) as i:

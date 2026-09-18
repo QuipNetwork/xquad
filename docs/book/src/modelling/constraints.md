@@ -35,7 +35,7 @@ weights them.
 A minimal \\(2 \times 2\\) grid problem exercises the row/column/pairwise forms together:
 
 ```python
-problem.define_model(size=n * n, domain=XQMXDomain.BINARY, rows=n, cols=n)
+problem.define_model(size=n * n, domain=Domain.BINARY, rows=n, cols=n)
 with problem.range(0, n) as r:
     problem.model.apply_onehot_row(r, penalty=50)
 with problem.range(0, n) as c:

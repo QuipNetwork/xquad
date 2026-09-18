@@ -40,9 +40,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Problem, Types
+from xquad.cp import Domain, Problem, Types
 from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
-from xquad.types import XQMX, Vec, XQMXDomain
+from xquad.types import XQMX, Vec
 from xquad.vm import VM, VMBackend
 
 # Rosenberg penalty for REDUCE: must exceed max |sigma| among risk terms.
@@ -74,7 +74,7 @@ def build_problem(
     num_risk = problem.input("num_risk", type=Types.Int)
     risk_in = problem.input("risk", type=Types.Vec)
 
-    problem.define_model(size=num_assets, domain=XQMXDomain.BINARY)
+    problem.define_model(size=num_assets, domain=Domain.BINARY)
 
     # Return objective: minimise -sum(r_i * x_i)
     with problem.range(0, num_assets) as i:

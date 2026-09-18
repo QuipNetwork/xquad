@@ -24,13 +24,12 @@ distance objective out leaves the pattern on its own -- allocate the grid,
 apply both one-hot families, decode with `colfind`:
 
 ```python
-from xquad.cp import Problem, Types
-from xquad.types import XQMXDomain
+from xquad.cp import Domain, Problem, Types
 
 def build_problem(n: int) -> Problem:
     problem = Problem("PurePermutation")
     num_items = problem.input("num_items", type=Types.Int)
-    problem.define_model(size=num_items * num_items, domain=XQMXDomain.BINARY,
+    problem.define_model(size=num_items * num_items, domain=Domain.BINARY,
                           rows=num_items, cols=num_items)
 
     with problem.range(0, num_items) as row:

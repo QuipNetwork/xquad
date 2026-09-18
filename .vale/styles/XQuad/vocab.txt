@@ -66,6 +66,7 @@ qubits
 QUBO
 QUBOs
 queryable
+Rebalance
 reimplement
 runtime
 runtimes
