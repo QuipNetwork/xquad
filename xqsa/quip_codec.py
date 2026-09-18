@@ -828,6 +828,37 @@ def _as_hex(value: object) -> str:
     return text if text.startswith("0x") else "0x" + text
 
 
+def _require_h256(value: object, source: str) -> str:
+    """Normalize to lower-case ``0x``-hex and reject anything but 32 bytes of hex.
+
+    ``_as_hex`` normalizes shape only: it prefixes ``0x`` and stops there, so a
+    typo'd hash (trailing whitespace, a dropped nibble, a stray character)
+    survives it unchanged and only fails later, deep inside SCALE key encoding,
+    as a raw codec exception no ``except Quip*Error`` clause catches and with
+    nothing naming where the value came from. ``source`` is that provenance --
+    an argument name, or an environment variable -- and it is what makes the
+    resulting message actionable.
+
+    Surrounding whitespace is stripped rather than rejected: a hash pasted from
+    a terminal or a config file routinely carries it, and it is unambiguous.
+
+    Args:
+        value: a ``0x``-hex string, a bare hex string, or raw bytes.
+        source: where the value came from, quoted verbatim in any error.
+
+    Raises:
+        ValueError: if the value is not hex, or is not exactly 32 bytes.
+    """
+    text = value.strip() if isinstance(value, str) else value
+    try:
+        raw = bytes.fromhex(_strip_0x(_as_hex(text)))
+    except ValueError as exc:
+        raise ValueError(f"{source} is not a hex hash: {value!r}") from exc
+    if len(raw) != 32:
+        raise ValueError(f"{source} must be a 32-byte hash, got {len(raw)} bytes: {value!r}")
+    return "0x" + raw.hex()
+
+
 def _canonical_hex(value: object) -> str | None:
     """Lower-case hex (no ``0x``) for ``bytes``/``str`` inputs, else ``None``."""
     if isinstance(value, (bytes, bytearray)):

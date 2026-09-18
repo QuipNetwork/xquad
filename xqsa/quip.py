@@ -81,6 +81,7 @@ from xqsa.quip_codec import (
     _as_int_or_none,
     _canonical_hex,
     _event_ids,
+    _require_h256,
     check_allowed_values,
     decode_solution,
     effective_expiry,
@@ -301,10 +302,14 @@ class SolverQuip(Solver):
         must exist in ``QuantumComputeMempool.JobSpecs``.
 
         Raises:
+            ValueError: if the resolved id is not a 32-byte hex hash. The
+                registration lookup below encodes the id as a SCALE storage key,
+                which fails on a malformed value as a raw codec exception; the
+                shape is checked first so a typo is named as a typo.
             QuipConnectionError: if the spec is not registered on-chain.
         """
         resolved = spec_id or self._chain_default_spec_id() or DEFAULT_ISING_SPEC_ID
-        resolved = _as_hex(resolved)
+        resolved = _require_h256(resolved, "spec_id")
         entry = self._iface.query("QuantumComputeMempool", "JobSpecs", [resolved])
         if entry is None or getattr(entry, "value", None) is None:
             raise QuipConnectionError(
@@ -359,7 +364,15 @@ class SolverQuip(Solver):
         raises instead.
 
         Raises:
-            ValueError: if no source yields a hash.
+            ValueError: if no source yields a hash, or if the one that wins is
+                not a 32-byte hex hash. The shape is checked here, at
+                construction, rather than left to the first :meth:`solve`: the
+                registration lookup encodes the hash as a SCALE storage key, so
+                a typo would otherwise surface much later as a raw codec
+                exception that no ``except Quip*Error`` clause catches, and
+                nothing at default log level would name the source it came
+                from. ``QUIP_TOPOLOGY`` being ambient makes that likelier here
+                than for ``topology=``.
         """
         env_topology = os.environ.get("QUIP_TOPOLOGY")
         resolved = topology or env_topology or self._chain_default_topology()
@@ -373,7 +386,7 @@ class SolverQuip(Solver):
         # shell gets a PlacementError against the wrong graph, with nothing else
         # pointing at the variable.
         source = "topology=" if topology else ("QUIP_TOPOLOGY" if env_topology else "QuantumPow.DefaultTopology")
-        hexed = _as_hex(resolved)
+        hexed = _require_h256(resolved, source)
         logger.debug("topology %s resolved from %s", hexed, source)
         return hexed
 

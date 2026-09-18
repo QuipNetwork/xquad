@@ -1053,6 +1053,54 @@ class TestSolverQuipConstruction:
         with pytest.raises(ValueError, match="no topology hash available"):
             _make_solver(monkeypatch, iface=iface)
 
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "0x" + "b2" * 31 + "b",  # a dropped nibble: odd length, right-ish width
+            "0x" + "b2" * 31,  # well-formed hex, one byte short
+            "0xnothex" + "0" * 57,  # right width, not hex
+        ],
+    )
+    def test_malformed_env_topology_raises_at_construction(self, monkeypatch, bad) -> None:
+        # A typo in an ambient variable must fail here, naming QUIP_TOPOLOGY,
+        # rather than at the first solve() as a raw scalecodec exception from
+        # encoding the storage key -- which no except Quip*Error clause catches
+        # and which names nothing. Surrounding whitespace is a separate case --
+        # it is stripped, not rejected, and the test below pins that.
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_TOPOLOGY", bad)
+        with pytest.raises(ValueError, match="QUIP_TOPOLOGY"):
+            SolverQuip(url="ws://fake", seed=VALID_SEED)
+
+    def test_env_topology_whitespace_is_stripped(self, monkeypatch) -> None:
+        # Stripped, not rejected: a hash pasted out of a terminal or a config
+        # file routinely carries surrounding whitespace and the intent is
+        # unambiguous.
+        from xqsa.quip import SolverQuip
+
+        override = "0x" + "b2" * 32
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_TOPOLOGY", f"  {override}\t")
+        solver = SolverQuip(url="ws://fake", seed=VALID_SEED)
+        assert solver._topology_hash == override
+
+    def test_malformed_topology_arg_raises_at_construction(self, monkeypatch) -> None:
+        # The topology= argument routes through the same guard, and the error
+        # names the argument rather than the environment variable.
+        with pytest.raises(ValueError, match="topology="):
+            _make_solver(monkeypatch, topology="0xdeadbeef")
+
+    def test_malformed_spec_id_raises_at_construction(self, monkeypatch) -> None:
+        # Same hole one function up: _resolve_spec_id hands its id straight to
+        # an unwrapped JobSpecs lookup, so a malformed one never reaches the
+        # "not registered on-chain" branch that would have explained itself.
+        with pytest.raises(ValueError, match="spec_id"):
+            _make_solver(monkeypatch, spec_id="0xdeadbeef")
+
     def test_topology_explicit_arg_wins(self, monkeypatch) -> None:
         explicit = "0x" + "ab" * 32
         iface = _default_iface()
