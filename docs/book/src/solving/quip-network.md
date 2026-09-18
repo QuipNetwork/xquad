@@ -106,12 +106,14 @@ topology that resolves from none of them raises rather than selecting a
 hash no chain would accept. `QUIP_TOPOLOGY` is the operator's override
 for whichever chain they are pointed at, and targets a registered
 non-default topology without threading a constructor argument through.
-Before reserving the reward, `solve()` also
-checks the resolved hash against `QuantumPow.MineableTopologies`, the
-subset of registered topologies miners actually match jobs against, and
-raises `QuipTopologyError` if the hash is registered but not mineable
--- an unmineable target fails immediately rather than sitting unsolved
-until it expires.
+`solve()` does not check the resolved hash against
+`QuantumPow.MineableTopologies`. That set is the chain's active *mining*
+set: it gates `submit_proof`, and so block production, not the compute
+mempool. An order carries its nodes, edges and coefficients inline and
+no topology hash at all, so the chain cannot perceive which topology an
+order was built against, and the solver fleet has no topology field to
+filter on. A topology that is registered but not mineable is proposed,
+matched and solved like any other.
 
 ## Coefficient Encoding
 
@@ -238,7 +240,7 @@ both local encoding checks and network-dependent lifecycle failures:
 | `QuipSigningError` | Extrinsic assembly, keystore handling, or submission fails |
 | `QuipConnectionError` | The node is unreachable, or a configured Ising spec is not registered on-chain |
 | `QuipSubmissionError` | An extrinsic cannot be submitted or the chain rejects it |
-| `QuipTopologyError` | The resolved topology hash is registered but absent from `MineableTopologies` |
+| `QuipTopologyError` | Retained for compatibility; nothing raises it. It reported a topology absent from `MineableTopologies`, which does not gate the mempool |
 | `QuipTimeoutError` | An order does not reach finality before the configured timeout; carries `order_id` so the caller can recover the result later with `query()` |
 | `QuipJobFailedError` | A final order has no usable solution; carries `order_id` |
 
