@@ -95,14 +95,17 @@ coupling graph is not a subgraph of the target topology raises
 Placement is deterministic, computed from the model alone, so nothing
 about it needs to be persisted or looked up later.
 
-The target topology is resolved once, at construction, from the
-chain's `QuantumPow.DefaultTopology`, or overridden explicitly with
-`topology=`. Because the same topology shape hashes differently per
-deployment -- each network's allowed-value specifications fold into the
-hash -- a hash from one Quip deployment is not portable to another.
-That is why nothing is pinned in the codebase: the chain read is the
-only authoritative source, and a topology that resolves from neither
-source raises rather than selecting a hash no chain would accept.
+The target topology is resolved once, at construction, from three
+sources in order: the `topology=` argument, the `QUIP_TOPOLOGY`
+environment variable, then the chain's `QuantumPow.DefaultTopology`.
+Because the same topology shape hashes differently per deployment --
+each network's allowed-value specifications fold into the hash -- a hash
+from one Quip deployment is not portable to another. That is why nothing
+is pinned in the codebase: every source is deployment-local, and a
+topology that resolves from none of them raises rather than selecting a
+hash no chain would accept. `QUIP_TOPOLOGY` is the operator's override
+for whichever chain they are pointed at, and targets a registered
+non-default topology without threading a constructor argument through.
 Before reserving the reward, `solve()` also
 checks the resolved hash against `QuantumPow.MineableTopologies`, the
 subset of registered topologies miners actually match jobs against, and

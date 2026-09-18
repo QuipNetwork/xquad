@@ -50,6 +50,7 @@ self-install the `[quip]` extra via `uv run --extra quip`.
 | --- | --- | --- |
 | `QUIP_RPC_URL` | required for e2e | chain RPC, `ws://` (DevNet) or `wss://` (aglais). `make test-quip` / `make test-quip-e2e` pass it through explicitly. |
 | `QUIP_FAUCET_URL` | optional | faucet **base** URL; the funded fixture POSTs to `<QUIP_FAUCET_URL>/request`. Without it only the read-only connectivity tests run. |
+| `QUIP_TOPOLOGY` | optional | registered topology hash for `SolverQuip` to target instead of the chain default. Unlike the rest of this table it configures the solver, not the harness, so it also applies outside the tests. Setting it un-skips the override tier. |
 | `QUIP_MINER_PROBE_TIMEOUT` | optional (default 60) | how long the `solving_miner` probe waits before skipping the end-to-end tier. Raise it on a slow or remote fleet. |
 | `SSL_CERT_FILE` | macOS + `wss://` only | CA bundle for the TLS handshake (see [macOS TLS](#macos-tls-wss-only)). |
 
@@ -273,10 +274,10 @@ Quick version + liveness check. A synced node reports `isSyncing == false` and
 
 The same `advantage2_system1` graph hashes differently per deployment (each
 network's allowed-value specs fold into the hash), so `SolverQuip` resolves the
-topology from chain `QuantumPow.DefaultTopology` at construction. That read is
-the only source: there is no pinned fallback in the codebase, and a topology
-that resolves from neither the chain nor an explicit `topology=` raises rather
-than selecting a hash no chain would accept. On aglais `DefaultTopology` is
+topology at construction from `topology=`, then `QUIP_TOPOLOGY`, then chain
+`QuantumPow.DefaultTopology`. There is no pinned fallback in the codebase, and a
+topology that resolves from none of the three raises rather than selecting a
+hash no chain would accept. On aglais `DefaultTopology` is
 `0xcbec1eb4...` over 4577 nodes / 41514 edges, read live on 2026-09-15. Never
 assume the DevNet hash on aglais or vice versa. `solve()` pre-validates that
 the resolved hash is in `MineableTopologies` before reserving the reward (raising

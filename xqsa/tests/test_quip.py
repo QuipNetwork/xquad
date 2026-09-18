@@ -886,7 +886,7 @@ def _install(monkeypatch, iface: object, *, substrate_raises: Exception | None =
 
 
 def _clear_quip_env(monkeypatch) -> None:
-    for name in ("QUIP_RPC_URL", "QUIP_SIGNER_SEED", "QUIP_KEYSTORE", "QUIP_REWARD"):
+    for name in ("QUIP_RPC_URL", "QUIP_SIGNER_SEED", "QUIP_KEYSTORE", "QUIP_REWARD", "QUIP_TOPOLOGY"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -1002,9 +1002,42 @@ class TestSolverQuipConstruction:
         # No reward arg, no QUIP_REWARD -> chain MinReward constant.
         assert _make_solver(monkeypatch)._reward == UNIT
 
+    def test_topology_explicit_arg_beats_env(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        explicit = "0x" + "a1" * 32
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_TOPOLOGY", "0x" + "b2" * 32)
+        solver = SolverQuip(url="ws://fake", seed=VALID_SEED, topology=explicit)
+        assert solver._topology_hash == explicit
+
+    def test_topology_from_env(self, monkeypatch) -> None:
+        # QUIP_TOPOLOGY displaces the chain default. Constructed directly rather
+        # than through _make_solver so no topology kwarg pre-empts the env read.
+        from xqsa.quip import SolverQuip
+
+        override = "0x" + "b2" * 32
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_TOPOLOGY", override)
+        solver = SolverQuip(url="ws://fake", seed=VALID_SEED)
+        assert solver._topology_hash == override
+
+    def test_topology_empty_env_falls_through(self, monkeypatch) -> None:
+        # Truthiness check, matching _resolve_reward: an empty QUIP_TOPOLOGY is
+        # not an override, so the chain default still wins.
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_TOPOLOGY", "")
+        solver = SolverQuip(url="ws://fake", seed=VALID_SEED)
+        assert solver._topology_hash == DEFAULT_TOPOLOGY_HASH
+
     def test_topology_defaults_to_chain_default(self, monkeypatch) -> None:
-        # No topology arg -> chain QuantumPow.DefaultTopology. The chain read is
-        # the only source; the topology hash is deployment-specific.
+        # No topology arg and no QUIP_TOPOLOGY -> chain QuantumPow.DefaultTopology.
+        # The hash is deployment-specific; nothing is pinned in the codebase.
         chain_default = "0x" + "e6" * 32
         iface = _default_iface()
         iface.storage[("QuantumPow", "DefaultTopology")] = chain_default

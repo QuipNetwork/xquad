@@ -33,6 +33,7 @@ Configuration is resolved from constructor arguments first, then environment:
     ``seed``               ``QUIP_SIGNER_SEED``  32-byte hex master seed
     ``keystore``           ``QUIP_KEYSTORE``     keystore path (load or create)
     ``reward``             ``QUIP_REWARD``       reward in planck (else MinReward)
+    ``topology``           ``QUIP_TOPOLOGY``     topology hash (else DefaultTopology)
     =====================  ====================================================
 
 Provide exactly one of ``seed`` or ``keystore`` (a keystore is generated on
@@ -337,21 +338,26 @@ class SolverQuip(Solver):
     def _resolve_topology_hash(self, topology: str | None) -> str:
         """Resolve the topology hash to target.
 
-        Prefers the explicit ``topology`` argument, then the chain's
-        ``QuantumPow.DefaultTopology``. Resolved once at construction so
-        :meth:`solve` and :meth:`query` on the same instance agree on the
-        topology even if the chain default later changes.
+        Prefers the explicit ``topology`` argument, then ``QUIP_TOPOLOGY``,
+        then the chain's ``QuantumPow.DefaultTopology``. Resolved once at
+        construction so :meth:`solve` and :meth:`query` on the same instance
+        agree on the topology even if the chain default later changes.
 
-        Those two are the only sources, deliberately. The same advantage2
-        graph hashes differently across deployments (the hash folds in each
-        deployment's allowed-value specs), so no constant could be correct
+        All three sources are deployment-local, deliberately, and none of them
+        is a constant in this codebase. The same advantage2 graph hashes
+        differently across deployments (the hash folds in each deployment's
+        allowed-value specs), so no pinned constant could be correct
         everywhere, and a stale one would resolve to a topology no chain
-        accepts. An unresolvable topology raises instead.
+        accepts. ``QUIP_TOPOLOGY`` is an operator's override for the chain
+        they are pointed at -- it targets a registered non-default topology
+        without threading a constructor argument through, which is what makes
+        that path testable against a live chain. An unresolvable topology
+        raises instead.
 
         Raises:
-            ValueError: if neither source yields a hash.
+            ValueError: if no source yields a hash.
         """
-        resolved = topology or self._chain_default_topology()
+        resolved = topology or os.environ.get("QUIP_TOPOLOGY") or self._chain_default_topology()
         if not resolved:
             raise ValueError("no topology hash available: pass topology=, or seed QuantumPow.DefaultTopology on-chain.")
         return _as_hex(resolved)
