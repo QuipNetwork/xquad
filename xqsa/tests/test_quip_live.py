@@ -65,6 +65,7 @@ from xqsa.quip import (
     QuipTimeoutError,
     SolverQuip,
     _as_hex,
+    _canonical_hex,
 )
 from xqsa.quip_codec import (
     DEFAULT_ISING_SPEC_ID,
@@ -341,16 +342,21 @@ class TestConnectivity:
                 except Exception as exc:  # noqa: BLE001 -- any failure means it wants bytes.
                     pytest.fail(f"{name}.{half} ({type_string}) is no longer empty on-chain: {exc}")
 
-    def test_default_topology_is_mineable(self, make_solver) -> None:
-        # The default topology the solver resolves must be in the chain's mineable
-        # set -- both localdev and testnet seed MineableTopologies with the default
-        # hash. Exercises the real query_map decode + membership the submit-path
-        # gate relies on; _ensure_mineable is a no-op on a correctly-seeded node.
+    def test_chain_default_topology_is_mineable(self, chain, make_solver) -> None:
+        # Both localdev and testnet seed MineableTopologies with the chain's
+        # default hash. Nothing on the solve path depends on that -- the mineable
+        # set gates submit_proof, i.e. block production -- but the assertion still
+        # exercises the real query_map decode and canonical-hex normalisation.
+        # Read the hash from the chain rather than from the solver: the solver's
+        # resolved hash can be a QUIP_TOPOLOGY override, which is precisely the
+        # registered-but-not-mineable case.
+        default = chain.query("QuantumPow", "DefaultTopology").value
+        assert default is not None
         solver = make_solver()
         mineable = solver._mineable_topologies()
         if not mineable:
             pytest.skip("MineableTopologies is empty/unset on this node; expected the default topology seeded")
-        solver._ensure_mineable(solver._topology_hash)  # does not raise on a seeded node
+        assert _canonical_hex(default) in mineable
 
 
 # ---------------------------------------------------------------------------

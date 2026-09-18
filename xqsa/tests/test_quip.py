@@ -1232,46 +1232,30 @@ def _install_storage_absent_exc(monkeypatch):
 
 
 class TestSolverQuipMineableTopology:
-    """The pre-submit MineableTopologies gate (_mineable_topologies/_ensure_mineable)."""
+    """_mineable_topologies as a chain reader. Nothing on the solve path gates on it."""
 
     def test_present_and_matches_passes(self, monkeypatch) -> None:
-        # The resolved hash is in the mineable set -> _ensure_mineable is a no-op.
         iface = _default_iface()
         iface.maps[("QuantumPow", "MineableTopologies")] = [(TOPO_HASH, ())]
         solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
         assert solver._mineable_topologies() == frozenset({"ab" * 32})
-        solver._ensure_mineable(TOPO_HASH)  # does not raise
 
     def test_membership_is_case_and_prefix_insensitive(self, monkeypatch) -> None:
-        # The chain may hand back the key as upper-case / bytes; membership must
-        # normalise both sides (compare on canonical hex).
+        # The chain may hand back the key as upper-case / bytes; the reader must
+        # normalise, so a caller can compare on canonical hex.
         iface = _default_iface()
         iface.maps[("QuantumPow", "MineableTopologies")] = [(bytes.fromhex("ab" * 32), ())]
         solver = _make_solver(monkeypatch, iface=iface, topology="0x" + "AB" * 32)
-        solver._ensure_mineable("0x" + "AB" * 32)  # does not raise
+        assert solver._mineable_topologies() == frozenset({"ab" * 32})
 
-    def test_registered_but_not_mineable_raises(self, monkeypatch) -> None:
-        from xqsa.quip import QuipTopologyError
-
-        iface = _default_iface()
-        iface.maps[("QuantumPow", "MineableTopologies")] = [("0x" + "cd" * 32, ())]
-        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
-        with pytest.raises(QuipTopologyError, match="not in the chain's mineable set"):
-            solver._ensure_mineable(TOPO_HASH)
-
-    def test_present_but_empty_rejects(self, monkeypatch) -> None:
-        # A defined-but-empty map (present in metadata, zero entries) rejects: no
-        # topology is mineable, so solve() must fail fast rather than skip. Only a
-        # runtime-absent storage item skips (see test_absent_storage_item_skips_check).
-        from xqsa.quip import QuipTopologyError
-
+    def test_present_but_empty_reads_as_empty(self, monkeypatch) -> None:
+        # A defined-but-empty map (present in metadata, zero entries) is an empty
+        # frozenset, distinct from the None of a runtime-absent storage item.
         solver = _make_solver(monkeypatch, topology=TOPO_HASH)  # no maps entry -> empty map
         assert solver._mineable_topologies() == frozenset()
-        with pytest.raises(QuipTopologyError, match="is empty"):
-            solver._ensure_mineable(TOPO_HASH)
 
-    def test_absent_storage_item_skips_check(self, monkeypatch) -> None:
-        # The runtime genuinely lacks the storage item -> None -> skip.
+    def test_absent_storage_item_reads_as_none(self, monkeypatch) -> None:
+        # The runtime genuinely lacks the storage item -> None.
         storage_absent = _install_storage_absent_exc(monkeypatch)
         solver = _make_solver(monkeypatch, topology=TOPO_HASH)
 
@@ -1280,11 +1264,10 @@ class TestSolverQuipMineableTopology:
 
         solver._iface.query_map = _absent
         assert solver._mineable_topologies() is None
-        solver._ensure_mineable(TOPO_HASH)  # does not raise
 
     def test_transport_fault_raises_connection_error(self, monkeypatch) -> None:
-        # A transient read fault must NOT be masked as "unset" (which would skip
-        # the check); it surfaces as QuipConnectionError, like _chain_default_topology.
+        # A transient read fault must NOT be masked as "unset"; it surfaces as
+        # QuipConnectionError, like _chain_default_topology.
         from xqsa.quip import QuipConnectionError
 
         solver = _make_solver(monkeypatch, topology=TOPO_HASH)
@@ -1779,11 +1762,33 @@ class TestSolverQuipSolve:
             solver.solve(_model())
         assert "call_function" not in captured  # never reached submission
 
-    def test_solve_mineable_populated_happy_path(self, monkeypatch) -> None:
-        # With MineableTopologies populated and matching, solve() proceeds as normal.
+    def test_solve_proceeds_when_topology_is_not_mineable(self, monkeypatch) -> None:
+        # Inverted guard. solve() used to reject a registered hash absent from
+        # MineableTopologies. That set is the chain's active mining set: it gates
+        # submit_proof, not the compute mempool, and an order carries its nodes,
+        # edges and coefficients inline with no topology hash at all, so the chain
+        # cannot perceive which topology an order was built against. A
+        # registered-but-non-mineable topology must therefore reach submission and
+        # solve normally. Verified on aglais order 20, answered in one block with
+        # 17 submissions and the global optimum.
         iface = _chain_iface(order=_order(), head=200)
-        iface.maps[("QuantumPow", "MineableTopologies")] = [(TOPO_HASH, ())]
+        iface.maps[("QuantumPow", "MineableTopologies")] = [("0x" + "cd" * 32, ())]  # TOPO_HASH absent
         solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        job = _job(solver)
+        vector = _spin_vector(job, {0: 1, 1: 1})
+        solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [
+            (b"solver", _submission("0xSOLVER", [vector], ising_energy_milli(job, vector)))
+        ]
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        assert solver.solve(_model()).metadata["order_id"] == 1
+        assert captured["call_function"] == "propose_job"
+
+    def test_solve_proceeds_when_nothing_is_mineable(self, monkeypatch) -> None:
+        # The same holds for an empty mineable set, which the old gate rejected
+        # outright. No maps entry -> a defined-but-empty map.
+        iface = _chain_iface(order=_order(), head=200)
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        assert solver._mineable_topologies() == frozenset()
         job = _job(solver)
         vector = _spin_vector(job, {0: 1, 1: 1})
         solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [
@@ -1791,33 +1796,6 @@ class TestSolverQuipSolve:
         ]
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         assert solver.solve(_model()).metadata["order_id"] == 1
-
-    def test_solve_unmineable_raises_before_submit(self, monkeypatch) -> None:
-        # A registered-but-unmineable hash fails fast: no reward is reserved and
-        # the balance check is never reached (the gate precedes both).
-        from xqsa.quip import QuipTopologyError
-
-        iface = _chain_iface(order=_order(), head=200)
-        iface.maps[("QuantumPow", "MineableTopologies")] = [("0x" + "cd" * 32, ())]
-        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
-        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
-        with pytest.raises(QuipTopologyError, match="not in the chain's mineable set"):
-            solver.solve(_model())
-        assert "call_function" not in captured  # never reached submission
-
-    def test_solve_topology_override_unmineable_raises(self, monkeypatch) -> None:
-        # A per-call topology= override that is registered but not mineable fails
-        # fast through solve(), exercising the kwargs["topology"] branch of the gate
-        # (the constructor default is mineable, so only the override trips it).
-        from xqsa.quip import QuipTopologyError
-
-        iface = _chain_iface(order=_order(), head=200)
-        iface.maps[("QuantumPow", "MineableTopologies")] = [(TOPO_HASH, ())]
-        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
-        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
-        with pytest.raises(QuipTopologyError, match="not in the chain's mineable set"):
-            solver.solve(_model(), topology="0x" + "cd" * 32)
-        assert "call_function" not in captured  # never reached submission
 
 
 class TestSolverQuipQuery:
