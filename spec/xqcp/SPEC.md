@@ -61,11 +61,47 @@ Creates a new problem container.
 
 Declare a runtime input. `type` is `Types.Int` (scalar) or `Types.Vec` (vector). Returns an `InputRef` bound to a register.
 
-### `problem.define_model(size, domain, rows=None, cols=None)`
+### `problem.define_model(size, domain, rows=None, cols=None, *, k=None, lo=None, hi=None, penalty=None)`
 
-Allocate the XQMX model. `size` is the total number of variables. `domain` is `XQMXDomain.BINARY` or `XQMXDomain.SPIN`. For 2D grid models, provide both `rows` and `cols` -- providing exactly one raises `ValueError`. After this call, `problem.model` and `problem.sample` become available.
+Allocate the XQMX model. `size` is the total number of variables. `domain` is a `Domain` member, or the `XQMXDomain` it wraps, which is normalised on entry. For 2D grid models, provide both `rows` and `cols` -- providing exactly one raises `ValueError`. After this call, `problem.model` and `problem.sample` become available.
 
-`XQMXDomain.INTEGER` raises `NotImplementedError`.
+`Domain` is xqcp's own enum. `BINARY`, `SPIN` and `INTEGER` wrap their `XQMXDomain` counterpart; `CATEGORICAL` has none, because the VM cannot allocate one. The forms:
+
+| Form | Allocates | Read back with |
+|------|-----------|----------------|
+| `Domain.BINARY` | `size` variables over {0, 1}, via `BQMX` | `sample.getline(i)` |
+| `Domain.SPIN` | `size` variables over {-1, +1}, via `SQMX` | `sample.getline(i)` |
+| `Domain.INTEGER, k=` | `size` variables over {0, ..., k-1}, via `XQMX` | `sample.getline(i)` |
+| `Domain.INTEGER, lo=, hi=` | `size` variables over {0, ..., hi-lo}, via `XQMX` | `sample.value(i)` |
+| `Domain.CATEGORICAL, k=, penalty=` | a `size` x `k` binary grid, one `ONEHOTR` per row, via `BQMX` | `sample.case(v)` |
+
+`size`, `k`, `lo` and `hi` are expressions, so any of them may come from calldata. A literal `k` below 2, or a literal `hi` below `lo + 1`, is rejected here; an expression is left to the VM's `InvalidIntegerK`.
+
+**The ranged form shifts.** Coefficients are written over `x` in `[lo, hi]` while the model holds `y = x - lo`. Each `quadratic[i, j].add(w)` therefore also records `w*lo` against the linear coefficient of both `i` and `j`, which is what substituting `x = y + lo` produces. A write to the diagonal lands both corrections on the one index, giving the `2*w*lo` that squaring asks for. Linear writes need no correction.
+
+The constant that substitution also produces is dropped, because XQMX has no offset field. Energies shift uniformly across assignments, so argmin is exact. `EQUALITY` drops its own `P*b^2` on the same terms; see [../xqvm/HLF.md](../xqvm/HLF.md).
+
+**Setting is refused on a shifted model, on both proxies.** `quadratic[i, j] = w` and `linear[i] = w` both raise `ValueError`; use `.add(w)`. Setting replaces a coefficient while the corrections can only accumulate, so a quadratic set would leave a repeated pair disagreeing with its corrections, and a linear set would drop whatever corrections earlier quadratic writes had left on that index. Accumulating loses nothing: a coefficient starts at zero, so `.add(w)` on an index nothing has written is `= w`.
+
+A runtime `lo` and a decoder loop bound compete for the decoder's single calldata scalar, and `compile()` raises naming both. Literal bounds avoid it.
+
+**The categorical form is a recording-time macro.** It calls `define_model(size * k, Domain.BINARY, rows=size, cols=k)` and applies `ONEHOTR` to each row, through the record paths a hand-written version would use. `model.domain` reads `XQMXDomain.BINARY` afterwards and no categorical marker is kept, so coefficient access is `(variable, case)` as on any 2D model.
+
+**Constraints are binary-only.** Every constraint kind is refused on a spin or integer model; only coefficient writes are supported. Each expansion in [../xqvm/HLF.md](../xqvm/HLF.md) is derived under `x^2 = x`, which holds for 0/1 variables alone, so off a binary model the encoder would build a penalty that does not encode the constraint written. Whether a correct per-domain expansion exists is an open VM-side question.
+
+### `problem.sample`
+
+The model's counterpart, bound by `define_model()`. Readers:
+
+| Reader | Returns |
+|--------|---------|
+| `getline(i)` | variable `i` exactly as the model stores it |
+| `value(i)` | variable `i` in the domain it was declared over: `getline(i) + lo` on a ranged model, `getline(i)` otherwise |
+| `case(v)` | the column holding the 1 in row `v`, or `-1` if that row is empty |
+| `rowfind(r, x)` / `colfind(c, x)` | the first column or row matching `x`, or `-1` (2D models) |
+| `rowsum(r)` / `colsum(c)` | the sum of a row or column (2D models) |
+
+`getline()` is the only raw reader and `value()` the only shifted one; nothing shifts implicitly. `case(v)` is `rowfind(v, 1)` and means the same on any 2D binary grid, whether or not `Domain.CATEGORICAL` built it.
 
 ### `problem.range(start, end)`
 
@@ -130,13 +166,23 @@ For every well-formed XQCP program:
 | `TypeError` | Indexed read `out[i]` on an `OutputRef` | `OutputRef.__getitem__()` |
 | `TypeError` | Indexed write `out[i] = value` on an `OutputRef` | `OutputRef.__setitem__()` |
 | `TypeError` | `problem.output()` with a `type` other than `Types.Vec` | `Problem.output()` |
-| `NotImplementedError` | `define_model()` with `XQMXDomain.INTEGER` | `Problem.define_model()` |
+| `ValueError` | `k=`, `lo=`, `hi=` or `penalty=` with `Domain.BINARY` or `Domain.SPIN` | `Problem.define_model()` |
+| `ValueError` | `penalty=` with `Domain.INTEGER` | `Problem.define_model()` |
+| `ValueError` | `Domain.INTEGER` with neither `k=` nor `lo=`/`hi=` | `Problem.define_model()` |
+| `ValueError` | `k=` given together with `lo=` or `hi=` | `Problem.define_model()` |
+| `ValueError` | `lo=` without `hi=`, or `hi=` without `lo=` | `Problem.define_model()` |
+| `ValueError` | Literal `k=` below 2, or literal `hi=` below `lo= + 1` | `Problem.define_model()` |
+| `ValueError` | `Domain.CATEGORICAL` without `k=` or without `penalty=` | `Problem.define_model()` |
+| `ValueError` | `Domain.CATEGORICAL` with `rows=`, `cols=`, `lo=` or `hi=` | `Problem.define_model()` |
+| `ValueError` | `quadratic[i, j] = w` on a ranged integer model | `QuadraticProxy.__setitem__()` |
+| `ValueError` | `linear[i] = w` on a ranged integer model | `LinearProxy.__setitem__()` |
+| `RuntimeError` | Any constraint applied to a spin or integer model | `compile()` |
 | `RuntimeError` | `branch()` inside a decoder output block | `compile()` |
 | `RuntimeError` | `iter()` inside a decoder output block | `compile()` |
 | `RuntimeError` | Any other action recorded after the first `output()` | `compile()` |
 | `RuntimeError` | `problem.output()` declared inside a `range()` block | `compile()` |
 | `RuntimeError` | `.append()` to an output declared before the current one | `compile()` |
-| `RuntimeError` | A second, distinct scalar referenced in a decoder block | `compile()` |
+| `RuntimeError` | A second, distinct scalar referenced in a decoder block, such as a runtime `lo=` meeting an output loop bound | `compile()` |
 | `RuntimeError` | A vector or model coefficient read in a decoder block | `compile()` |
 | `RuntimeError` | A loop variable read outside its own loop, in a decoder block | `compile()` |
 

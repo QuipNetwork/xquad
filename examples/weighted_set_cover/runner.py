@@ -40,9 +40,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Problem, Types
+from xquad.cp import Domain, Problem, Types
 from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
-from xquad.types import XQMX, Vec, XQMXDomain
+from xquad.types import XQMX, Vec
 from xquad.vm import VM, VMBackend
 
 
@@ -74,7 +74,7 @@ def build_problem(
     demands_in = problem.input("demands", type=Types.Vec)
     costs_in = problem.input("costs", type=Types.Vec)
 
-    problem.define_model(size=num_sets_in, domain=XQMXDomain.BINARY)
+    problem.define_model(size=num_sets_in, domain=Domain.BINARY)
 
     # Objective: minimise total cost
     with problem.range(0, num_sets_in) as s:

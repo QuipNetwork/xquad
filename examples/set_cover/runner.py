@@ -40,9 +40,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Problem, Types
+from xquad.cp import Domain, Problem, Types
 from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
-from xquad.types import XQMX, Vec, XQMXDomain
+from xquad.types import XQMX, Vec
 from xquad.vm import VM, VMBackend
 
 
@@ -62,7 +62,7 @@ def build_problem(num_elements: int, num_sets: int, covers: list[list[int]]) -> 
     num_sets_in = problem.input("num_sets", type=Types.Int)
     covers_in = problem.input("covers", type=Types.Vec)
 
-    problem.define_model(size=num_sets_in, domain=XQMXDomain.BINARY)
+    problem.define_model(size=num_sets_in, domain=Domain.BINARY)
 
     # Objective: minimise number of selected sets
     with problem.range(0, num_sets_in) as s:

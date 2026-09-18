@@ -18,13 +18,12 @@ Max-Cut for three nodes -- the same graph
 derives by hand -- built with `Problem` and compiled to `.xqasm`:
 
 ```python
-from xqcp import Problem, Types
-from xqvm_py import XQMXDomain
+from xqcp import Domain, Problem, Types
 
 problem = Problem("Triangle")
 n = problem.input("n", type=Types.Int)
 edges = problem.input("edges", type=Types.Vec)
-problem.define_model(size=n, domain=XQMXDomain.BINARY)
+problem.define_model(size=n, domain=Domain.BINARY)
 
 edge_count = problem.stow("edge_count", edges.veclen() // 3)
 with problem.range(0, edge_count) as e:
@@ -50,6 +49,13 @@ against it and computes its energy; `programs.decoder` reads a sample back
 into a `partition`. Each is a standalone `.xqasm` string, runnable through
 any XQVM interpreter.
 
+`Domain` also covers integer variables (`INTEGER` with `k=`, or with
+`lo=`/`hi=` for a range XQCP shifts into the model and back out through
+`sample.value()`) and unordered cases (`CATEGORICAL` with `k=` and
+`penalty=`, recorded as a one-hot binary grid read with `sample.case()`).
+The [Modelling](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/modelling/inputs-and-model.md)
+chapter covers each form and what constraints are available on it.
+
 ## How it works
 
 `Problem` records every DSL call (`input`, `define_model`, `range`,
@@ -69,7 +75,7 @@ this package follows it, and any divergence here is a bug.
 
 ## Examples
 
-Fourteen complete problems built with this DSL, from
+Fifteen complete problems built with this DSL, from
 [Max-Cut](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/examples/maxcut.md)
 to
 [Travelling Salesman](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/examples/tsp.md),

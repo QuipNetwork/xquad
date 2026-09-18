@@ -7,14 +7,13 @@ reads, and the model those inputs fill. Both happen before anything else --
 and `input()` calls after `define_model()` raise `RuntimeError`.
 
 Every code sample in this chapter, and the rest of Part III, assumes the
-same two imports:
+same import:
 
 ```python
-from xquad.cp import Problem, Types
-from xquad.types import XQMXDomain
+from xquad.cp import Domain, Problem, Types
 ```
 
-They are shown once, here, and omitted everywhere after.
+It is shown once, here, and omitted everywhere after.
 
 ## Inputs
 
@@ -94,16 +93,77 @@ total variable count, as an `int` or an expression built from your
 inputs -- knapsack sizes its model directly off an input:
 
 ```python
-problem.define_model(size=num_items, domain=XQMXDomain.BINARY)
+problem.define_model(size=num_items, domain=Domain.BINARY)
 ```
 
-`domain` is `XQMXDomain.BINARY` or `XQMXDomain.SPIN`; see
+`domain` is a `Domain` member; see
 [Quadratic Models](../concepts/quadratic-models.md#three-domains) for what
 each domain means and how to choose between them, since that choice does
-not belong to this page. `XQMXDomain.INTEGER` raises `NotImplementedError`
--- the CP layer does not support it yet, though the underlying `XQMX`
-allocator does. Binary is the domain every current running example in this
-book uses.
+not belong to this page. Binary is the domain the running examples in this
+book use. `Domain` also accepts the `XQMXDomain` it wraps, so code written
+against the VM enum keeps working.
+
+### Integer Variables
+
+An integer variable takes one of `k` values rather than two. Give the
+width directly:
+
+```python
+problem.define_model(size=num_assets, domain=Domain.INTEGER, k=4)
+```
+
+That allocates `num_assets` variables over `{0, 1, 2, 3}`. `k` is an
+expression like `size`, so it may come from calldata.
+
+Where the values you are modelling are not zero-based, give bounds
+instead:
+
+```python
+problem.define_model(size=num_assets, domain=Domain.INTEGER, lo=-5, hi=5)
+```
+
+You then write coefficients over `x` in `[-5, 5]` while the model holds
+`y = x - lo` in `{0, ..., 10}`, and `sample.value(i)` shifts back on the
+way out. XQCP rewrites each quadratic write for you: `w * x_i * x_j`
+expands to `w*y_i*y_j + w*lo*y_i + w*lo*y_j + w*lo^2` once `x = y + lo` is
+substituted, so the write records `w*lo` against the linear coefficient of
+both indices as well. The `w*lo^2` constant is dropped, because XQMX has
+no offset field. Energies shift by the same amount for every assignment,
+so the minimum is still in the same place; the number is not the
+objective's true value. Linear writes need no correction.
+
+Two consequences worth knowing before you reach for the ranged form.
+Setting a coefficient is refused on it, on `quadratic[i, j] = w` and
+`linear[i] = w` alike, because setting replaces a coefficient while the
+corrections can only accumulate: two writes to the same pair would
+disagree, and a linear set would drop whatever corrections earlier
+quadratic writes had left on that index. Use `.add()`, which loses
+nothing, since a coefficient starts at zero. And a runtime `lo` competes
+with an output loop bound for the decoder's single calldata scalar, so
+`compile()` raises naming both. Literal bounds sidestep it.
+
+Constraints are binary-only. On a spin or integer model every
+`apply_*` method is refused and only coefficient writes are supported,
+because each expansion in the VM is derived under `x^2 = x`. Write the
+penalty out by hand, as
+[Portfolio Rebalance](../examples/portfolio_rebalance.md) does for its
+budget.
+
+### Categorical Variables
+
+A categorical variable takes one of `k` unordered cases. There is no VM
+domain for that, so XQCP records the standard encoding:
+
+```python
+problem.define_model(size=num_nodes, domain=Domain.CATEGORICAL, k=num_colors, penalty=200)
+```
+
+That is a `num_nodes` x `num_colors` binary grid with one `ONEHOTR` per
+row, built through the same calls you would have written yourself. The
+model is binary afterwards, so constraints work on it as usual and
+coefficient access is `(variable, case)`. Read the answer back with
+`sample.case(v)`, which gives the case a variable took or `-1` if its row
+came back empty.
 
 ### 1D and 2D Models
 
@@ -113,23 +173,19 @@ binary decision per item, with no row/column structure to it. Pass `rows`
 and `cols` to get a grid instead:
 
 ```python
-problem.define_model(size=rows * cols, domain=XQMXDomain.BINARY, rows=rows, cols=cols)
+problem.define_model(size=rows * cols, domain=Domain.BINARY, rows=rows, cols=cols)
 ```
 
-`rows` and `cols` are both-or-neither. `define_model()` checks
-`rows is not None and cols is not None` to decide whether the model is a
-grid, with no validation and no error if only one is given -- passing
-just one silently builds a 1D model instead, `ModelRef` and all. The
-failure surfaces at `compile()`, as `TypeError: Cannot coerce tuple to
-Expr` -- not at `define_model()`, and not at the `model.linear[(1, 2)]`
-access below, which records happily against a 1D model.
+`rows` and `cols` are both-or-neither: `define_model()` raises
+`ValueError` when given exactly one, rather than building a 1D model that
+fails later.
 
 Once a model has a shape, coefficient access accepts a `(row, col)` tuple
 in place of a flat index, and XQCP flattens it for you. Compiling
 
 ```python
 n = problem.input("n", type=Types.Int)
-problem.define_model(size=n * n, domain=XQMXDomain.BINARY, rows=n, cols=n)
+problem.define_model(size=n * n, domain=Domain.BINARY, rows=n, cols=n)
 problem.model.linear[(1, 2)] = 99
 ```
 

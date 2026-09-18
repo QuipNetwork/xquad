@@ -42,9 +42,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Problem, Types
+from xquad.cp import Domain, Problem, Types
 from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
-from xquad.types import XQMX, Vec, XQMXDomain
+from xquad.types import XQMX, Vec
 from xquad.vm import VM, VMBackend
 
 
@@ -62,7 +62,7 @@ def build_problem(n: int, seed: int) -> tuple[Problem, list[tuple[int, int, int]
     num_nodes = problem.input("num_nodes", type=Types.Int)
     edges_in = problem.input("edges", type=Types.Vec)
 
-    problem.define_model(size=num_nodes, domain=XQMXDomain.BINARY)
+    problem.define_model(size=num_nodes, domain=Domain.BINARY)
 
     edge_count = problem.stow("edge_count", edges_in.veclen() // 3)
     with problem.range(0, edge_count) as e:

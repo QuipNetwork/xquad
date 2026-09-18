@@ -90,13 +90,12 @@ No example in this repository calls `apply_implies`. A minimal
 demonstration, run rather than assumed, checks the sign directly:
 
 ```python
-from xquad.cp import Problem, Types
-from xquad.types import XQMXDomain
+from xquad.cp import Domain, Problem, Types
 from xquad.vm import VM, VMBackend
 
 problem = Problem("ImpliesDemo")
 n = problem.input("n", type=Types.Int)
-problem.define_model(size=n, domain=XQMXDomain.BINARY)
+problem.define_model(size=n, domain=Domain.BINARY)
 problem.model.apply_implies(0, 1, 50)   # picking 0 requires picking 1
 problem.model.linear[0].add(-30)        # a reason to pick 0 at all
 

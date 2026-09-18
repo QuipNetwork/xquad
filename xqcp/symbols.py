@@ -115,9 +115,10 @@ class LoopVar(Expr, _ExprOps):
 class SampleRef:
     """Symbolic reference to the sample (counterpart of the model)."""
 
-    def __init__(self, reg: int, is_2d: bool) -> None:
+    def __init__(self, reg: int, is_2d: bool, lo_expr: Expr | None = None) -> None:
         self.reg = reg
         self.is_2d = is_2d
+        self.lo_expr = lo_expr
 
     def colfind(self, col: Expr | int, value: int) -> ColFindExpr:
         """Find the row where the given column has the specified value (2D models)."""
@@ -130,8 +131,26 @@ class SampleRef:
         return RowFindExpr(self.reg, coerce(row), value)
 
     def getline(self, index: Expr | int) -> GetLineExpr:
-        """Read a sample variable by index."""
+        """Read a sample variable by index, exactly as the model stores it."""
         return GetLineExpr(self.reg, coerce(index))
+
+    def value(self, index: Expr | int) -> Expr:
+        """Read a sample variable in the domain the user declared it over.
+
+        Identical to ``getline`` unless ``define_model`` was given
+        ``lo=``/``hi=``, where the stored y = x - lo is shifted back to x.
+        """
+        raw = self.getline(index)
+        return raw if self.lo_expr is None else raw + self.lo_expr
+
+    def case(self, row: Expr | int) -> RowFindExpr:
+        """The case a categorical variable took, or -1 if its row is empty.
+
+        A plain ``rowfind(row, 1)``: it means the same on any 2D binary
+        grid, whether or not ``define_model`` built it from
+        ``Domain.CATEGORICAL``.
+        """
+        return self.rowfind(row, 1)
 
     def rowsum(self, row: Expr | int) -> RowSumExpr:
         """Sum all values in a row (2D models)."""
@@ -177,11 +196,23 @@ class CoefficientRef(Expr, _ExprOps):
             inner.emit(lines, indent)
 
     def add(self, weight: Expr | int) -> None:
-        """Record an ADDLINE/ADDQUAD action."""
+        """Record an ADDLINE/ADDQUAD action.
+
+        On a ranged integer model the user writes over x = y + lo, so a
+        quadratic write also records w*lo against the linear coefficient of
+        both named indices.  The diagonal needs no special case: two
+        corrections land on the one index, giving the 2*w*lo that squaring
+        y + lo asks for.  Linear writes need no correction.
+        """
         if self._kind == "linear":
             self._problem._record_add_linear(self._model, self._coord, weight)
-        else:
-            self._problem._record_add_quadratic(self._model, self._coord, self._coord_b, weight)
+            return
+
+        self._problem._record_add_quadratic(self._model, self._coord, self._coord_b, weight)
+        if self._model.lo_expr is not None:
+            shift = coerce(weight) * self._model.lo_expr
+            self._problem._record_add_linear(self._model, self._coord, shift)
+            self._problem._record_add_linear(self._model, self._coord_b, shift)
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +231,13 @@ class LinearProxy:
         return CoefficientRef(self._problem, self._model, "linear", coord)
 
     def __setitem__(self, coord: Any, weight: Expr | int) -> None:
+        if self._model.lo_expr is not None:
+            raise ValueError(
+                "xqcp: linear[i] = w is not supported on a ranged integer model (lo=/hi=): "
+                "setting replaces the coefficient while the lo corrections a quadratic write "
+                "records on it can only accumulate, so a set after one would drop it; use "
+                "linear[i].add(w)"
+            )
         self._problem._record_set_linear(self._model, coord, weight)
 
 
@@ -218,6 +256,13 @@ class QuadraticProxy:
     def __setitem__(self, coords: tuple[Any, Any], weight: Expr | int) -> None:
         if not isinstance(coords, tuple) or len(coords) != 2:
             raise TypeError(f"Expected (i, j) tuple, got {coords!r}")
+        if self._model.lo_expr is not None:
+            raise ValueError(
+                "xqcp: quadratic[i, j] = w is not supported on a ranged integer model "
+                "(lo=/hi=): setting replaces the coefficient while the lo correction can "
+                "only accumulate, so writing the same pair twice would leave the two "
+                "disagreeing; use quadratic[i, j].add(w)"
+            )
         self._problem._record_set_quadratic(self._model, coords[0], coords[1], weight)
 
 
@@ -236,12 +281,14 @@ class ModelRef:
         domain: XQMXDomain,
         cols_reg: int | None,
         is_2d: bool,
+        lo_expr: Expr | None = None,
     ) -> None:
         self._problem = problem
         self.reg = reg
         self.domain = domain
         self.cols_reg = cols_reg
         self.is_2d = is_2d
+        self.lo_expr = lo_expr
         self._linear_proxy: LinearProxy | None = None
         self._quadratic_proxy: QuadraticProxy | None = None
 

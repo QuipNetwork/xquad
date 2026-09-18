@@ -46,7 +46,7 @@ from .expression import (
     VecLenExpr,
     coerce,
 )
-from .problem import Action, CompiledPrograms, Problem
+from .problem import Action, CompiledPrograms, Domain, Problem
 from .symbols import (
     CoefficientRef,
     InputRef,
@@ -130,6 +130,7 @@ def xq_bitlen(val: Expr | int) -> BitLenExpr:
 __all__ = [
     # DSL entry points
     "Problem",
+    "Domain",
     "Types",
     "CompiledPrograms",
     # Free functions

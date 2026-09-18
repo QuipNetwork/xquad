@@ -40,9 +40,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Problem, Types
+from xquad.cp import Domain, Problem, Types
 from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
-from xquad.types import XQMX, Vec, XQMXDomain
+from xquad.types import XQMX, Vec
 from xquad.vm import VM, VMBackend
 
 # Rosenberg penalty: must exceed the max absolute coefficient of any cubic term.
@@ -63,7 +63,7 @@ def build_problem(n: int, m: int, terms: list[tuple[int, int, int, int]]) -> Pro
     num_terms = problem.input("num_terms", type=Types.Int)
     terms_in = problem.input("terms", type=Types.Vec)
 
-    problem.define_model(size=num_vars, domain=XQMXDomain.BINARY)
+    problem.define_model(size=num_vars, domain=Domain.BINARY)
 
     # Linear bias: -1 per variable to reward selection
     with problem.range(0, num_vars) as v:

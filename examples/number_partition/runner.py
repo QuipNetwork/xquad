@@ -36,9 +36,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Problem, Types
+from xquad.cp import Domain, Problem, Types
 from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
-from xquad.types import XQMX, Vec, XQMXDomain
+from xquad.types import XQMX, Vec
 from xquad.vm import VM, VMBackend
 
 
@@ -63,7 +63,7 @@ def build_problem(n: int, numbers: list[int]) -> Problem:
     # target = S // 2
     target = problem.stow("target", total // 2)
 
-    problem.define_model(size=num_items, domain=XQMXDomain.BINARY)
+    problem.define_model(size=num_items, domain=Domain.BINARY)
 
     # Build index and coefficient vecs
     indices = problem.vec()

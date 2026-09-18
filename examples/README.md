@@ -41,6 +41,7 @@ Examples that select subsets, cover demands, pack bins, and balance integer weig
 - [Weighted Set Cover](weighted_set_cover/README.md) -- Select sets with capacities to cover element demands at minimum cost.
 - [Number Partition](number_partition/README.md) -- Split positive integers into two subsets with nearly equal sums.
 - [Portfolio Optimization](portfolio_opt/README.md) -- Select a fixed-size portfolio while penalising higher-order risk interactions.
+- [Portfolio Rebalance](portfolio_rebalance/README.md) -- Choose signed integer asset weights against a risk matrix and a budget.
 
 ## Satisfiability and higher-order
 

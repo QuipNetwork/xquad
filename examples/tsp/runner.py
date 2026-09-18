@@ -42,9 +42,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Problem, Types, xq_triu
+from xquad.cp import Domain, Problem, Types, xq_triu
 from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
-from xquad.types import XQMX, Vec, XQMXDomain, triu
+from xquad.types import XQMX, Vec, triu
 from xquad.vm import VM, VMBackend
 
 
@@ -64,7 +64,7 @@ def build_problem(n: int, seed: int) -> tuple[Problem, list[int]]:
 
     problem.define_model(
         size=num_cities * num_cities,
-        domain=XQMXDomain.BINARY,
+        domain=Domain.BINARY,
         rows=num_cities,
         cols=num_cities,
     )

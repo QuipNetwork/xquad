@@ -36,9 +36,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Problem, Types
+from xquad.cp import Domain, Problem, Types
 from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
-from xquad.types import XQMX, Vec, XQMXDomain
+from xquad.types import XQMX, Vec
 from xquad.vm import VM, VMBackend
 
 
@@ -56,7 +56,7 @@ def build_problem(n: int, weights: list[int], values: list[int], capacity: int) 
     values_in = problem.input("values", type=Types.Vec)
     capacity_in = problem.input("capacity", type=Types.Int)
 
-    problem.define_model(size=num_items, domain=XQMXDomain.BINARY)
+    problem.define_model(size=num_items, domain=Domain.BINARY)
 
     # Objective: minimise -sum(v_i * x_i)
     with problem.range(0, num_items) as i:
