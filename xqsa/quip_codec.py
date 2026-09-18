@@ -279,10 +279,13 @@ class Topology:
         """Build a topology from a decoded ``QuantumPow.RegisteredTopologies`` entry.
 
         ``meta`` is the SCALE-decoded ``TopologyMeta`` storage value: its
-        ``nodes`` and ``edges`` define the graph, and its ``allowed_h`` /
-        ``allowed_j`` / ``allowed_spin`` (each an ``AllowedValueSpec``) are
-        captured when present so :func:`check_allowed_values` can flag
-        out-of-spec coefficients for the educational warning.
+        ``nodes`` and ``edges`` define the graph, and its ``allowed_h_values`` /
+        ``allowed_j_values`` / ``allowed_spin_values`` (each an
+        ``AllowedValueSpec``) are captured when present so
+        :func:`check_allowed_values` can flag out-of-spec coefficients for the
+        educational warning. Those three names are the pallet's own field names
+        and must match it exactly: a mismatch resolves to ``None`` and silently
+        disables the warning rather than failing.
         """
         nodes = meta["nodes"]
         edges = meta["edges"]
@@ -291,9 +294,9 @@ class Topology:
         return cls.of(
             nodes,  # type: ignore[arg-type]
             edges,  # type: ignore[arg-type]
-            allowed_h=AllowedValues.from_chain_spec(meta.get("allowed_h")),
-            allowed_j=AllowedValues.from_chain_spec(meta.get("allowed_j")),
-            allowed_spin=AllowedValues.from_chain_spec(meta.get("allowed_spin")),
+            allowed_h=AllowedValues.from_chain_spec(meta.get("allowed_h_values")),
+            allowed_j=AllowedValues.from_chain_spec(meta.get("allowed_j_values")),
+            allowed_spin=AllowedValues.from_chain_spec(meta.get("allowed_spin_values")),
         )
 
     def index_of(self, node: int) -> int:

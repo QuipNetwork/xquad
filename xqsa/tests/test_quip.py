@@ -1135,8 +1135,9 @@ class TestSolverQuipChainReads:
         iface.storage[("QuantumPow", "RegisteredTopologies")] = {
             "nodes": [0, 1, 2],
             "edges": [(0, 1)],
-            "allowed_h": {"Set": [-MILLI_SCALE, 0, MILLI_SCALE]},
-            "allowed_j": {"Set": [-MILLI_SCALE, MILLI_SCALE]},
+            "allowed_h_values": {"Set": [-MILLI_SCALE, 0, MILLI_SCALE]},
+            "allowed_j_values": {"Set": [-MILLI_SCALE, MILLI_SCALE]},
+            "allowed_spin_values": {"Set": [-1, 1]},
         }
         solver = _make_solver(monkeypatch, iface=iface, topology=topo_hash)
         topo = solver._fetch_topology()
@@ -1294,6 +1295,29 @@ class TestSolverQuipAllowedValueWarning:
             solver._maybe_warn_allowed_values(job)  # suppressed by the one-time flag
         assert len(record) == 1
         assert QUIP_COEFFICIENTS_DOC_URL in str(record[0].message)
+
+    def test_warns_on_a_topology_decoded_from_the_chain(self, monkeypatch) -> None:
+        # End-to-end key-name guard: the pallet's TopologyMeta field names are
+        # allowed_{h,j,spin}_values, and reading any other name yields None,
+        # which disables the warning with no error to notice. Going through
+        # _fetch_topology (rather than a hand-built Topology) is what makes a
+        # future rename of those keys fail here.
+        topo_hash = "0x" + "ab" * 32
+        iface = _default_iface()
+        iface.storage[("QuantumPow", "RegisteredTopologies")] = {
+            "nodes": [0, 1, 2],
+            "edges": [(0, 1)],
+            "allowed_h_values": {"Set": [-MILLI_SCALE, 0, MILLI_SCALE]},
+            "allowed_j_values": {"Set": [-MILLI_SCALE, MILLI_SCALE]},
+        }
+        solver = _make_solver(monkeypatch, iface=iface, topology=topo_hash)
+        topo = solver._fetch_topology()
+        assert topo.allowed_h is not None
+        model = XQMX.spin_model(2)
+        model.set_linear(0, 2)  # milli 2000, outside {-1000, 0, 1000}
+        model.set_quadratic(0, 1, 1)
+        with pytest.warns(UserWarning, match="allowed"):
+            solver._maybe_warn_allowed_values(model_to_ising(model, topo))
 
     def test_no_warning_when_in_spec(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)
