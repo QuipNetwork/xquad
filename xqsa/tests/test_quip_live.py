@@ -79,18 +79,20 @@ FAUCET_URL = os.environ.get("QUIP_FAUCET_URL")
 
 pytestmark = [
     pytest.mark.quip,
-    pytest.mark.skipif(not RPC_URL, reason="QUIP_RPC_URL unset; live devnet tests skipped"),
+    pytest.mark.skipif(not RPC_URL, reason="QUIP_RPC_URL unset; live chain tests skipped"),
 ]
 
-# advantage2_system1 on the v0.2 devnet (pinned in quip_codec), confirmed live.
-# (These are the live counts, not the pre-live 4578 / 41531 estimate.)
-EXPECTED_NODES = 4577
-EXPECTED_EDGES = 41515
 UNIT = 10**12
 
-# Tighter lifecycle bounds than the production defaults so a live solve reaches
-# finality in tens of seconds rather than minutes.
-SOLVER_KWARGS = dict(deadline_blocks=30, block_wait=5, poll_interval=3.0, timeout=180.0)
+# Production lifecycle bounds. An earlier revision tightened these to
+# deadline_blocks=30 / block_wait=5 so a live solve reached finality in tens of
+# seconds, on the assumption in MINER_IDLE_SKIP below that a fresh order solves
+# in ~1-2 blocks. Measured against aglais on 2026-09-18 that assumption holds
+# only for the median: first-solution latency ran 1, 1, 1, 2, 5, 6, 9, 12 and 25
+# blocks across twelve answered orders, so a 30-block deadline sat inside the
+# tail and orders were finalizing empty. poll_interval stays tight so an
+# answered order still returns promptly; timeout clears 100 blocks at ~6s.
+SOLVER_KWARGS = dict(deadline_blocks=100, block_wait=10, poll_interval=3.0, timeout=660.0)
 
 # How long the capability probe waits for the miner to submit ANY solution
 # before declaring the E2E tier unavailable. Overridable for slow hosts.
@@ -123,7 +125,7 @@ def chain():
 
 @pytest.fixture(scope="session")
 def funded_keystore(tmp_path_factory):
-    """A fresh keystore funded via the localdev faucet.
+    """A fresh keystore funded via the chain's faucet.
 
     Skips the whole funded tier when ``QUIP_FAUCET_URL`` is unset -- without a
     funder we cannot reserve a reward.
@@ -143,7 +145,7 @@ def funded_keystore(tmp_path_factory):
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 -- localdev faucet
+    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 -- operator-supplied faucet URL
         assert resp.status == 200, f"faucet returned {resp.status}"
 
     # Wait for the transfer to land.
@@ -180,10 +182,10 @@ def make_solver(funded_keystore):
 def _miner_solves(tmp_path_factory) -> bool:
     """Probe once whether the miner returns a solution; cached for the session.
 
-    Proposes a trivial job and polls ``OrderSolutions`` for any submission. Fast
-    when the miner works (returns on the first solution); bounded by
-    ``PROBE_TIMEOUT`` when it does not. Returns False (rather than erroring) so
-    the E2E tier skips cleanly when the fleet is idle.
+    Proposes the gated tests' own model and polls ``OrderSolutions`` for any
+    submission. Fast when the miner works (returns on the first solution);
+    bounded by ``PROBE_TIMEOUT`` when it does not. Returns False (rather than
+    erroring) so the E2E tier skips cleanly when the fleet is idle.
     """
     if not FAUCET_URL:
         return False
@@ -214,10 +216,11 @@ def _miner_solves(tmp_path_factory) -> bool:
             break
         time.sleep(3)
 
-    model = XQMX.spin_model(2)
-    model.set_linear(0, 1)
-    model.set_quadratic(0, 1, -1)
-    job = model_to_ising(model, solver._fetch_topology())
+    # The same model the gated tests propose. A smaller one would place onto
+    # different hardware nodes and so prove nothing about them: placement is
+    # per-model, and whether an order is answered depends on the nodes it lands
+    # on. A gate must exercise what it gates.
+    job = model_to_ising(_asymmetric_spin_model(), solver._fetch_topology())
     try:
         order_id = solver._propose_job(job)
     except Exception:
@@ -271,16 +274,31 @@ class TestConnectivity:
         assert const is not None
         assert const.value == DEFAULT_ISING_SPEC_ID
 
-    def test_topology_resolves_to_pinned_graph(self, make_solver) -> None:
+    def test_topology_decodes_to_a_consistent_graph(self, make_solver) -> None:
+        # Deliberately not an exact node/edge count. A count is a fingerprint of
+        # one deployment -- aglais and a localdev DevNet register different
+        # graphs -- so an exact assertion fails on a healthy chain that simply
+        # is not the one it was recorded against. Deployment identity is already
+        # covered by test_solver_topology_tracks_chain_default below, and the
+        # hash it compares binds the exact node and edge arrays.
+        #
+        # What is asserted here is the decode contract, which holds on every
+        # deployment: a non-empty graph whose edges reference real nodes.
+        # Topology.__post_init__ already enforces ordering and uniqueness but
+        # checks neither endpoint membership nor self-loops.
         solver = make_solver()
         topology = solver._fetch_topology()
-        assert len(topology.nodes) == EXPECTED_NODES
-        assert len(topology.edges) == EXPECTED_EDGES
+        assert topology.nodes
+        assert topology.edges
+        nodes = set(topology.nodes)
+        assert all(u in nodes and v in nodes for u, v in topology.edges)
+        assert all(u != v for u, v in topology.edges)
 
     def test_solver_topology_tracks_chain_default(self, chain, make_solver) -> None:
         # With no topology= override, the solver targets the chain's declared
-        # default topology (deployment-agnostic; the pinned constant is only a
-        # fallback and differs per network).
+        # default topology. This is what makes the suite deployment-agnostic:
+        # nothing in the codebase carries a hash, because a hash is only ever
+        # valid on the deployment that registered it.
         default = chain.query("QuantumPow", "DefaultTopology").value
         assert default is not None
         solver = make_solver()

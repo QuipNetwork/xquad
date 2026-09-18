@@ -36,7 +36,6 @@ import pytest
 dimod = pytest.importorskip("dimod", reason="dwave-samplers / dimod not installed")
 
 from xqsa.quip_codec import (
-    ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH,
     DEFAULT_ISING_SPEC_ID,
     I32_MAX,
     I32_MIN,
@@ -307,20 +306,40 @@ class TestModelToIsing:
 
         job = model_to_ising(model, topo, mapping={0: 10, 1: 20})
 
-        # node 10 -> position 0, node 20 -> position 1, node 30 -> position 2
-        assert job.h_values == (3 * MILLI_SCALE, -2 * MILLI_SCALE, 0)
-        # edge (10,20) -> position 0, edge (20,30) -> position 1
-        assert job.j_values == (5 * MILLI_SCALE, 0)
+        # Only the placed nodes are submitted: 10 -> position 0, 20 -> position 1.
+        # Node 30 and edge (20,30) host nothing, so they are not part of the order.
+        assert job.h_values == (3 * MILLI_SCALE, -2 * MILLI_SCALE)
+        assert job.j_values == (5 * MILLI_SCALE,)
         assert job.domain == XQMXDomain.SPIN
-        assert job.nodes == (10, 20, 30)
+        assert job.nodes == (10, 20)
+        assert job.edges == ((10, 20),)
 
-    def test_array_lengths_match_topology(self) -> None:
-        """h/j arrays span the full topology regardless of model size."""
+    def test_submits_the_placed_subgraph_not_the_whole_topology(self) -> None:
+        """h/j span the placed subgraph, which stays a subgraph of the hardware.
+
+        A 2-variable model must not carry every hardware node and edge into
+        permanent chain storage. The submitted graph is still drawn from the
+        hardware graph, so every node and edge in it is real.
+        """
         model = XQMX.spin_model(2)
         model.set_quadratic(0, 1, 1)
         job = model_to_ising(model, PATH5)
-        assert len(job.h_values) == PATH5.num_nodes
-        assert len(job.j_values) == PATH5.num_edges
+
+        assert len(job.h_values) == job.topology.num_nodes == 2
+        assert len(job.j_values) == job.topology.num_edges == 1
+        assert job.topology.num_nodes < PATH5.num_nodes
+        assert all(PATH5.has_node(node) for node in job.nodes)
+        assert all(PATH5.has_edge(u, v) for u, v in job.edges)
+
+    def test_linear_only_model_submits_no_edges(self) -> None:
+        """A model with no couplings yields nodes and an empty edge array."""
+        model = XQMX.spin_model(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, -1)
+        job = model_to_ising(model, PATH5)
+        assert job.topology.num_nodes == 2
+        assert job.edges == ()
+        assert job.j_values == ()
 
     def test_empty_model_rejected(self) -> None:
         """A model with no terms has nothing to solve."""
@@ -386,7 +405,8 @@ class TestModelToIsing:
         model.set_quadratic(0, 1, 1)
         job = model_to_ising(model, PATH5, mapping={0: 3, 1: 4})
         assert job.mapping == {0: 3, 1: 4}
-        assert job.j_values[PATH5.edge_index(3, 4)] == MILLI_SCALE
+        assert job.nodes == (3, 4)
+        assert job.j_values[job.topology.edge_index(3, 4)] == MILLI_SCALE
 
 
 # ---------------------------------------------------------------------------
@@ -478,7 +498,8 @@ def test_encode_decode_roundtrip_matches_brute_force(domain: XQMXDomain) -> None
     """Encoding then decoding the optimal spin vector reproduces the optimum.
 
     Builds a small model, encodes it onto a path topology, then constructs the
-    full-topology spin vector for the brute-force optimum and decodes it back.
+    spin vector for the brute-force optimum over the submitted graph and decodes
+    it back.
     The decoded sample must equal the optimum and recompute the same energy --
     proving encode/decode index alignment is self-consistent.
     """
@@ -493,11 +514,11 @@ def test_encode_decode_roundtrip_matches_brute_force(domain: XQMXDomain) -> None
     optimum, optimum_energy = _brute_force_optimum(model)
 
     # Build the per-node spin vector the miner would return for the optimum.
-    spin_vector = [-1] * PATH5.num_nodes
+    spin_vector = [-1] * job.topology.num_nodes
     for var, node in job.mapping.items():
         value = optimum[var]
         spin = value if domain == XQMXDomain.SPIN else (2 * value - 1)
-        spin_vector[PATH5.index_of(node)] = spin
+        spin_vector[job.topology.index_of(node)] = spin
 
     decoded = decode_solution(job, spin_vector, model)
     assert {var: decoded.get_linear(var) for var in range(model.size)} == optimum
@@ -529,9 +550,9 @@ def test_encoded_problem_argmin_decodes_to_optimum(domain: XQMXDomain) -> None:
     argmin_vector: list[int] | None = None
     argmin_energy: int | None = None
     for spins in itertools.product((-1, 1), repeat=model.size):
-        vector = [-1] * PATH5.num_nodes
+        vector = [-1] * job.topology.num_nodes
         for var, node in job.mapping.items():
-            vector[PATH5.index_of(node)] = spins[var]
+            vector[job.topology.index_of(node)] = spins[var]
         energy = ising_energy_milli(job, vector)
         if argmin_energy is None or energy < argmin_energy:
             argmin_energy = energy
@@ -607,7 +628,7 @@ class TestIsingEnergyMilli:
         model.set_quadratic(0, 1, 1)
         job = model_to_ising(model, PATH5)
         with pytest.raises(EncodingError, match="does not match topology"):
-            ising_energy_milli(job, [1, 1])
+            ising_energy_milli(job, [1] * (job.topology.num_nodes + 1))
 
 
 # ---------------------------------------------------------------------------
@@ -719,6 +740,9 @@ def test_i32_overflow_error_carries_doc_link() -> None:
 # mock accepts anything.
 VALID_SEED = "0x" + "01" * 32
 UNIT = 1_000_000_000_000  # 1 tQUIP in planck (chain MinReward default).
+# Stand-in for a deployment's QuantumPow.DefaultTopology. The real hash is
+# per-deployment and read from the chain; nothing is pinned in the codebase.
+DEFAULT_TOPOLOGY_HASH = "0x" + "cb" * 32
 
 # A topology carrying allowed-value sets, so check_allowed_values has data.
 TOPO_WITH_SETS = Topology.of(
@@ -847,7 +871,10 @@ def _default_iface(*, with_default_spec_const: bool = False, balance: int | None
     constants: dict = {("QuantumComputeMempool", "MinReward"): UNIT}
     if with_default_spec_const:
         constants[("QuantumComputeMempool", "DefaultIsingSpecId")] = DEFAULT_ISING_SPEC_ID
-    storage: dict = {("QuantumComputeMempool", "JobSpecs"): {"spec": "ok"}}
+    storage: dict = {
+        ("QuantumComputeMempool", "JobSpecs"): {"spec": "ok"},
+        ("QuantumPow", "DefaultTopology"): DEFAULT_TOPOLOGY_HASH,
+    }
     if balance is not None:
         storage[("System", "Account")] = {"data": {"free": balance}}
     return FakeSubstrate(constants=constants, storage=storage)
@@ -976,17 +1003,22 @@ class TestSolverQuipConstruction:
         assert _make_solver(monkeypatch)._reward == UNIT
 
     def test_topology_defaults_to_chain_default(self, monkeypatch) -> None:
-        # No topology arg -> chain QuantumPow.DefaultTopology (the pinned
-        # constant is deployment-specific and must not be assumed).
+        # No topology arg -> chain QuantumPow.DefaultTopology. The chain read is
+        # the only source; the topology hash is deployment-specific.
         chain_default = "0x" + "e6" * 32
         iface = _default_iface()
         iface.storage[("QuantumPow", "DefaultTopology")] = chain_default
         solver = _make_solver(monkeypatch, iface=iface)
         assert solver._topology_hash == chain_default
 
-    def test_topology_falls_back_to_pinned_when_default_unset(self, monkeypatch) -> None:
-        # DefaultTopology unset on-chain -> the pinned fallback constant.
-        assert _make_solver(monkeypatch)._topology_hash == ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH
+    def test_topology_unresolvable_raises(self, monkeypatch) -> None:
+        # No topology arg and no chain default -> a clear error. There is no
+        # third source to fall through to: a hash is per-deployment, so any
+        # constant here would be one no other deployment would accept.
+        iface = _default_iface()
+        del iface.storage[("QuantumPow", "DefaultTopology")]
+        with pytest.raises(ValueError, match="no topology hash available"):
+            _make_solver(monkeypatch, iface=iface)
 
     def test_topology_explicit_arg_wins(self, monkeypatch) -> None:
         explicit = "0x" + "ab" * 32
@@ -996,8 +1028,9 @@ class TestSolverQuipConstruction:
         assert solver._topology_hash == explicit
 
     def test_chain_default_topology_transport_error_raises(self, monkeypatch) -> None:
-        # A transient read fault must NOT be masked as "no default configured" and
-        # silently select the pinned localdev hash on another network.
+        # A transient read fault must NOT be masked as "no default configured":
+        # construction would then raise a topology error that blames the chain
+        # for declaring no default, when the read simply never landed.
         from xqsa.quip import QuipConnectionError
 
         solver = _make_solver(monkeypatch, topology="0x" + "ab" * 32)
@@ -1010,8 +1043,8 @@ class TestSolverQuipConstruction:
             solver._chain_default_topology()
 
     def test_chain_default_topology_absent_falls_back(self, monkeypatch) -> None:
-        # A runtime that genuinely lacks the storage item resolves to None (the
-        # caller then uses the pinned fallback).
+        # A runtime that genuinely lacks the storage item resolves to None, which
+        # the caller reports as "no chain default" rather than as a fault.
         solver = _make_solver(monkeypatch, topology="0x" + "ab" * 32)
 
         exc_module = types.ModuleType("substrateinterface.exceptions")

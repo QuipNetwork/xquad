@@ -1306,12 +1306,12 @@ wheels = [
 
 [[package]]
 name = "quip-signer"
-version = "0.2.2"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/0f/2c/93a58b9e07dc86fe1fe23e356ec8f35bf3da3c9bd9983daf10ef649fa122/quip_signer-0.2.2.tar.gz", hash = "sha256:5d265c8f408b2bb05e0543f1cd3d0f46507fe91ba5afcc2c3f4c94643db81e3f", size = 47743, upload-time = "2026-07-04T09:32:12.674Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/60/29/05936bf404b00af7eecfae3a2ff3b344705fa9aa8a10d4623b379c1c15ac/quip_signer-0.3.0.tar.gz", hash = "sha256:32fbaf97deb71a1f4c577d15a62944d2a8f653d4aa8a0d1c8503c3a5325aba4e", size = 34876, upload-time = "2026-09-08T21:02:23.033Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4c/2e/df07db14817ba3852ab9a41b9346050c2118fadf68cd650a52f621687ec1/quip_signer-0.2.2-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:3798528e3205475efc7213c390f937303e3ead8419d578c3df34937c52abc653", size = 335362, upload-time = "2026-07-04T09:32:10.591Z" },
-    { url = "https://files.pythonhosted.org/packages/ec/bc/ce3682965c4c0f35257d945b5b2904733e6f1ea35ee1855e60aa2a0895f1/quip_signer-0.2.2-cp39-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:ee6969de24c485e86afbc7db269742e795fed84ede972b345bb8c8f2ee78524d", size = 349164, upload-time = "2026-07-04T09:32:11.8Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/01/5c761f98132681c1cabc643a7e8d61b4c0ee8b6134f278a46705f4ac918b/quip_signer-0.3.0-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:9a1ba61cc317b6427b8b2d82095107d1142b48f9cb754833199f9dcbf3bc22ba", size = 380922, upload-time = "2026-09-08T21:02:20.804Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/7b/5ae2b942547f8df96fe4881b4ee939fc4bea907ad83761fae44e3f0486c6/quip_signer-0.3.0-cp39-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:7b6a93ee2d1a9fa886a527ae51c206243476fe5a680fcb68c906320f25a32aff", size = 435574, upload-time = "2026-09-08T21:02:21.918Z" },
 ]
 
 [[package]]
@@ -1616,7 +1616,7 @@ requires-dist = [
     { name = "nvidia-cuda-nvrtc-cu12", marker = "extra == 'cuda'" },
     { name = "nvidia-cuda-runtime-cu12", marker = "extra == 'cuda'" },
     { name = "pyobjc-framework-metal", marker = "sys_platform == 'darwin' and extra == 'metal'", specifier = ">=11.0" },
-    { name = "quip-signer", marker = "extra == 'quip'", specifier = ">=0.2.2" },
+    { name = "quip-signer", marker = "extra == 'quip'", specifier = ">=0.3.0,<0.4" },
     { name = "substrate-interface", marker = "extra == 'quip'", specifier = ">=1.7.4,<2" },
     { name = "xqvm-py", editable = "xqvm_py" },
 ]

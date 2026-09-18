@@ -21,7 +21,7 @@ Extrinsic assembly for Quip Network hybrid-signed transactions.
 Crypto is delegated to the ``quip_signer`` binding (protocol-rs MR !41): this
 module owns ONLY the extrinsic-assembly layer -- keystore persistence of the
 32-byte master seed, SCALE SignedPayload composition, the v4 wire frame, and
-submission. No HKDF / ML-DSA / account-id derivation lives here.
+submission. No HKDF / FN-DSA / account-id derivation lives here.
 
 The Quip runtime's ``Signature`` type is ``HybridTxSignature`` (a composite
 struct of ``public || signature``, not a ``MultiSignature`` enum), so
@@ -30,17 +30,19 @@ extrinsics. We assemble the wire bytes ourselves and submit through the iface's
 RPC layer; ``substrate-interface`` is still used for ``compose_call``, chain
 state, and the websocket.
 
-Signing contract (settled by ``quip_signer`` on protocol-rs ``v0.2``): the H3
-domain prefix is applied INTRINSICALLY by ``HybridSigner.sign`` -- do not
+Signing contract (settled by ``quip_signer`` 0.3.0, the first release carrying
+the H4 suite -- sr25519 + FN-DSA-512 rather than H3's sr25519 + ML-DSA-44): the
+H4 domain prefix is applied INTRINSICALLY by ``HybridSigner.sign`` -- do not
 pre-apply it. Substrate's ">256-byte ``SignedPayload`` -> sign
 ``blake2_256(payload)``" rule is the CALLER's responsibility (the binding signs
 raw bytes, no hashing, no length check), so :func:`build_signed_extrinsic`
 applies it before calling ``sign``.
 
 The extrinsic layout is adapted from ``quip.network/faucet`` and the
-``quip-protocol`` miner's ``shared/substrate_client.py``; it conforms to
-protocol-rs ``v0.2`` and is validated by ``test_quip_signing.py`` plus live
-submission. The signed-extension order in :data:`SIGNED_EXTENSIONS` is the one
+``quip-protocol`` miner's ``shared/substrate_client.py``; it carries the H4
+suite (sr25519 + FN-DSA-512) as published by ``quip-signer`` 0.3.x, and is
+validated by ``test_quip_signing.py`` plus live submission. The
+signed-extension order in :data:`SIGNED_EXTENSIONS` is the one
 item only a live metadata check can confirm, so ``test_quip_live.py`` asserts it
 against the chain's own metadata.
 """
@@ -98,12 +100,12 @@ SIGNED_EXTENSIONS: tuple[str, ...] = (
 # ``quip_signer`` byte-length invariants (see the binding's parity tests).
 MASTER_SEED_LEN = 32
 ACCOUNT_ID_LEN = 32
-HYBRID_PUBLIC_LEN = 1344  # sr25519_pk(32) || ml_dsa_pk(1312)
-HYBRID_ENVELOPE_LEN = 3828  # public(1344) || signature(2484)
+HYBRID_PUBLIC_LEN = 929  # sr25519_pk(32) || falcon512_pk(897)
+HYBRID_ENVELOPE_LEN = 1660  # public(929) || signature(731)
 
 # Keystore on-disk format.
 KEYSTORE_VERSION = 1
-KEYSTORE_SCHEME = "hybrid"
+KEYSTORE_SCHEME = "hybrid-falcon512"
 KEYSTORE_FILE_MODE = 0o600
 
 
@@ -190,8 +192,15 @@ def load_keystore(path: Path | str) -> Keystore:
         raise QuipSigningError(f"keystore at {resolved} must be a JSON object")
     if raw.get("version") != KEYSTORE_VERSION:
         raise QuipSigningError(f"keystore version {raw.get('version')!r} not supported; expected {KEYSTORE_VERSION}")
-    if raw.get("scheme") != KEYSTORE_SCHEME:
-        raise QuipSigningError(f"expected scheme={KEYSTORE_SCHEME!r}, got {raw.get('scheme')!r}")
+    scheme = raw.get("scheme")
+    if scheme != KEYSTORE_SCHEME:
+        if scheme == "hybrid":
+            raise QuipSigningError(
+                f"keystore at {resolved} holds an H3 (sr25519 + ML-DSA-44) account; the chain now runs H4 "
+                f"(sr25519 + FN-DSA-512). The 32-byte master seed in the file is still valid, but H4 derives a "
+                f"different account id from it, so generate a fresh keystore and fund the new account."
+            )
+        raise QuipSigningError(f"expected scheme={KEYSTORE_SCHEME!r}, got {scheme!r}")
     if raw.get("encrypted"):
         raise QuipSigningError("passphrase-encrypted keystores are not supported yet")
 
@@ -254,8 +263,8 @@ def build_signed_extrinsic(
     runtime version). ``signer`` is a ``quip_signer.HybridSigner``.
 
     The signed payload is ``call || extra || additional`` (signed-extension
-    extras in metadata order; the empty extensions encode to 0 bytes on
-    ``v0.2``). It is ``blake2_256``-hashed before signing when it exceeds
+    extras in metadata order; the extensions carrying no data encode to 0
+    bytes). It is ``blake2_256``-hashed before signing when it exceeds
     :data:`SIGNED_PAYLOAD_HASH_THRESHOLD` bytes -- the caller's half of the
     contract. ``signer.sign`` returns the full SCALE ``HybridTxSignature``
     envelope (``public || signature``), which is spliced into the wire frame
