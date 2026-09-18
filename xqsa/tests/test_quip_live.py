@@ -77,6 +77,10 @@ from xqvm_py.xqmx import XQMX
 
 RPC_URL = os.environ.get("QUIP_RPC_URL")
 FAUCET_URL = os.environ.get("QUIP_FAUCET_URL")
+# Set QUIP_TOPOLOGY to a registered non-default hash to run the whole suite
+# against it. SolverQuip reads the variable itself, in its constructor, so no
+# fixture threads it -- this is only how the tests know the override is in play.
+TOPOLOGY_OVERRIDE = os.environ.get("QUIP_TOPOLOGY")
 
 pytestmark = [
     pytest.mark.quip,
@@ -300,6 +304,8 @@ class TestConnectivity:
         # default topology. This is what makes the suite deployment-agnostic:
         # nothing in the codebase carries a hash, because a hash is only ever
         # valid on the deployment that registered it.
+        if TOPOLOGY_OVERRIDE:
+            pytest.skip("QUIP_TOPOLOGY displaces the chain default this test asserts")
         default = chain.query("QuantumPow", "DefaultTopology").value
         assert default is not None
         solver = make_solver()
@@ -357,6 +363,23 @@ class TestConnectivity:
         if not mineable:
             pytest.skip("MineableTopologies is empty/unset on this node; expected the default topology seeded")
         assert _canonical_hex(default) in mineable
+
+    def test_override_topology_is_registered_but_not_mineable(self, chain, make_solver) -> None:
+        # The premise of the override run, asserted rather than assumed. If
+        # QUIP_TOPOLOGY were also mineable, every solve below would prove nothing
+        # about mineability being irrelevant to the mempool. Registered is what
+        # _fetch_topology requires; absent from the mining set is the condition
+        # solve() used to reject.
+        if not TOPOLOGY_OVERRIDE:
+            pytest.skip("QUIP_TOPOLOGY unset; the non-mineable path is opt-in")
+        solver = make_solver()
+        assert solver._topology_hash == _as_hex(TOPOLOGY_OVERRIDE)
+        assert solver._fetch_topology().nodes  # registered: decodes to a real graph
+        mineable = solver._mineable_topologies()
+        assert mineable is not None, "MineableTopologies absent from the runtime; nothing to be outside of"
+        assert _canonical_hex(TOPOLOGY_OVERRIDE) not in mineable
+        default = chain.query("QuantumPow", "DefaultTopology").value
+        assert _canonical_hex(TOPOLOGY_OVERRIDE) != _canonical_hex(default)
 
 
 # ---------------------------------------------------------------------------
