@@ -1313,11 +1313,13 @@ class TestSolverQuipAllowedValueWarning:
         assert QUIP_COEFFICIENTS_DOC_URL in str(record[0].message)
 
     def test_warns_on_a_topology_decoded_from_the_chain(self, monkeypatch) -> None:
-        # End-to-end key-name guard: the pallet's TopologyMeta field names are
-        # allowed_{h,j,spin}_values, and reading any other name yields None,
-        # which disables the warning with no error to notice. Going through
-        # _fetch_topology (rather than a hand-built Topology) is what makes a
-        # future rename of those keys fail here.
+        # The decode path from a chain-shaped meta dict through to the warning,
+        # which nothing covered before: reading a key the meta does not carry
+        # yields None and disables the warning with no error to notice. This
+        # fixture spells the same literals as quip_codec, so it catches a
+        # one-sided edit here, NOT a pallet-side rename -- only the chain can
+        # witness that. test_allowed_value_spec_names_match_the_pallet in
+        # test_quip_live.py is the guard for that half.
         topo_hash = "0x" + "ab" * 32
         iface = _default_iface()
         iface.storage[("QuantumPow", "RegisteredTopologies")] = {

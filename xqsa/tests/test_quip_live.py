@@ -299,6 +299,32 @@ class TestConnectivity:
         assert all(u in nodes and v in nodes for u, v in topology.edges)
         assert all(u != v for u, v in topology.edges)
 
+    def test_allowed_value_spec_names_match_the_pallet(self, chain, make_solver) -> None:
+        # QUI-1374: Topology.from_chain read allowed_h / allowed_j / allowed_spin
+        # while TopologyMeta serves allowed_*_values. Every lookup resolved to
+        # None, from_chain_spec(None) returned None, and the out-of-spec
+        # coefficient warning was dead on every real chain with nothing logged.
+        # The unit fixture could not catch it -- it authored the same literals as
+        # the codec -- so only the chain can witness the pallet's own names.
+        solver = make_solver()
+        raw = chain.query("QuantumPow", "RegisteredTopologies", [solver._topology_hash]).value
+        assert raw is not None, "the resolved topology is not registered on this chain"
+        served = {key for key in raw if key.startswith("allowed_")}
+        assert served == {"allowed_h_values", "allowed_j_values", "allowed_spin_values"}, (
+            f"TopologyMeta's allowed-value fields are {sorted(served)}; "
+            "Topology.from_chain reads allowed_{h,j,spin}_values and would silently decode None"
+        )
+        # A served spec must survive the decode, so a name that matches but a
+        # shape that changed also fails here rather than going quiet.
+        topology = solver._fetch_topology()
+        for field, attr in (
+            ("allowed_h_values", "allowed_h"),
+            ("allowed_j_values", "allowed_j"),
+            ("allowed_spin_values", "allowed_spin"),
+        ):
+            if raw.get(field) is not None:
+                assert getattr(topology, attr) is not None, f"{field} is served but decoded to None"
+
     def test_solver_topology_tracks_chain_default(self, chain, make_solver) -> None:
         # With no topology= override, the solver targets the chain's declared
         # default topology. This is what makes the suite deployment-agnostic:

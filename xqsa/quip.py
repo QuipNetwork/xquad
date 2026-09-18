@@ -183,8 +183,8 @@ class SolverQuip(Solver):
 
     Constructing the solver connects to the node, resolves the Ising job spec,
     default reward, and target topology from chain state, and builds the hybrid
-    signer from a seed or keystore. The topology defaults to the chain's
-    ``QuantumPow.DefaultTopology``; pass ``topology=`` to override. An
+    signer from a seed or keystore. The topology is resolved from ``topology=``,
+    then ``QUIP_TOPOLOGY``, then the chain's ``QuantumPow.DefaultTopology``. An
     unresolvable topology raises rather than falling through to a hash no chain
     would accept. See the module docstring for configuration and installation.
 
@@ -361,10 +361,21 @@ class SolverQuip(Solver):
         Raises:
             ValueError: if no source yields a hash.
         """
-        resolved = topology or os.environ.get("QUIP_TOPOLOGY") or self._chain_default_topology()
+        env_topology = os.environ.get("QUIP_TOPOLOGY")
+        resolved = topology or env_topology or self._chain_default_topology()
         if not resolved:
-            raise ValueError("no topology hash available: pass topology=, or seed QuantumPow.DefaultTopology on-chain.")
-        return _as_hex(resolved)
+            raise ValueError(
+                "no topology hash available: pass topology=, set QUIP_TOPOLOGY, "
+                "or seed QuantumPow.DefaultTopology on-chain."
+            )
+        # Name the winning source. QUIP_TOPOLOGY is ambient: an operator who
+        # exports it for one run and then solves an unrelated model in the same
+        # shell gets a PlacementError against the wrong graph, with nothing else
+        # pointing at the variable.
+        source = "topology=" if topology else ("QUIP_TOPOLOGY" if env_topology else "QuantumPow.DefaultTopology")
+        hexed = _as_hex(resolved)
+        logger.debug("topology %s resolved from %s", hexed, source)
+        return hexed
 
     def _chain_default_topology(self) -> str | None:
         """Read the ``QuantumPow.DefaultTopology`` storage value, or ``None`` if unset.
@@ -413,10 +424,11 @@ class SolverQuip(Solver):
     def _fetch_topology(self, topology_hash: str | None = None) -> Topology:
         """Fetch and cache the hardware topology from ``QuantumPow.RegisteredTopologies``.
 
-        ``topology_hash`` defaults to the hash resolved at construction (an
-        explicit ``topology=``, else the chain's ``QuantumPow.DefaultTopology``).
-        The decoded ``TopologyMeta`` carries the graph and the allowed-value
-        sets (captured for the educational warning).
+        ``topology_hash`` defaults to the hash resolved at construction (see
+        :meth:`_resolve_topology_hash`: ``topology=``, then ``QUIP_TOPOLOGY``,
+        then the chain's ``QuantumPow.DefaultTopology``). The decoded
+        ``TopologyMeta`` carries the graph and the allowed-value sets (captured
+        for the educational warning).
 
         Raises:
             ValueError: if no topology hash is configured.
@@ -425,7 +437,8 @@ class SolverQuip(Solver):
         key = topology_hash or self._topology_hash
         if not key:
             raise ValueError(
-                "no topology hash configured. Pass topology= (the chain QuantumPow.DefaultTopology resolved empty)."
+                "no topology hash configured. Pass topology= or set QUIP_TOPOLOGY "
+                "(the chain QuantumPow.DefaultTopology resolved empty)."
             )
         key = _as_hex(key)
         cached = self._topology_cache.get(key)
@@ -444,9 +457,11 @@ class SolverQuip(Solver):
         A chain reader with nothing behind it: this set is the chain's active
         *mining* set, gating ``submit_proof`` and so block production, and it
         does not decide whether the compute mempool admits or answers an order.
-        Nothing on the solve path calls this. It is kept because inspecting the
-        mining set is a reasonable thing to want, and the live test tier asserts
-        against it directly.
+        Nothing on the solve path calls this, and it is private, so there is no
+        supported route to it. It is kept solely because the live test tier
+        asserts the chain default is mineable and that a ``QUIP_TOPOLOGY``
+        override is not, which is the evidence that mineability does not gate
+        the mempool. Delete it with those assertions, not before.
 
         ``MineableTopologies`` is a ``StorageMap<H256, ()>`` -- a set keyed by
         topology hash. It is enumerated (via ``query_map``) rather than probed
