@@ -8,10 +8,10 @@ and decodes whatever comes back as an XQMX sample.
 
 This page is derived from
 [`xqsa/quip.py`](https://gitlab.com/quip.network/xquad/-/blob/main/xqsa/quip.py),
-`spec/xqsa/SOLVERS.md`, and an internal contributor testing guide, since
-no Quip Network endpoint or funded account was available to run
-anything against a live chain -- see [Gaps](#gaps) for what that leaves
-unanswered.
+`spec/xqsa/SOLVERS.md`, and an internal contributor testing guide. The
+mechanism it describes has been exercised end to end against a live Quip
+deployment, but the coordinates for reaching one are not public -- see
+[Gaps](#gaps) for what that leaves unanswered for a reader.
 
 ## Installation and Configuration
 
@@ -26,7 +26,7 @@ The umbrella `xquad` package forwards `[cuda]`, `[dwave]`, and
 its own -- install it against `xqsa` directly. The extra brings in
 `substrate-interface` (the chain RPC client) and `quip-signer`, a
 native extension providing the chain's hybrid signature scheme
-(sr25519 plus ML-DSA-44), which `substrate-interface` alone cannot
+(sr25519 plus FN-DSA-512), which `substrate-interface` alone cannot
 produce. `quip-signer` resolves a prebuilt wheel on Linux and builds
 from source with a local Rust toolchain on macOS and Windows. Both
 guards are lazy: `import xqsa` and every other solver in this chapter
@@ -96,12 +96,14 @@ Placement is deterministic, computed from the model alone, so nothing
 about it needs to be persisted or looked up later.
 
 The target topology is resolved once, at construction, from the
-chain's `QuantumPow.DefaultTopology` (falling back to a pinned
-`ADVANTAGE2_SYSTEM1_TOPOLOGY_HASH` if that read fails), or overridden
-explicitly with `topology=`. Because the same topology shape hashes
-differently per deployment -- each network's allowed-value
-specifications fold into the hash -- a hash from one Quip deployment is
-not portable to another. Before reserving the reward, `solve()` also
+chain's `QuantumPow.DefaultTopology`, or overridden explicitly with
+`topology=`. Because the same topology shape hashes differently per
+deployment -- each network's allowed-value specifications fold into the
+hash -- a hash from one Quip deployment is not portable to another.
+That is why nothing is pinned in the codebase: the chain read is the
+only authoritative source, and a topology that resolves from neither
+source raises rather than selecting a hash no chain would accept.
+Before reserving the reward, `solve()` also
 checks the resolved hash against `QuantumPow.MineableTopologies`, the
 subset of registered topologies miners actually match jobs against, and
 raises `QuipTopologyError` if the hash is registered but not mineable
@@ -254,19 +256,22 @@ The rest depend on chain state or the round trip completing.
 
 ## Gaps
 
-The source available to this chapter answers the mechanism -- lifecycle,
-topology, encoding, cost accounting, failures -- in detail. It does not
-answer what a reader needs to actually run a job:
+This chapter answers the mechanism -- lifecycle, topology, encoding,
+cost accounting, failures -- in detail. It does not answer what a reader
+outside the project needs to actually run a job:
 
-- **No public endpoint or funded account path.** Nothing in this
-  repository gives a reader-obtainable `QUIP_RPC_URL` or a way to fund
-  an account, beyond an internal contributor guide describing a local
-  development chain and operator-only test coordinates that are
-  explicitly flagged there as unstable and not meant to be hard-coded.
+- **No reader-obtainable endpoint or funding path.** Nothing in this
+  repository gives a reader a `QUIP_RPC_URL` or a way to fund an
+  account. Contributors get both from an internal testing guide, which
+  flags the coordinates as unstable and not meant to be hard-coded --
+  which is also why they are not reproduced here.
 - **No current reward or fee figures.** `MinReward` and transaction fees
   are live chain state that the contributor guide itself warns changes
   between releases; this chapter does not assert a number that could go
   stale in the published book.
-- **No observed job.** Every number a real submission would produce --
-  timing, an actual `order_id`, a real `qpu_timing`-equivalent, whether
-  a fresh job typically solves in one block or many -- is absent here.
+- **No numbers from an observed job.** The propose -> solve -> decode
+  path is exercised against a live deployment by the contributor suite,
+  but the figures a particular submission produces -- timing, an actual
+  `order_id`, a real `qpu_timing`-equivalent, how many blocks a fresh
+  job typically takes -- are deployment- and fleet-dependent, so none is
+  quoted here.

@@ -327,6 +327,17 @@ class TestKeystore:
         assert bytes.fromhex(raw["account_id_hex"][2:]) == ks.signer.account_id
         assert bytes.fromhex(raw["public_key_hex"][2:]) == ks.signer.public_key
 
+    def test_h3_keystore_rejected_with_regeneration_guidance(self, tmp_path) -> None:
+        # An H3 keystore must be told it needs regenerating for H4, not accused
+        # of tampering by the account-id check further down.
+        path = tmp_path / "keystore.json"
+        generate_keystore(path)
+        raw = json.loads(path.read_text())
+        raw["scheme"] = "hybrid"
+        path.write_text(json.dumps(raw))
+        with pytest.raises(QuipSigningError, match="generate a fresh keystore"):
+            load_keystore(path)
+
     def test_tampered_account_id_rejected(self, tmp_path) -> None:
         path = tmp_path / "keystore.json"
         generate_keystore(path)
