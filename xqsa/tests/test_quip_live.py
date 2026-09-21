@@ -66,6 +66,7 @@ from xqsa.quip import (
     SolverQuip,
     _as_hex,
     _canonical_hex,
+    _require_h256,
 )
 from xqsa.quip_codec import (
     DEFAULT_ISING_SPEC_ID,
@@ -403,14 +404,25 @@ class TestConnectivity:
         # solve() used to reject.
         if not TOPOLOGY_OVERRIDE:
             pytest.skip("QUIP_TOPOLOGY unset; the non-mineable path is opt-in")
+        # Normalize once, the way the constructor does, and compare against that.
+        # _as_hex only prefixes 0x, while the constructor resolves through
+        # _require_h256, which also strips and lower-cases. An override spelled in
+        # upper case or with surrounding whitespace is accepted by SolverQuip but
+        # failed here, reporting a spelling difference as a breach of the premise.
+        override = _require_h256(TOPOLOGY_OVERRIDE, "QUIP_TOPOLOGY")
         solver = make_solver()
-        assert solver._topology_hash == _as_hex(TOPOLOGY_OVERRIDE)
+        assert solver._topology_hash == override
         assert solver._fetch_topology().nodes  # registered: decodes to a real graph
+        # The mining set and the chain default are compared in _canonical_hex
+        # form (lower-case, no 0x), which is what _mineable_topologies stores.
+        # Comparing the 0x-prefixed override against them directly would never
+        # match, and both assertions would pass whatever the chain says.
+        canonical_override = _canonical_hex(override)
         mineable = solver._mineable_topologies()
         assert mineable is not None, "MineableTopologies absent from the runtime; nothing to be outside of"
-        assert _canonical_hex(TOPOLOGY_OVERRIDE) not in mineable
+        assert canonical_override not in mineable
         default = chain.query("QuantumPow", "DefaultTopology").value
-        assert _canonical_hex(TOPOLOGY_OVERRIDE) != _canonical_hex(default)
+        assert canonical_override != _canonical_hex(default)
 
 
 # ---------------------------------------------------------------------------
