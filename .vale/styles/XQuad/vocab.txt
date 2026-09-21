@@ -86,7 +86,6 @@ unassemblable
 undecodable
 Undecodable
 underflows
-unmineable
 unstorable
 untaken
 untraced
