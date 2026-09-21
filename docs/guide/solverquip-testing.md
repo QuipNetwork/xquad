@@ -50,6 +50,7 @@ self-install the `[quip]` extra via `uv run --extra quip`.
 | --- | --- | --- |
 | `QUIP_RPC_URL` | required for e2e | chain RPC, `ws://` (DevNet) or `wss://` (aglais). `make test-quip` / `make test-quip-e2e` pass it through explicitly. |
 | `QUIP_FAUCET_URL` | optional | faucet **base** URL; the funded fixture POSTs to `<QUIP_FAUCET_URL>/request`. Without it only the read-only connectivity tests run. |
+| `QUIP_TOPOLOGY` | optional | registered topology hash for `SolverQuip` to target instead of the chain default. Unlike the rest of this table it configures the solver, not the harness, so it also applies outside the tests. Setting it un-skips the override tier. |
 | `QUIP_MINER_PROBE_TIMEOUT` | optional (default 60) | how long the `solving_miner` probe waits before skipping the end-to-end tier. Raise it on a slow or remote fleet. |
 | `SSL_CERT_FILE` | macOS + `wss://` only | CA bundle for the TLS handshake (see [macOS TLS](#macos-tls-wss-only)). |
 
@@ -61,9 +62,9 @@ the two the recipe forwards.
 
 - **submit + lifecycle** (always run against any healthy chain): connectivity,
   the live `propose_job` SCALE / extras contract (a clean submission with no
-  `System.ExtrinsicFailed`), the topology fetch, the mineability pre-check
-  (`MineableTopologies` membership), the balance pre-check, the timeout path,
-  and expired-no-solution auto-reclaim. These need no returned solution.
+  `System.ExtrinsicFailed`), the topology fetch, the balance pre-check, the
+  timeout path, and expired-no-solution auto-reclaim. These need no returned
+  solution.
 - **end-to-end** (`TestEndToEnd`): need the fleet to actually solve. They are
   guarded by the `solving_miner` fixture, which proposes a throwaway order and
   waits for a solution; it skips the tier cleanly when no fleet is active. A
@@ -273,15 +274,35 @@ Quick version + liveness check. A synced node reports `isSyncing == false` and
 
 The same `advantage2_system1` graph hashes differently per deployment (each
 network's allowed-value specs fold into the hash), so `SolverQuip` resolves the
-topology from chain `QuantumPow.DefaultTopology` at construction. That read is
-the only source: there is no pinned fallback in the codebase, and a topology
-that resolves from neither the chain nor an explicit `topology=` raises rather
-than selecting a hash no chain would accept. On aglais `DefaultTopology` is
+topology at construction from `topology=`, then `QUIP_TOPOLOGY`, then chain
+`QuantumPow.DefaultTopology`. There is no pinned fallback in the codebase, and a
+topology that resolves from none of the three raises rather than selecting a
+hash no chain would accept. On aglais `DefaultTopology` is
 `0xcbec1eb4...` over 4577 nodes / 41514 edges, read live on 2026-09-15. Never
-assume the DevNet hash on aglais or vice versa. `solve()` pre-validates that
-the resolved hash is in `MineableTopologies` before reserving the reward (raising
-`QuipTopologyError`). Only a runtime that lacks the `MineableTopologies` storage
-item entirely skips the check; a present-but-empty set rejects.
+assume the DevNet hash on aglais or vice versa.
+
+`solve()` does not consult `MineableTopologies`. That set is the chain's active
+mining set: it gates `submit_proof`, and so block production, not the compute
+mempool. Nothing binds an order to a topology at `propose_job` -- an order
+carries its nodes, edges and coefficients inline and no topology hash at all --
+so the chain cannot perceive which topology an order was built against, and
+mineability cannot affect whether an order is admitted or answered.
+
+To exercise that, aglais carries a permanently registered non-mineable topology:
+a complete graph on 16 nodes (K16), hash
+`0x830abc16c0b28b26f119f3a1279d07811bdeb9c0234d7f442ae46d6698d9a797`, registered
+at block 232673. It is registered, not mineable, and not the default. Point
+`QUIP_TOPOLOGY` at it to run the whole suite against it:
+
+    CERT=$(uv run --extra quip python -m certifi)
+    SSL_CERT_FILE="$CERT" QUIP_MINER_PROBE_TIMEOUT=180 \
+      QUIP_TOPOLOGY=0x830abc16c0b28b26f119f3a1279d07811bdeb9c0234d7f442ae46d6698d9a797 \
+      make test-quip \
+        QUIP_RPC_URL=wss://bootnode-1.aglais.quip.network:20049/rpc \
+        QUIP_FAUCET_URL=https://faucet.aglais.quip.network
+
+Reuse K16; do not register another. There is no `unregister_topology`, so every
+registration is permanent.
 
 ### Run the suite
 

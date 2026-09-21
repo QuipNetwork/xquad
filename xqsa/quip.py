@@ -33,6 +33,7 @@ Configuration is resolved from constructor arguments first, then environment:
     ``seed``               ``QUIP_SIGNER_SEED``  32-byte hex master seed
     ``keystore``           ``QUIP_KEYSTORE``     keystore path (load or create)
     ``reward``             ``QUIP_REWARD``       reward in planck (else MinReward)
+    ``topology``           ``QUIP_TOPOLOGY``     topology hash (else DefaultTopology)
     =====================  ====================================================
 
 Provide exactly one of ``seed`` or ``keystore`` (a keystore is generated on
@@ -80,6 +81,7 @@ from xqsa.quip_codec import (
     _as_int_or_none,
     _canonical_hex,
     _event_ids,
+    _require_h256,
     check_allowed_values,
     decode_solution,
     effective_expiry,
@@ -122,9 +124,10 @@ JOB_ORDERS_STORAGE = "JobOrders"
 ORDER_SOLUTIONS_STORAGE = "OrderSolutions"
 
 # ``QuantumPow`` topology storage this backend reads. ``RegisteredTopologies``
-# (queried in ``_fetch_topology``) is the topology set; ``MineableTopologies``
-# is the subset miners actually match on -- a hash can be registered without
-# being mineable, so both are checked before the reward is reserved.
+# (queried in ``_fetch_topology``) is the topology set a hash must belong to.
+# ``MineableTopologies`` is the chain's active mining set, which gates
+# ``submit_proof`` and not the compute mempool; nothing on the solve path
+# consults it, and ``_mineable_topologies`` is kept only as a chain reader.
 MINEABLE_TOPOLOGIES_STORAGE = "MineableTopologies"
 
 
@@ -137,13 +140,16 @@ class QuipSubmissionError(QuipError):
 
 
 class QuipTopologyError(QuipError):
-    """Raised when the resolved topology is registered but not in the mineable set.
+    """Retained for compatibility; nothing in this module raises it any more.
 
-    A distinct pre-submit configuration error: the hash exists in
-    ``QuantumPow.RegisteredTopologies`` (so ``_fetch_topology`` succeeds) but is
-    absent from ``QuantumPow.MineableTopologies``, so no miner would match a job
-    proposed against it. Raised before the reward is reserved, unlike the
-    connection/submission/finality errors around it.
+    It used to report a resolved topology that was registered but absent from
+    ``QuantumPow.MineableTopologies``. That set is the chain's active *mining*
+    set: it gates ``submit_proof``, i.e. block production, and has no bearing on
+    whether the compute mempool admits or answers an order. An order carries its
+    nodes, edges and coefficients inline and no topology hash at all, so the
+    chain cannot perceive which topology an order was built against. The check
+    was therefore answering a mempool question with a consensus predicate and is
+    gone; the class stays exported so downstream ``except`` clauses still import.
     """
 
 
@@ -178,8 +184,8 @@ class SolverQuip(Solver):
 
     Constructing the solver connects to the node, resolves the Ising job spec,
     default reward, and target topology from chain state, and builds the hybrid
-    signer from a seed or keystore. The topology defaults to the chain's
-    ``QuantumPow.DefaultTopology``; pass ``topology=`` to override. An
+    signer from a seed or keystore. The topology is resolved from ``topology=``,
+    then ``QUIP_TOPOLOGY``, then the chain's ``QuantumPow.DefaultTopology``. An
     unresolvable topology raises rather than falling through to a hash no chain
     would accept. See the module docstring for configuration and installation.
 
@@ -296,10 +302,14 @@ class SolverQuip(Solver):
         must exist in ``QuantumComputeMempool.JobSpecs``.
 
         Raises:
+            ValueError: if the resolved id is not a 32-byte hex hash. The
+                registration lookup below encodes the id as a SCALE storage key,
+                which fails on a malformed value as a raw codec exception; the
+                shape is checked first so a typo is named as a typo.
             QuipConnectionError: if the spec is not registered on-chain.
         """
         resolved = spec_id or self._chain_default_spec_id() or DEFAULT_ISING_SPEC_ID
-        resolved = _as_hex(resolved)
+        resolved = _require_h256(resolved, "spec_id")
         entry = self._iface.query("QuantumComputeMempool", "JobSpecs", [resolved])
         if entry is None or getattr(entry, "value", None) is None:
             raise QuipConnectionError(
@@ -337,24 +347,48 @@ class SolverQuip(Solver):
     def _resolve_topology_hash(self, topology: str | None) -> str:
         """Resolve the topology hash to target.
 
-        Prefers the explicit ``topology`` argument, then the chain's
-        ``QuantumPow.DefaultTopology``. Resolved once at construction so
-        :meth:`solve` and :meth:`query` on the same instance agree on the
-        topology even if the chain default later changes.
+        Prefers the explicit ``topology`` argument, then ``QUIP_TOPOLOGY``,
+        then the chain's ``QuantumPow.DefaultTopology``. Resolved once at
+        construction so :meth:`solve` and :meth:`query` on the same instance
+        agree on the topology even if the chain default later changes.
 
-        Those two are the only sources, deliberately. The same advantage2
-        graph hashes differently across deployments (the hash folds in each
-        deployment's allowed-value specs), so no constant could be correct
+        All three sources are deployment-local, deliberately, and none of them
+        is a constant in this codebase. The same advantage2 graph hashes
+        differently across deployments (the hash folds in each deployment's
+        allowed-value specs), so no pinned constant could be correct
         everywhere, and a stale one would resolve to a topology no chain
-        accepts. An unresolvable topology raises instead.
+        accepts. ``QUIP_TOPOLOGY`` is an operator's override for the chain
+        they are pointed at -- it targets a registered non-default topology
+        without threading a constructor argument through, which is what makes
+        that path testable against a live chain. An unresolvable topology
+        raises instead.
 
         Raises:
-            ValueError: if neither source yields a hash.
+            ValueError: if no source yields a hash, or if the one that wins is
+                not a 32-byte hex hash. The shape is checked here, at
+                construction, rather than left to the first :meth:`solve`: the
+                registration lookup encodes the hash as a SCALE storage key, so
+                a typo would otherwise surface much later as a raw codec
+                exception that no ``except Quip*Error`` clause catches, and
+                nothing at default log level would name the source it came
+                from. ``QUIP_TOPOLOGY`` being ambient makes that likelier here
+                than for ``topology=``.
         """
-        resolved = topology or self._chain_default_topology()
+        env_topology = os.environ.get("QUIP_TOPOLOGY")
+        resolved = topology or env_topology or self._chain_default_topology()
         if not resolved:
-            raise ValueError("no topology hash available: pass topology=, or seed QuantumPow.DefaultTopology on-chain.")
-        return _as_hex(resolved)
+            raise ValueError(
+                "no topology hash available: pass topology=, set QUIP_TOPOLOGY, "
+                "or seed QuantumPow.DefaultTopology on-chain."
+            )
+        # Name the winning source. QUIP_TOPOLOGY is ambient: an operator who
+        # exports it for one run and then solves an unrelated model in the same
+        # shell gets a PlacementError against the wrong graph, with nothing else
+        # pointing at the variable.
+        source = "topology=" if topology else ("QUIP_TOPOLOGY" if env_topology else "QuantumPow.DefaultTopology")
+        hexed = _require_h256(resolved, source)
+        logger.debug("topology %s resolved from %s", hexed, source)
+        return hexed
 
     def _chain_default_topology(self) -> str | None:
         """Read the ``QuantumPow.DefaultTopology`` storage value, or ``None`` if unset.
@@ -403,10 +437,11 @@ class SolverQuip(Solver):
     def _fetch_topology(self, topology_hash: str | None = None) -> Topology:
         """Fetch and cache the hardware topology from ``QuantumPow.RegisteredTopologies``.
 
-        ``topology_hash`` defaults to the hash resolved at construction (an
-        explicit ``topology=``, else the chain's ``QuantumPow.DefaultTopology``).
-        The decoded ``TopologyMeta`` carries the graph and the allowed-value
-        sets (captured for the educational warning).
+        ``topology_hash`` defaults to the hash resolved at construction (see
+        :meth:`_resolve_topology_hash`: ``topology=``, then ``QUIP_TOPOLOGY``,
+        then the chain's ``QuantumPow.DefaultTopology``). The decoded
+        ``TopologyMeta`` carries the graph and the allowed-value sets (captured
+        for the educational warning).
 
         Raises:
             ValueError: if no topology hash is configured.
@@ -415,7 +450,8 @@ class SolverQuip(Solver):
         key = topology_hash or self._topology_hash
         if not key:
             raise ValueError(
-                "no topology hash configured. Pass topology= (the chain QuantumPow.DefaultTopology resolved empty)."
+                "no topology hash configured. Pass topology= or set QUIP_TOPOLOGY "
+                "(the chain QuantumPow.DefaultTopology resolved empty)."
             )
         key = _as_hex(key)
         cached = self._topology_cache.get(key)
@@ -431,25 +467,31 @@ class SolverQuip(Solver):
     def _mineable_topologies(self) -> frozenset[str] | None:
         """Return the canonical hashes in ``QuantumPow.MineableTopologies``, or ``None``.
 
+        A chain reader with nothing behind it: this set is the chain's active
+        *mining* set, gating ``submit_proof`` and so block production, and it
+        does not decide whether the compute mempool admits or answers an order.
+        Nothing on the solve path calls this, and it is private, so there is no
+        supported route to it. It is kept solely because the live test tier
+        asserts the chain default is mineable and that a ``QUIP_TOPOLOGY``
+        override is not, which is the evidence that mineability does not gate
+        the mempool. Delete it with those assertions, not before.
+
         ``MineableTopologies`` is a ``StorageMap<H256, ()>`` -- a set keyed by
         topology hash. It is enumerated (via ``query_map``) rather than probed
         with a keyed lookup so a defined-but-empty map is distinguishable from a
         hash simply being absent from a populated one: a keyed read returning
-        ``None`` cannot tell those apart, and the two demand opposite outcomes.
+        ``None`` cannot tell those apart.
 
         Returns ``None`` only when the storage item is genuinely absent from the
-        runtime -- the pallet does not compile the item into metadata at all.
-        That is the sole "skip the mineability check" signal: a runtime that
-        *does* compile the pallet always exposes the item in metadata, so a
-        deployment which simply does not use the feature can only surface it as
-        an empty map, never as runtime absence. A defined-but-empty set therefore
-        returns an empty ``frozenset`` (no topology is mineable, so the caller
-        rejects), never ``None``.
+        runtime -- the pallet does not compile the item into metadata at all. A
+        runtime that *does* compile the pallet always exposes the item in
+        metadata, so a deployment which simply does not use the feature surfaces
+        it as an empty map; that returns an empty ``frozenset``, never ``None``.
 
         Distinguishes genuine runtime absence from a transport/decode fault,
         mirroring :meth:`_chain_default_topology`: a read fault, or entries that
         are present but all fail to decode to a hash, surface as a connection
-        error rather than silently skipping the check.
+        error rather than silently reporting an absent set.
 
         Raises:
             QuipConnectionError: if reading the storage map fails for any reason
@@ -488,43 +530,8 @@ class SolverQuip(Solver):
                 "topology hash; retry or verify chain connectivity."
             )
         # A genuinely-empty set returns an empty frozenset (not None): only a
-        # runtime lacking the storage item entirely skips the check.
+        # runtime lacking the storage item entirely reports absence.
         return frozenset(hashes)
-
-    def _ensure_mineable(self, topology_hash: str | None = None) -> None:
-        """Raise if the resolved topology is registered but not in the mineable set.
-
-        Called from :meth:`solve` after :meth:`_fetch_topology` (which already
-        confirmed the hash is registered) and before the reward is reserved.
-        ``topology_hash`` defaults to the hash resolved at construction, mirroring
-        :meth:`_fetch_topology`'s defaulting so both validate the same hash from a
-        single source of truth.
-
-        A ``MineableTopologies`` absent from the runtime skips the check (see
-        :meth:`_mineable_topologies`); a defined-but-empty set, or a populated set
-        that omits the hash, rejects -- no miner would match the proposed job.
-
-        Raises:
-            QuipTopologyError: if the set is defined and omits the hash.
-            QuipConnectionError: if the set cannot be read (transport/decode fault).
-        """
-        key = topology_hash or self._topology_hash
-        mineable = self._mineable_topologies()
-        if mineable is None:
-            logger.debug("QuantumPow.%s is unset; skipping the mineability check", MINEABLE_TOPOLOGIES_STORAGE)
-            return
-        if not mineable:
-            raise QuipTopologyError(
-                f"the chain's mineable set (QuantumPow.{MINEABLE_TOPOLOGIES_STORAGE}) is empty; no topology "
-                f"is currently mineable, so a job proposed against {_as_hex(key)} would sit unsolved until "
-                "expiry. Seed a topology into MineableTopologies on-chain."
-            )
-        if _canonical_hex(key) not in mineable:
-            raise QuipTopologyError(
-                f"topology {_as_hex(key)} is registered but not in the chain's mineable set "
-                f"(QuantumPow.{MINEABLE_TOPOLOGIES_STORAGE}); no miner would pick up a job proposed against "
-                "it. Pass a mineable topology= or seed the topology into MineableTopologies on-chain."
-            )
 
     def _check_balance(self, required: int) -> int:
         """Return the account's free balance, raising if it cannot cover ``required``.
@@ -887,9 +894,8 @@ class SolverQuip(Solver):
             mapping: explicit variable -> node placement (else searched).
 
         Raises:
-            QuipTopologyError: if the resolved topology is registered but not in
-                the chain's mineable set (raised before the reward is reserved).
-            QuipConnectionError: if the mineable-set read faults (transport/decode).
+            QuipConnectionError: if a chain read faults (transport/decode) while
+                resolving the topology, the order, or the account balance.
             QuipSubmissionError: if proposing the job fails.
             QuipTimeoutError: if the order does not finalize within ``timeout``
                 (the order id is recoverable via :meth:`query`).
@@ -897,12 +903,6 @@ class SolverQuip(Solver):
         """
         self._validate_model(model)
         topology = self._fetch_topology(kwargs.get("topology"))
-        # Gate on mineability before committing funds: a registered-but-unmineable
-        # hash would otherwise propose a job no miner matches, wasting a full
-        # propose -> expiry -> reclaim round-trip. Kept here (not in
-        # _fetch_topology) so query()'s order recovery stays independent of the
-        # current mineable set.
-        self._ensure_mineable(kwargs.get("topology"))
         job = model_to_ising(model, topology, mapping=kwargs.get("mapping"))
         self._maybe_warn_allowed_values(job)
         self._check_balance(self._reward + FEE_HEADROOM_PLANCK)
