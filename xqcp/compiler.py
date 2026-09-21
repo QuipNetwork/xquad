@@ -637,8 +637,8 @@ _VERIFIER_REG_COUNT = 9
 # Constraint kinds xqcp only supports on a binary model.  Every HLF expansion
 # in spec/xqvm/HLF.md is derived under x^2 = x, so on a spin or integer model
 # the encoder would build a penalty that does not say what the user wrote.
-# Whether a correct expansion exists per domain is the open question recorded
-# in scratch/spikes/hlf-domain-generality/brief.md.
+# Whether a correct expansion exists per domain is the open question
+# spec/xqcp/SPEC.md records under "Constraints are binary-only".
 _BINARY_ONLY_KINDS = (
     "onehot_row",
     "onehot_col",

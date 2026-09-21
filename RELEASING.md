@@ -93,9 +93,22 @@ Before cutting a tag:
 5. **Run the release checks locally** before pushing with
    `make check-release` (or `make preflight-release`, the same thing
    under a preflight-shaped name; it is deliberately kept out of plain
-   `make preflight`). Needs `maturin`, `twine`, and `uv` on `PATH` --
-   it is the same `make -k check-release` that `release:validate` runs
-   in CI.
+   `make preflight`). It is the same `make -k check-release` that
+   `release:validate` runs in CI, so it needs the same tooling that
+   `.gitlab/ci/setup.yml` installs for that job:
+
+       uv tool install maturin --with ziglang
+       uv tool install 'twine>=6.1'
+       bash scripts/install-cargo-tools.sh --only cargo-zigbuild
+       rustup target add aarch64-unknown-linux-gnu
+       export PATH="${HOME}/.local/share/uv/tools/maturin/bin:${PATH}"
+
+   The `PATH` export is not optional. One of the three cdylib artefacts
+   is an aarch64 wheel cross-compiled with zig as the linker, and
+   `cargo-zigbuild` locates zig by running `python3 -m ziglang`, so the
+   `python3` first on `PATH` has to be maturin's own venv python, which
+   is where `--with ziglang` put the package. Without it the run fails
+   at `Failed to find zig`, after the native wheel has already built.
 
 ## Cutting a release
 
