@@ -97,6 +97,10 @@
 #   scripts/check-version-sites.py --print-version
 #                                             # canonical PEP 440 version of
 #                                             # the tree, for smoke-wheels.sh
+#   scripts/check-version-sites.py --set VERSION
+#                                             # write every site to VERSION, in
+#                                             # each ecosystem's spelling
+#                                             # (`make set-version`)
 #   scripts/check-version-sites.py --root DIR # check a tree other than this one
 #
 # Exit codes:
@@ -663,32 +667,118 @@ def do_print_version(root: Path) -> int:
     return 0
 
 
-def check_tag(root: Path, tag: str) -> int:
-    body = tag[1:] if tag.startswith("v") else tag
+def _spellings(raw: str, noun: str) -> tuple[str, str] | None:
+    """Return `raw`'s (SemVer, PEP 440) spellings, or None once the reason it has none is emitted.
 
-    expected_pep440 = canon(body)
-    if expected_pep440 is None:
+    Every version this script writes or checks has to be expressible in both
+    grammars. The two registries are written by one pipeline and neither
+    allows an unpublish, so a version only one of them accepts fails halfway
+    through, with crates.io already committed.
+
+    `noun` names what is being judged (`tag v0.4.0`, `version 0.4.1-dev`) so
+    the same three rejections read correctly for a tag and for a bump.
+    """
+    body = raw[1:] if raw.startswith("v") else raw
+
+    pep440 = canon(body)
+    if pep440 is None:
         emit(
-            f"tag {tag} is not expressible as a PEP 440 version.",
-            "Cargo accepts it; Python cannot, so this tag names no single version",
-            "and cannot be released by this pipeline. Use a PEP 440-compatible",
+            f"{noun} is not expressible as a PEP 440 version.",
+            "Cargo accepts it; Python cannot, so it names no single version and",
+            "cannot be released by this pipeline. Use a PEP 440-compatible",
             "prerelease instead (-rc1, -alpha.1, -dev).",
         )
-        return 2
+        return None
     if not is_semver(body):
         emit(
-            f"tag {tag} is not a valid SemVer version.",
-            "Python accepts it; cargo cannot, so this tag names no single version",
-            "and cannot be released by this pipeline.",
+            f"{noun} is not a valid SemVer version.",
+            "Python accepts it; cargo cannot, so it names no single version and",
+            "cannot be released by this pipeline.",
         )
-        return 2
+        return None
     if "+" in body:
         emit(
-            f"tag {tag} carries a local version segment.",
+            f"{noun} carries a local version segment.",
             "PyPI refuses local versions on upload, so release:pypi would fail",
             "after release:crates had already written to crates.io.",
         )
+        return None
+    return body, pep440
+
+
+def do_set(root: Path, version: str) -> int:
+    """Write every site to `version`, each in its own ecosystem's spelling.
+
+    The write is a line substitution, not a TOML round-trip: `tomllib` is
+    read-only and the Makefile runs this under `uv run --no-project
+    --isolated`, so there is no `tomlkit` to reach for and no index to reach
+    it from. That is the cheaper shape anyway -- rewriting a manifest through
+    a serialiser reflows comments and key order across a file this project
+    reviews by diff.
+
+    Every site is read first. `find_line` recovers the line each value is
+    written on, and the value read out of the TOML parse is what gets
+    replaced on it, so a line whose contents moved cannot be written blind.
+    Sites are grouped by file and each file is written once; substitutions
+    never change a line count, so the numbers stay valid across the batch.
+
+    The lockfiles are not sites (see the SITES table) and are regenerated
+    afterwards. The closing line says how.
+    """
+    if not version.strip():
+        emit("--set needs a version, e.g. `make set-version VERSION=0.4.1-dev`")
         return 2
+
+    spellings = _spellings(version, f"version {version}")
+    if spellings is None:
+        return 2
+    body, pep440 = spellings
+
+    # rel -> [(line number, text as written today, text to write)]
+    edits: dict[str, list[tuple[int, str, str]]] = {}
+    claimed: set[tuple[str, int]] = set()
+    for site, found in read_all(root):
+        if found.lineno is None:
+            raise SetupError(f"{site.path}: cannot locate the line {site.label} is written on")
+        if (site.path, found.lineno) in claimed:
+            raise SetupError(f"{site.path}:{found.lineno}: two sites resolve to this line")
+        claimed.add((site.path, found.lineno))
+        wanted = pep440 if site.eco is Eco.PYTHON else body
+        edits.setdefault(site.path, []).append((found.lineno, _needle(site, found.value), _needle(site, wanted)))
+
+    for rel, items in sorted(edits.items()):
+        lines = load_text(root, rel).splitlines(keepends=True)
+        for lineno, old, new in items:
+            line = lines[lineno - 1]
+            if old not in line:
+                raise SetupError(f"{rel}:{lineno}: expected {old} on this line, found {line.strip()!r}")
+            lines[lineno - 1] = line.replace(old, new)
+        (root / rel).write_text("".join(lines), encoding="utf-8")
+
+    # Read the tree back rather than trusting the write. A bad substitution
+    # across 23 sites on the release path is exactly the failure that must not
+    # be silent, and re-reading also re-parses every manifest, so a write that
+    # broke the TOML fails here instead of in the next job.
+    findings = [
+        f"{site.path}:{found.lineno if found.lineno is not None else '?'}: {site.label}: wrote {found.display}"
+        for site, found in read_all(root)
+        if found.value != (pep440 if site.eco is Eco.PYTHON else body)
+    ]
+    if findings:
+        emit(f"{len(findings)} of {len(SITES)} sites did not take the new version.", "", *findings)
+        return 2
+
+    print(f"set {len(SITES)} version sites to {body} (Cargo) / {pep440} (PEP 440)")
+    print("regenerate the lockfiles: cargo check; uv lock;")
+    print("  cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml")
+    return 0
+
+
+def check_tag(root: Path, tag: str) -> int:
+    spellings = _spellings(tag, f"tag {tag}")
+    if spellings is None:
+        return 2
+    body, expected_pep440 = spellings
 
     findings: list[tuple[str, str]] = []
     for site, found in read_all(root):
@@ -732,6 +822,18 @@ def _expected_display(site: Site, version: str) -> str:
     return f"{site.pin_name}=={version}" if site.role is Role.PEER_PIN else version
 
 
+def _needle(site: Site, version: str) -> str:
+    """The exact text a site's version is written as, for a line substitution.
+
+    A peer pin is written inside a requirement string (`xqsa[cuda]==0.4.0`),
+    so the pin name anchors it. Every other role writes a bare quoted version,
+    and the quotes are what keep `version = "0.4.0"` from also matching a path
+    or a name on the same line.
+    """
+    display = _expected_display(site, version)
+    return display if site.role is Role.PEER_PIN else f'"{display}"'
+
+
 def emit(*lines: str) -> None:
     for line in lines:
         print(f"error: version-sites: {line}".rstrip(), file=sys.stderr)
@@ -743,10 +845,20 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--root", default=None, help="tree to check; defaults to this script's repository")
     parser.add_argument("--list", action="store_true", help="print every version site and its value")
     parser.add_argument("--print-version", action="store_true", help="print the tree's canonical PEP 440 version")
+    parser.add_argument("--set", default=None, metavar="VERSION", help="write every version site to VERSION")
     args = parser.parse_args(argv)
 
-    if args.list and args.print_version:
-        print("error: version-sites: --list and --print-version are mutually exclusive", file=sys.stderr)
+    modes = [
+        name
+        for name, selected in (
+            ("--list", args.list),
+            ("--print-version", args.print_version),
+            ("--set", args.set is not None),
+        )
+        if selected
+    ]
+    if len(modes) > 1:
+        print(f"error: version-sites: {' and '.join(modes)} are mutually exclusive", file=sys.stderr)
         return 2
 
     root = Path(args.root).resolve() if args.root else REPO_ROOT
@@ -756,6 +868,8 @@ def main(argv: list[str]) -> int:
             return do_list(root)
         if args.print_version:
             return do_print_version(root)
+        if args.set is not None:
+            return do_set(root, args.set)
 
         # The table sweeps run whether or not there is a tag. They compare no
         # versions; they assert the table still describes the tree, so a new

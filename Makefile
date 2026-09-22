@@ -5,7 +5,7 @@
         check-release-notes \
         test-rust test-python check-parity check-docs-handwritten \
         check-crate-publish check-python-dists check-release \
-        check-version-sites list-version-sites \
+        check-version-sites list-version-sites set-version \
         deps deps-miri deps-py deps-wasm \
         install-hooks \
         lint lint-clippy lint-doc lint-deny-rs lint-py check-uv-lock \
@@ -154,6 +154,20 @@ check-version-sites:
 # list, so the prose and the check cannot drift.
 list-version-sites:
 	$(VERPY) scripts/check-version-sites.py --list
+
+# Writes every site in that list to VERSION, each in its own ecosystem's
+# spelling -- SemVer in the Cargo manifests, PEP 440 in the Python ones, so
+# `0.4.1-dev` lands as `0.4.1-dev` in one and `0.4.1.dev0` in the other.
+#
+# The lockfiles are not version sites and do not move on their own. Follow
+# with `cargo check`, `uv lock`, and `cargo update -p xqvm --manifest-path
+# fixtures/pallet-xqvm/Cargo.toml`; the target prints the same three.
+#
+# Every back-merge conflicts on these sites by construction, so the
+# resolution is this one command rather than 23 hand edits.
+#   make set-version VERSION=0.4.1-dev
+set-version:
+	$(VERPY) scripts/check-version-sites.py --set "$(VERSION)"
 
 # "Is the release artefact publishable": the tag/manifest version check,
 # crate dry-run packaging, and the Python distribution
