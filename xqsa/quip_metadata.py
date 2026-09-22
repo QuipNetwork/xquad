@@ -69,7 +69,7 @@ from xqsa.quip_codec import QuipMetadataError
 
 __all__ = ["METADATA_AT_VERSION_API", "TARGET_METADATA_VERSION", "connect", "v14_interface_class"]
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("xqsa.quip.metadata")
 
 # The runtime API entry point that serves metadata at a caller-chosen version,
 # and the version we ask it for: the newest one `scalecodec` 1.2.x decodes.

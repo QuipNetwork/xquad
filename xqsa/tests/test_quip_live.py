@@ -60,6 +60,8 @@ pytest.importorskip(
 )
 
 from xqsa.quip import (
+    MEMPOOL_PALLET,
+    PROPOSE_JOB_CALL,
     QuipJobFailedError,
     QuipSubmissionError,
     QuipTimeoutError,
@@ -198,7 +200,7 @@ def _miner_solves(tmp_path_factory) -> bool:
     # Give the funding a moment to land before reserving a reward.
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
-        if solver._check_balance(0) > UNIT:
+        if solver._free_balance() > UNIT:
             break
         time.sleep(3)
 
@@ -208,7 +210,8 @@ def _miner_solves(tmp_path_factory) -> bool:
     # on. A gate must exercise what it gates.
     job = model_to_ising(_asymmetric_spin_model(), solver._fetch_topology())
     try:
-        order_id = solver._propose_job(job)
+        wire, ext_hash = solver._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, solver._propose_call_params(job))
+        order_id = solver._propose_job(wire, ext_hash)
     except Exception:
         return False
 
