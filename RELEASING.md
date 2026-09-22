@@ -121,27 +121,50 @@ Before cutting a tag:
    access token, `api` scope, masked). `write_repository` is the minimum
    needed to push tags; full `api` is simpler to configure. Used only by
    `release:auto-tag` to look up the merged MR and push the tag.
-3. **Settings → Merge requests → Approvals** -- enable "Require code
-   owner approval" for the `main` branch and set approvals required
-   to 2. This enforces that all MRs go through both
-   `@kleczkowski` and `@meganathanmanish`.
+3. **Settings → Repository → Protected branches** -- protect `main`
+   (push: No one, merge: Maintainers), `dev` and `release/*` (push and
+   merge: Maintainers), force push off on all three. Protecting
+   `release/*` is what runs the full CI tier, hardware included, on a
+   release candidate. The table and the reasoning are in
+   [`docs/guide/gitflow-protocol.md`](docs/guide/gitflow-protocol.md).
+4. **Settings → Merge requests** -- squash commits when merging:
+   "Allow, off by default". A release merge must not squash, and under
+   "Require" it cannot be stopped. Merge request title pattern: the
+   Conventional Commits grammar, so a bad title is rejected on the form
+   before a pipeline has to catch it.
+
+The project's approval rule is one approval from any member, and an
+author cannot approve their own merge request. `.gitlab/CODEOWNERS` is
+advisory -- code owner approval is off on every protected branch.
 
 ### Release MR flow (standard)
 
+There are two long-lived lines, and the first decision is which one this
+release comes from: a **patch** (`vX.Y.Z`, Z > 0) is cut from `main`, the
+non-breaking line, and a **minor** (`vX.Y.0`) is cut from `dev`, the
+breaking one. The source line freezes until the release merges. Both
+kinds merge into `main`. The protocol behind this -- routing, the freeze,
+the back-merge -- is in
+[`docs/guide/gitflow-protocol.md`](docs/guide/gitflow-protocol.md) and is
+not restated here.
+
 ```sh
-# 1. Create a release branch. The branch name must match release/vX.Y.Z
+# 1. Create a release branch from its line: origin/main for a patch,
+#    origin/dev for a minor. The branch name must match release/vX.Y.Z
 #    exactly -- the CI auto-tag job matches the merge SHA against the MR
 #    API to find this branch name.
-git checkout -b release/vX.Y.Z main
+git fetch origin && git switch -c release/vX.Y.Z origin/main   # or origin/dev
 
-# 2. Bump versions in every manifest, then regenerate the lockfiles.
-#    `make list-version-sites` prints every site and its current value;
-#    that list lives in scripts/check-version-sites.py and is not
-#    repeated here, so the prose cannot fall behind the check. In shape
-#    it is: every crate manifest, the two workspace dependency aliases in
-#    Cargo.toml, every pyproject [project] version, xqvm_py/__init__.py,
-#    every `==X.Y.Z` peer pin including xquad's optional-dependencies,
-#    and the lockfiles below.
+# 2. Set every version site, then regenerate the lockfiles.
+#    `make set-version` writes all of them, each in its own ecosystem's
+#    spelling; `make list-version-sites` prints them. That list lives in
+#    scripts/check-version-sites.py and is not repeated here, so the
+#    prose cannot fall behind the check. In shape it is: every crate
+#    manifest, the two workspace dependency aliases in Cargo.toml, every
+#    pyproject [project] version, xqvm_py/__init__.py, every `==X.Y.Z`
+#    peer pin including xquad's optional-dependencies, and the pallet
+#    fixture's lock entry.
+make set-version VERSION=X.Y.Z
 #    Then regenerate: `cargo check` (Cargo.lock) and `uv lock` (uv.lock).
 #    `uv lock` is not optional bookkeeping here -- `make check-uv-lock`
 #    (`uv lock --check`) runs in `verify:python` and `preflight-py` and
@@ -158,17 +181,18 @@ git checkout -b release/vX.Y.Z main
 #    Then confirm: `make check-version-sites TAG=vX.Y.Z`.
 git commit -s -am "chore: bump workspace to X.Y.Z"
 
-#    Main carries `X.Y.Z-dev` (Rust) / `X.Y.Z.devN` (Python) between
-#    releases, so this step usually just drops the suffix. The suffix no
-#    longer carries the resolution argument it was introduced with:
-#    `check-crate-publish` packages every workspace member into a scratch
-#    tree and resolves each against the locally packaged siblings rather
-#    than against crates.io, so a workspace version that names an
-#    already-published release can no longer pull a sibling from
-#    crates.io in place of the local source. See the `check-crate-publish`
-#    comment in the Makefile for what that target does and why. Keep the
-#    suffix as the convention that says main is unreleased. After
-#    tagging, open a follow-up that bumps main to the next `-dev` version.
+#    Both lines carry a `-dev` version between releases -- `main` the
+#    next patch, `dev` the next minor -- so this step usually just drops
+#    the suffix. The suffix no longer carries the resolution argument it
+#    was introduced with: `check-crate-publish` packages every workspace
+#    member into a scratch tree and resolves each against the locally
+#    packaged siblings rather than against crates.io, so a workspace
+#    version that names an already-published release can no longer pull
+#    a sibling from crates.io in place of the local source. See the
+#    `check-crate-publish` comment in the Makefile for what that target
+#    does and why. It is now enforced rather than conventional:
+#    `check-version-sites` fails on `main` or `dev` when either carries a
+#    release version, which is what the reopening step below answers.
 #
 #    The two ecosystems spell prereleases differently and always have:
 #    Cargo wants SemVer (`0.4.0-dev`, `0.3.0-rc1`), Python wants PEP 440
@@ -178,42 +202,54 @@ git commit -s -am "chore: bump workspace to X.Y.Z"
 git push -u origin release/vX.Y.Z
 ```
 
-Title the MR `release: vX.Y.Z`. The project squashes on merge with
-`squash_commit_template = %{title}`, so the title becomes a commit
-subject and `verify:policy` checks it against the commit grammar --
-`release` is a type in `scripts/commit-grammar.sh` for exactly this
-reason, and git-cliff drops it.
+Open the MR with the `release` template and tick the release type:
+patch from `main` or minor from `dev`. Title it `release: vX.Y.Z`. The
+title is checked against the commit grammar twice: by the title pattern
+on the merge request form, and by `verify:policy` through
+`scripts/check-mr-title.sh`. `release` is a type in
+`scripts/commit-grammar.sh`, and git-cliff drops it.
 
-`verify:policy` checks the title on the merge request's own pipelines,
-via `scripts/check-mr-title.sh`, so a non-conforming title fails while
-correcting it is still cheap. It used to fail only once a merge train
-had started, because the squash commit carrying the title existed only
-on the train ref; disabling the train left the title unchecked
-everywhere until the explicit check replaced that coverage.
+Because a release merges unsquashed, the title is not a commit subject.
+It reaches `main` only inside the merge commit's message, below a
+GitLab-generated `merge: branch 'release/vX.Y.Z' into 'main'` subject
+that git-cliff skips, so a title edited after the last pipeline cannot
+remove anything from the release notes.
 
-One limitation to know about when retitling a release MR: GitLab starts
-pipelines on push, not on title edits. A title changed after the last
-push is not rechecked, so retitle before your final push rather than
-after.
+`verify:policy` also gates the merge on containment: the release branch
+must contain `origin/main`, or it would ship without everything `main`
+fixed since it was cut. A minor release branch cut from a `dev` that is
+missing a back-merge fails here, and the fix is to back-merge `main`
+into it.
 
-If one slips through anyway, the `main` pipeline catches it after the
-merge. `verify:policy` finds an empty commit range there and checks
-what the push landed instead, which for a merge is the squash commit
-carrying the title, so a bad subject fails loudly within minutes. It is
-only a detection: the commit is on `main` and cannot be amended, and a
-subject that fails the grammar is dropped from the rendered notes by
-`filter_unconventional`. Expect the gap when previewing with
-`make changelog-release VERSION=vX.Y.Z STRIP=all OUTPUT=/dev/stdout`,
-and add the entry by hand on the GitLab Release page.
+Open the MR targeting `main`. It needs the project's one approval; the
+template's `/assign_reviewer` puts both @kleczkowski and
+@meganathanmanish on it, and review from both is expected of a release
+rather than enforced -- a two-of-two pool cannot be enforced while an
+author cannot approve their own merge request.
 
-Open the MR targeting `main`. Both @kleczkowski and @meganathanmanish
-must approve. After approval, merge using any strategy -- squash and
-merge commit are both supported. `release:auto-tag` detects the merged
-MR by matching `CI_COMMIT_SHA` against both `squash_commit_sha` and
-`merge_commit_sha` in the GitLab MR API.
+**Merge it without squashing.** A squashed release loses every commit
+behind it -- a minor loses everything from `dev`, a patch the fixes
+that landed on the release branch -- and the release notes come out
+empty with nothing reporting it. `release:auto-tag` would still find
+the merge, since it matches `CI_COMMIT_SHA` against both
+`squash_commit_sha` and `merge_commit_sha`; the automation tolerates
+either, the policy does not.
 
 The merge triggers `release:auto-tag` on `main`, which pushes tag
 `vX.Y.Z`. The tag then fires the rest of the release pipeline.
+
+After the tag, two follow-ups, and CI marks each one outstanding until
+it lands:
+
+1. **Reopen `main`** at the next patch's `-dev` version, by merge
+   request from a `chore/` branch -- `main` is closed to direct pushes.
+   Until it merges, `release:validate` fails on `main`'s pipelines,
+   because `main` carries a release version.
+2. **Back-merge `main` into `dev`**, by direct push, following the
+   recipe in [`docs/guide/gitflow-protocol.md`](docs/guide/gitflow-protocol.md)
+   under "Back-merging". After a minor this is also where `dev` takes the
+   next minor's `-dev` version. Until it lands, `dev`'s pipelines carry a
+   standing red from `check-branch-containment`.
 
 `release:auto-tag` carries `needs: []`, so it does not wait for the
 merge commit's own `verify` / `test` / `hardware` / `docs` jobs -- the
@@ -227,7 +263,8 @@ red. See the job's comment in `.gitlab/ci/release.yml`.
 
 ### Legacy manual flow (fallback)
 
-If you need to tag without a release MR (e.g., hotfix or RC):
+If you need to tag without a release MR -- a release candidate, or a
+recovery when auto-tagging failed:
 
 ```sh
 # Bump every version site to X.Y.Z first -- step 2 of the release MR
@@ -246,20 +283,25 @@ nothing published: delete the tag, bump, and re-cut, as under "If a tag
 does get cut against a red tree" above.
 
 Release candidates take this path, and the bump is not optional for
-them either. Main carries the next version with a prerelease suffix, so
-cutting `vX.Y.Z-rc1` means moving every site to `X.Y.Z-rc1` (Cargo) /
-`X.Y.ZrcN` (Python) first, and opening the follow-up back to the `-dev`
-version afterwards.
+them either: the published version comes from the tree, so the tagged
+commit has to carry `X.Y.Z-rcN` (Cargo) / `X.Y.ZrcN` (Python). Cut one
+the way a beta is cut -- a throwaway branch off `release/vX.Y.Z`,
+`make set-version VERSION=X.Y.Z-rcN` with the lockfiles regenerated, the
+tag, and the branch discarded unmerged. The release branch itself stays
+at `X.Y.Z` throughout, so nothing has to be bumped back. The procedure
+is in [`docs/guide/gitflow-protocol.md`](docs/guide/gitflow-protocol.md)
+under "Pre-release snapshots".
 
-An rc tag runs the full pipeline through `release:crates` and
-`release:pypi` -- both share the `.on-release-tag` rule, so rc
-artefacts publish the same as any other tag -- but `release:notes`
-carries its own, narrower rule and does not fire on a tag matching
-`-rc`. An rc tag publishes crates and wheels with no GitLab Release
-page. This mirrors `cliff.toml`'s `tag_pattern`, which does not treat
-an rc tag as a release boundary either: the rc's commits fold into the
-following non-rc release's notes instead of getting a page of their
-own that the real release would then have to absorb a second time.
+A prerelease tag (`-rcN` or `-betaN`) runs the full pipeline through
+`release:crates` and `release:pypi` -- both share the `.on-release-tag`
+rule, so its artefacts publish the same as any other tag -- but
+`release:notes` and `docs:publish` match `cliff.toml`'s `tag_pattern`
+instead, three numeric fields and nothing else. A prerelease publishes
+crates and wheels with no GitLab Release page and no documentation.
+`tag_pattern` does not treat a prerelease as a release boundary either:
+its commits fold into the following release's notes instead of getting
+a page of their own that the real release would then have to absorb a
+second time.
 
 ---
 
@@ -288,16 +330,19 @@ The tag push triggers a fully-automatic pipeline in stage `release`:
    (`needs:` enforces ordering so PyPI cannot run before crates.io).
 4. **`release:notes`** -- git-cliff renders the GitLab Release page
    from the conventional-commit history, scoped to the range between
-   this tag and its nearest non-rc predecessor, so the page carries
+   this tag and its nearest release predecessor, so the page carries
    exactly this release's own section rather than every release
-   reachable from history. Skipped entirely on an rc tag (see "Release
-   candidates" above). Runs after `release:pypi` so the announcement
+   reachable from history. Skipped entirely on a prerelease tag (see
+   "Release candidates" above). Runs after `release:pypi` so the announcement
    page goes live only once all artefacts are on the registries. It
    fetches `release-cli` from the same `RELEASE_CLI_URL` that
    `release:validate` probes on every pipeline, so a 404 or an
    unreachable registry now surfaces on a merge request instead of
    here, last in the tag-only publish chain. It is also the last job,
    so artefacts are already live and a re-run is safe.
+5. **`docs:publish`** -- publishes the book this tag carries, on a
+   release tag only. `main` is a working branch, so the published book
+   always describes the latest release.
 
 Watch the pipeline. If `release:pypi` fails, rerun only that job:
 `twine upload --skip-existing` makes a re-run a no-op for anything
@@ -372,10 +417,9 @@ and rerun the pipeline.
   source, which requires a Rust toolchain (rustc >= 1.85). Native
   macOS/Windows wheels would eliminate that requirement but need
   platform-specific CI runners.
-- **Automated version bumps.** No `cargo-release` / `hatch version`
-  integration yet; versions are edited by hand per the step above.
-  `make check-version-sites` verifies the result but does not produce
-  it, so a bump is still as many edits as there are sites.
+- **Automated version selection.** `make set-version` writes every site,
+  but which version comes next, and regenerating the three lockfiles
+  after it, are still by hand.
 - **Signed tags + signed artefacts.** Tags are expected to be git-
   signed (`git tag -s`); crates.io / PyPI artefact signing (sigstore
   cosign, PEP 740) is not wired. Tracked separately.

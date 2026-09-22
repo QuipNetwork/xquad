@@ -87,7 +87,12 @@ make serve-docs            # mdbook serve --open
 make changelog                              # generate CHANGELOG.md (preview unreleased)
 make changelog-release VERSION=v0.2.0       # preview a tag's release notes (renders exactly one section)
 make render-changelog                       # render-only validation (lint smoke)
-make check-release-notes                    # regression guard: every non-rc release renders exactly one section
+make check-release-notes                    # regression guard: every release renders exactly one section
+
+# Versions and branches (docs/guide/gitflow-protocol.md is normative)
+make list-version-sites                     # every place a release version is written
+make set-version VERSION=0.4.1-dev          # write them all; then cargo check && uv lock
+make check-branch-containment               # origin/main contained in dev / release/* (no-op elsewhere)
 ```
 
 ## Shared Conventions
@@ -118,6 +123,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 ### DCO Sign-Off
 
 Commits must be signed off: `git commit -s` (DCO requirement from `CONTRIBUTING.md`).
+
+### Branching
+
+Two long-lived branches. [`docs/guide/gitflow-protocol.md`](docs/guide/gitflow-protocol.md) is normative for routing, releases, betas and the back-merge; do not restate it. Before 1.0:
+
+- **`main`** is the non-breaking line, at the next patch's `-dev` version. It is closed to direct pushes; everything lands by merge request.
+- **`dev`** is the breaking line, at the next minor's `-dev` version. Maintainers push to it for back-merges and version bumps only. Anything authored goes through a merge request, because a direct push skips the title check and the atomic spec-MR rule.
+
+Route every change by one question: **does it break?** Before 1.0 the minor is the breaking bump, so "is this a fix?" is the wrong question -- a non-breaking feature goes to `main` and a breaking fix goes to `dev`. A breaking change branches from `dev`, targets `dev`, and carries `!` in its merge request title and commit subjects. Everything else branches from and targets `main`. There is no `hotfix/` branch before 1.0. Branch names stay `feature/qui-<id>` on either line; the target is set on the merge request, not in the name.
+
+When opening a merge request, answer the **Compatibility** block in `.gitlab/merge_request_templates/default.md` -- GitLab auto-populates that template, and its answer decides the target branch, so it has to match the branch chosen on the form. Leaving it blank means an unrouted change. A non-breaking claim needs two or three lines naming what the change touched and why a consumer pinned to the current minor can take it without editing their code. Releases use `release.md` instead (`glab mr create --template release`).
+
+Nothing is squashed on merge. The one exception is post-1.0 `hotfix/*` into `main`.
 
 ### Conventional Commits
 
@@ -349,10 +367,10 @@ happened to share a stage barrier and nothing else:
 
 | Phase | Question it answers | What it covers |
 | --- | --- | --- |
-| `verify` | Does the workspace match what it's required to match? | clippy, rustdoc, cargo-deny, ruff, `uv.lock` freshness, the fresh-xqffi-cdylib check, opcode parity, Rust + Python conformance vectors, example smoke tests, atomic spec-MR guard, commit-message guard, merge-request-title guard, changelog render |
+| `verify` | Does the workspace match what it's required to match? | clippy, rustdoc, cargo-deny, ruff, `uv.lock` freshness, the fresh-xqffi-cdylib check, opcode parity, Rust + Python conformance vectors, example smoke tests, atomic spec-MR guard, commit-message guard, merge-request-title guard, branch containment guard, changelog render |
 | `test` | Does the workspace do what it should when executed? | unit, integration, doc tests (Rust); pytest (Python); Quip signing-layer tests; WASM no_std tests; Substrate pallet fixture |
 | `hardware` | Does it work on real hardware? | CUDA, D-Wave QPU, and Metal solver tests on real hardware (protected refs only) |
-| `docs` | Is the documentation correct and buildable? | generated-docs freshness, docs drift guard, package README length guard, mdbook build, GitLab Pages publish |
+| `docs` | Is the documentation correct and buildable? | generated-docs freshness, docs drift guard, package README length guard, mdbook build, GitLab Pages publish (release tags only) |
 | `release` | Is the artefact publishable, and (on a tag) published? | `release:validate` packaging checks on every pipeline including tags; crates.io + PyPI publishing and GitLab Release notes via git-cliff on a pushed tag |
 
 **Gating topology.** `verify:*` and `test:*` jobs all carry `needs: []`
@@ -396,6 +414,13 @@ absent job. The path lists, the per-clause reasoning, and the per-entry
 justification live in `.gitlab/ci/test.yml`'s "Path gating" section.
 Local `make preflight-rs` runs both targets unconditionally.
 
+**CI signals.** Two reds are expected, and each means a step of the release protocol is outstanding rather than that something is broken. Do not "fix" either by anything but the step it names:
+
+- **`dev` red from `check-branch-containment`** (in `verify:policy`): `main` has moved since the last back-merge. Every push pipeline on `dev` stays red until someone back-merges `main` into `dev`. Merge requests into `dev` are not judged by it, so work continues in parallel.
+- **`main` red from `check-version-sites`** (in `release:validate`): `main` carries a release version. This follows every release merge until the merge request reopening `main` at the next patch's `-dev` version lands.
+
+A third is a gate, not a signal: a merge request from `release/*` fails `verify:policy` when the release branch does not contain `origin/main`. The fix is a back-merge of `main` into the release branch.
+
 **Naming.** A job's name prefix is its phase (`verify:rust` runs in the
 `verify` stage, `docs:build` in `docs`) -- that is the CI-side taxonomy.
 The Makefile stays action-first (`<action>-<subject>`, e.g. `lint-rust`,
@@ -416,7 +441,7 @@ Caveats:
 
 - Pre-conventional-commits history (everything before QUI-480) is filtered out by `filter_unconventional = true`; only commits on or after the QUI-480 enforcement appear in the rendered output. `make changelog` renders the whole unreleased history with no other scoping, so an empty render is the expected state until the first user-visible `feat`/`fix` lands.
 - `chore`, `style`, `test`, `ci`, `build` are **dropped silently** -- if a commit under one of those types ships a user-visible change (e.g. a security-relevant dep bump under `chore`), promote it to `feat`/`fix`/`security` before merging or it will be invisible in release notes.
-- `cliff.toml`'s `tag_pattern` scopes each release's notes to that release alone: it keeps an rc tag from ever becoming a range boundary, so an rc's commits fold into the following non-rc release's section instead of getting a page of their own. `changelog-release` (the Makefile target `release:notes` invokes) pairs this with an explicit `PREV..VERSION` range, where `PREV` is the nearest non-rc predecessor tag, rather than an unbounded `--tag`. `make check-release-notes` (`scripts/check-release-notes.sh`, run as part of `lint-policy` / `verify:policy`) is the regression guard: it renders every non-rc tag's range plus the pre-tag preview and asserts each yields exactly one `## [` heading.
+- `cliff.toml`'s `tag_pattern` scopes each release's notes to that release alone: it is three numeric fields and nothing else, so a prerelease tag (`-rcN`, `-betaN`) never becomes a range boundary and its commits fold into the following release's section instead of getting a page of their own. `changelog-release` (the Makefile target `release:notes` invokes) pairs this with an explicit `PREV..VERSION` range, where `PREV` is the nearest release predecessor tag (`git describe --exclude='*-*'`, the same pattern in glob form), rather than an unbounded `--tag`. `release:notes` and `docs:publish` match the same pattern, so a prerelease publishes to both registries with no Release page and no documentation. `make check-release-notes` (`scripts/check-release-notes.sh`, run as part of `lint-policy` / `verify:policy`) is the regression guard: it renders every release tag's range plus the pre-tag preview and asserts each yields exactly one `## [` heading. Mirror the pattern wherever a tag is classified; a denylist of prerelease spellings is what let `-beta` through before.
 - Before tagging a release, run `make changelog-release VERSION=vX.Y.Z` locally to preview what the GitLab Release page will say -- the render contains exactly one section. Bad commit subjects can be fixed on the source branch and re-merged before the tag is cut.
 
 ## Local overrides
