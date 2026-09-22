@@ -898,6 +898,9 @@ def _clear_quip_env(monkeypatch) -> None:
         "QUIP_KEYSTORE",
         "QUIP_REWARD",
         "QUIP_TOPOLOGY",
+        "QUIP_FAUCET_URL",
+        "QUIP_AUTOCONFIRM",
+        "QUIP_AUTOFUND",
         # CA configuration steers connect's wss:// default; keep it out of unit tests.
         "SSL_CERT_FILE",
         "SSL_CERT_DIR",
@@ -1073,6 +1076,53 @@ class TestSolverQuipConstruction:
         _clear_quip_env(monkeypatch)
         with pytest.raises(TypeError, match="multiple values for keyword argument 'url'"):
             SolverQuip.for_network("aglais", url="ws://x", seed=VALID_SEED)
+
+    def test_for_network_sets_preset_faucet_and_name(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+        from xqsa.quip_networks import NETWORKS
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_FAUCET_URL", "http://env-faucet")
+        solver = SolverQuip.for_network("aglais", seed=VALID_SEED)
+        # The preset enters as an argument, so it beats QUIP_FAUCET_URL.
+        assert solver._faucet == NETWORKS["aglais"].faucet
+        assert solver._network == "aglais"
+
+    def test_for_network_caller_faucet_overrides_preset(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        solver = SolverQuip.for_network("aglais", seed=VALID_SEED, faucet="http://mine")
+        assert solver._faucet == "http://mine"
+
+    def test_faucet_from_arg(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, faucet="http://arg-faucet")
+        assert solver._faucet == "http://arg-faucet"
+        # A raw url= names no network.
+        assert solver._network is None
+
+    def test_faucet_from_env(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_FAUCET_URL", "http://env-faucet")
+        solver = SolverQuip(url="ws://fake", seed=VALID_SEED)
+        assert solver._faucet == "http://env-faucet"
+
+    def test_faucet_arg_beats_env(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_FAUCET_URL", "http://env-faucet")
+        solver = SolverQuip(url="ws://fake", seed=VALID_SEED, faucet="http://arg-faucet")
+        assert solver._faucet == "http://arg-faucet"
+
+    def test_faucet_unset_is_none(self, monkeypatch) -> None:
+        assert _make_solver(monkeypatch)._faucet is None
 
     def test_topology_from_env(self, monkeypatch) -> None:
         # QUIP_TOPOLOGY displaces the chain default. Constructed directly rather

@@ -225,6 +225,7 @@ class SolverQuip(Solver):
         block_wait: int = DEFAULT_BLOCK_WAIT,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         timeout: float = DEFAULT_TIMEOUT,
+        faucet: str | None = None,
     ) -> None:
         # Two distinct guards, one per piece of the [quip] extra: client + signer.
         try:
@@ -257,6 +258,9 @@ class SolverQuip(Solver):
         self._topology_cache: dict[str, Topology] = {}
         self._warned_allowed_values = False
         self._quip_signing = quip_signing
+        self._faucet = faucet or os.environ.get("QUIP_FAUCET_URL")
+        # Set by for_network; a solver built from a raw url= names no network.
+        self._network: str | None = None
 
         try:
             # Not substrateinterface.SubstrateInterface directly: Quip runtimes
@@ -286,8 +290,9 @@ class SolverQuip(Solver):
         """Build a solver against a named Quip network preset.
 
         Looks ``name`` up in :data:`xqsa.quip_networks.NETWORKS` and passes the
-        preset's RPC endpoint to the constructor as ``url``. Every other keyword
-        goes to the constructor unchanged. A classmethod rather than a
+        preset's RPC endpoint to the constructor as ``url`` and its faucet as
+        ``faucet``. A caller's own ``faucet=`` overrides the preset's; every
+        other keyword goes to the constructor unchanged. A classmethod rather than a
         constructor argument so the preset enters as ``url=``, which beats
         ``QUIP_RPC_URL``: an exported localdev URL cannot silently redirect a
         solver the caller asked to point at a named network.
@@ -307,7 +312,10 @@ class SolverQuip(Solver):
         if preset is None:
             raise ValueError(f"unknown Quip network {name!r}; known networks: {', '.join(sorted(NETWORKS))}")
         logger.info("Quip network %s resolved to %s", name, preset.rpc)
-        return cls(url=preset.rpc, **kwargs)
+        kwargs.setdefault("faucet", preset.faucet)
+        solver = cls(url=preset.rpc, **kwargs)
+        solver._network = name
+        return solver
 
     # ------------------------------------------------------------------
     # Identity / configuration resolution

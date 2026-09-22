@@ -46,9 +46,7 @@ not here.
 from __future__ import annotations
 
 import os
-import ssl
 import time
-import urllib.request
 
 import pytest
 
@@ -74,7 +72,7 @@ from xqsa.quip_codec import (
     DEFAULT_ISING_SPEC_ID,
     model_to_ising,
 )
-from xqsa.quip_metadata import _default_ca_bundle
+from xqsa.quip_faucet import fund_from_faucet
 from xqsa.quip_metadata import connect as connect_shimmed
 from xqsa.quip_signing import SIGNED_EXTENSIONS, _extension_fields, load_or_generate_keystore
 from xqvm_py.xqmx import XQMX
@@ -132,32 +130,6 @@ def chain():
     iface.close()
 
 
-def _request_faucet(dest: str) -> int:
-    """POST a funding request for ``dest`` to the faucet; return the HTTP status.
-
-    Verifies TLS with the same CA default as ``connect``, so an ``https://``
-    faucet works on macOS without an exported ``SSL_CERT_FILE``. ``ssl`` ignores
-    ``WEBSOCKET_CLIENT_CA_BUNDLE``, so it is honoured here explicitly, the way
-    websocket-client reads it: a file, a directory, or ignored when missing.
-    """
-    body = f'{{"dest":"{dest}","amount":{10 * UNIT}}}'.encode()
-    req = urllib.request.Request(
-        FAUCET_URL.rstrip("/") + "/request",
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    bundle = os.environ.get("WEBSOCKET_CLIENT_CA_BUNDLE", "")
-    if os.path.isfile(bundle):
-        context = ssl.create_default_context(cafile=bundle)
-    elif os.path.isdir(bundle):
-        context = ssl.create_default_context(capath=bundle)
-    else:
-        context = ssl.create_default_context(cafile=_default_ca_bundle())
-    with urllib.request.urlopen(req, timeout=30, context=context) as resp:  # noqa: S310 -- operator-supplied faucet URL
-        return resp.status
-
-
 @pytest.fixture(scope="session")
 def funded_keystore(tmp_path_factory):
     """A fresh keystore funded via the chain's faucet.
@@ -171,8 +143,7 @@ def funded_keystore(tmp_path_factory):
     keystore = load_or_generate_keystore(path)
     dest = "0x" + keystore.account_id.hex()
 
-    status = _request_faucet(dest)
-    assert status == 200, f"faucet returned {status}"
+    fund_from_faucet(dest, url=FAUCET_URL)
 
     # Wait for the transfer to land.
     iface = connect_shimmed(RPC_URL)
@@ -219,8 +190,7 @@ def _miner_solves(tmp_path_factory) -> bool:
     keystore = load_or_generate_keystore(path)
     dest = "0x" + keystore.account_id.hex()
     try:
-        if _request_faucet(dest) != 200:
-            return False
+        fund_from_faucet(dest, url=FAUCET_URL)
     except Exception:
         return False
 
