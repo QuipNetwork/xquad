@@ -136,7 +136,8 @@ def _request_faucet(dest: str) -> int:
     """POST a funding request for ``dest`` to the faucet; return the HTTP status.
 
     Verifies TLS with the same CA default as ``connect``, so an ``https://``
-    faucet works on macOS without an exported ``SSL_CERT_FILE``.
+    faucet works on macOS without an exported ``SSL_CERT_FILE``. ``ssl`` ignores
+    ``WEBSOCKET_CLIENT_CA_BUNDLE``, so it is honoured here explicitly.
     """
     body = f'{{"dest":"{dest}","amount":{10 * UNIT}}}'.encode()
     req = urllib.request.Request(
@@ -145,7 +146,8 @@ def _request_faucet(dest: str) -> int:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    context = ssl.create_default_context(cafile=_default_ca_bundle())
+    cafile = os.environ.get("WEBSOCKET_CLIENT_CA_BUNDLE") or _default_ca_bundle()
+    context = ssl.create_default_context(cafile=cafile)
     with urllib.request.urlopen(req, timeout=30, context=context) as resp:  # noqa: S310 -- operator-supplied faucet URL
         return resp.status
 

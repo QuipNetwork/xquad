@@ -72,7 +72,7 @@ import os
 import time
 import warnings
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 from xqsa import quip_metadata
 from xqsa.quip_codec import (
@@ -282,7 +282,7 @@ class SolverQuip(Solver):
         self._topology_hash = self._resolve_topology_hash(topology)
 
     @classmethod
-    def for_network(cls, name: str, /, **kwargs: Any) -> SolverQuip:
+    def for_network(cls, name: str, /, **kwargs: Any) -> Self:
         """Build a solver against a named Quip network preset.
 
         Looks ``name`` up in :data:`xqsa.quip_networks.NETWORKS` and passes the

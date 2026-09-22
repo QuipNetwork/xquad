@@ -38,6 +38,8 @@ than asserted about a decoder that ignores its input.
 
 from __future__ import annotations
 
+import os
+import ssl
 import sys
 import types
 
@@ -511,6 +513,13 @@ def connect_stubs(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "substrateinterface", substrate)
     monkeypatch.setitem(sys.modules, "certifi", certifi)
     monkeypatch.setattr(sys, "platform", "darwin")
+    # An empty OpenSSL store, as on python.org macOS builds, unless the env points
+    # at one -- mirroring how OpenSSL resolves SSL_CERT_FILE / SSL_CERT_DIR.
+    monkeypatch.setattr(
+        ssl,
+        "get_default_verify_paths",
+        lambda: types.SimpleNamespace(cafile=os.environ.get("SSL_CERT_FILE"), capath=os.environ.get("SSL_CERT_DIR")),
+    )
     for name in ("SSL_CERT_FILE", "SSL_CERT_DIR", "WEBSOCKET_CLIENT_CA_BUNDLE"):
         monkeypatch.delenv(name, raising=False)
 
@@ -521,6 +530,16 @@ class TestConnect:
         iface = connect("wss://node:443/rpc")
         assert iface.url == "wss://node:443/rpc"
         assert iface.kwargs == {"ws_options": {"sslopt": {"ca_certs": CA_BUNDLE}}}
+
+    def test_scheme_is_case_insensitive(self) -> None:
+        assert connect("WSS://node/rpc").kwargs == {"ws_options": {"sslopt": {"ca_certs": CA_BUNDLE}}}
+
+    def test_populated_store_is_kept(self, monkeypatch) -> None:
+        # Homebrew-style macOS Python: OpenSSL already has a CA file.
+        monkeypatch.setattr(
+            ssl, "get_default_verify_paths", lambda: types.SimpleNamespace(cafile="/brew/cert.pem", capath=None)
+        )
+        assert connect("wss://node/rpc").kwargs == {}
 
     def test_ws_gets_no_tls_options(self) -> None:
         assert connect("ws://localhost:20049/rpc").kwargs == {}

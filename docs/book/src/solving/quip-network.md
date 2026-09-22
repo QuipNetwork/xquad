@@ -25,7 +25,8 @@ The umbrella `xquad` package forwards `[cuda]`, `[dwave]`, and
 `[metal]` to the matching `xqsa` extra, but has no `[quip]` extra of
 its own -- install it against `xqsa` directly. The extra brings in
 `substrate-interface` (the chain RPC client), `certifi` (the CA
-bundle for `wss://` endpoints), and `quip-signer`, a
+bundle `wss://` falls back to on a macOS Python with none), and
+`quip-signer`, a
 native extension providing the chain's hybrid signature scheme
 (sr25519 plus FN-DSA-512), which `substrate-interface` alone cannot
 produce. `quip-signer` resolves a prebuilt wheel on Linux and builds

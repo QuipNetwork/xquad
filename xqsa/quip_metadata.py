@@ -60,6 +60,7 @@ from __future__ import annotations
 import functools
 import logging
 import os
+import ssl
 import sys
 from collections.abc import Mapping
 from typing import Any
@@ -298,21 +299,22 @@ def v14_interface_class(base: type) -> type:
     return type(f"V14{base.__name__}", (_V14MetadataMixin, base), {})
 
 
-_CA_ENV_VARS = ("SSL_CERT_FILE", "SSL_CERT_DIR", "WEBSOCKET_CLIENT_CA_BUNDLE")
-
-
 def _default_ca_bundle() -> str | None:
     """Return certifi's CA bundle path where TLS would otherwise have none.
 
-    python.org and uv-managed Pythons on macOS ship no CA bundle, so a TLS
-    handshake fails without one. Returns ``None`` on every other platform, whose
-    system trust store must keep applying, and whenever the user configured CAs
-    through ``SSL_CERT_FILE``, ``SSL_CERT_DIR`` or ``WEBSOCKET_CLIENT_CA_BUNDLE``.
+    python.org and uv-managed Pythons on macOS ship an empty OpenSSL store, so a
+    TLS handshake fails without a bundle. Returns ``None`` everywhere else: off
+    macOS, whose system trust store must keep applying; on a macOS Python whose
+    store is populated (Homebrew, or ``SSL_CERT_FILE`` / ``SSL_CERT_DIR``
+    pointing at one); and when ``WEBSOCKET_CLIENT_CA_BUNDLE`` is set.
 
     Raises:
         ImportError: if ``certifi`` is needed and not installed.
     """
-    if sys.platform != "darwin" or any(os.environ.get(name) for name in _CA_ENV_VARS):
+    if sys.platform != "darwin" or os.environ.get("WEBSOCKET_CLIENT_CA_BUNDLE"):
+        return None
+    paths = ssl.get_default_verify_paths()
+    if paths.cafile or paths.capath:
         return None
     import certifi
 
@@ -325,11 +327,10 @@ def connect(url: str, **kwargs: Any) -> Any:
     The shim lives on the returned instance's class alone; an unrelated
     ``substrate-interface`` client in the same process is untouched.
 
-    On macOS, a ``wss://`` URL verifies TLS against certifi's CA bundle unless
-    the caller passed ``ws_options`` (forwarded untouched) or configured CAs
-    through ``SSL_CERT_FILE``, ``SSL_CERT_DIR`` or
-    ``WEBSOCKET_CLIENT_CA_BUNDLE``. Other platforms keep their system trust
-    store.
+    On a macOS Python with an empty CA store, a ``wss://`` URL verifies TLS
+    against certifi's bundle unless the caller passed ``ws_options`` (forwarded
+    untouched) or set ``WEBSOCKET_CLIENT_CA_BUNDLE``; see
+    :func:`_default_ca_bundle`. Everywhere else the existing trust store applies.
 
     Raises:
         ImportError: if ``substrate-interface`` is not installed, or ``certifi``
@@ -339,6 +340,6 @@ def connect(url: str, **kwargs: Any) -> Any:
 
     # websocket-client loads the system store only when no ca_certs is given, so
     # the bundle is supplied only where that store is empty (see _default_ca_bundle).
-    if url.startswith("wss://") and "ws_options" not in kwargs and (bundle := _default_ca_bundle()):
+    if url.lower().startswith("wss://") and "ws_options" not in kwargs and (bundle := _default_ca_bundle()):
         kwargs["ws_options"] = {"sslopt": {"ca_certs": bundle}}
     return v14_interface_class(substrateinterface.SubstrateInterface)(url=url, **kwargs)

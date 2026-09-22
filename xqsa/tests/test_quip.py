@@ -883,7 +883,9 @@ def _default_iface(*, with_default_spec_const: bool = False, balance: int | None
 def _install(monkeypatch, iface: object, *, substrate_raises: Exception | None = None) -> None:
     monkeypatch.setitem(sys.modules, "substrateinterface", _fake_substrate_module(iface, raises=substrate_raises))
     monkeypatch.setitem(sys.modules, "quip_signer", _fake_quip_signer())
-    # The rest of the [quip] extra: connect imports certifi for wss:// URLs.
+    # The rest of the [quip] extra: connect imports certifi for wss:// URLs on
+    # macOS. Pin the platform so every CI host takes that branch.
+    monkeypatch.setattr(sys, "platform", "darwin")
     certifi = types.ModuleType("certifi")
     certifi.where = lambda: "/fake/cacert.pem"  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "certifi", certifi)
