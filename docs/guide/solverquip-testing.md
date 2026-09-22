@@ -228,7 +228,8 @@ what the signing layer speaks.
 
 - **RPC:** the `aglais` preset in `xqsa/quip_networks.py` is the source of
   truth; it points at bootnode-1's validator RPC (bootnode-2 and bootnode-3
-  serve the same chain). Any node can fall behind the chain tip and serve a stale,
+  serve the same chain). The commands below spell out its current RPC and
+  faucet values; if they disagree with the preset, the preset wins. Any node can fall behind the chain tip and serve a stale,
   frozen view -- balances read as 0 and freshly submitted extrinsics look
   like they never land, even though the chain is live. Confirm the node is
   caught up before trusting reads (see the liveness check below), and point

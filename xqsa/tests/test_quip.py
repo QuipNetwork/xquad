@@ -890,7 +890,17 @@ def _install(monkeypatch, iface: object, *, substrate_raises: Exception | None =
 
 
 def _clear_quip_env(monkeypatch) -> None:
-    for name in ("QUIP_RPC_URL", "QUIP_SIGNER_SEED", "QUIP_KEYSTORE", "QUIP_REWARD", "QUIP_TOPOLOGY"):
+    for name in (
+        "QUIP_RPC_URL",
+        "QUIP_SIGNER_SEED",
+        "QUIP_KEYSTORE",
+        "QUIP_REWARD",
+        "QUIP_TOPOLOGY",
+        # CA configuration steers connect's wss:// default; keep it out of unit tests.
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "WEBSOCKET_CLIENT_CA_BUNDLE",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -1059,7 +1069,7 @@ class TestSolverQuipConstruction:
 
         _install(monkeypatch, _default_iface())
         _clear_quip_env(monkeypatch)
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeError, match="multiple values for keyword argument 'url'"):
             SolverQuip.for_network("aglais", url="ws://x", seed=VALID_SEED)
 
     def test_topology_from_env(self, monkeypatch) -> None:
