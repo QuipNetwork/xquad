@@ -68,34 +68,41 @@ if [[ -z "$(git tag -l)" ]]; then
     exit 0
 fi
 
-# Non-rc release tags. Mirrors .on-release-tag's shape
-# (.gitlab/ci/release.yml: /^v\d/) for "is this a release tag at all",
-# and cliff.toml's tag_pattern for "is it an rc".
+# Release tags, exactly as cliff.toml's tag_pattern defines one: three
+# numeric fields and nothing after them. This used to claim it mirrored
+# that pattern while the code denylisted `-rc`, which is the divergence
+# that would have let a `-beta` tag through as a range boundary and
+# rendered a release's notes short by every commit before the beta
+# (QUI-1256). Mirror the pattern; do not enumerate what it excludes.
 release_tags=()
 while IFS= read -r tag; do
     [[ -z "${tag}" ]] && continue
     release_tags+=("${tag}")
-done < <(git tag -l 'v[0-9]*' | grep -v -- '-rc' | sort -V)
+done < <(git tag -l 'v[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V)
 
 if [[ "${#release_tags[@]}" -eq 0 ]]; then
-    echo "guard: no non-rc release tags in this clone -- nothing to verify"
+    echo "guard: no release tags in this clone -- nothing to verify"
     exit 0
 fi
 
-# A non-rc predecessor must exist, or this is the first release ever
+# A release predecessor must exist, or this is the first release ever
 # tagged: there is no prior section for it to accidentally absorb, and
 # `make changelog-release` hits its own "neither branch resolves" error
 # for exactly this input, by design (see the Makefile's PREV
 # derivation). Skip that tag rather than fail on it.
+#
+# `--exclude` takes a glob rather than a regex, so `*-*` is how
+# tag_pattern's "no fourth component" is spelled here: a release tag
+# carries no hyphen, and every prerelease spelling does.
 testable_tags=()
 for tag in "${release_tags[@]}"; do
-    if git describe --tags --abbrev=0 --exclude='*-rc*' "${tag}^" >/dev/null 2>&1; then
+    if git describe --tags --abbrev=0 --exclude='*-*' "${tag}^" >/dev/null 2>&1; then
         testable_tags+=("${tag}")
     fi
 done
 
 if [[ "${#testable_tags[@]}" -eq 0 ]]; then
-    echo "guard: no non-rc tag with a non-rc predecessor -- nothing to verify"
+    echo "guard: no release tag with a release predecessor -- nothing to verify"
     exit 0
 fi
 

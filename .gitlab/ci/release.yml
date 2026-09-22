@@ -362,17 +362,23 @@ release:notes:
         - release:pypi
     # Deliberately its own `rules:`, not `<<: *on-release-tag`. That
     # anchor is shared with release:crates and release:pypi (this
-    # file's "Shared rules" section), which must keep publishing rc
-    # artefacts -- only the GitLab Release page is skipped for an rc
-    # tag. QUI-1096: cliff.toml's tag_pattern no longer recognises `-rc`
-    # tags as releases at all, so an rc tag's commits are folded into the
-    # following non-rc release's section instead of getting a page of
-    # their own; running this job on the rc tag itself would
-    # either publish an empty page (no commits since the last non-rc
-    # release yet) or a duplicate once the real release ships. Narrow
-    # the job, not the anchor.
+    # file's "Shared rules" section), which must keep publishing
+    # prerelease artefacts -- only the GitLab Release page is skipped
+    # for one. QUI-1096: cliff.toml's tag_pattern does not recognise a
+    # prerelease tag as a release at all, so its commits fold into the
+    # following release's section instead of getting a page of their
+    # own; running this job on the prerelease tag itself would either
+    # publish an empty page (no commits since the last release yet) or a
+    # duplicate once the real release ships. Narrow the job, not the
+    # anchor.
+    #
+    # The condition mirrors cliff.toml's tag_pattern rather than
+    # denylisting the prerelease spellings one at a time. `/^v\d/ &&
+    # !~ /-rc/` was the older form, and it would have published a page
+    # for a `-beta` tag: rc was the only spelling in use when it was
+    # written, and a denylist cannot know about the next one (QUI-1256).
     rules:
-        - if: $CI_COMMIT_TAG =~ /^v\d/ && $CI_COMMIT_TAG !~ /-rc/
+        - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
     variables:
         GIT_DEPTH: 0
     dependencies: []

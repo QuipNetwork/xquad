@@ -72,7 +72,7 @@ lint-python: fmt-check-py lint-py
 # unscoped history, so it would stay green through the exact QUI-1096
 # regression (every GitLab release page republishing every prior
 # release's changelog). check-release-notes instead renders every
-# non-rc tag's actual PREV..tag range and asserts each yields exactly
+# release tag's actual PREV..tag range and asserts each yields exactly
 # one `## [` heading, which is the regression itself. It needs full tag
 # history, not just depth, which verify:policy already provides via
 # GIT_DEPTH: 0 (see verify.yml), so this line is the only CI-side change
@@ -950,7 +950,7 @@ changelog:
 render-changelog:
 	git-cliff --config cliff.toml --output /dev/null
 
-# Wraps scripts/check-release-notes.sh, which renders every non-rc tag's
+# Wraps scripts/check-release-notes.sh, which renders every release tag's
 # PREV..tag range (the same range changelog-release derives below, for
 # every past tag rather than just the one VERSION names) and asserts
 # each render yields exactly one `## [` heading. render-changelog above
@@ -1030,15 +1030,21 @@ check-release-notes:
 # separately via --tag, so the rendered section is labelled with the
 # version being previewed rather than "unreleased").
 #
-# `--exclude='*-rc*'` is what keeps an rc tag from becoming the lower
-# bound of a release's range: an rc predecessor is passed over in favour
-# of the last real release, so the rc's own commits stay inside the
-# range and fold into the next real release's notes.
+# `--exclude='*-*'` is what keeps a prerelease tag from becoming the
+# lower bound of a release's range: a prerelease predecessor is passed
+# over in favour of the last real release, so its own commits stay
+# inside the range and fold into the next real release's notes.
+# `--exclude` takes a glob rather than a regex, and `*-*` is how
+# tag_pattern's "three numeric fields and nothing else" is spelled in
+# one: a release tag carries no hyphen and every prerelease spelling
+# does. It read `*-rc*` until QUI-1256, which was the same denylist
+# mistake in a second place -- a `-beta` predecessor would have bounded
+# the range and dropped every commit before it from the notes.
 #
 # It pairs with cliff.toml's `tag_pattern` (NOT its `skip_tags`), which
 # does the same job for the upper half -- git-cliff does not recognise
-# rc tags as releases at all, so one cannot become a boundary inside the
-# range either. Both halves are needed: this one is git's view of which
+# prerelease tags as releases at all, so one cannot become a boundary
+# inside the range either. Both halves are needed: this one is git's view of which
 # tag `prev` resolves to, that one is git-cliff's view of which tags
 # split a range. See cliff.toml's tag_pattern comment for why
 # `skip_tags` is not sufficient there.
@@ -1073,14 +1079,14 @@ changelog-release:
 		exit 2; \
 	fi; \
 	if git rev-parse -q --verify "$${VERSION}" >/dev/null 2>&1; then \
-		prev="$$(git describe --tags --abbrev=0 --exclude='*-rc*' "$${VERSION}^" 2>/dev/null || true)"; \
+		prev="$$(git describe --tags --abbrev=0 --exclude='*-*' "$${VERSION}^" 2>/dev/null || true)"; \
 		range="$${prev}..$${VERSION}"; \
 	else \
-		prev="$$(git describe --tags --abbrev=0 --exclude='*-rc*' HEAD 2>/dev/null || true)"; \
+		prev="$$(git describe --tags --abbrev=0 --exclude='*-*' HEAD 2>/dev/null || true)"; \
 		range="$${prev}..HEAD"; \
 	fi; \
 	if [ -z "$${prev}" ]; then \
-		echo "error: no predecessor tag found for VERSION=$${VERSION} (git describe --tags --abbrev=0 --exclude='*-rc*' <ref> returned nothing); changelog-release needs at least one earlier non-rc tag to bound the range" >&2; \
+		echo "error: no predecessor tag found for VERSION=$${VERSION} (git describe --tags --abbrev=0 --exclude='*-*' <ref> returned nothing); changelog-release needs at least one earlier release tag to bound the range" >&2; \
 		exit 2; \
 	fi; \
 	echo "changelog-release: rendering $${range} as $${VERSION}" >&2; \
