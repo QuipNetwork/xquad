@@ -221,3 +221,9 @@ def test_bad_ca_bundle_raises_faucet_error(monkeypatch):
     with pytest.raises(QuipFaucetError) as excinfo:
         fund_from_faucet(DEST, url=URL)
     assert excinfo.value.status is None
+
+
+def test_scheme_less_url_raises_faucet_error():
+    with pytest.raises(QuipFaucetError) as excinfo:
+        fund_from_faucet(DEST, url="faucet.example")
+    assert excinfo.value.status is None

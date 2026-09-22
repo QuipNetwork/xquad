@@ -1117,6 +1117,8 @@ class TestSolverQuipConstruction:
         monkeypatch.setenv("QUIP_FAUCET_URL", "http://env-faucet")
         solver = SolverQuip.for_network("aglais", seed=VALID_SEED, faucet=None)
         assert solver._faucet == NETWORKS["aglais"].faucet
+        solver = SolverQuip.for_network("aglais", seed=VALID_SEED, faucet="")
+        assert solver._faucet == NETWORKS["aglais"].faucet
 
     def test_for_network_caller_faucet_overrides_preset(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip
@@ -2676,6 +2678,26 @@ class TestSolveAutofundGate:
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         solver.solve(_model())
         assert "Fund 0x" in "".join(stderr.written)
+
+    def test_prompt_goes_to_stdout_when_stderr_is_redirected(self, monkeypatch) -> None:
+        solver, iface = _solve_ready_short(monkeypatch, autofund=False)
+
+        def fake_fund(dest, *, url, amount=None):
+            iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
+            return {}
+
+        monkeypatch.setattr("xqsa.quip.fund_from_faucet", fake_fund)
+        monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
+        stderr, stdout = _FakeTTY(isatty=False), _FakeTTY(isatty=True)
+        monkeypatch.setattr(sys, "stderr", stderr)
+        monkeypatch.setattr(sys, "stdout", stdout)
+        monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        solver.solve(_model())
+        shown = "".join(stdout.written)
+        assert "Fund 0x" in shown
+        assert "[quip] job quote" in shown
+        assert stderr.written == []
 
     def test_no_faucet_raises_before_the_autofund_gate(self, monkeypatch) -> None:
         from xqsa.quip import QuipSubmissionError

@@ -27,6 +27,7 @@ one drip, and rate-limits per destination. :func:`fund_from_faucet` wraps the
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import os
@@ -77,23 +78,25 @@ def _post_request(url: str, dest: str, amount: int | None, timeout: float) -> tu
     payload: dict = {"dest": dest}
     if amount is not None:
         payload["amount"] = amount
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     # Verifies TLS with the same CA default as xqsa.quip_metadata.connect, so
     # an https:// faucet works on macOS without an exported SSL_CERT_FILE.
     # ssl ignores WEBSOCKET_CLIENT_CA_BUNDLE, so it is honoured here explicitly.
     try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
         cafile = os.environ.get("WEBSOCKET_CLIENT_CA_BUNDLE") or quip_metadata._default_ca_bundle()
         context = ssl.create_default_context(cafile=cafile)
         with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:  # noqa: S310 -- operator-supplied faucet URL
             return resp.status, _json_object(resp.read())
     except urllib.error.HTTPError as exc:
         return exc.code, _json_object(exc.read())
-    except (OSError, ImportError) as exc:  # URLError, timeouts, and a bad CA bundle are all OSErrors.
+    # URLError, timeouts and a bad CA bundle are OSErrors; a scheme-less URL is
+    # a ValueError; a truncated response is an HTTPException.
+    except (OSError, ImportError, ValueError, http.client.HTTPException) as exc:
         raise QuipFaucetError(None, {}, f"faucet request to {url} failed: {exc}") from exc
 
 

@@ -395,7 +395,7 @@ class SolverQuip(Solver):
         if preset is None:
             raise ValueError(f"unknown Quip network {name!r}; known networks: {', '.join(sorted(NETWORKS))}")
         logger.info("Quip network %s resolved to %s", name, preset.rpc)
-        if kwargs.get("faucet") is None:  # faucet=None must not let QUIP_FAUCET_URL beat the preset.
+        if not kwargs.get("faucet"):  # an unset faucet must not let QUIP_FAUCET_URL beat the preset.
             kwargs["faucet"] = preset.faucet
         solver = cls(url=preset.rpc, **kwargs)
         solver._network = name
@@ -1136,11 +1136,13 @@ class SolverQuip(Solver):
                 f"{name}=False asks for confirmation but stdin is not a terminal; "
                 f"pass {name}=True or {name}=lambda q: ... to decide in code",
             )
-        if not sys.stderr.isatty():  # otherwise _display already showed it.
-            print(str(quote), file=sys.stderr)
-        # The question goes to stderr with the quote: input(prompt) writes to
-        # stdout, which a redirect would hide while the process waits.
-        print(f"[quip] {question} [y/N] ", end="", file=sys.stderr, flush=True)
+        # Ask on whichever output stream is the terminal, so a redirect of the
+        # other cannot hide the question while the process waits. When stderr
+        # is the terminal, _display already showed the quote there.
+        out = sys.stderr if sys.stderr.isatty() else sys.stdout
+        if out is sys.stdout:
+            print(str(quote), file=out)
+        print(f"[quip] {question} [y/N] ", end="", file=out, flush=True)
         try:
             answer = input()
         except EOFError:
