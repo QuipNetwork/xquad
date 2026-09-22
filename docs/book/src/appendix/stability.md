@@ -45,12 +45,34 @@ guarantees that observable behaviour stays fixed.
 
 ## What Is Not Guaranteed
 
-Nothing here promises binary compatibility across versions. `CONTRIBUTING.md`
-states that public API changes must be semver-compatible and that breaking
-changes require a major version bump. For a `0.x` project, that policy
-governs the crate versions -- it is not a commitment that nothing
+Nothing here promises binary compatibility across versions. Versions follow
+semver as Cargo reads it, where the leftmost non-zero field is the major: before
+`1.0` a breaking change bumps the minor (`0.4` to `0.5`) and a patch release
+(`0.4.0` to `0.4.1`) carries only compatible changes, fixes and features alike.
+That policy governs the crate versions -- it is not a commitment that nothing
 observable will ever break before `1.0`. Treat every `0.x` release as a
 snapshot, not a foundation to build on without re-checking. If your use
 case needs a stability guarantee this project does not yet make, [file an
 issue](https://gitlab.com/quip.network/xquad/-/issues) against the
 repository rather than assuming one.
+
+## Reading the Documentation for an Older Release
+
+The published book tracks the most recent release. Every tagged release carries
+its own copy of these pages in the repository, so an older version is a checkout
+away:
+
+```sh
+git switch --detach v0.4.0
+make build-docs      # renders to docs/book/build/
+make serve-docs      # serves it and opens a browser
+```
+
+`make serve-docs` rebuilds on edit, so it is also the way to preview a change
+before opening a merge request. Return with `git switch -`.
+
+Tags are listed with `git tag --list 'v*' | sort -V`, and the released packages
+for each are on [crates.io](https://crates.io/crates/xqvm) and
+[PyPI](https://pypi.org/project/xquad/). Tags carrying `-rc` or `-beta` are
+pre-releases: they are on both registries, but the published book never
+describes one.

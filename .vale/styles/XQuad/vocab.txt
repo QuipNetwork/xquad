@@ -20,6 +20,7 @@ codec
 coeffs
 composable
 Config
+cutover
 dataclass
 dataflow
 desugared
@@ -38,12 +39,16 @@ extrinsic
 extrinsics
 falsy
 fixup
+hotfix
+Hotfixes
 injective
 Ising
 Iter
 Iverson
 keystore
 Keystore
+lockfile
+lockfiles
 maximiser
 maximisers
 mdBook
@@ -70,6 +75,7 @@ Rebalance
 reimplement
 runtime
 runtimes
+semver
 stderr
 stdin
 stdout
@@ -86,6 +92,7 @@ unassemblable
 undecodable
 Undecodable
 underflows
+unsquashed
 unstorable
 untaken
 untraced

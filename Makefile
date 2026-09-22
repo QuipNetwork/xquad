@@ -5,7 +5,8 @@
         check-release-notes \
         test-rust test-python check-parity check-docs-handwritten \
         check-crate-publish check-python-dists check-release \
-        check-version-sites list-version-sites \
+        check-version-sites list-version-sites set-version \
+        check-branch-containment \
         deps deps-miri deps-py deps-wasm \
         install-hooks \
         lint lint-clippy lint-doc lint-deny-rs lint-py check-uv-lock \
@@ -72,16 +73,29 @@ lint-python: fmt-check-py lint-py
 # unscoped history, so it would stay green through the exact QUI-1096
 # regression (every GitLab release page republishing every prior
 # release's changelog). check-release-notes instead renders every
-# non-rc tag's actual PREV..tag range and asserts each yields exactly
+# release tag's actual PREV..tag range and asserts each yields exactly
 # one `## [` heading, which is the regression itself. It needs full tag
 # history, not just depth, which verify:policy already provides via
 # GIT_DEPTH: 0 (see verify.yml), so this line is the only CI-side change
 # it needs.
 #
+# check-branch-containment joins for the reason verify.yml has no
+# `rules:` anywhere: it scopes itself on the ref it is handed and exits
+# 0 on every ref it does not judge, so it needs no job of its own and
+# stays runnable locally -- a `rules:`-gated job is neither.
+#
+# check-version-sites is deliberately NOT here, although its branch
+# assertion is policy too. It runs through $(VERPY), which needs uv,
+# and verify:policy's image carries none. It also does not need to be:
+# release:validate has no `rules:`, installs uv, and runs it through
+# check-release on every pipeline, so the assertion already fires on
+# every main and dev push -- in the release stage rather than here.
+#
 # preflight-py lists fmt-check-toml directly so a Python-only
 # contributor gets the TOML check without running the rest of the
 # policy phase.
-lint-policy: fmt-check-toml lint-deny-rs render-changelog check-atomic-spec check-commit-messages check-release-notes
+lint-policy: fmt-check-toml lint-deny-rs render-changelog check-atomic-spec check-commit-messages \
+             check-release-notes check-branch-containment
 
 # Wraps scripts/check-atomic-spec-mr.sh, forwarding the optional positional
 # BASE/HEAD refs the way the script expects. Both are quoted so that
@@ -154,6 +168,20 @@ check-version-sites:
 # list, so the prose and the check cannot drift.
 list-version-sites:
 	$(VERPY) scripts/check-version-sites.py --list
+
+# Writes every site in that list to VERSION, each in its own ecosystem's
+# spelling -- SemVer in the Cargo manifests, PEP 440 in the Python ones, so
+# `0.4.1-dev` lands as `0.4.1-dev` in one and `0.4.1.dev0` in the other.
+#
+# The lockfiles are not version sites and do not move on their own. Follow
+# with `cargo check`, `uv lock`, and `cargo update -p xqvm --manifest-path
+# fixtures/pallet-xqvm/Cargo.toml`; the target prints the same three.
+#
+# Every back-merge conflicts on these sites by construction, so the
+# resolution is this one command rather than 23 hand edits.
+#   make set-version VERSION=0.4.1-dev
+set-version:
+	$(VERPY) scripts/check-version-sites.py --set "$(VERSION)"
 
 # "Is the release artefact publishable": the tag/manifest version check,
 # crate dry-run packaging, and the Python distribution
@@ -936,7 +964,7 @@ changelog:
 render-changelog:
 	git-cliff --config cliff.toml --output /dev/null
 
-# Wraps scripts/check-release-notes.sh, which renders every non-rc tag's
+# Wraps scripts/check-release-notes.sh, which renders every release tag's
 # PREV..tag range (the same range changelog-release derives below, for
 # every past tag rather than just the one VERSION names) and asserts
 # each render yields exactly one `## [` heading. render-changelog above
@@ -951,6 +979,17 @@ render-changelog:
 # wrong reason.
 check-release-notes:
 	bash scripts/check-release-notes.sh
+
+# Wraps scripts/check-branch-containment.sh, which asserts the two-branch
+# protocol's one invariant: origin/main is contained in dev, and in every
+# release branch cut from it (docs/guide/gitflow-protocol.md).
+#
+# Takes no arguments. The script reads the ref from the environment and
+# judges only dev and release/*, so a local run on any other branch is a
+# no-op that prints why. It needs origin/main fetched, which verify:policy
+# does in its before_script and a local clone usually has.
+check-branch-containment:
+	bash scripts/check-branch-containment.sh
 
 # Generate the changelog / release notes for a tagged release.
 # Invoked from `release:notes` in .gitlab/ci/release.yml with
@@ -1016,15 +1055,21 @@ check-release-notes:
 # separately via --tag, so the rendered section is labelled with the
 # version being previewed rather than "unreleased").
 #
-# `--exclude='*-rc*'` is what keeps an rc tag from becoming the lower
-# bound of a release's range: an rc predecessor is passed over in favour
-# of the last real release, so the rc's own commits stay inside the
-# range and fold into the next real release's notes.
+# `--exclude='*-*'` is what keeps a prerelease tag from becoming the
+# lower bound of a release's range: a prerelease predecessor is passed
+# over in favour of the last real release, so its own commits stay
+# inside the range and fold into the next real release's notes.
+# `--exclude` takes a glob rather than a regex, and `*-*` is how
+# tag_pattern's "three numeric fields and nothing else" is spelled in
+# one: a release tag carries no hyphen and every prerelease spelling
+# does. It read `*-rc*` until QUI-1256, which was the same denylist
+# mistake in a second place -- a `-beta` predecessor would have bounded
+# the range and dropped every commit before it from the notes.
 #
 # It pairs with cliff.toml's `tag_pattern` (NOT its `skip_tags`), which
 # does the same job for the upper half -- git-cliff does not recognise
-# rc tags as releases at all, so one cannot become a boundary inside the
-# range either. Both halves are needed: this one is git's view of which
+# prerelease tags as releases at all, so one cannot become a boundary
+# inside the range either. Both halves are needed: this one is git's view of which
 # tag `prev` resolves to, that one is git-cliff's view of which tags
 # split a range. See cliff.toml's tag_pattern comment for why
 # `skip_tags` is not sufficient there.
@@ -1059,14 +1104,14 @@ changelog-release:
 		exit 2; \
 	fi; \
 	if git rev-parse -q --verify "$${VERSION}" >/dev/null 2>&1; then \
-		prev="$$(git describe --tags --abbrev=0 --exclude='*-rc*' "$${VERSION}^" 2>/dev/null || true)"; \
+		prev="$$(git describe --tags --abbrev=0 --exclude='*-*' "$${VERSION}^" 2>/dev/null || true)"; \
 		range="$${prev}..$${VERSION}"; \
 	else \
-		prev="$$(git describe --tags --abbrev=0 --exclude='*-rc*' HEAD 2>/dev/null || true)"; \
+		prev="$$(git describe --tags --abbrev=0 --exclude='*-*' HEAD 2>/dev/null || true)"; \
 		range="$${prev}..HEAD"; \
 	fi; \
 	if [ -z "$${prev}" ]; then \
-		echo "error: no predecessor tag found for VERSION=$${VERSION} (git describe --tags --abbrev=0 --exclude='*-rc*' <ref> returned nothing); changelog-release needs at least one earlier non-rc tag to bound the range" >&2; \
+		echo "error: no predecessor tag found for VERSION=$${VERSION} (git describe --tags --abbrev=0 --exclude='*-*' <ref> returned nothing); changelog-release needs at least one earlier release tag to bound the range" >&2; \
 		exit 2; \
 	fi; \
 	echo "changelog-release: rendering $${range} as $${VERSION}" >&2; \

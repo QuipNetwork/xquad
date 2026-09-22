@@ -189,7 +189,15 @@ Fixes #456
 
 ## Semver Compliance
 
-Public API changes must be semver-compatible. Breaking changes require a major version bump.
+Public API changes must be semver-compatible, in the sense Cargo applies: the
+leftmost non-zero field is the major. Before 1.0 that makes the **minor** the
+breaking bump -- `0.4` to `0.5` breaks, `0.4.0` to `0.4.1` must not -- and a
+patch release carries fixes and features alike. After 1.0 a breaking change
+takes the major.
+
+Which bump a change needs is also which branch it goes to: breaking work
+targets `dev`, everything else targets `main`. See
+[`docs/guide/gitflow-protocol.md`](docs/guide/gitflow-protocol.md).
 
 ## Undefined Behaviour
 
@@ -275,29 +283,38 @@ silently skipped for contributors who do not have one.
 
 ## Merge Requests
 
+- **Pick the target branch first.** There are two long-lived branches:
+  `main` takes non-breaking changes and `dev` takes breaking ones. Branch
+  from the one you will target. The default template's **Compatibility**
+  block asks which applies, and its answer has to match the target branch
+  chosen on the merge request form. A non-breaking claim needs two or
+  three lines saying what the change touched and why a consumer pinned to
+  the current minor can take it. The full model is in
+  [`docs/guide/gitflow-protocol.md`](docs/guide/gitflow-protocol.md).
 - Keep changes focused and minimal.
 - Reference any related issues in the MR description.
 - Ensure all CI pipeline stages pass. Use the checklist in the template.
+  There are two templates: `default` for ordinary work, which GitLab fills
+  in automatically, and `release` for a release merge request.
+- Merges are not squashed: every commit on your branch reaches the target
+  branch, and the release notes, as written. Keep each commit's subject
+  worth reading on its own.
 - The MR **title** must follow Conventional Commits, exactly as a commit
-  subject does -- squash-on-merge makes the title the subject of the
-  squash commit that lands on `main`. CI enforces this in `verify:policy`
-  (`scripts/check-mr-title.sh`, which reuses the same grammar as the
-  `commit-msg` hook). GitLab's three draft prefixes
-  (`[Draft]`, `Draft:`, `(Draft)`) are stripped before the check, so a
-  draft MR is not failed for being a draft. Nothing else is stripped --
+  subject does. It is checked twice: by the title pattern on the merge
+  request form, and in `verify:policy` by `scripts/check-mr-title.sh`,
+  which reuses the same grammar as the `commit-msg` hook and also
+  enforces the 72-character limit the form cannot. GitLab's three draft
+  prefixes (`[Draft]`, `Draft:`, `(Draft)`) are accepted by both, so a
+  draft MR is not failed for being a draft. Nothing else is --
   `WIP:` has not been a draft marker since GitLab 14.0 and is judged as
   ordinary title text.
 
   GitLab starts pipelines on push, not on title edits, so a title changed
-  after your last push is not rechecked. Retitle before pushing rather
-  than after. A title that slips through that way is caught after the
-  merge instead: `verify:policy` on `main` finds an empty commit range
-  and checks what the push landed there, which for a merge is the
-  squash commit carrying the title
-  (`scripts/check-commit-messages.sh`, "Landed mode"). That is
-  detection only -- the subject is on `main` by then, and a subject
-  that failed the grammar has already been dropped from the release
-  notes.
+  after your last push is not rechecked by CI. Retitle before pushing
+  rather than after. Because merges are not squashed, the title does not
+  become a commit subject -- it lands inside the merge commit's message,
+  below a GitLab-generated `merge: branch ...` subject -- so a title that
+  slips through costs consistency, not a release-notes entry.
 
   To try a title before pushing:
   `bash scripts/check-mr-title.sh 'feat(xqvm): add an opcode'`

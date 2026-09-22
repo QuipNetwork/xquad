@@ -1,7 +1,7 @@
 # xquad development workflow
 
-This document describes how changes move from authoring to `main` in
-the xquad repository. The central idea -- carried over from the
+This document describes how changes move from authoring to `main` and
+`dev` in the xquad repository. The central idea -- carried over from the
 xq-rs <-> xq-py merge (QUI-412) -- is that two implementations of the
 same VM must stay in lockstep. Everything else in the workflow is in
 service of that invariant.
@@ -21,25 +21,33 @@ One repository, two implementations, one spec:
 
 ## Branches
 
-- **`main`** -- released state. Protected. Merged from MRs only, and
-  always as a real merge commit: every merge on `main` has two parents
-  and a GitLab-generated `merge: branch '<source>' into 'main'`
-  subject. The repository ran a merge train with squash-on-merge until
-  that was disabled; [`scripts/check-mr-title.sh`](../../scripts/check-mr-title.sh)
-  records what the change cost and what replaced it.
-- **`feature/qui-<id>[-tag]`** -- short-lived branches for individual
-  tickets, merged into `main` on green CI. One branch may carry several
-  tickets when they touch the same files. The MR body lists each ticket
-  it consumes (QUI-*), so Linear status moves in lockstep with git
-  state.
-- **`release/v<version>`** -- prepares a release: the version bump
-  across the manifests and whatever else the tag needs. Merged into
-  `main` before the tag is cut.
-- **`chore/<tag>`** -- repository maintenance belonging to no ticket,
-  such as bumping `main` back to its `-dev` version after a release.
+Two long-lived branches. Before 1.0, `main` is the non-breaking line
+and `dev` is the breaking one; which a change targets is decided by
+whether it breaks, not by whether it is a fix.
+[`gitflow-protocol.md`](gitflow-protocol.md) is the normative
+description -- routing, releases, betas and the back-merge -- and what
+follows is only the naming.
 
-There is no long-lived integration branch. Every branch above is
-short-lived and merges into `main` directly.
+- **`main`** -- the non-breaking line, at the next patch's `-dev`
+  version. Protected and closed to direct pushes: everything lands by
+  merge request, as a real merge commit with a GitLab-generated
+  `merge: branch '<source>' into 'main'` subject. Merges are not
+  squashed.
+- **`dev`** -- the breaking line, at the next minor's `-dev` version.
+  Protected; Maintainers may push to it, for back-merges and version
+  bumps only. It contains `main` at all times, and CI marks `dev` red
+  while a back-merge is outstanding.
+- **`feature/qui-<id>[-tag]`** -- short-lived branches for individual
+  tickets, cut from and merged into whichever line the change belongs
+  on. One branch may carry several tickets when they touch the same
+  files. The MR body lists each ticket it consumes (QUI-*), so Linear
+  status moves in lockstep with git state.
+- **`release/v<version>`** -- prepares a release: cut from `main` for a
+  patch or from `dev` for a minor, carries the version bump, and merges
+  into `main` unsquashed. `release:auto-tag` cuts the tag from the
+  merge.
+- **`chore/<tag>`** -- repository maintenance belonging to no ticket,
+  such as reopening `main` at its next `-dev` version after a release.
 
 ## The atomic spec-MR rule
 

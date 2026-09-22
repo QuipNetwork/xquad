@@ -71,6 +71,16 @@
 # they exist so that a crate added in September is caught on that merge
 # request rather than at tag time in November.
 #
+# With no tag at all, one assertion still runs, and only on the two
+# long-lived branches: their trees must carry a `-dev` version. Before
+# 1.0 both are working branches -- `main` is the non-breaking line and
+# `dev` the breaking one -- so a release version on either means a tag
+# was cut and the reopening bump was skipped. That is not hypothetical:
+# it happened after `v0.4.0-rc1`, and again after `v0.4.0`, and nothing
+# reported either (QUI-1256). Any other branch is judged by nothing,
+# because a branch mid-bump is a normal state and a rule that read it
+# would fail the merge request carrying the bump.
+#
 # `release:validate` carries no `rules:`, so it sees every tag, not only
 # release tags. A tag that does not match ^v<digit> is skipped: it cannot
 # trigger `release:crates` or `release:pypi`, so failing would break an
@@ -97,11 +107,21 @@
 #   scripts/check-version-sites.py --print-version
 #                                             # canonical PEP 440 version of
 #                                             # the tree, for smoke-wheels.sh
+#   scripts/check-version-sites.py --set VERSION
+#                                             # write every site to VERSION, in
+#                                             # each ecosystem's spelling
+#                                             # (`make set-version`)
 #   scripts/check-version-sites.py --root DIR # check a tree other than this one
 #
+# The branch assertion reads $CI_COMMIT_BRANCH and nothing else. This
+# script never shells out to git (see above), so it cannot ask which
+# branch is checked out; set the variable to try it by hand:
+#   CI_COMMIT_BRANCH=main make check-version-sites
+#
 # Exit codes:
-#   0  -- pass, or no tag to check
-#   1  -- a version site disagrees with the tag
+#   0  -- pass, or nothing to check on this ref
+#   1  -- a version site disagrees with the tag, or a working branch
+#         carries a release version
 #   2  -- usage error, or the site table no longer describes the tree
 
 from __future__ import annotations
@@ -234,6 +254,11 @@ def parse_requirement(raw: str) -> tuple[str, tuple[str, ...], str] | None:
         return None
     extras = tuple(extra.strip() for extra in (match["extras"] or "").split(",") if extra.strip())
     return match["name"], extras, match["spec"].strip()
+
+
+# The two long-lived branches, which are both working branches before
+# 1.0. See check_branch below, and docs/guide/gitflow-protocol.md.
+WORKING_BRANCHES = frozenset({"main", "dev"})
 
 
 # --- Site table ------------------------------------------------------------
@@ -653,42 +678,183 @@ def do_list(root: Path) -> int:
     return 0
 
 
-def do_print_version(root: Path) -> int:
+def tree_version(root: Path) -> str | None:
+    """The one canonical PEP 440 version every site agrees on, or None if they disagree."""
     canonical = {canon(found.value) for _, found in read_all(root)}
     if len(canonical) != 1 or None in canonical:
-        print("error: version-sites: the version sites do not agree on one version", file=sys.stderr)
-        print("error: version-sites: run `make list-version-sites` to see them", file=sys.stderr)
+        return None
+    return canonical.pop()
+
+
+def do_print_version(root: Path) -> int:
+    version = tree_version(root)
+    if version is None:
+        emit("the version sites do not agree on one version", "run `make list-version-sites` to see them")
         return 2
-    print(canonical.pop())
+    print(version)
     return 0
 
 
-def check_tag(root: Path, tag: str) -> int:
-    body = tag[1:] if tag.startswith("v") else tag
+def _spellings(raw: str, noun: str) -> tuple[str, str] | None:
+    """Return `raw`'s (SemVer, PEP 440) spellings, or None once the reason it has none is emitted.
 
-    expected_pep440 = canon(body)
-    if expected_pep440 is None:
+    Every version this script writes or checks has to be expressible in both
+    grammars. The two registries are written by one pipeline and neither
+    allows an unpublish, so a version only one of them accepts fails halfway
+    through, with crates.io already committed.
+
+    `noun` names what is being judged (`tag v0.4.0`, `version 0.4.1-dev`) so
+    the same three rejections read correctly for a tag and for a bump.
+    """
+    body = raw[1:] if raw.startswith("v") else raw
+
+    pep440 = canon(body)
+    if pep440 is None:
         emit(
-            f"tag {tag} is not expressible as a PEP 440 version.",
-            "Cargo accepts it; Python cannot, so this tag names no single version",
-            "and cannot be released by this pipeline. Use a PEP 440-compatible",
+            f"{noun} is not expressible as a PEP 440 version.",
+            "Cargo accepts it; Python cannot, so it names no single version and",
+            "cannot be released by this pipeline. Use a PEP 440-compatible",
             "prerelease instead (-rc1, -alpha.1, -dev).",
         )
-        return 2
+        return None
     if not is_semver(body):
         emit(
-            f"tag {tag} is not a valid SemVer version.",
-            "Python accepts it; cargo cannot, so this tag names no single version",
-            "and cannot be released by this pipeline.",
+            f"{noun} is not a valid SemVer version.",
+            "Python accepts it; cargo cannot, so it names no single version and",
+            "cannot be released by this pipeline.",
         )
-        return 2
+        return None
     if "+" in body:
         emit(
-            f"tag {tag} carries a local version segment.",
+            f"{noun} carries a local version segment.",
             "PyPI refuses local versions on upload, so release:pypi would fail",
             "after release:crates had already written to crates.io.",
         )
+        return None
+    return body, pep440
+
+
+def do_set(root: Path, version: str) -> int:
+    """Write every site to `version`, each in its own ecosystem's spelling.
+
+    The write is a line substitution, not a TOML round-trip: `tomllib` is
+    read-only and the Makefile runs this under `uv run --no-project
+    --isolated`, so there is no `tomlkit` to reach for and no index to reach
+    it from. That is the cheaper shape anyway -- rewriting a manifest through
+    a serialiser reflows comments and key order across a file this project
+    reviews by diff.
+
+    Every site is read first. `find_line` recovers the line each value is
+    written on, and the value read out of the TOML parse is what gets
+    replaced on it, so a line whose contents moved cannot be written blind.
+    Sites are grouped by file and each file is written once; substitutions
+    never change a line count, so the numbers stay valid across the batch.
+
+    The lockfiles are not sites (see the SITES table) and are regenerated
+    afterwards. The closing line says how.
+    """
+    if not version.strip():
+        emit("--set needs a version, e.g. `make set-version VERSION=0.4.1-dev`")
         return 2
+
+    spellings = _spellings(version, f"version {version}")
+    if spellings is None:
+        return 2
+    body, pep440 = spellings
+
+    # rel -> [(line number, text as written today, text to write)]
+    edits: dict[str, list[tuple[int, str, str]]] = {}
+    claimed: set[tuple[str, int]] = set()
+    for site, found in read_all(root):
+        if found.lineno is None:
+            raise SetupError(f"{site.path}: cannot locate the line {site.label} is written on")
+        if (site.path, found.lineno) in claimed:
+            raise SetupError(f"{site.path}:{found.lineno}: two sites resolve to this line")
+        claimed.add((site.path, found.lineno))
+        wanted = pep440 if site.eco is Eco.PYTHON else body
+        edits.setdefault(site.path, []).append((found.lineno, _needle(site, found.value), _needle(site, wanted)))
+
+    for rel, items in sorted(edits.items()):
+        lines = load_text(root, rel).splitlines(keepends=True)
+        for lineno, old, new in items:
+            line = lines[lineno - 1]
+            if old not in line:
+                raise SetupError(f"{rel}:{lineno}: expected {old} on this line, found {line.strip()!r}")
+            lines[lineno - 1] = line.replace(old, new)
+        (root / rel).write_text("".join(lines), encoding="utf-8")
+
+    # Read the tree back rather than trusting the write. A bad substitution
+    # across 23 sites on the release path is exactly the failure that must not
+    # be silent, and re-reading also re-parses every manifest, so a write that
+    # broke the TOML fails here instead of in the next job.
+    findings = [
+        f"{site.path}:{found.lineno if found.lineno is not None else '?'}: {site.label}: wrote {found.display}"
+        for site, found in read_all(root)
+        if found.value != (pep440 if site.eco is Eco.PYTHON else body)
+    ]
+    if findings:
+        emit(f"{len(findings)} of {len(SITES)} sites did not take the new version.", "", *findings)
+        return 2
+
+    print(f"set {len(SITES)} version sites to {body} (Cargo) / {pep440} (PEP 440)")
+    print("regenerate the lockfiles: cargo check; uv lock;")
+    print("  cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml")
+    return 0
+
+
+def check_branch(root: Path, branch: str) -> int:
+    """Assert a long-lived branch's tree carries a development version.
+
+    Before 1.0 both are working branches: `main` is the non-breaking
+    line and reopens at `x.y.(z+1)-dev` after every tag, `dev` is the
+    breaking line and sits at `x.(y+1).0-dev`. Neither may carry a
+    version a tag could publish, because an artefact built from one
+    would be named as a published release while its contents drift on
+    under that name.
+
+    The assertion is the suffix, not a particular version. Which `-dev`
+    version a branch should be on is a question about the last tag and
+    about which line the branch is, and answering it here would mean
+    this guard knowing the release history. The drift it exists to
+    catch is a bump that never happened at all, and the suffix is
+    enough to see that.
+    """
+    version = tree_version(root)
+    if version is None:
+        emit(
+            "the version sites do not agree on one version",
+            "run `make list-version-sites` to see them",
+        )
+        return 2
+
+    if ".dev" in version:
+        print(f"version sites OK ({len(SITES)} sites at {version}, {branch} is a working branch)")
+        return 0
+
+    emit(
+        f"{branch} carries {version}, which is a release version.",
+        "",
+        "main and dev are working branches before 1.0 and carry a -dev",
+        "suffix: main the next patch (0.4.1-dev), dev the next minor",
+        "(0.5.0-dev). A release version on one of them means a tag was cut",
+        "and the reopening bump was skipped, so every artefact built from",
+        "this branch is named as the published release while the branch",
+        "moves on underneath the name. Nothing else notices -- the tag",
+        "comparison only runs on a tag, and there is no tag here.",
+        "",
+        "To fix:",
+        "  make set-version VERSION=<next>-dev",
+        "  cargo check && uv lock",
+        "  cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml",
+    )
+    return 1
+
+
+def check_tag(root: Path, tag: str) -> int:
+    spellings = _spellings(tag, f"tag {tag}")
+    if spellings is None:
+        return 2
+    body, expected_pep440 = spellings
 
     findings: list[tuple[str, str]] = []
     for site, found in read_all(root):
@@ -732,6 +898,18 @@ def _expected_display(site: Site, version: str) -> str:
     return f"{site.pin_name}=={version}" if site.role is Role.PEER_PIN else version
 
 
+def _needle(site: Site, version: str) -> str:
+    """The exact text a site's version is written as, for a line substitution.
+
+    A peer pin is written inside a requirement string (`xqsa[cuda]==0.4.0`),
+    so the pin name anchors it. Every other role writes a bare quoted version,
+    and the quotes are what keep `version = "0.4.0"` from also matching a path
+    or a name on the same line.
+    """
+    display = _expected_display(site, version)
+    return display if site.role is Role.PEER_PIN else f'"{display}"'
+
+
 def emit(*lines: str) -> None:
     for line in lines:
         print(f"error: version-sites: {line}".rstrip(), file=sys.stderr)
@@ -743,10 +921,20 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--root", default=None, help="tree to check; defaults to this script's repository")
     parser.add_argument("--list", action="store_true", help="print every version site and its value")
     parser.add_argument("--print-version", action="store_true", help="print the tree's canonical PEP 440 version")
+    parser.add_argument("--set", default=None, metavar="VERSION", help="write every version site to VERSION")
     args = parser.parse_args(argv)
 
-    if args.list and args.print_version:
-        print("error: version-sites: --list and --print-version are mutually exclusive", file=sys.stderr)
+    modes = [
+        name
+        for name, selected in (
+            ("--list", args.list),
+            ("--print-version", args.print_version),
+            ("--set", args.set is not None),
+        )
+        if selected
+    ]
+    if len(modes) > 1:
+        print(f"error: version-sites: {' and '.join(modes)} are mutually exclusive", file=sys.stderr)
         return 2
 
     root = Path(args.root).resolve() if args.root else REPO_ROOT
@@ -756,6 +944,8 @@ def main(argv: list[str]) -> int:
             return do_list(root)
         if args.print_version:
             return do_print_version(root)
+        if args.set is not None:
+            return do_set(root, args.set)
 
         # The table sweeps run whether or not there is a tag. They compare no
         # versions; they assert the table still describes the tree, so a new
@@ -785,7 +975,15 @@ def main(argv: list[str]) -> int:
         tag = os.environ.get("CI_COMMIT_TAG", "").strip()
 
     if not tag:
-        print(f"guard: no tag to check (CI_COMMIT_TAG unset); {len(SITES)} version sites declared")
+        branch = os.environ.get("CI_COMMIT_BRANCH", "").strip()
+        if branch in WORKING_BRANCHES:
+            try:
+                return check_branch(root, branch)
+            except SetupError as exc:
+                print(f"error: site-table: {exc}", file=sys.stderr)
+                return 2
+        where = branch or "no branch"
+        print(f"guard: no tag to check ({where} is not a working branch); {len(SITES)} version sites declared")
         return 0
 
     # A ref only publishes if it matches `.on-release-tag` (/^v\d/), so a pushed

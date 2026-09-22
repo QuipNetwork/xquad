@@ -121,8 +121,8 @@ docs:build:
 # to `docs:publish` along with everything else. Do not rename it back, and
 # do not drop `pages: true` -- without the property the deployment stops
 # happening silently, since a job named `docs:publish` is not one GitLab
-# recognises by name. It only runs on direct pushes to main, so merge
-# request and tag pipelines build the book without publishing it.
+# recognises by name. It only runs on a release tag, so branch and merge
+# request pipelines build the book without publishing it.
 #
 # Inline shell instead of a `make` target: every other job in
 # this repo's CI calls `make -k <target>` so the CI definition and the
@@ -163,7 +163,19 @@ docs:publish:
         paths:
             - public
     rules:
-        # Only on direct pushes to main -- not on tag pipelines or MR
-        # pipelines (MR pipelines run before the merge; we publish after).
-        - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
+        # Only on a release tag. This read `$CI_COMMIT_BRANCH == "main"
+        # && $CI_PIPELINE_SOURCE == "push"` until QUI-1256, which held
+        # while main carried the last release. Under the two-branch
+        # protocol main is a working branch at `x.y.z-dev`, so a push to
+        # it is in-progress documentation and publishing that puts pages
+        # on the site describing a toolchain nobody can install. What
+        # ships is what the tag carries.
+        #
+        # The pattern is cliff.toml's tag_pattern, so a prerelease tag
+        # publishes nothing, for the same reason release:notes skips one:
+        # an rc or a beta is not what a reader pinning the toolchain
+        # installs. docs/book/src/appendix/stability.md tells a reader on
+        # an older line how to build that tag's book locally, which is
+        # the route this rule leaves them.
+        - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
           when: on_success
