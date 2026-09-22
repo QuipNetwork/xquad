@@ -9,9 +9,9 @@ and decodes whatever comes back as an XQMX sample.
 This page is derived from
 [`xqsa/quip.py`](https://gitlab.com/quip.network/xquad/-/blob/main/xqsa/quip.py),
 `spec/xqsa/SOLVERS.md`, and an internal contributor testing guide. The
-mechanism it describes has been exercised end to end against a live Quip
-deployment, but the coordinates for reaching one are not public -- see
-[Gaps](#gaps) for what that leaves unanswered for a reader.
+mechanism it describes has been exercised end to end against `aglais`,
+the public Quip test network; [Gaps](#gaps) lists what this page still
+leaves unanswered for a reader.
 
 ## Installation and Configuration
 
@@ -58,15 +58,17 @@ on-chain but `SolverQuip` does not exercise them.
 preset in `xqsa.quip_networks` instead of an explicit `url`:
 
 ```python
-SolverQuip.for_network("devnet", keystore="~/.quip/keystore.json")
+SolverQuip.for_network("aglais", keystore="~/.quip/keystore.json")
 ```
 
-Two presets are registered: `devnet` (the local Docker stack
-contributors run for offline testing) and one for the public network
-described in [Gaps](#gaps). The RPC and faucet coordinates behind each
-preset live in `xqsa.quip_networks`, move with the deployment, and are
-corrected in patch releases -- treat that module, not this page, as
-the source of truth.
+Two presets are registered: `aglais`, the public test network, and
+`devnet`, the local Docker stack contributors run for offline testing.
+The RPC and faucet coordinates behind each preset live in
+`xqsa.quip_networks`, move with the deployment, and are corrected in
+patch releases. The test network's own page,
+[aglais.quip.network](https://aglais.quip.network), publishes the
+current endpoints and the faucet; check the preset against it if a
+connection fails.
 
 ## Job Lifecycle
 
@@ -282,11 +284,10 @@ This chapter answers the mechanism -- lifecycle, topology, encoding,
 cost accounting, failures -- in detail. It does not answer what a reader
 outside the project needs to actually run a job:
 
-- **No reader-obtainable endpoint or funding path.** Nothing in this
-  repository gives a reader a `QUIP_RPC_URL` or a way to fund an
-  account. Contributors get both from an internal testing guide, which
-  flags the coordinates as unstable and not meant to be hard-coded --
-  which is also why they are not reproduced here.
+- **No funding walkthrough.** The `aglais` preset carries the faucet's
+  address, but `SolverQuip` does not request funds itself, and this
+  page does not walk through funding an account; the test network's
+  page above shows the faucet request.
 - **No current reward or fee figures.** `MinReward` and transaction fees
   are live chain state that the contributor guide itself warns changes
   between releases; this chapter does not assert a number that could go

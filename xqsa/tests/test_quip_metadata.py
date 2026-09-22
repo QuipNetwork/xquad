@@ -47,6 +47,7 @@ from xqsa.quip_codec import QuipMetadataError
 from xqsa.quip_metadata import (
     METADATA_AT_VERSION_API,
     TARGET_METADATA_VERSION,
+    _default_ca_bundle,
     connect,
     v14_interface_class,
 )
@@ -492,7 +493,7 @@ CA_BUNDLE = "/stub/certifi/cacert.pem"
 
 @pytest.fixture
 def connect_stubs(monkeypatch) -> None:
-    """Stub ``substrateinterface`` and ``certifi``, and clear the CA env vars.
+    """Stub ``substrateinterface`` and ``certifi``, pose as macOS, clear CA env vars.
 
     A fresh ``SubstrateInterface`` class per test: ``v14_interface_class`` is
     cached per base, so a shared class would share its subclass too.
@@ -509,7 +510,8 @@ def connect_stubs(monkeypatch) -> None:
     certifi.where = lambda: CA_BUNDLE  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "substrateinterface", substrate)
     monkeypatch.setitem(sys.modules, "certifi", certifi)
-    for name in ("SSL_CERT_FILE", "WEBSOCKET_CLIENT_CA_BUNDLE"):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    for name in ("SSL_CERT_FILE", "SSL_CERT_DIR", "WEBSOCKET_CLIENT_CA_BUNDLE"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -528,7 +530,15 @@ class TestConnect:
         options = {"sslopt": {"cert_reqs": 0}}
         assert connect("wss://node/rpc", ws_options=options).kwargs == {"ws_options": options}
 
-    @pytest.mark.parametrize("var", ["SSL_CERT_FILE", "WEBSOCKET_CLIENT_CA_BUNDLE"])
+    @pytest.mark.parametrize("var", ["SSL_CERT_FILE", "SSL_CERT_DIR", "WEBSOCKET_CLIENT_CA_BUNDLE"])
     def test_env_ca_config_wins(self, monkeypatch, var: str) -> None:
         monkeypatch.setenv(var, "/corp/ca.pem")
         assert connect("wss://node/rpc").kwargs == {}
+
+    def test_other_platforms_keep_the_system_store(self, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert connect("wss://node/rpc").kwargs == {}
+        assert _default_ca_bundle() is None
+
+    def test_default_bundle_on_macos(self) -> None:
+        assert _default_ca_bundle() == CA_BUNDLE
