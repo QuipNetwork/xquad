@@ -193,7 +193,23 @@ verify:policy:
     timeout: 15m
     before_script:
         - !reference [.fragments, cargo-tools-only]
-        - git fetch origin main --quiet
+        # Explicit refspecs, not `git fetch origin main`. A bare branch
+        # name only updates origin/<name> when remote.origin.fetch
+        # already covers it, and the runner's default refspecs cover the
+        # pipeline's own ref and nothing else -- so on a dev pipeline
+        # the bare form can leave origin/main missing, and
+        # check-branch-containment would fail for the wrong reason.
+        #
+        # dev is fetched for check-branch-containment and for
+        # check-commit-messages' landed mode on dev. `|| true` because
+        # dev does not exist before the QUI-1256 cutover lands and a
+        # fetch naming an absent ref fails the whole job; both guards
+        # refuse to treat a missing ref as a pass, so nothing is
+        # silently skipped by this. Not `|| :` -- a trailing ` :` makes
+        # YAML read the whole line as a mapping key rather than a
+        # command string, and the job then runs something else entirely.
+        - git fetch origin +refs/heads/main:refs/remotes/origin/main --quiet
+        - git fetch origin +refs/heads/dev:refs/remotes/origin/dev --quiet || true
     script:
         # Two commands, not one, because check-mr-title is not a
         # lint-policy prerequisite (see the note above). Neither

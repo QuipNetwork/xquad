@@ -71,6 +71,16 @@
 # they exist so that a crate added in September is caught on that merge
 # request rather than at tag time in November.
 #
+# With no tag at all, one assertion still runs, and only on the two
+# long-lived branches: their trees must carry a `-dev` version. Before
+# 1.0 both are working branches -- `main` is the non-breaking line and
+# `dev` the breaking one -- so a release version on either means a tag
+# was cut and the reopening bump was skipped. That is not hypothetical:
+# it happened after `v0.4.0-rc1`, and again after `v0.4.0`, and nothing
+# reported either (QUI-1256). Any other branch is judged by nothing,
+# because a branch mid-bump is a normal state and a rule that read it
+# would fail the merge request carrying the bump.
+#
 # `release:validate` carries no `rules:`, so it sees every tag, not only
 # release tags. A tag that does not match ^v<digit> is skipped: it cannot
 # trigger `release:crates` or `release:pypi`, so failing would break an
@@ -103,9 +113,15 @@
 #                                             # (`make set-version`)
 #   scripts/check-version-sites.py --root DIR # check a tree other than this one
 #
+# The branch assertion reads $CI_COMMIT_BRANCH and nothing else. This
+# script never shells out to git (see above), so it cannot ask which
+# branch is checked out; set the variable to try it by hand:
+#   CI_COMMIT_BRANCH=main make check-version-sites
+#
 # Exit codes:
-#   0  -- pass, or no tag to check
-#   1  -- a version site disagrees with the tag
+#   0  -- pass, or nothing to check on this ref
+#   1  -- a version site disagrees with the tag, or a working branch
+#         carries a release version
 #   2  -- usage error, or the site table no longer describes the tree
 
 from __future__ import annotations
@@ -238,6 +254,11 @@ def parse_requirement(raw: str) -> tuple[str, tuple[str, ...], str] | None:
         return None
     extras = tuple(extra.strip() for extra in (match["extras"] or "").split(",") if extra.strip())
     return match["name"], extras, match["spec"].strip()
+
+
+# The two long-lived branches, which are both working branches before
+# 1.0. See check_branch below, and docs/guide/gitflow-protocol.md.
+WORKING_BRANCHES = frozenset({"main", "dev"})
 
 
 # --- Site table ------------------------------------------------------------
@@ -657,13 +678,20 @@ def do_list(root: Path) -> int:
     return 0
 
 
-def do_print_version(root: Path) -> int:
+def tree_version(root: Path) -> str | None:
+    """The one canonical PEP 440 version every site agrees on, or None if they disagree."""
     canonical = {canon(found.value) for _, found in read_all(root)}
     if len(canonical) != 1 or None in canonical:
-        print("error: version-sites: the version sites do not agree on one version", file=sys.stderr)
-        print("error: version-sites: run `make list-version-sites` to see them", file=sys.stderr)
+        return None
+    return canonical.pop()
+
+
+def do_print_version(root: Path) -> int:
+    version = tree_version(root)
+    if version is None:
+        emit("the version sites do not agree on one version", "run `make list-version-sites` to see them")
         return 2
-    print(canonical.pop())
+    print(version)
     return 0
 
 
@@ -772,6 +800,54 @@ def do_set(root: Path, version: str) -> int:
     print("regenerate the lockfiles: cargo check; uv lock;")
     print("  cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml")
     return 0
+
+
+def check_branch(root: Path, branch: str) -> int:
+    """Assert a long-lived branch's tree carries a development version.
+
+    Before 1.0 both are working branches: `main` is the non-breaking
+    line and reopens at `x.y.(z+1)-dev` after every tag, `dev` is the
+    breaking line and sits at `x.(y+1).0-dev`. Neither may carry a
+    version a tag could publish, because an artefact built from one
+    would be named as a published release while its contents drift on
+    under that name.
+
+    The assertion is the suffix, not a particular version. Which `-dev`
+    version a branch should be on is a question about the last tag and
+    about which line the branch is, and answering it here would mean
+    this guard knowing the release history. The drift it exists to
+    catch is a bump that never happened at all, and the suffix is
+    enough to see that.
+    """
+    version = tree_version(root)
+    if version is None:
+        emit(
+            "the version sites do not agree on one version",
+            "run `make list-version-sites` to see them",
+        )
+        return 2
+
+    if ".dev" in version:
+        print(f"version sites OK ({len(SITES)} sites at {version}, {branch} is a working branch)")
+        return 0
+
+    emit(
+        f"{branch} carries {version}, which is a release version.",
+        "",
+        "main and dev are working branches before 1.0 and carry a -dev",
+        "suffix: main the next patch (0.4.1-dev), dev the next minor",
+        "(0.5.0-dev). A release version on one of them means a tag was cut",
+        "and the reopening bump was skipped, so every artefact built from",
+        "this branch is named as the published release while the branch",
+        "moves on underneath the name. Nothing else notices -- the tag",
+        "comparison only runs on a tag, and there is no tag here.",
+        "",
+        "To fix:",
+        "  make set-version VERSION=<next>-dev",
+        "  cargo check && uv lock",
+        "  cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml",
+    )
+    return 1
 
 
 def check_tag(root: Path, tag: str) -> int:
@@ -899,7 +975,15 @@ def main(argv: list[str]) -> int:
         tag = os.environ.get("CI_COMMIT_TAG", "").strip()
 
     if not tag:
-        print(f"guard: no tag to check (CI_COMMIT_TAG unset); {len(SITES)} version sites declared")
+        branch = os.environ.get("CI_COMMIT_BRANCH", "").strip()
+        if branch in WORKING_BRANCHES:
+            try:
+                return check_branch(root, branch)
+            except SetupError as exc:
+                print(f"error: site-table: {exc}", file=sys.stderr)
+                return 2
+        where = branch or "no branch"
+        print(f"guard: no tag to check ({where} is not a working branch); {len(SITES)} version sites declared")
         return 0
 
     # A ref only publishes if it matches `.on-release-tag` (/^v\d/), so a pushed

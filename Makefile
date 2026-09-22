@@ -6,6 +6,7 @@
         test-rust test-python check-parity check-docs-handwritten \
         check-crate-publish check-python-dists check-release \
         check-version-sites list-version-sites set-version \
+        check-branch-containment \
         deps deps-miri deps-py deps-wasm \
         install-hooks \
         lint lint-clippy lint-doc lint-deny-rs lint-py check-uv-lock \
@@ -78,10 +79,23 @@ lint-python: fmt-check-py lint-py
 # GIT_DEPTH: 0 (see verify.yml), so this line is the only CI-side change
 # it needs.
 #
+# check-branch-containment joins for the reason verify.yml has no
+# `rules:` anywhere: it scopes itself on the ref it is handed and exits
+# 0 on every ref it does not judge, so it needs no job of its own and
+# stays runnable locally -- a `rules:`-gated job is neither.
+#
+# check-version-sites is deliberately NOT here, although its branch
+# assertion is policy too. It runs through $(VERPY), which needs uv,
+# and verify:policy's image carries none. It also does not need to be:
+# release:validate has no `rules:`, installs uv, and runs it through
+# check-release on every pipeline, so the assertion already fires on
+# every main and dev push -- in the release stage rather than here.
+#
 # preflight-py lists fmt-check-toml directly so a Python-only
 # contributor gets the TOML check without running the rest of the
 # policy phase.
-lint-policy: fmt-check-toml lint-deny-rs render-changelog check-atomic-spec check-commit-messages check-release-notes
+lint-policy: fmt-check-toml lint-deny-rs render-changelog check-atomic-spec check-commit-messages \
+             check-release-notes check-branch-containment
 
 # Wraps scripts/check-atomic-spec-mr.sh, forwarding the optional positional
 # BASE/HEAD refs the way the script expects. Both are quoted so that
@@ -965,6 +979,17 @@ render-changelog:
 # wrong reason.
 check-release-notes:
 	bash scripts/check-release-notes.sh
+
+# Wraps scripts/check-branch-containment.sh, which asserts the two-branch
+# protocol's one invariant: origin/main is contained in dev, and in every
+# release branch cut from it (docs/guide/gitflow-protocol.md).
+#
+# Takes no arguments. The script reads the ref from the environment and
+# judges only dev and release/*, so a local run on any other branch is a
+# no-op that prints why. It needs origin/main fetched, which verify:policy
+# does in its before_script and a local clone usually has.
+check-branch-containment:
+	bash scripts/check-branch-containment.sh
 
 # Generate the changelog / release notes for a tagged release.
 # Invoked from `release:notes` in .gitlab/ci/release.yml with
