@@ -1,10 +1,17 @@
-# Code owners — every MR into main requires approval from both owners.
+# Suggested reviewers. GitLab lists the owners of a matching path as
+# suggested approvers in the merge request sidebar.
 #
-# Approval count is enforced via:
-#   Settings → Merge requests → Approval rules → Approvals required: 2
+# This file is advisory and nothing here is enforced. A CODEOWNERS entry
+# only becomes binding when "Require code owner approval" is set on the
+# protected branch, and it is off for both `main` and `release/*`. The
+# standing approval rule is one approval from any project member, which
+# any member satisfies regardless of what this file says.
 #
-# The "Require code owner approval" toggle on the protected main branch
-# additionally ensures approvals must come from the listed owners, not
-# arbitrary project members.
+# An earlier revision of this header claimed approvals required was 2 and
+# that the code owner toggle was on for `main`. Neither was ever true.
+#
+# To make it binding after 1.0, when `main` receives only release and
+# hotfix merges and an approval rule scoped to `main` becomes the right
+# rule: tick that toggle on `main`'s protection rule.
 
 * @kleczkowski @meganathanmanish
