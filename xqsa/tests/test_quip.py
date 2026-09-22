@@ -1108,6 +1108,16 @@ class TestSolverQuipConstruction:
         assert solver._faucet == NETWORKS["aglais"].faucet
         assert solver._network == "aglais"
 
+    def test_for_network_faucet_none_keeps_the_preset(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+        from xqsa.quip_networks import NETWORKS
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_FAUCET_URL", "http://env-faucet")
+        solver = SolverQuip.for_network("aglais", seed=VALID_SEED, faucet=None)
+        assert solver._faucet == NETWORKS["aglais"].faucet
+
     def test_for_network_caller_faucet_overrides_preset(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip
 
@@ -2498,7 +2508,7 @@ class TestSolveAutoconfirmGate:
         solver = _solve_ready(monkeypatch, autoconfirm=False)
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
-        monkeypatch.setattr("builtins.input", lambda prompt: "y")
+        monkeypatch.setattr("builtins.input", lambda prompt="": "y")
         result = solver.solve(_model())
         assert isinstance(result, SolverResult)
 
@@ -2508,7 +2518,7 @@ class TestSolveAutoconfirmGate:
         solver = _solve_ready(monkeypatch, autoconfirm=False)
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
-        monkeypatch.setattr("builtins.input", lambda prompt: "n")
+        monkeypatch.setattr("builtins.input", lambda prompt="": "n")
         with pytest.raises(QuipCancelledError) as excinfo:
             solver.solve(_model())
         assert excinfo.value.quote.total_planck > 0
@@ -2521,7 +2531,7 @@ class TestSolveAutoconfirmGate:
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
 
-        def _raise_eof(prompt: str) -> str:
+        def _raise_eof(prompt: str = "") -> str:
             raise EOFError
 
         monkeypatch.setattr("builtins.input", _raise_eof)
@@ -2536,7 +2546,7 @@ class TestSolveAutoconfirmGate:
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=False))
         calls: list[str] = []
-        monkeypatch.setattr("builtins.input", lambda prompt: calls.append(prompt) or "y")
+        monkeypatch.setattr("builtins.input", lambda prompt="": calls.append(prompt) or "y")
         with pytest.raises(QuipCancelledError, match="autoconfirm=False") as excinfo:
             solver.solve(_model())
         message = str(excinfo.value)
@@ -2623,6 +2633,49 @@ class TestSolveAutofundGate:
         solver.solve(_model())
         assert len(calls) == 1
         assert calls[0] == (shortfall if above_one_drip else None)
+
+    def test_false_no_tty_cancels_without_funding(self, monkeypatch) -> None:
+        from xqsa.quip import QuipCancelledError
+
+        calls: list = []
+        solver, _iface = _solve_ready_short(monkeypatch, autofund=False)
+        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: calls.append(dest))
+        monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=False))
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipCancelledError, match="autofund=lambda q"):
+            solver.solve(_model())
+        assert calls == []
+        assert "wait_for" not in captured
+
+    def test_faucet_error_propagates_without_proposing(self, monkeypatch) -> None:
+        from xqsa.quip_faucet import QuipFaucetError
+
+        solver, _iface = _solve_ready_short(monkeypatch)
+
+        def refuse(dest, *, url, amount=None):
+            raise QuipFaucetError(403, {"error": "destination already funded"}, "refused")
+
+        monkeypatch.setattr("xqsa.quip.fund_from_faucet", refuse)
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipFaucetError):
+            solver.solve(_model())
+        assert "wait_for" not in captured
+
+    def test_prompt_goes_to_stderr(self, monkeypatch) -> None:
+        solver, iface = _solve_ready_short(monkeypatch, autofund=False)
+
+        def fake_fund(dest, *, url, amount=None):
+            iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
+            return {}
+
+        monkeypatch.setattr("xqsa.quip.fund_from_faucet", fake_fund)
+        monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
+        stderr = _FakeTTY(isatty=True)
+        monkeypatch.setattr(sys, "stderr", stderr)
+        monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        solver.solve(_model())
+        assert "Fund 0x" in "".join(stderr.written)
 
     def test_no_faucet_raises_before_the_autofund_gate(self, monkeypatch) -> None:
         from xqsa.quip import QuipSubmissionError

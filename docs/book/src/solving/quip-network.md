@@ -45,8 +45,8 @@ environment variables:
 | `keystore` | `QUIP_KEYSTORE` | Keystore file path (loaded, or created on first use) |
 | `reward` | `QUIP_REWARD` | Reward in planck; falls back to the chain's `MinReward` |
 | `faucet` | `QUIP_FAUCET_URL` | Faucet base URL used to top up a short account when `autofund` allows it |
-| `autoconfirm` | `QUIP_AUTOCONFIRM` | Whether to submit without asking; `True` submits, `False` asks on the terminal, or a callable judging the job's `JobQuote` |
-| `autofund` | `QUIP_AUTOFUND` | Whether to draw from `faucet` when the account cannot cover the quoted job; same three forms as `autoconfirm` |
+| `autoconfirm` | `QUIP_AUTOCONFIRM` | Whether to submit without asking. `True` (the default) submits; `False` asks on the terminal and raises `QuipCancelledError` without one, a notebook included; a callable judges the job's `JobQuote`. The variable takes `1/true/yes/on` or `0/false/no/off` |
+| `autofund` | `QUIP_AUTOFUND` | Whether to draw from `faucet` when the account cannot cover the quoted job; same forms and default as `autoconfirm` |
 
 Provide exactly one of `seed` or `keystore`. `spec_id` and `topology`
 are constructor-only overrides -- both default to chain state

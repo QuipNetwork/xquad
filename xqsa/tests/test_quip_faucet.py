@@ -185,3 +185,39 @@ def test_non_json_error_body_tolerated(mock_urlopen):
 
     assert excinfo.value.status == 500
     assert excinfo.value.body == {}
+
+
+@patch("xqsa.quip_faucet.urllib.request.urlopen")
+def test_non_json_success_body_reads_as_empty(mock_urlopen):
+    resp = io.BytesIO(b"<html>not the faucet</html>")
+    resp.status = 200
+    mock_urlopen.return_value = _Ctx(resp)
+    assert fund_from_faucet(DEST, url=URL) == {}
+
+
+@patch("xqsa.quip_faucet.urllib.request.urlopen")
+def test_non_object_error_body_tolerated(mock_urlopen):
+    mock_urlopen.side_effect = urllib.error.HTTPError(URL, 400, "error", {}, io.BytesIO(b"[1, 2]"))
+    with pytest.raises(QuipFaucetError) as excinfo:
+        fund_from_faucet(DEST, url=URL)
+    assert excinfo.value.body == {}
+
+
+@patch("xqsa.quip_faucet.time.sleep")
+@patch("xqsa.quip_faucet.urllib.request.urlopen")
+def test_rate_limit_beyond_cap_raises_without_sleeping(mock_urlopen, mock_sleep):
+    mock_urlopen.side_effect = [_http_error(429, {"retry_after_seconds": 86400})]
+    with pytest.raises(QuipFaucetError) as excinfo:
+        fund_from_faucet(DEST, url=URL)
+    assert excinfo.value.status == 429
+    mock_sleep.assert_not_called()
+
+
+def test_bad_ca_bundle_raises_faucet_error(monkeypatch):
+    def boom(cafile=None):
+        raise FileNotFoundError(cafile)
+
+    monkeypatch.setattr("xqsa.quip_faucet.ssl.create_default_context", boom)
+    with pytest.raises(QuipFaucetError) as excinfo:
+        fund_from_faucet(DEST, url=URL)
+    assert excinfo.value.status is None

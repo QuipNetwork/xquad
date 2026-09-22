@@ -44,6 +44,11 @@ logger = logging.getLogger("xqsa.quip.faucet")
 # a given faucet deployment may drip a different amount.
 DEFAULT_DRIP_PLANCK = 10_000_000_000_000
 
+# The longest 429 back-off honoured before the one retry. The faucet's window
+# is 5 seconds; a larger ask is a misconfigured endpoint, and sleeping on it
+# would stall solve() in a script that no gate was meant to block.
+MAX_RETRY_AFTER_SECONDS = 30.0
+
 
 class QuipFaucetError(QuipError):
     """Raised when a faucet funding request fails.
@@ -62,9 +67,12 @@ class QuipFaucetError(QuipError):
 def _post_request(url: str, dest: str, amount: int | None, timeout: float) -> tuple[int, dict]:
     """Send one funding request to ``url``; return ``(status, body)``.
 
+    A body that is not a JSON object reads as ``{}``: a proxy answering in
+    HTML at a mis-set URL must fail as a faucet error, not a decode error.
+
     Raises:
-        QuipFaucetError: on a transport-level failure (``URLError``,
-            ``TimeoutError``, or other ``OSError``), with ``status=None``.
+        QuipFaucetError: on a transport-level or TLS setup failure, with
+            ``status=None``.
     """
     payload: dict = {"dest": dest}
     if amount is not None:
@@ -78,27 +86,32 @@ def _post_request(url: str, dest: str, amount: int | None, timeout: float) -> tu
     # Verifies TLS with the same CA default as xqsa.quip_metadata.connect, so
     # an https:// faucet works on macOS without an exported SSL_CERT_FILE.
     # ssl ignores WEBSOCKET_CLIENT_CA_BUNDLE, so it is honoured here explicitly.
-    cafile = os.environ.get("WEBSOCKET_CLIENT_CA_BUNDLE") or quip_metadata._default_ca_bundle()
-    context = ssl.create_default_context(cafile=cafile)
     try:
+        cafile = os.environ.get("WEBSOCKET_CLIENT_CA_BUNDLE") or quip_metadata._default_ca_bundle()
+        context = ssl.create_default_context(cafile=cafile)
         with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:  # noqa: S310 -- operator-supplied faucet URL
-            return resp.status, json.loads(resp.read())
+            return resp.status, _json_object(resp.read())
     except urllib.error.HTTPError as exc:
-        raw = exc.read()
-        try:
-            body = json.loads(raw) if raw else {}
-        except json.JSONDecodeError:
-            body = {}
-        return exc.code, body
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return exc.code, _json_object(exc.read())
+    except (OSError, ImportError) as exc:  # URLError, timeouts, and a bad CA bundle are all OSErrors.
         raise QuipFaucetError(None, {}, f"faucet request to {url} failed: {exc}") from exc
+
+
+def _json_object(raw: bytes) -> dict:
+    """Parse ``raw`` as a JSON object, or return ``{}`` for anything else."""
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}
 
 
 def fund_from_faucet(dest: str, *, url: str, amount: int | None = None, timeout: float = 40.0) -> dict:
     """Request faucet funding for ``dest`` and return the drip's JSON body.
 
     Retries exactly once on a 429 rate limit, sleeping for the server's
-    ``retry_after_seconds``. A 403 (the faucet only tops up accounts at or
+    ``retry_after_seconds`` (a wait over :data:`MAX_RETRY_AFTER_SECONDS`
+    raises instead). A 403 (the faucet only tops up accounts at or
     below one drip) is never retried.
 
     Args:
@@ -120,7 +133,14 @@ def fund_from_faucet(dest: str, *, url: str, amount: int | None = None, timeout:
     status, body = _post_request(request_url, dest, amount, timeout)
 
     if status == 429:
-        retry_after = float(body.get("retry_after_seconds", 5))
+        try:
+            retry_after = max(0.0, float(body.get("retry_after_seconds", 5)))
+        except (TypeError, ValueError):
+            retry_after = 5.0
+        if retry_after > MAX_RETRY_AFTER_SECONDS:
+            raise QuipFaucetError(
+                status, body, f"faucet {request_url} rate limited {dest} for {retry_after:.0f}s; try again later"
+            )
         logger.debug("faucet %s rate limited %s, retrying after %ss", request_url, dest, retry_after)
         time.sleep(retry_after)
         status, body = _post_request(request_url, dest, amount, timeout)

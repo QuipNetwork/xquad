@@ -44,9 +44,11 @@ first use if absent). Every :meth:`SolverQuip.solve` first quotes the job
 (:class:`JobQuote`: reward plus the chain-reported fee, against the balance)
 and passes two consent gates. ``autoconfirm`` decides whether to submit at that
 price; ``autofund`` decides whether an account short of it is topped up from
-the faucet first. Each gate is ``True`` (proceed), ``False`` (ask on the
-terminal; raises :class:`QuipCancelledError` when stdin is not one), or a
-callable taking the quote and returning a verdict. A short account with no
+the faucet first. Each gate is ``True`` (proceed, the default), ``False`` (ask
+on the terminal; raises :class:`QuipCancelledError` when stdin is not one,
+which includes a Jupyter kernel), or a callable taking the quote and returning
+a verdict. The environment variables take ``1/true/yes/on`` or
+``0/false/no/off``. A short account with no
 faucet configured raises :class:`QuipSubmissionError`.
 
 Named networks skip the URL: ``SolverQuip.for_network("aglais", keystore=...)``
@@ -393,7 +395,8 @@ class SolverQuip(Solver):
         if preset is None:
             raise ValueError(f"unknown Quip network {name!r}; known networks: {', '.join(sorted(NETWORKS))}")
         logger.info("Quip network %s resolved to %s", name, preset.rpc)
-        kwargs.setdefault("faucet", preset.faucet)
+        if kwargs.get("faucet") is None:  # faucet=None must not let QUIP_FAUCET_URL beat the preset.
+            kwargs["faucet"] = preset.faucet
         solver = cls(url=preset.rpc, **kwargs)
         solver._network = name
         return solver
@@ -1135,8 +1138,11 @@ class SolverQuip(Solver):
             )
         if not sys.stderr.isatty():  # otherwise _display already showed it.
             print(str(quote), file=sys.stderr)
+        # The question goes to stderr with the quote: input(prompt) writes to
+        # stdout, which a redirect would hide while the process waits.
+        print(f"[quip] {question} [y/N] ", end="", file=sys.stderr, flush=True)
         try:
-            answer = input(f"[quip] {question} [y/N] ")
+            answer = input()
         except EOFError:
             answer = ""
         if answer.strip().lower() not in ("y", "yes"):
