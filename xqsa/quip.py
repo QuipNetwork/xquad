@@ -40,6 +40,11 @@ Provide exactly one of ``seed`` or ``keystore`` (a keystore is generated on
 first use if absent). The account must be funded; on localdev the faucet at
 ``QUIP_FAUCET_URL`` tops it up.
 
+Named networks skip the URL: ``SolverQuip.for_network("aglais", keystore=...)``
+builds a solver against a preset, ``aglais`` (the public testnet) or ``devnet``
+(the localdev stack). The coordinates, and how often they move, are in
+:mod:`xqsa.quip_networks`.
+
 Signing is hybrid (sr25519 + FN-DSA-512): the chain's ``Signature`` is
 ``HybridTxSignature``, which ``substrate-interface`` cannot produce, so all
 crypto is delegated to the ``quip_signer`` extension and extrinsic assembly to
@@ -89,6 +94,7 @@ from xqsa.quip_codec import (
     ising_energy_milli,
     model_to_ising,
 )
+from xqsa.quip_networks import NETWORKS
 from xqsa.solver import Solver, SolverResult
 
 if TYPE_CHECKING:
@@ -274,6 +280,34 @@ class SolverQuip(Solver):
         self._spec_id = self._resolve_spec_id(spec_id)
         self._reward = self._resolve_reward(reward)
         self._topology_hash = self._resolve_topology_hash(topology)
+
+    @classmethod
+    def for_network(cls, name: str, /, **kwargs: Any) -> SolverQuip:
+        """Build a solver against a named Quip network preset.
+
+        Looks ``name`` up in :data:`xqsa.quip_networks.NETWORKS` and passes the
+        preset's RPC endpoint to the constructor as ``url``. Every other keyword
+        goes to the constructor unchanged. A classmethod rather than a
+        constructor argument so the preset enters as ``url=``, which beats
+        ``QUIP_RPC_URL``: an exported localdev URL cannot silently redirect a
+        solver the caller asked to point at a named network.
+
+        Examples:
+            Connects to the network, so it is not run as a doctest::
+
+                solver = SolverQuip.for_network("aglais", keystore="~/.quip/keystore.json")
+
+        Raises:
+            ValueError: if ``name`` is not a known network, before any
+                connection is attempted.
+            TypeError: if ``url`` is also passed.
+            Everything the constructor raises.
+        """
+        preset = NETWORKS.get(name)
+        if preset is None:
+            raise ValueError(f"unknown Quip network {name!r}; known networks: {', '.join(sorted(NETWORKS))}")
+        logger.info("Quip network %s resolved to %s", name, preset.rpc)
+        return cls(url=preset.rpc, **kwargs)
 
     # ------------------------------------------------------------------
     # Identity / configuration resolution

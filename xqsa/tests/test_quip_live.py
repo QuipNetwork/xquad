@@ -22,8 +22,8 @@ Opt-in: marked ``quip`` and skipped unless ``QUIP_RPC_URL`` is set. Run against
 a Quip Network devnet (a single-node localdev or a testnet), pointing the two
 env vars at its RPC + faucet:
 
-    QUIP_RPC_URL=ws://127.0.0.1:9944 \\
-    QUIP_FAUCET_URL=http://127.0.0.1:8087 \\
+    QUIP_RPC_URL=ws://localhost:20049/rpc \\
+    QUIP_FAUCET_URL=http://localhost:20049/api/faucet \\
         uv run --extra quip pytest xqsa/tests/test_quip_live.py -m quip -v
 
 Two tiers:

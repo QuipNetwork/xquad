@@ -51,6 +51,22 @@ parameters defaulting to `Open`, `SingleBest`, and `OnChainOnly`; the
 pallet's data-carrying variants (`Callback` delivery, `Bid` mode) exist
 on-chain but `SolverQuip` does not exercise them.
 
+### Named networks
+
+`SolverQuip.for_network(name, **kwargs)` builds a solver from a named
+preset in `xqsa.quip_networks` instead of an explicit `url`:
+
+```python
+SolverQuip.for_network("devnet", keystore="~/.quip/keystore.json")
+```
+
+Two presets are registered: `devnet` (the local Docker stack
+contributors run for offline testing) and one for the public network
+described in [Gaps](#gaps). The RPC and faucet coordinates behind each
+preset live in `xqsa.quip_networks`, move with the deployment, and are
+corrected in patch releases -- treat that module, not this page, as
+the source of truth.
+
 ## Job Lifecycle
 
 `solve()` calls `propose_job`, which reserves the full reward and

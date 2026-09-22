@@ -1604,12 +1604,14 @@ metal = [
     { name = "pyobjc-framework-metal", marker = "sys_platform == 'darwin'" },
 ]
 quip = [
+    { name = "certifi" },
     { name = "quip-signer" },
     { name = "substrate-interface" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "certifi", marker = "extra == 'quip'", specifier = ">=2019.3.9" },
     { name = "cupy-cuda12x", marker = "extra == 'cuda'", specifier = ">=13.0" },
     { name = "dwave-samplers", specifier = ">=1.0" },
     { name = "dwave-system", marker = "extra == 'dwave'", specifier = ">=1.0" },

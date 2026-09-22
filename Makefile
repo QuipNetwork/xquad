@@ -635,8 +635,8 @@ test-substrate-fixture:
 # QUIP_RPC_URL, so drive it with the devnet env vars set (see test-quip-e2e):
 #
 #   make test-quip \
-#       QUIP_RPC_URL=ws://127.0.0.1:9944 \
-#       QUIP_FAUCET_URL=http://127.0.0.1:8087
+#       QUIP_RPC_URL=ws://localhost:20049/rpc \
+#       QUIP_FAUCET_URL=http://localhost:20049/api/faucet
 test-quip: test-quip-sign test-quip-e2e
 
 # Run the quip-marked signing tests (xqsa/tests/test_quip_signing.py): the
@@ -677,8 +677,8 @@ test-quip-sign:
 # env vars at the devnet's RPC + faucet:
 #
 #   make test-quip-e2e \
-#       QUIP_RPC_URL=ws://127.0.0.1:9944 \
-#       QUIP_FAUCET_URL=http://127.0.0.1:8087
+#       QUIP_RPC_URL=ws://localhost:20049/rpc \
+#       QUIP_FAUCET_URL=http://localhost:20049/api/faucet
 #
 # QUIP_RPC_URL gates the whole module (unset -> every test skips), so the
 # target hard-errors when it is missing rather than reporting a hollow, all-
@@ -692,7 +692,7 @@ test-quip-sign:
 # for the full rationale; not repeated here.
 test-quip-e2e:
 	@if [ -z "$(QUIP_RPC_URL)" ]; then \
-		echo "error: QUIP_RPC_URL is required (e.g. make test-quip-e2e QUIP_RPC_URL=ws://127.0.0.1:9944 QUIP_FAUCET_URL=http://127.0.0.1:8087)" >&2; \
+		echo "error: QUIP_RPC_URL is required (e.g. make test-quip-e2e QUIP_RPC_URL=ws://localhost:20049/rpc QUIP_FAUCET_URL=http://localhost:20049/api/faucet)" >&2; \
 		exit 2; \
 	fi
 	uv sync --extra quip

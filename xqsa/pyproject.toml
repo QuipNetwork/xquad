@@ -32,7 +32,9 @@ metal = [ "pyobjc-framework-Metal>=11.0; sys_platform == 'darwin'" ]
 # envelope self-check in `quip_signing.build_signed_extrinsic` verifies through
 # the same installed binding that produced it, so a suite change keeping the same
 # byte lengths self-verifies locally and is rejected only by the chain.
-quip = [ "substrate-interface>=1.7.4,<2", "quip-signer>=0.3.0,<0.4" ]
+# `certifi` arrives through substrate-interface anyway; it is listed because
+# `quip_metadata.connect` imports it directly for the wss:// CA default.
+quip = [ "substrate-interface>=1.7.4,<2", "quip-signer>=0.3.0,<0.4", "certifi>=2019.3.9" ]
 
 [tool.uv.sources]
 xqvm_py.workspace = true

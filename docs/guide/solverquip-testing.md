@@ -52,11 +52,13 @@ self-install the `[quip]` extra via `uv run --extra quip`.
 | `QUIP_FAUCET_URL` | optional | faucet **base** URL; the funded fixture POSTs to `<QUIP_FAUCET_URL>/request`. Without it only the read-only connectivity tests run. |
 | `QUIP_TOPOLOGY` | optional | registered topology hash for `SolverQuip` to target instead of the chain default. Unlike the rest of this table it configures the solver, not the harness, so it also applies outside the tests. Setting it un-skips the override tier. |
 | `QUIP_MINER_PROBE_TIMEOUT` | optional (default 60) | how long the `solving_miner` probe waits before skipping the end-to-end tier. Raise it on a slow or remote fleet. |
-| `SSL_CERT_FILE` | macOS + `wss://` only | CA bundle for the TLS handshake (see [macOS TLS](#macos-tls-wss-only)). |
 
 Any variable exported in your shell -- or passed as `make VAR=val` -- reaches
-pytest, so you can set `SSL_CERT_FILE` and `QUIP_MINER_PROBE_TIMEOUT` alongside
-the two the recipe forwards.
+pytest, so you can set `QUIP_MINER_PROBE_TIMEOUT` alongside the two the
+recipe forwards. `xqsa.quip_metadata.connect` supplies certifi's CA bundle
+for `wss://` URLs automatically unless `SSL_CERT_FILE` or
+`WEBSOCKET_CLIENT_CA_BUNDLE` is set, so macOS no longer needs either
+exported for aglais.
 
 ### The two test tiers
 
@@ -85,16 +87,6 @@ the two the recipe forwards.
   format check rejects it, and H4 derives a different account id from the same
   master seed, so the balance does not carry over either. Generate a fresh one
   and fund that.
-
-### macOS TLS (`wss://` only)
-
-The python.org / uv Python build ships no system CA bundle, so `wss://`
-handshakes fail on macOS unless you point OpenSSL at certifi's bundle:
-
-    export SSL_CERT_FILE=$(uv run --extra quip python -m certifi)
-
-Export it for every command that touches aglais (REPL, tests, scripts). It
-is harmless on Linux and unnecessary for the `ws://` DevNet.
 
 ## Option A -- local DevNet
 
@@ -192,9 +184,8 @@ so use a differently-named override and pass it with `-f`.
         QUIP_RPC_URL=ws://localhost:20049/rpc \
         QUIP_FAUCET_URL=http://localhost:20049/api/faucet
 
-No `SSL_CERT_FILE` is needed for the `ws://` DevNet. A fresh order solves in
-~2-4 blocks at localdev block time (~14-21s propose to on-chain solution under
-emulation).
+A fresh order solves in ~2-4 blocks at localdev block time (~14-21s propose to
+on-chain solution under emulation).
 
 ### Teardown
 
@@ -235,14 +226,15 @@ what the signing layer speaks.
 
 ### Coordinates (verify before a run -- these move)
 
-- **RPC:** use a validator node, e.g. `wss://bootnode-1.aglais.quip.network:20049/rpc`
-  (bootnode-2 and bootnode-3 serve the same chain).
-  Any node can fall behind the chain tip and serve a stale, frozen view -- balances
-  read as 0 and freshly submitted extrinsics look like they never land, even though
-  the chain is live. Confirm the node is caught up before trusting reads (see the
-  liveness check below), and point `QUIP_RPC_URL` at a different RPC if the one you
-  are on is not syncing.
-- **Faucet:** `https://faucet.aglais.quip.network`, healthy as of 2026-09-15
+- **RPC:** the `aglais` preset in `xqsa/quip_networks.py` is the source of
+  truth; it points at bootnode-1's validator RPC (bootnode-2 and bootnode-3
+  serve the same chain). Any node can fall behind the chain tip and serve a stale,
+  frozen view -- balances read as 0 and freshly submitted extrinsics look
+  like they never land, even though the chain is live. Confirm the node is
+  caught up before trusting reads (see the liveness check below), and point
+  `QUIP_RPC_URL` at a different RPC if the one you are on is not syncing.
+- **Faucet:** the `aglais` preset's faucet coordinate in
+  `xqsa/quip_networks.py` is the source of truth, healthy as of 2026-09-15
   (`/health` returns `{"status":"ok"}`; the bare root returns 404, which is not a
   fault). Set `QUIP_FAUCET_URL` to it and the funded tier runs. A repeat request
   for the same account is rate-limited, so use a fresh keystore per run.
@@ -262,10 +254,9 @@ what the signing layer speaks.
 Quick version + liveness check. A synced node reports `isSyncing == false` and
 `currentBlock == highestBlock`; if it is behind, its state reads are stale:
 
-    CERT=$(uv run --extra quip python -m certifi)
-    RPC=wss://bootnode-1.aglais.quip.network:20049/rpc
-    SSL_CERT_FILE="$CERT" uv run --extra quip python -c "from xqsa.quip_metadata import connect; \
-        s=connect('$RPC'); \
+    uv run --extra quip python -c "from xqsa.quip_metadata import connect; \
+        from xqsa.quip_networks import NETWORKS; \
+        s=connect(NETWORKS['aglais'].rpc); \
         print('runtime', s.rpc_request('state_getRuntimeVersion',[])['result']); \
         print('sync   ', s.rpc_request('system_syncState',[])['result']); \
         print('health ', s.rpc_request('system_health',[])['result'])"
@@ -294,8 +285,7 @@ a complete graph on 16 nodes (K16), hash
 at block 232673. It is registered, not mineable, and not the default. Point
 `QUIP_TOPOLOGY` at it to run the whole suite against it:
 
-    CERT=$(uv run --extra quip python -m certifi)
-    SSL_CERT_FILE="$CERT" QUIP_MINER_PROBE_TIMEOUT=180 \
+    QUIP_MINER_PROBE_TIMEOUT=180 \
       QUIP_TOPOLOGY=0x830abc16c0b28b26f119f3a1279d07811bdeb9c0234d7f442ae46d6698d9a797 \
       make test-quip \
         QUIP_RPC_URL=wss://bootnode-1.aglais.quip.network:20049/rpc \
@@ -306,8 +296,7 @@ registration is permanent.
 
 ### Run the suite
 
-    CERT=$(uv run --extra quip python -m certifi)
-    SSL_CERT_FILE="$CERT" QUIP_MINER_PROBE_TIMEOUT=180 \
+    QUIP_MINER_PROBE_TIMEOUT=180 \
       make test-quip \
         QUIP_RPC_URL=wss://bootnode-1.aglais.quip.network:20049/rpc \
         QUIP_FAUCET_URL=https://faucet.aglais.quip.network
@@ -365,18 +354,15 @@ once when the fleet is active.
 ## Manual smoke solve (optional)
 
 Beyond the pytest suite, a single small model round-trips the propose + decode +
-energy-canary path. Export the same env you used above (for aglais also
-export `SSL_CERT_FILE` and set `QUIP_RPC_URL`/`QUIP_KEYSTORE`), fund a keystore,
-then:
+energy-canary path. Set `QUIP_KEYSTORE` and fund the keystore, then:
 
-    export QUIP_RPC_URL=ws://localhost:20049/rpc     # or wss://bootnode-1.aglais.quip.network:20049/rpc (aglais)
     export QUIP_KEYSTORE=/tmp/quip-ks.json
     uv run --extra quip python - <<'PY'
     from xqsa.quip import SolverQuip
     from xqvm_py.xqmx import XQMX
     m = XQMX.spin_model(2)
     m.set_linear(0, 1); m.set_quadratic(0, 1, -1)   # brute-force optimum = -2
-    r = SolverQuip().solve(m)
+    r = SolverQuip.for_network("aglais").solve(m)   # or "devnet"
     print("energy:", r.energy, "| matches chain:", r.metadata["energy_matches_chain"])
     PY
 

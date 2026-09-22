@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import os
 from collections.abc import Mapping
 from typing import Any
 
@@ -302,9 +303,26 @@ def connect(url: str, **kwargs: Any) -> Any:
     The shim lives on the returned instance's class alone; an unrelated
     ``substrate-interface`` client in the same process is untouched.
 
+    For a ``wss://`` URL, TLS verification uses certifi's CA bundle unless the
+    caller passed ``ws_options`` (forwarded untouched) or ``SSL_CERT_FILE`` or
+    ``WEBSOCKET_CLIENT_CA_BUNDLE`` is set, in which case that configuration
+    applies instead.
+
     Raises:
-        ImportError: if ``substrate-interface`` is not installed.
+        ImportError: if ``substrate-interface`` is not installed, or ``certifi``
+            is not installed and the certifi default applies.
     """
     import substrateinterface
 
+    # python.org and uv-managed Pythons on macOS ship no CA bundle, so a wss://
+    # handshake fails without one. An explicit ca_certs would override both env
+    # vars inside websocket-client, so it is only supplied when neither is set.
+    if (
+        url.startswith("wss://")
+        and "ws_options" not in kwargs
+        and not (os.environ.get("SSL_CERT_FILE") or os.environ.get("WEBSOCKET_CLIENT_CA_BUNDLE"))
+    ):
+        import certifi
+
+        kwargs["ws_options"] = {"sslopt": {"ca_certs": certifi.where()}}
     return v14_interface_class(substrateinterface.SubstrateInterface)(url=url, **kwargs)

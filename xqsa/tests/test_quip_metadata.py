@@ -47,6 +47,7 @@ from xqsa.quip_codec import QuipMetadataError
 from xqsa.quip_metadata import (
     METADATA_AT_VERSION_API,
     TARGET_METADATA_VERSION,
+    connect,
     v14_interface_class,
 )
 
@@ -480,3 +481,54 @@ class TestIsolation:
 
     def test_the_subclass_is_built_once_per_base(self) -> None:
         assert v14_interface_class(_StubInterface) is v14_interface_class(_StubInterface)
+
+
+# ---------------------------------------------------------------------------
+# connect: the certifi CA default for wss://
+# ---------------------------------------------------------------------------
+
+CA_BUNDLE = "/stub/certifi/cacert.pem"
+
+
+@pytest.fixture
+def connect_stubs(monkeypatch) -> None:
+    """Stub ``substrateinterface`` and ``certifi``, and clear the CA env vars.
+
+    A fresh ``SubstrateInterface`` class per test: ``v14_interface_class`` is
+    cached per base, so a shared class would share its subclass too.
+    """
+
+    class SubstrateInterface:
+        def __init__(self, url: str | None = None, **kwargs) -> None:
+            self.url = url
+            self.kwargs = kwargs
+
+    substrate = types.ModuleType("substrateinterface")
+    substrate.SubstrateInterface = SubstrateInterface  # type: ignore[attr-defined]
+    certifi = types.ModuleType("certifi")
+    certifi.where = lambda: CA_BUNDLE  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "substrateinterface", substrate)
+    monkeypatch.setitem(sys.modules, "certifi", certifi)
+    for name in ("SSL_CERT_FILE", "WEBSOCKET_CLIENT_CA_BUNDLE"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.usefixtures("connect_stubs")
+class TestConnect:
+    def test_wss_gets_the_certifi_bundle(self) -> None:
+        iface = connect("wss://node:443/rpc")
+        assert iface.url == "wss://node:443/rpc"
+        assert iface.kwargs == {"ws_options": {"sslopt": {"ca_certs": CA_BUNDLE}}}
+
+    def test_ws_gets_no_tls_options(self) -> None:
+        assert connect("ws://localhost:20049/rpc").kwargs == {}
+
+    def test_caller_ws_options_pass_through(self, monkeypatch) -> None:
+        monkeypatch.setitem(sys.modules, "certifi", None)  # never consulted
+        options = {"sslopt": {"cert_reqs": 0}}
+        assert connect("wss://node/rpc", ws_options=options).kwargs == {"ws_options": options}
+
+    @pytest.mark.parametrize("var", ["SSL_CERT_FILE", "WEBSOCKET_CLIENT_CA_BUNDLE"])
+    def test_env_ca_config_wins(self, monkeypatch, var: str) -> None:
+        monkeypatch.setenv(var, "/corp/ca.pem")
+        assert connect("wss://node/rpc").kwargs == {}
