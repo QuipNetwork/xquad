@@ -34,7 +34,7 @@ Configuration is resolved from constructor arguments first, then environment:
     ``keystore``           ``QUIP_KEYSTORE``     keystore path (load or create)
     ``reward``             ``QUIP_REWARD``       reward in planck (else MinReward)
     ``topology``           ``QUIP_TOPOLOGY``     topology hash (else DefaultTopology)
-    ``faucet``             ``QUIP_FAUCET_URL``   faucet base URL (for_network: preset)
+    ``faucet``             ``QUIP_FAUCET_URL``   faucet base URL (env read only without url=)
     ``autoconfirm``        ``QUIP_AUTOCONFIRM``  submit without asking (default true)
     ``autofund``           ``QUIP_AUTOFUND``     fund from the faucet without asking
     =====================  ====================================================
@@ -340,7 +340,9 @@ class SolverQuip(Solver):
         self._topology_cache: dict[str, Topology] = {}
         self._warned_allowed_values = False
         self._quip_signing = quip_signing
-        self._faucet = faucet or os.environ.get("QUIP_FAUCET_URL")
+        # The env faucet belongs to the env RPC: an explicit url= may name another
+        # chain, so it never draws from whatever faucet happens to be exported.
+        self._faucet = faucet or (None if url else os.environ.get("QUIP_FAUCET_URL"))
         # Set by for_network; a solver built from a raw url= names no network.
         self._network: str | None = None
         self._autoconfirm = _resolve_gate(autoconfirm, "autoconfirm", "QUIP_AUTOCONFIRM")

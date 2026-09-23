@@ -416,7 +416,7 @@ class TestConnectivity:
 class TestSubmitPath:
     def test_insufficient_balance_raises(self, make_solver) -> None:
         # A reward far beyond the funded balance trips the pre-check before submit.
-        # autofund off: with QUIP_FAUCET_URL exported, this must never reach the faucet.
+        # The shortfall is far beyond one drip, so this raises before either gate or the faucet.
         solver = make_solver(reward=10_000 * UNIT, autofund=lambda quote: False)
         with pytest.raises(QuipSubmissionError):
             solver.solve(_asymmetric_spin_model())

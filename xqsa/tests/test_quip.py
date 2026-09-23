@@ -1139,9 +1139,20 @@ class TestSolverQuipConstruction:
 
         _install(monkeypatch, _default_iface())
         _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_RPC_URL", "ws://fake")
         monkeypatch.setenv("QUIP_FAUCET_URL", "http://env-faucet")
-        solver = SolverQuip(url="ws://fake", seed=VALID_SEED)
+        solver = SolverQuip(seed=VALID_SEED)
         assert solver._faucet == "http://env-faucet"
+
+    def test_env_faucet_ignored_with_explicit_url(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_FAUCET_URL", "http://env-faucet")
+        # An explicit url= may name another chain than the exported faucet serves.
+        solver = SolverQuip(url="ws://fake", seed=VALID_SEED)
+        assert solver._faucet is None
 
     def test_faucet_arg_beats_env(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip

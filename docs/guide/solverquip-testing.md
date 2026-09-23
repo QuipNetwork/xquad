@@ -49,7 +49,7 @@ self-install the `[quip]` extra via `uv run --extra quip`.
 | Variable | When | Meaning |
 | --- | --- | --- |
 | `QUIP_RPC_URL` | required for e2e | chain RPC, `ws://` (DevNet) or `wss://` (aglais). `make test-quip` / `make test-quip-e2e` pass it through explicitly. |
-| `QUIP_FAUCET_URL` | optional | faucet **base** URL; the funded fixture POSTs to `<QUIP_FAUCET_URL>/request`. `SolverQuip` reads it too, as the faucet `autofund` draws from. Without it only the read-only connectivity tests run. |
+| `QUIP_FAUCET_URL` | optional | faucet **base** URL; the funded fixture POSTs to `<QUIP_FAUCET_URL>/request`. `SolverQuip` reads it too, as the faucet `autofund` draws from, but only when its RPC URL also comes from `QUIP_RPC_URL`; the fixtures pass `url=` and fund directly. Without it only the read-only connectivity tests run. |
 | `QUIP_TOPOLOGY` | optional | registered topology hash for `SolverQuip` to target instead of the chain default. Unlike the rest of this table it configures the solver, not the harness, so it also applies outside the tests. Setting it un-skips the override tier. |
 | `QUIP_MINER_PROBE_TIMEOUT` | optional (default 60) | how long the `solving_miner` probe waits before skipping the end-to-end tier. Raise it on a slow or remote fleet. |
 
