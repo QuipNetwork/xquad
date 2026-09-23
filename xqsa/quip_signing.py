@@ -413,6 +413,32 @@ def _compact_small(value: int) -> bytes | None:
     return None
 
 
+def disarm_extrinsic(wire: bytes) -> bytes:
+    """Return a copy of a :func:`build_signed_extrinsic` wire frame whose signature fails.
+
+    Flips one byte inside the envelope's signature half, so the copy has the
+    same length and layout -- and so the same ``payment_queryInfo`` fee --
+    but can never be dispatched. The byte chosen (the second of the signature
+    half) is random-looking material in either component's encoding, so the
+    copy still decodes; only verification fails. Use it to price an extrinsic
+    without handing the node something it could broadcast.
+
+    Raises:
+        QuipSigningError: if ``wire`` is not a signed frame of the expected length.
+    """
+    prefix_len = next(
+        (n for n in (1, 2, 4, 5) if len(wire) > n and encode_compact_u32(len(wire) - n) == wire[:n]),
+        None,
+    )
+    header_len = 2 + ACCOUNT_ID_LEN  # version byte, MultiAddress::Id tag, account
+    if prefix_len is None or len(wire) < prefix_len + header_len + HYBRID_ENVELOPE_LEN:
+        raise QuipSigningError("not a signed extrinsic frame; cannot disarm it")
+    offset = prefix_len + header_len + HYBRID_PUBLIC_LEN + 1
+    disarmed = bytearray(wire)
+    disarmed[offset] ^= 0xFF
+    return bytes(disarmed)
+
+
 def encode_compact_u32(value: int) -> bytes:
     """SCALE compact encoding of a non-negative ``u32``.
 

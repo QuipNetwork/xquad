@@ -43,13 +43,14 @@ Provide exactly one of ``seed`` or ``keystore`` (a keystore is generated on
 first use if absent). Every :meth:`SolverQuip.solve` first quotes the job
 (:class:`JobQuote`: reward plus the chain-reported fee, against the balance)
 and passes two consent gates. ``autoconfirm`` decides whether to submit at that
-price; ``autofund`` decides whether an account short of it is topped up from
-the faucet first. Each gate is ``True`` (proceed, the default), ``False`` (ask
-on the terminal; raises :class:`QuipCancelledError` when stdin is not one,
-which includes a Jupyter kernel), or a callable taking the quote and returning
-a verdict. The environment variables take ``1/true/yes/on`` or
-``0/false/no/off``. A short account with no
-faucet configured raises :class:`QuipSubmissionError`.
+price; ``autofund`` decides whether an account short of it is topped up with
+one faucet drip first. A shortfall larger than one drip is never requested; it
+raises :class:`QuipSubmissionError`, since it is more often a mistyped reward.
+Each gate is ``True`` (proceed, the default), ``False`` (ask on the terminal;
+raises :class:`QuipCancelledError` when stdin is not one, which includes a
+Jupyter kernel), or a callable taking the quote and returning a verdict. The
+environment variables take ``1/true/yes/on`` or ``0/false/no/off``. A short
+account with no faucet configured raises :class:`QuipSubmissionError`.
 
 Named networks skip the URL: ``SolverQuip.for_network("aglais", keystore=...)``
 builds a solver against a preset, ``aglais`` (the public testnet) or ``devnet``
@@ -689,13 +690,18 @@ class SolverQuip(Solver):
 
         ``payment_queryInfo`` dry-runs the fee of a signed extrinsic, so the
         answer tracks the live runtime rather than a formula copied from it.
-        ``partialFee`` arrives as a decimal string, ``0x`` hex, or an int
+        ``wire`` itself never leaves this process here; see
+        :func:`xqsa.quip_signing.disarm_extrinsic`. ``partialFee`` arrives as a decimal string, ``0x`` hex, or an int
         depending on the node. Any failure falls back to
         :data:`FEE_HEADROOM_PLANCK` with ``exact`` false rather than blocking
         the solve on a price estimate.
         """
         try:
-            raw = self._iface.rpc_request("payment_queryInfo", ["0x" + wire.hex()])["result"]["partialFee"]
+            # Price a copy whose signature fails: the node sees a frame it can
+            # never dispatch, so neither quote() nor a declined gate leaves it
+            # holding a proposable job. Same length, so the same fee.
+            priced = self._quip_signing.disarm_extrinsic(wire)
+            raw = self._iface.rpc_request("payment_queryInfo", ["0x" + priced.hex()])["result"]["partialFee"]
             if isinstance(raw, str):
                 return (int(raw, 16) if raw.startswith("0x") else int(raw)), True
             return int(raw), True
@@ -715,17 +721,26 @@ class SolverQuip(Solver):
             return "planck", 0
         return str(symbol), int(decimals)
 
-    def _insufficient_error(self, quote: JobQuote) -> QuipSubmissionError:
-        """Build the error for an account that cannot cover ``quote``, naming where to fund it."""
+    def _insufficient_error(self, quote: JobQuote, *, beyond_drip: bool = False) -> QuipSubmissionError:
+        """Build the error for an account that cannot cover ``quote``, naming where to fund it.
+
+        ``beyond_drip`` marks a shortfall larger than one faucet drip, which
+        ``autofund`` never requests: that is more often a mistyped reward than
+        a real need.
+        """
 
         def amount(planck: int) -> str:
             return f"{_format_planck(planck, quote.token_decimals)} {quote.token_symbol}"
 
-        remedy = (
-            f"Fund it from the faucet at {self._faucet}."
-            if self._faucet
-            else "Pass faucet=, set QUIP_FAUCET_URL, or build with SolverQuip.for_network(...) to name a faucet."
-        )
+        if beyond_drip:
+            remedy = (
+                f"That is more than one faucet drip ({amount(DEFAULT_DRIP_PLANCK)}), which is all autofund "
+                "requests; check reward=, or fund the account another way."
+            )
+        elif self._faucet:
+            remedy = f"Fund it from the faucet at {self._faucet}."
+        else:
+            remedy = "Pass faucet=, set QUIP_FAUCET_URL, or build with SolverQuip.for_network(...) to name a faucet."
         return QuipSubmissionError(
             f"insufficient balance: account {_as_hex(self._signer.account_id)} holds "
             f"{amount(quote.balance_planck)} but the job needs {amount(quote.total_planck)} "
@@ -1114,7 +1129,7 @@ class SolverQuip(Solver):
         text = str(quote)
         for line in text.splitlines():
             logger.info("%s", line)
-        if sys.stderr.isatty():
+        if _isatty(sys.stderr):
             print(text, file=sys.stderr)
 
     @staticmethod
@@ -1130,7 +1145,7 @@ class SolverQuip(Solver):
             if gate(quote):
                 return
             raise QuipCancelledError(quote, f"{name} declined: the {name} callable rejected the quote")
-        if not sys.stdin.isatty():
+        if not _isatty(sys.stdin):
             raise QuipCancelledError(
                 quote,
                 f"{name}=False asks for confirmation but stdin is not a terminal; "
@@ -1139,7 +1154,7 @@ class SolverQuip(Solver):
         # Ask on whichever output stream is the terminal, so a redirect of the
         # other cannot hide the question while the process waits. When stderr
         # is the terminal, _display already showed the quote there.
-        out = sys.stderr if sys.stderr.isatty() else sys.stdout
+        out = sys.stderr if _isatty(sys.stderr) else sys.stdout
         if out is sys.stdout:
             print(str(quote), file=out)
         print(f"[quip] {question} [y/N] ", end="", file=out, flush=True)
@@ -1151,9 +1166,8 @@ class SolverQuip(Solver):
             raise QuipCancelledError(quote, f"{name} declined: answered {answer.strip()!r} at the prompt")
 
     def _fund(self, quote: JobQuote) -> None:
-        """Top the account up from the faucet by ``quote``'s shortfall and wait for it to land.
+        """Top the account up with one faucet drip and wait for it to cover ``quote``.
 
-        Asks for no more than a default drip unless the shortfall exceeds one.
         The faucet answers once the drip is on chain, but the node this solver
         reads may lag, so the balance is re-read until it covers the quote.
 
@@ -1162,12 +1176,9 @@ class SolverQuip(Solver):
             QuipSubmissionError: if the balance still falls short after
                 :data:`FUND_WAIT_SECONDS`.
         """
-        shortfall = quote.shortfall_planck
-        fund_from_faucet(
-            "0x" + bytes(self._signer.account_id).hex(),
-            url=self._faucet,
-            amount=shortfall if shortfall > DEFAULT_DRIP_PLANCK else None,
-        )
+        # No amount: the faucet's default drip. solve() only gets here when the
+        # shortfall fits in one, so a mistyped reward is never funded.
+        fund_from_faucet("0x" + bytes(self._signer.account_id).hex(), url=self._faucet)
         deadline = time.monotonic() + FUND_WAIT_SECONDS
         while (balance := self._free_balance()) < quote.total_planck:
             if time.monotonic() >= deadline:
@@ -1232,6 +1243,8 @@ class SolverQuip(Solver):
         if quote.shortfall_planck:
             if not self._faucet:
                 raise self._insufficient_error(quote)
+            if quote.shortfall_planck > DEFAULT_DRIP_PLANCK:
+                raise self._insufficient_error(quote, beyond_drip=True)
             self._pass_gate(
                 self._autofund,
                 quote,
@@ -1293,6 +1306,12 @@ class SolverQuip(Solver):
 
 _TRUE_FLAGS = frozenset({"1", "true", "yes", "on"})
 _FALSE_FLAGS = frozenset({"0", "false", "no", "off"})
+
+
+def _isatty(stream: object) -> bool:
+    """Whether ``stream`` is a terminal; ``None`` (pythonw, some daemons) is not."""
+    isatty = getattr(stream, "isatty", None)
+    return bool(isatty and isatty())
 
 
 def _env_flag(name: str) -> bool | None:

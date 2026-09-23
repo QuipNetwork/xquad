@@ -45,6 +45,7 @@ from xqsa import quip_signing
 from xqsa.quip_signing import (
     EXTRINSIC_VERSION_SIGNED,
     HYBRID_ENVELOPE_LEN,
+    HYBRID_PUBLIC_LEN,
     MULTI_ADDRESS_ID,
     ExtrinsicReceipt,
     QuipSigningError,
@@ -444,6 +445,28 @@ class TestBuildSignedExtrinsic:
         # The envelope must verify against the HASH, not the raw payload.
         assert quip_signer.verify_envelope(digest, envelope, signer.account_id)
         assert not quip_signer.verify_envelope(payload, envelope, signer.account_id)
+
+    def test_disarmed_copy_keeps_length_and_fails_verification(self) -> None:
+        signer = signer_from_seed(SEED)
+        iface = FakeIface(call_bytes=bytes(i % 256 for i in range(300)), nonce=0, spec_version=1, tx_version=1)
+        wire, _ = build_signed_extrinsic(iface, signer, "QuantumComputeMempool", "propose_job", {})
+        disarmed = quip_signing.disarm_extrinsic(wire)
+
+        assert len(disarmed) == len(wire)
+        assert sum(a != b for a, b in zip(wire, disarmed, strict=True)) == 1
+        account, envelope, rest = _decode_wire(disarmed)
+        assert (account, rest) == _decode_wire(wire)[::2]
+        extra, additional = quip_signing._signed_extensions(
+            nonce=0, spec_version=1, tx_version=1, genesis_bytes=GENESIS
+        )
+        digest = hashlib.blake2b(iface.call_bytes + extra + additional, digest_size=32).digest()
+        assert quip_signer.verify_envelope(digest, _decode_wire(wire)[1], signer.account_id)
+        assert not quip_signer.verify_envelope(digest, envelope, signer.account_id)
+        assert envelope[:HYBRID_PUBLIC_LEN] == _decode_wire(wire)[1][:HYBRID_PUBLIC_LEN]
+
+    def test_disarm_rejects_a_frame_that_is_not_signed(self) -> None:
+        with pytest.raises(QuipSigningError, match="cannot disarm"):
+            quip_signing.disarm_extrinsic(b"\x04\x00")
 
     def test_call_composed_with_given_module_and_params(self) -> None:
         signer = signer_from_seed(SEED)

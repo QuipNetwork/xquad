@@ -1561,9 +1561,11 @@ def _patch_signing(monkeypatch, solver, *, receipt=None, build_raises: Exception
 
     def fake_submit(iface, wire_bytes, ext_hash, wait_for="inblock"):
         captured["wait_for"] = wait_for
+        captured["submitted_wire"] = wire_bytes
         return receipt(captured["call_function"]) if callable(receipt) else receipt
 
     monkeypatch.setattr(qs, "build_signed_extrinsic", fake_build)
+    monkeypatch.setattr(qs, "disarm_extrinsic", lambda wire: b"disarmed:" + wire)
     monkeypatch.setattr(qs, "submit_and_watch", fake_submit)
     return captured
 
@@ -2597,7 +2599,7 @@ class TestSolveAutofundGate:
         result = solver.solve(_model())
         assert isinstance(result, SolverResult)
         assert len(calls) == 1
-        assert calls[0][0] == "0x" + "00" * 32  # the fake signer's account_id, b"\x00" * 32
+        assert calls[0][0] == "0x" + bytes(solver._signer.account_id).hex()
         assert calls[0][1] == "http://faucet"
         assert "wait_for" in captured  # propose_job was submitted
 
@@ -2613,28 +2615,36 @@ class TestSolveAutofundGate:
         assert calls == []
         assert "wait_for" not in captured
 
-    @pytest.mark.parametrize(
-        ("reward", "above_one_drip"),
-        [(UNIT, False), (20 * UNIT, True)],
-    )
-    def test_amount_is_none_below_a_drip_else_the_exact_shortfall(self, monkeypatch, reward, above_one_drip) -> None:
-        from xqsa.quip_faucet import DEFAULT_DRIP_PLANCK
+    def test_requests_the_default_drip_without_an_amount(self, monkeypatch) -> None:
+        solver, iface = _solve_ready_short(monkeypatch)
+        calls: list[dict] = []
 
-        solver, iface = _solve_ready_short(monkeypatch, reward=reward)
-        shortfall = reward + FEE_PLANCK  # balance is 0, so shortfall == total.
-        assert (shortfall > DEFAULT_DRIP_PLANCK) is above_one_drip
-        calls: list[int | None] = []
-
-        def fake_fund(dest, *, url, amount=None):
-            calls.append(amount)
+        def fake_fund(dest, **kwargs):
+            calls.append(kwargs)
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
 
         monkeypatch.setattr("xqsa.quip.fund_from_faucet", fake_fund)
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         solver.solve(_model())
-        assert len(calls) == 1
-        assert calls[0] == (shortfall if above_one_drip else None)
+        assert calls == [{"url": "http://faucet"}]
+
+    def test_shortfall_beyond_one_drip_raises_without_asking(self, monkeypatch) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        asked: list = []
+        funded: list = []
+        # 20 AGLS reward on an empty account: twice a drip, the mistyped-reward case.
+        solver, _iface = _solve_ready_short(
+            monkeypatch, reward=20 * UNIT, autofund=lambda quote: asked.append(quote) or True
+        )
+        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: funded.append(dest))
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipSubmissionError, match="more than one faucet drip"):
+            solver.solve(_model())
+        assert asked == []
+        assert funded == []
+        assert "wait_for" not in captured
 
     def test_false_no_tty_cancels_without_funding(self, monkeypatch) -> None:
         from xqsa.quip import QuipCancelledError
@@ -2733,3 +2743,26 @@ class TestSolveAutofundGate:
             solver.solve(_model())
         assert calls == []
         assert "wait_for" not in captured
+
+
+def test_fee_is_priced_on_a_disarmed_copy_never_the_submitted_bytes(monkeypatch) -> None:
+    solver = _solve_ready(monkeypatch)
+    captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+    solver.solve(_model())
+    (method, params), *_ = solver._iface.rpc_calls
+    assert method == "payment_queryInfo"
+    assert params == ["0x" + (b"disarmed:" + b"\x00\x01").hex()]
+    assert captured["submitted_wire"] == b"\x00\x01"
+
+
+@pytest.mark.parametrize("stream", ["stdin", "stderr"])
+def test_gates_and_display_survive_a_missing_stream(monkeypatch, stream) -> None:
+    # pythonw and some daemons run with sys.stdin / sys.stderr set to None.
+    from xqsa.quip import QuipCancelledError
+
+    solver = _solve_ready(monkeypatch, autoconfirm=False)
+    _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+    monkeypatch.setattr(sys, stream, None)
+    # Not a terminal, so autoconfirm=False declines instead of raising AttributeError.
+    with pytest.raises(QuipCancelledError, match="not a terminal"):
+        solver.solve(_model())
