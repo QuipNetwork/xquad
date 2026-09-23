@@ -71,7 +71,7 @@ from xqsa.quip import (
     _canonical_hex,
     _require_h256,
 )
-from xqsa.quip_codec import DEFAULT_ISING_SPEC_ID
+from xqsa.quip_codec import DEFAULT_ISING_SPEC_ID, PlacementError
 from xqsa.quip_faucet import fund_from_faucet
 from xqsa.quip_metadata import connect as connect_shimmed
 from xqsa.quip_signing import SIGNED_EXTENSIONS, _extension_fields, load_or_generate_keystore
@@ -540,6 +540,9 @@ class TestEndToEnd:
         """A K6 model, which the default topology cannot place, solves in native mode."""
         model = _dense_spin_model()
         solver = make_solver()
+        if not NATIVE_MODE:
+            with pytest.raises(PlacementError):
+                solver._job_for(model, None, None)
         result = solver.solve(model, topology="native")
         assert result.metadata["energy_matches_chain"] is True
         assert result.metadata["num_solutions"] >= 1

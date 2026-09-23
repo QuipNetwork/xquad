@@ -470,8 +470,30 @@ class TestNativePlacement:
         placed_job = model_to_ising(model, permissive)
 
         assert set(native_job.mapping) == set(placed_job.mapping)
-        assert sorted(native_job.h_values) == sorted(placed_job.h_values)
-        assert sorted(native_job.j_values) == sorted(placed_job.j_values)
+
+        def h_of(job: IsingJob, var: int) -> int:
+            return job.h_values[job.topology.index_of(job.mapping[var])]
+
+        def j_of(job: IsingJob, u: int, v: int) -> int:
+            return job.j_values[job.topology.edge_index(job.mapping[u], job.mapping[v])]
+
+        for var in native_job.mapping:
+            assert h_of(native_job, var) == h_of(placed_job, var)
+        for u, v in [(0, 2), (2, 4), (0, 4)]:
+            assert j_of(native_job, u, v) == j_of(placed_job, u, v)
+
+    def test_binary_decode_on_sparse_ids(self) -> None:
+        """A BINARY model over sparse ids decodes spins back as x = (s + 1) / 2."""
+        model = XQMX.binary_model(4)
+        model.set_quadratic(1, 3, 1)
+
+        topo, mapping = native_placement(model)
+        assert mapping == {1: 0, 3: 1}
+
+        job = model_to_ising(model, topo, mapping=mapping)
+        sample = decode_solution(job, [1, -1], model)
+        assert sample.get_linear(1) == 1
+        assert sample.get_linear(3) == 0
 
     def test_no_allowed_value_sets(self) -> None:
         """A native topology carries no allowed-value sets."""
@@ -2213,6 +2235,24 @@ class TestSolverQuipNativeTopology:
         solver = SolverQuip(url="ws://fake", seed=VALID_SEED)
         assert solver._topology_hash == "native"
 
+    def test_per_call_native_ignores_case_and_whitespace(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, iface=_chain_iface(order=_order(), head=200), topology=TOPO_HASH)
+        assert solver._job_for(_k5_model(), " Native ", None).nodes == (0, 1, 2, 3, 4)
+
+    def test_explicit_hash_beats_env_native(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_TOPOLOGY", "native")
+        solver = SolverQuip(url="ws://fake", seed=VALID_SEED, topology=TOPO_HASH)
+        assert solver._topology_hash == TOPO_HASH
+
+    def test_fetch_topology_refuses_native(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, topology="native")
+        with pytest.raises(ValueError, match="native mode"):
+            solver._fetch_topology()
+
     def test_native_solver_places_a_model_the_default_topology_cannot(self, monkeypatch) -> None:
         # K5 needs degree 4 at every node; TOPO_HASH (a 5-node path) tops out at
         # degree 2, so this would raise PlacementError against the chain default.
@@ -2223,8 +2263,9 @@ class TestSolverQuipNativeTopology:
 
         monkeypatch.setattr(solver, "_fetch_topology", _fail)
         _patch_signing(monkeypatch, solver)
-        quote = solver.quote(_k5_model())
-        assert quote is not None
+        job = solver._prepare(_k5_model(), {})[0]
+        assert job.nodes == (0, 1, 2, 3, 4)
+        assert len(job.edges) == 10
 
     def test_per_call_native_override_places_k5_that_default_topology_rejects(self, monkeypatch) -> None:
         iface = _chain_iface(order=_order(), head=200)
