@@ -2649,6 +2649,27 @@ class TestSolveAutofundGate:
         assert funded == []
         assert "wait_for" not in captured
 
+    def test_balance_above_the_faucet_ceiling_raises_without_asking(self, monkeypatch) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        asked: list = []
+        funded: list = []
+        # 12 AGLS held, 13 needed: a 1 AGLS shortfall, but the faucet refuses an account above one drip.
+        solver, _iface = _solve_ready_short(
+            monkeypatch,
+            balance=12 * UNIT,
+            reward=13 * UNIT,
+            autoconfirm=lambda quote: asked.append(quote) or True,
+            autofund=lambda quote: asked.append(quote) or True,
+        )
+        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: funded.append(dest))
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipSubmissionError, match="at most one drip"):
+            solver.solve(_model())
+        assert asked == []
+        assert funded == []
+        assert "wait_for" not in captured
+
     def test_false_no_tty_cancels_without_funding(self, monkeypatch) -> None:
         from xqsa.quip import QuipCancelledError
 

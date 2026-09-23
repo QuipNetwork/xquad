@@ -721,12 +721,15 @@ class SolverQuip(Solver):
             return "planck", 0
         return str(symbol), int(decimals)
 
-    def _insufficient_error(self, quote: JobQuote, *, beyond_drip: bool = False) -> QuipSubmissionError:
+    def _insufficient_error(
+        self, quote: JobQuote, *, beyond_drip: bool = False, above_ceiling: bool = False
+    ) -> QuipSubmissionError:
         """Build the error for an account that cannot cover ``quote``, naming where to fund it.
 
         ``beyond_drip`` marks a shortfall larger than one faucet drip, which
         ``autofund`` never requests: that is more often a mistyped reward than
-        a real need.
+        a real need. ``above_ceiling`` marks an account already holding more
+        than one drip, which the faucet refuses to top up.
         """
 
         def amount(planck: int) -> str:
@@ -736,6 +739,11 @@ class SolverQuip(Solver):
             remedy = (
                 f"That is more than one faucet drip ({amount(DEFAULT_DRIP_PLANCK)}), which is all autofund "
                 "requests; check reward=, or fund the account another way."
+            )
+        elif above_ceiling:
+            remedy = (
+                f"The faucet only tops up an account holding at most one drip ({amount(DEFAULT_DRIP_PLANCK)}); "
+                "fund the account another way."
             )
         elif self._faucet:
             remedy = f"Fund it from the faucet at {self._faucet}."
@@ -1227,9 +1235,10 @@ class SolverQuip(Solver):
             QuipConnectionError: if a chain read faults (transport/decode) while
                 resolving the topology, the order, or the account balance.
             QuipSubmissionError: if the account cannot cover the quote and no
-                faucet is configured, the shortfall exceeds one faucet drip, or
-                the drip does not land; or if proposing the job fails. The
-                first two are raised before either gate is asked.
+                faucet is configured, the shortfall exceeds one faucet drip, the
+                balance already exceeds the faucet's one-drip ceiling, or the
+                drip does not land; or if proposing the job fails. The first
+                three are raised before either gate is asked.
             QuipCancelledError: if the ``autoconfirm`` or ``autofund`` gate
                 declines (carries the quote).
             QuipFaucetError: if the faucet refuses or cannot be reached.
@@ -1243,6 +1252,8 @@ class SolverQuip(Solver):
         # it before asking anyone to confirm a job that cannot go out.
         if quote.shortfall_planck > DEFAULT_DRIP_PLANCK:
             raise self._insufficient_error(quote, beyond_drip=True)
+        if quote.shortfall_planck and quote.balance_planck > DEFAULT_DRIP_PLANCK:
+            raise self._insufficient_error(quote, above_ceiling=True)
         if quote.shortfall_planck and not self._faucet:
             raise self._insufficient_error(quote)
         total = f"{_format_planck(quote.total_planck, quote.token_decimals)} {quote.token_symbol}"
