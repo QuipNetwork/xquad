@@ -93,6 +93,7 @@ from xqsa.quip_codec import (
     _TERMINAL_STATUSES,
     DEFAULT_ISING_SPEC_ID,
     QUIP_COEFFICIENTS_DOC_URL,
+    EncodingError,
     QuipError,
     QuipMetadataError,
     Topology,
@@ -1145,6 +1146,26 @@ class SolverQuip(Solver):
             )
         return native
 
+    def _check_order_size(self, topology: Topology) -> None:
+        """Raise if ``topology`` exceeds the mempool's ``MaxNodes`` / ``MaxEdges``.
+
+        A registered topology fits by construction, but a native one is as large
+        as the model. Checked before quoting, so an oversized order fails here
+        with the limit named rather than in SCALE encoding or on chain. A bound
+        the runtime does not expose is not checked.
+
+        Raises:
+            EncodingError: if the node or edge count exceeds its bound.
+        """
+        bounds = (("MaxNodes", "nodes", topology.num_nodes), ("MaxEdges", "edges", topology.num_edges))
+        for name, noun, count in bounds:
+            const = self._iface.get_constant(MEMPOOL_PALLET, name)
+            limit = getattr(const, "value", None)
+            if limit is not None and count > int(limit):
+                raise EncodingError(
+                    f"native order has {count} {noun}, over the mempool's {MEMPOOL_PALLET}.{name} of {int(limit)}"
+                )
+
     def _job_for(self, model: XQMX, topology: str | None, mapping: Mapping[int, int] | None) -> IsingJob:
         """Encode ``model`` for the effective topology: ``topology``, else the resolved one.
 
@@ -1156,9 +1177,11 @@ class SolverQuip(Solver):
 
         Raises:
             ValueError: if ``mapping`` is given in native mode.
+            EncodingError: if a native order exceeds the mempool's size bounds.
         """
         if self._native_for(topology, mapping):
             native_topology, native_mapping = native_placement(model)
+            self._check_order_size(native_topology)
             return model_to_ising(model, native_topology, mapping=native_mapping)
         return model_to_ising(model, self._fetch_topology(topology), mapping=mapping)
 

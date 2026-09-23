@@ -2334,6 +2334,21 @@ class TestSolverQuipNativeTopology:
         with pytest.raises(ValueError, match="mapping"):
             solver.query(1, model, topology="native", mapping=explicit_mapping)
 
+    @pytest.mark.parametrize(("name", "limit"), [("MaxNodes", 4), ("MaxEdges", 9)])
+    def test_native_order_over_the_mempool_bound_raises(self, monkeypatch, name, limit) -> None:
+        iface = _default_iface()
+        iface.constants[("QuantumComputeMempool", name)] = limit
+        solver = _make_solver(monkeypatch, iface=iface, topology="native")
+        with pytest.raises(EncodingError, match=f"QuantumComputeMempool.{name} of {limit}"):
+            solver._job_for(_k5_model(), None, None)
+
+    def test_native_order_at_the_mempool_bound_passes(self, monkeypatch) -> None:
+        iface = _default_iface()
+        iface.constants[("QuantumComputeMempool", "MaxNodes")] = 5
+        iface.constants[("QuantumComputeMempool", "MaxEdges")] = 10
+        solver = _make_solver(monkeypatch, iface=iface, topology="native")
+        assert solver._job_for(_k5_model(), None, None).topology.num_edges == 10
+
     def test_query_rejects_native_mapping_before_the_order_is_final(self, monkeypatch) -> None:
         iface = _chain_iface(order=_order(status="Opened"), head=50)
         solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)

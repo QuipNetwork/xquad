@@ -156,7 +156,9 @@ The variables, after any BINARY-to-SPIN fold, are relabelled densely to
 carries no allowed-value sets, so the allowed-value warning stays
 silent; the mempool never enforces those sets. `mapping=` has no
 hardware graph to target in this mode and raises `ValueError`. A
-per-call value overrides the constructor's in either direction.
+per-call value overrides the constructor's in either direction. A native
+order is as large as the model, so one over the mempool's `MaxNodes`
+(5,000) or `MaxEdges` (50,000) raises `EncodingError` before it is quoted.
 
 Native mode narrows who can answer. A miner that cannot embed an
 arbitrary graph, such as a QPU-backed one, cannot solve these orders;
