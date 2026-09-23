@@ -57,8 +57,9 @@ Any variable exported in your shell -- or passed as `make VAR=val` -- reaches
 pytest, so you can set `QUIP_MINER_PROBE_TIMEOUT` alongside the two the
 recipe forwards. On macOS, whose python.org and uv Pythons ship no CA
 bundle, `xqsa.quip_metadata.connect` and the suite's faucet requests verify
-TLS against certifi's bundle unless `SSL_CERT_FILE`, `SSL_CERT_DIR`, or
-`WEBSOCKET_CLIENT_CA_BUNDLE` is set, so aglais needs no CA export.
+TLS against certifi's bundle unless `SSL_CERT_FILE` or `SSL_CERT_DIR` is
+set, or `WEBSOCKET_CLIENT_CA_BUNDLE` names an existing file or directory, so
+aglais needs no CA export.
 
 ### The two test tiers
 

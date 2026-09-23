@@ -306,12 +306,14 @@ def _default_ca_bundle() -> str | None:
     TLS handshake fails without a bundle. Returns ``None`` everywhere else: off
     macOS, whose system trust store must keep applying; on a macOS Python whose
     store is populated (Homebrew, or ``SSL_CERT_FILE`` / ``SSL_CERT_DIR``
-    pointing at one); and when ``WEBSOCKET_CLIENT_CA_BUNDLE`` is set.
+    pointing at one); and when ``WEBSOCKET_CLIENT_CA_BUNDLE`` names an existing
+    file or directory. websocket-client ignores that variable when its path does
+    not exist, so a stale export does not switch the default off either.
 
     Raises:
         ImportError: if ``certifi`` is needed and not installed.
     """
-    if sys.platform != "darwin" or os.environ.get("WEBSOCKET_CLIENT_CA_BUNDLE"):
+    if sys.platform != "darwin" or os.path.exists(os.environ.get("WEBSOCKET_CLIENT_CA_BUNDLE", "")):
         return None
     paths = ssl.get_default_verify_paths()
     if paths.cafile or paths.capath:
@@ -328,9 +330,11 @@ def connect(url: str, **kwargs: Any) -> Any:
     ``substrate-interface`` client in the same process is untouched.
 
     On a macOS Python with an empty CA store, a ``wss://`` URL verifies TLS
-    against certifi's bundle unless the caller passed ``ws_options`` (forwarded
-    untouched) or set ``WEBSOCKET_CLIENT_CA_BUNDLE``; see
-    :func:`_default_ca_bundle`. Everywhere else the existing trust store applies.
+    against certifi's bundle unless the caller's ``ws_options["sslopt"]`` already
+    names a CA source (``ca_certs``, ``ca_cert_path`` or ``context``) or
+    ``WEBSOCKET_CLIENT_CA_BUNDLE`` points at one; see :func:`_default_ca_bundle`.
+    Other caller ``ws_options`` are kept, and the caller's dicts are copied, not
+    modified. Everywhere else the existing trust store applies.
 
     Raises:
         ImportError: if ``substrate-interface`` is not installed, or ``certifi``
@@ -340,6 +344,10 @@ def connect(url: str, **kwargs: Any) -> Any:
 
     # websocket-client loads the system store only when no ca_certs is given, so
     # the bundle is supplied only where that store is empty (see _default_ca_bundle).
-    if url.lower().startswith("wss://") and "ws_options" not in kwargs and (bundle := _default_ca_bundle()):
-        kwargs["ws_options"] = {"sslopt": {"ca_certs": bundle}}
+    # Copied, since substrate-interface writes its size limits into ws_options.
+    ws_options = dict(kwargs.get("ws_options") or {})
+    sslopt = dict(ws_options.get("sslopt") or {})
+    caller_names_ca = any(key in sslopt for key in ("ca_certs", "ca_cert_path", "context"))
+    if url.lower().startswith("wss://") and not caller_names_ca and (bundle := _default_ca_bundle()):
+        kwargs["ws_options"] = {**ws_options, "sslopt": {**sslopt, "ca_certs": bundle}}
     return v14_interface_class(substrateinterface.SubstrateInterface)(url=url, **kwargs)

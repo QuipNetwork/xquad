@@ -544,15 +544,38 @@ class TestConnect:
     def test_ws_gets_no_tls_options(self) -> None:
         assert connect("ws://localhost:20049/rpc").kwargs == {}
 
-    def test_caller_ws_options_pass_through(self, monkeypatch) -> None:
+    @pytest.mark.parametrize("key", ["ca_certs", "ca_cert_path", "context"])
+    def test_caller_ca_source_passes_through(self, monkeypatch, key: str) -> None:
         monkeypatch.setitem(sys.modules, "certifi", None)  # never consulted
-        options = {"sslopt": {"cert_reqs": 0}}
+        options = {"sslopt": {key: "/corp/ca"}}
         assert connect("wss://node/rpc", ws_options=options).kwargs == {"ws_options": options}
 
-    @pytest.mark.parametrize("var", ["SSL_CERT_FILE", "SSL_CERT_DIR", "WEBSOCKET_CLIENT_CA_BUNDLE"])
+    def test_caller_ws_options_keep_the_bundle(self) -> None:
+        # Options naming no CA source must not switch the default off.
+        options = {"timeout": 30, "sslopt": {"cert_reqs": 2}}
+        kwargs = connect("wss://node/rpc", ws_options=options).kwargs
+        assert kwargs == {"ws_options": {"timeout": 30, "sslopt": {"cert_reqs": 2, "ca_certs": CA_BUNDLE}}}
+        assert options == {"timeout": 30, "sslopt": {"cert_reqs": 2}}
+
+    @pytest.mark.parametrize("var", ["SSL_CERT_FILE", "SSL_CERT_DIR"])
     def test_env_ca_config_wins(self, monkeypatch, var: str) -> None:
         monkeypatch.setenv(var, "/corp/ca.pem")
         assert connect("wss://node/rpc").kwargs == {}
+
+    @pytest.mark.parametrize("kind", ["file", "dir"])
+    def test_websocket_ca_bundle_wins(self, monkeypatch, tmp_path, kind: str) -> None:
+        bundle = tmp_path / "ca"
+        if kind == "file":
+            bundle.write_text("")
+        else:
+            bundle.mkdir()
+        monkeypatch.setenv("WEBSOCKET_CLIENT_CA_BUNDLE", str(bundle))
+        assert connect("wss://node/rpc").kwargs == {}
+
+    def test_missing_websocket_ca_bundle_is_ignored(self, monkeypatch, tmp_path) -> None:
+        # websocket-client ignores a path that does not exist, so the default stays.
+        monkeypatch.setenv("WEBSOCKET_CLIENT_CA_BUNDLE", str(tmp_path / "missing.pem"))
+        assert connect("wss://node/rpc").kwargs == {"ws_options": {"sslopt": {"ca_certs": CA_BUNDLE}}}
 
     def test_other_platforms_keep_the_system_store(self, monkeypatch) -> None:
         monkeypatch.setattr(sys, "platform", "linux")
