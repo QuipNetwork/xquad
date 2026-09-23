@@ -138,6 +138,31 @@ order was built against, and the solver fleet has no topology field to
 filter on. A topology that is registered but not mineable is proposed,
 matched and solved like any other.
 
+### Native topology mode
+
+Passing `topology="native"` builds the topology from the model's own
+variables and couplings instead of reading one from the chain. It is
+accepted on the constructor, per call on `solve()`, `quote()` and
+`query()`, and through `QUIP_TOPOLOGY=native`:
+
+```python
+result = solver.solve(model, topology="native")
+```
+
+The variables, after any BINARY-to-SPIN fold, are relabelled densely to
+`0..n-1`, so placement is the identity and cannot raise
+`PlacementError`. No chain topology is read, and the native topology
+carries no allowed-value sets, so the allowed-value warning stays
+silent; the mempool never enforces those sets. `mapping=` has no
+hardware graph to target in this mode and raises `ValueError`. A
+per-call value overrides the constructor's in either direction.
+
+Native mode narrows who can answer. A miner that cannot embed an
+arbitrary graph, such as a QPU-backed one, cannot solve these orders;
+the simulated-annealing miner fleet can. Native mode is never chosen
+automatically on `PlacementError`: a call that raises today would
+otherwise start proposing jobs and spending funds.
+
 ## Coefficient Encoding
 
 The normative rules for this section are
@@ -259,7 +284,7 @@ both local encoding checks and network-dependent lifecycle failures:
 |---|---|
 | `QuipError` | Base class for every error below |
 | `EncodingError` | The model is not `MODEL`-mode, its domain is unsupported, or both its `linear` and `quadratic` dicts are empty. Also covers a coefficient that fails milli-scale conversion (see [Coefficient Encoding](#coefficient-encoding)) |
-| `PlacementError` | The model's coupling graph is not a subgraph of the target topology |
+| `PlacementError` | The model's coupling graph is not a subgraph of the target topology. Raised in default mode only; see [Native topology mode](#native-topology-mode) |
 | `QuipSigningError` | Extrinsic assembly, keystore handling, or submission fails |
 | `QuipConnectionError` | The node is unreachable, or a configured Ising spec is not registered on-chain |
 | `QuipSubmissionError` | An extrinsic cannot be submitted or the chain rejects it |
