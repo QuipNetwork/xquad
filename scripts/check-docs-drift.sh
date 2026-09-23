@@ -82,7 +82,10 @@ allow() {
     ALLOW+=("${1}|${2}|${3}|${4}")
 }
 
-add_rule "aglais-product" '(^|[^[:alnum:]_-])[Aa]glais'
+# The legacy product name ("Aglais") and its crate paths (`aglais_xqvm_*`).
+# Lowercase `aglais` alone is the Quip test network, which the book may name;
+# write it lowercase and code-formatted (`aglais`), even to open a sentence.
+add_rule "aglais-product" '(^|[^[:alnum:]_-])(Aglais|aglais_)'
 
 add_rule "aglais-crate" 'aglais-xqvm-'
 

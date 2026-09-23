@@ -883,10 +883,26 @@ def _default_iface(*, with_default_spec_const: bool = False, balance: int | None
 def _install(monkeypatch, iface: object, *, substrate_raises: Exception | None = None) -> None:
     monkeypatch.setitem(sys.modules, "substrateinterface", _fake_substrate_module(iface, raises=substrate_raises))
     monkeypatch.setitem(sys.modules, "quip_signer", _fake_quip_signer())
+    # The rest of the [quip] extra: connect imports certifi for wss:// URLs on
+    # macOS. Pin the platform so every CI host takes that branch.
+    monkeypatch.setattr(sys, "platform", "darwin")
+    certifi = types.ModuleType("certifi")
+    certifi.where = lambda: "/fake/cacert.pem"  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "certifi", certifi)
 
 
 def _clear_quip_env(monkeypatch) -> None:
-    for name in ("QUIP_RPC_URL", "QUIP_SIGNER_SEED", "QUIP_KEYSTORE", "QUIP_REWARD", "QUIP_TOPOLOGY"):
+    for name in (
+        "QUIP_RPC_URL",
+        "QUIP_SIGNER_SEED",
+        "QUIP_KEYSTORE",
+        "QUIP_REWARD",
+        "QUIP_TOPOLOGY",
+        # CA configuration steers connect's wss:// default; keep it out of unit tests.
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "WEBSOCKET_CLIENT_CA_BUNDLE",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -1011,6 +1027,52 @@ class TestSolverQuipConstruction:
         monkeypatch.setenv("QUIP_TOPOLOGY", "0x" + "b2" * 32)
         solver = SolverQuip(url="ws://fake", seed=VALID_SEED, topology=explicit)
         assert solver._topology_hash == explicit
+
+    def test_for_network_uses_preset_rpc(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+        from xqsa.quip_networks import NETWORKS
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        solver = SolverQuip.for_network("aglais", seed=VALID_SEED)
+        assert solver._url == NETWORKS["aglais"].rpc
+
+    def test_for_network_beats_env_url(self, monkeypatch) -> None:
+        # The preset enters as url=, so an exported QUIP_RPC_URL cannot redirect it.
+        from xqsa.quip import SolverQuip
+        from xqsa.quip_networks import NETWORKS
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_RPC_URL", "ws://env-node:9944")
+        solver = SolverQuip.for_network("aglais", seed=VALID_SEED)
+        assert solver._url == NETWORKS["aglais"].rpc
+
+    def test_for_network_passes_kwargs_through(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+        from xqsa.quip_networks import NETWORKS
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        solver = SolverQuip.for_network("devnet", seed=VALID_SEED, reward=7 * UNIT)
+        assert solver._url == NETWORKS["devnet"].rpc
+        assert solver._reward == 7 * UNIT
+
+    def test_for_network_unknown_name_raises_before_connecting(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface(), substrate_raises=AssertionError("must not connect"))
+        _clear_quip_env(monkeypatch)
+        with pytest.raises(ValueError, match="aglais, devnet"):
+            SolverQuip.for_network("mainnet", seed=VALID_SEED)
+
+    def test_for_network_rejects_url(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        with pytest.raises(TypeError, match="multiple values for keyword argument 'url'"):
+            SolverQuip.for_network("aglais", url="ws://x", seed=VALID_SEED)
 
     def test_topology_from_env(self, monkeypatch) -> None:
         # QUIP_TOPOLOGY displaces the chain default. Constructed directly rather
