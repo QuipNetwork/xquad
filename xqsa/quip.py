@@ -1130,6 +1130,21 @@ class SolverQuip(Solver):
     # Public surface
     # ------------------------------------------------------------------
 
+    def _native_for(self, topology: str | None, mapping: Mapping[int, int] | None) -> bool:
+        """Return whether a call runs in native mode: ``topology``, else the resolved one.
+
+        Raises:
+            ValueError: if ``mapping`` is given in native mode, which has no
+                hardware graph for it to target.
+        """
+        native = _is_native(topology or self._topology_hash)
+        if native and mapping is not None:
+            raise ValueError(
+                f"mapping= cannot be combined with topology={NATIVE_TOPOLOGY!r}: native mode "
+                "builds the topology from the model, so there is no hardware graph to map onto."
+            )
+        return native
+
     def _job_for(self, model: XQMX, topology: str | None, mapping: Mapping[int, int] | None) -> IsingJob:
         """Encode ``model`` for the effective topology: ``topology``, else the resolved one.
 
@@ -1142,12 +1157,7 @@ class SolverQuip(Solver):
         Raises:
             ValueError: if ``mapping`` is given in native mode.
         """
-        if _is_native(topology or self._topology_hash):
-            if mapping is not None:
-                raise ValueError(
-                    f"mapping= cannot be combined with topology={NATIVE_TOPOLOGY!r}: native mode "
-                    "builds the topology from the model, so there is no hardware graph to map onto."
-                )
+        if self._native_for(topology, mapping):
             native_topology, native_mapping = native_placement(model)
             return model_to_ising(model, native_topology, mapping=native_mapping)
         return model_to_ising(model, self._fetch_topology(topology), mapping=mapping)
@@ -1347,9 +1357,9 @@ class SolverQuip(Solver):
         the winning solution -- so an order proposed in a different process (or
         recovered after a :class:`QuipTimeoutError`) can still be read, provided
         the same ``model`` (and ``mapping``/``topology`` if non-default) is
-        supplied. If the order was proposed with ``topology="native"``, pass it
-        again here unless this solver instance is itself native-configured;
-        otherwise the re-derived placement targets the wrong graph. A final
+        supplied. Pass the ``topology`` the order was proposed with, ``"native"``
+        included, whenever it differs from this instance's own; otherwise the
+        re-derived placement targets the wrong graph. A final
         order with no solutions auto-reclaims and raises
         :class:`QuipJobFailedError`.
 
@@ -1357,6 +1367,7 @@ class SolverQuip(Solver):
             ValueError: if ``mapping`` is given with ``topology="native"``.
         """
         self._validate_model(model)
+        self._native_for(topology, mapping)  # reject native + mapping= before any chain read.
         order = self._fetch_order(order_id)
         if not self._order_lifecycle(order, self._current_block())["is_final"]:
             return None
