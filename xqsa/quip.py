@@ -1145,7 +1145,8 @@ class SolverQuip(Solver):
         """Return if ``gate`` consents to ``quote``, else raise :class:`QuipCancelledError`.
 
         ``True`` consents; a callable decides from the quote; ``False`` asks on
-        the terminal and never hangs: with no TTY on stdin it raises at once.
+        the terminal and never hangs: with no TTY on stdin, or on neither
+        stderr nor stdout, it raises at once.
         """
         if gate is True:
             return
@@ -1153,16 +1154,17 @@ class SolverQuip(Solver):
             if gate(quote):
                 return
             raise QuipCancelledError(quote, f"{name} declined: the {name} callable rejected the quote")
-        if not _isatty(sys.stdin):
+        # Ask on whichever output stream is the terminal, so a redirect of the
+        # other cannot hide the question while the process waits. With both
+        # redirected there is nowhere to ask. When stderr is the terminal,
+        # _display already showed the quote there.
+        out = next((stream for stream in (sys.stderr, sys.stdout) if _isatty(stream)), None)
+        if not _isatty(sys.stdin) or out is None:
             raise QuipCancelledError(
                 quote,
-                f"{name}=False asks for confirmation but stdin is not a terminal; "
+                f"{name}=False asks for confirmation but stdin, or both stderr and stdout, is not a terminal; "
                 f"pass {name}=True or {name}=lambda q: ... to decide in code",
             )
-        # Ask on whichever output stream is the terminal, so a redirect of the
-        # other cannot hide the question while the process waits. When stderr
-        # is the terminal, _display already showed the quote there.
-        out = sys.stderr if _isatty(sys.stderr) else sys.stdout
         if out is sys.stdout:
             print(str(quote), file=out)
         print(f"[quip] {question} [y/N] ", end="", file=out, flush=True)

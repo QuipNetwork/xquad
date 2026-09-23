@@ -2512,6 +2512,7 @@ class TestSolveAutoconfirmGate:
         solver = _solve_ready(monkeypatch, autoconfirm=False)
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
+        monkeypatch.setattr(sys, "stderr", _FakeTTY(isatty=True))
         monkeypatch.setattr("builtins.input", lambda prompt="": "y")
         result = solver.solve(_model())
         assert isinstance(result, SolverResult)
@@ -2522,8 +2523,9 @@ class TestSolveAutoconfirmGate:
         solver = _solve_ready(monkeypatch, autoconfirm=False)
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
+        monkeypatch.setattr(sys, "stderr", _FakeTTY(isatty=True))
         monkeypatch.setattr("builtins.input", lambda prompt="": "n")
-        with pytest.raises(QuipCancelledError) as excinfo:
+        with pytest.raises(QuipCancelledError, match="answered 'n'") as excinfo:
             solver.solve(_model())
         assert excinfo.value.quote.total_planck > 0
         assert "wait_for" not in captured
@@ -2534,13 +2536,30 @@ class TestSolveAutoconfirmGate:
         solver = _solve_ready(monkeypatch, autoconfirm=False)
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
+        monkeypatch.setattr(sys, "stderr", _FakeTTY(isatty=True))
 
         def _raise_eof(prompt: str = "") -> str:
             raise EOFError
 
         monkeypatch.setattr("builtins.input", _raise_eof)
-        with pytest.raises(QuipCancelledError):
+        with pytest.raises(QuipCancelledError, match="at the prompt"):
             solver.solve(_model())
+        assert "wait_for" not in captured
+
+    def test_false_tty_stdin_with_both_outputs_redirected_cancels(self, monkeypatch) -> None:
+        from xqsa.quip import QuipCancelledError
+
+        solver = _solve_ready(monkeypatch, autoconfirm=False)
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
+        monkeypatch.setattr(sys, "stderr", _FakeTTY(isatty=False))
+        monkeypatch.setattr(sys, "stdout", _FakeTTY(isatty=False))
+        calls: list[str] = []
+        monkeypatch.setattr("builtins.input", lambda prompt="": calls.append(prompt) or "y")
+        # A question written into the redirect target would block unseen.
+        with pytest.raises(QuipCancelledError, match="not a terminal"):
+            solver.solve(_model())
+        assert calls == []
         assert "wait_for" not in captured
 
     def test_false_no_tty_cancels_without_prompting(self, monkeypatch) -> None:
