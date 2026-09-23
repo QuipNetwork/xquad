@@ -34,11 +34,23 @@ Configuration is resolved from constructor arguments first, then environment:
     ``keystore``           ``QUIP_KEYSTORE``     keystore path (load or create)
     ``reward``             ``QUIP_REWARD``       reward in planck (else MinReward)
     ``topology``           ``QUIP_TOPOLOGY``     topology hash (else DefaultTopology)
+    ``faucet``             ``QUIP_FAUCET_URL``   faucet base URL (env read only without url=)
+    ``autoconfirm``        ``QUIP_AUTOCONFIRM``  submit without asking (default true)
+    ``autofund``           ``QUIP_AUTOFUND``     fund from the faucet without asking
     =====================  ====================================================
 
 Provide exactly one of ``seed`` or ``keystore`` (a keystore is generated on
-first use if absent). The account must be funded; on localdev the faucet at
-``QUIP_FAUCET_URL`` tops it up.
+first use if absent). Every :meth:`SolverQuip.solve` first quotes the job
+(:class:`JobQuote`: reward plus the chain-reported fee, against the balance)
+and passes two consent gates. ``autoconfirm`` decides whether to submit at that
+price; ``autofund`` decides whether an account short of it is topped up with
+one faucet drip first. A shortfall larger than one drip is never requested; it
+raises :class:`QuipSubmissionError`, since it is more often a mistyped reward.
+Each gate is ``True`` (proceed, the default), ``False`` (ask on the terminal;
+raises :class:`QuipCancelledError` when stdin is not one, which includes a
+Jupyter kernel), or a callable taking the quote and returning a verdict. The
+environment variables take ``1/true/yes/on`` or ``0/false/no/off``. A short
+account with no faucet configured raises :class:`QuipSubmissionError`.
 
 Named networks skip the URL: ``SolverQuip.for_network("aglais", keystore=...)``
 builds a solver against a preset, ``aglais`` (the public testnet) or ``devnet``
@@ -69,9 +81,11 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
 import warnings
 from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Self
 
 from xqsa import quip_metadata
@@ -94,10 +108,13 @@ from xqsa.quip_codec import (
     ising_energy_milli,
     model_to_ising,
 )
+from xqsa.quip_faucet import DEFAULT_DRIP_PLANCK, fund_from_faucet
 from xqsa.quip_networks import NETWORKS
 from xqsa.solver import Solver, SolverResult
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from xqsa.quip_codec import IsingJob
     from xqvm_py.xqmx import XQMX
 
@@ -110,15 +127,18 @@ DEFAULT_DEADLINE_BLOCKS = 100
 DEFAULT_BLOCK_WAIT = 10
 DEFAULT_POLL_INTERVAL = 6.0
 DEFAULT_TIMEOUT = 600.0
+# How long solve() waits for a faucet drip to show up in the free balance. The
+# faucet answers only once the drip is on chain, so this covers a lagging RPC
+# node, not block time.
+FUND_WAIT_SECONDS = 30.0
 
-# Heuristic free-balance buffer added over the reserved reward in the pre-submit
-# balance check, to cover the ``propose_job`` transaction fee. The chain does the
-# authoritative reserve + fee deduction; this only yields a friendly early error.
-# ``propose_job`` carries the placed subgraph's arrays, whose length scales with
-# the model rather than with the hardware graph -- keep the buffer generous
-# anyway, since a large model still pays a non-trivial length fee. Tuned during
-# live validation.
-FEE_HEADROOM_PLANCK = 100_000_000_000  # 0.1 tQUIP (12 decimals).
+# The ``propose_job`` fee a quote assumes when ``payment_queryInfo`` does not
+# answer; ``JobQuote.fee_exact`` is then false. Measured fees on aglais at spec
+# 117 run about 0.0022 AGLS and top out near 0.0075 AGLS over the benchmarked
+# model range, so this is about 33 percent over that ceiling. It depends on the
+# runtime's weights and fee config, which an upgrade can move silently; it is a
+# bound for today's runtime, not a law.
+FEE_HEADROOM_PLANCK = 10_000_000_000  # 0.01 AGLS (12 decimals).
 
 # The ``QuantumComputeMempool`` pallet name and the calls/storage/events this
 # backend uses; gathered here so the chain surface is easy to audit.
@@ -135,6 +155,66 @@ ORDER_SOLUTIONS_STORAGE = "OrderSolutions"
 # ``submit_proof`` and not the compute mempool; nothing on the solve path
 # consults it, and ``_mineable_topologies`` is kept only as a chain reader.
 MINEABLE_TOPOLOGIES_STORAGE = "MineableTopologies"
+
+
+@dataclass(frozen=True)
+class JobQuote:
+    """What proposing one job costs, and whether the account can pay for it.
+
+    Built by :meth:`SolverQuip.quote` (and by :meth:`SolverQuip.solve` before it
+    proposes) from the signed ``propose_job`` extrinsic the solve submits. The
+    fee is the chain's own ``payment_queryInfo`` answer when ``fee_exact`` is
+    true, else the :data:`FEE_HEADROOM_PLANCK` fallback. The reward is reserved
+    at proposal and returned if the job closes unanswered; the fee is burned
+    either way. Amounts are in planck; ``str()`` renders them in token units.
+    """
+
+    network: str | None
+    reward_planck: int
+    fee_planck: int
+    fee_exact: bool
+    balance_planck: int
+    token_symbol: str
+    token_decimals: int
+
+    @property
+    def total_planck(self) -> int:
+        """Reward plus fee: what the account must hold to propose the job."""
+        return self.reward_planck + self.fee_planck
+
+    @property
+    def shortfall_planck(self) -> int:
+        """How far the balance falls short of the total, or 0."""
+        return max(0, self.total_planck - self.balance_planck)
+
+    def __str__(self) -> str:
+        """Render the quote as ``[quip]``-prefixed ASCII lines, decimal points aligned."""
+        where = f"network {self.network}" if self.network else "custom endpoint"
+        fee = "fee exact" if self.fee_exact else "fee estimated"
+        rows = {
+            "reward": self.reward_planck,
+            "fee": self.fee_planck,
+            "total": self.total_planck,
+            "balance": self.balance_planck,
+            "shortfall": self.shortfall_planck,
+        }
+        amounts = {label: _format_planck(value, self.token_decimals) for label, value in rows.items()}
+        width = max(map(len, amounts.values()))
+        lines = [f"[quip] job quote ({where}, {fee})"]
+        lines += [f"[quip]   {label:<10} {amount:>{width}} {self.token_symbol}" for label, amount in amounts.items()]
+        return "\n".join(lines)
+
+
+class QuipCancelledError(QuipError):
+    """Raised when a consent gate (``autoconfirm`` or ``autofund``) declines a job.
+
+    Carries the :class:`JobQuote` that was declined as ``quote``, so a caller
+    can tell "you said no" from "it failed" and still see the price.
+    """
+
+    def __init__(self, quote: JobQuote, message: str) -> None:
+        self.quote = quote
+        super().__init__(message)
 
 
 class QuipConnectionError(QuipError):
@@ -225,6 +305,9 @@ class SolverQuip(Solver):
         block_wait: int = DEFAULT_BLOCK_WAIT,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         timeout: float = DEFAULT_TIMEOUT,
+        faucet: str | None = None,
+        autoconfirm: bool | Callable[[JobQuote], bool] | None = None,
+        autofund: bool | Callable[[JobQuote], bool] | None = None,
     ) -> None:
         # Two distinct guards, one per piece of the [quip] extra: client + signer.
         try:
@@ -257,6 +340,13 @@ class SolverQuip(Solver):
         self._topology_cache: dict[str, Topology] = {}
         self._warned_allowed_values = False
         self._quip_signing = quip_signing
+        # The env faucet belongs to the env RPC: an explicit url= may name another
+        # chain, so it never draws from whatever faucet happens to be exported.
+        self._faucet = faucet or (None if url else os.environ.get("QUIP_FAUCET_URL"))
+        # Set by for_network; a solver built from a raw url= names no network.
+        self._network: str | None = None
+        self._autoconfirm = _resolve_gate(autoconfirm, "autoconfirm", "QUIP_AUTOCONFIRM")
+        self._autofund = _resolve_gate(autofund, "autofund", "QUIP_AUTOFUND")
 
         try:
             # Not substrateinterface.SubstrateInterface directly: Quip runtimes
@@ -286,8 +376,9 @@ class SolverQuip(Solver):
         """Build a solver against a named Quip network preset.
 
         Looks ``name`` up in :data:`xqsa.quip_networks.NETWORKS` and passes the
-        preset's RPC endpoint to the constructor as ``url``. Every other keyword
-        goes to the constructor unchanged. A classmethod rather than a
+        preset's RPC endpoint to the constructor as ``url`` and its faucet as
+        ``faucet``. A caller's own ``faucet=`` overrides the preset's; every
+        other keyword goes to the constructor unchanged. A classmethod rather than a
         constructor argument so the preset enters as ``url=``, which beats
         ``QUIP_RPC_URL``: an exported localdev URL cannot silently redirect a
         solver the caller asked to point at a named network.
@@ -307,7 +398,11 @@ class SolverQuip(Solver):
         if preset is None:
             raise ValueError(f"unknown Quip network {name!r}; known networks: {', '.join(sorted(NETWORKS))}")
         logger.info("Quip network %s resolved to %s", name, preset.rpc)
-        return cls(url=preset.rpc, **kwargs)
+        if not kwargs.get("faucet"):  # an unset faucet must not let QUIP_FAUCET_URL beat the preset.
+            kwargs["faucet"] = preset.faucet
+        solver = cls(url=preset.rpc, **kwargs)
+        solver._network = name
+        return solver
 
     # ------------------------------------------------------------------
     # Identity / configuration resolution
@@ -567,17 +662,16 @@ class SolverQuip(Solver):
         # runtime lacking the storage item entirely reports absence.
         return frozenset(hashes)
 
-    def _check_balance(self, required: int) -> int:
-        """Return the account's free balance, raising if it cannot cover ``required``.
+    def _free_balance(self) -> int:
+        """Return the account's free balance in planck.
 
         ``propose_job`` reserves the full reward at proposal, so the free
-        balance must cover the reward plus fees.
+        balance must cover the reward plus the fee; :class:`JobQuote` compares.
 
         Raises:
             QuipConnectionError: if the account entry or its ``data.free`` field
                 cannot be read/decoded -- an anomalous read must not be reported
                 as a zero balance.
-            QuipSubmissionError: if the readable free balance is below ``required``.
         """
         entry = self._iface.query("System", "Account", [self._signer.account_id])
         value = getattr(entry, "value", None)
@@ -591,12 +685,77 @@ class SolverQuip(Solver):
                 f"could not read the free balance of {_as_hex(self._signer.account_id)} from "
                 f"System.Account (got {value!r}); cannot verify funding"
             ) from exc
-        if free < required:
-            raise QuipSubmissionError(
-                f"insufficient balance: account holds {free} planck but the job needs {required} "
-                f"(reward {self._reward} + fees). Fund the account via the faucet."
-            )
         return free
+
+    def _query_fee(self, wire: bytes) -> tuple[int, bool]:
+        """Ask the chain what ``wire`` would pay in fees: ``(fee_planck, exact)``.
+
+        ``payment_queryInfo`` dry-runs the fee of a signed extrinsic, so the
+        answer tracks the live runtime rather than a formula copied from it.
+        ``wire`` itself never leaves this process here; the node prices a
+        copy from :func:`xqsa.quip_signing.disarm_extrinsic`. ``partialFee``
+        arrives as a decimal string, ``0x`` hex, or an int depending on the
+        node. Any failure falls back to :data:`FEE_HEADROOM_PLANCK` with
+        ``exact`` false rather than blocking the solve on a price estimate.
+        """
+        try:
+            # Price a copy whose signature fails: the node sees a frame it can
+            # never dispatch, so neither quote() nor a declined gate leaves it
+            # holding a proposable job. Same length, so the same fee.
+            priced = self._quip_signing.disarm_extrinsic(wire)
+            raw = self._iface.rpc_request("payment_queryInfo", ["0x" + priced.hex()])["result"]["partialFee"]
+            if isinstance(raw, str):
+                return (int(raw, 16) if raw.startswith("0x") else int(raw)), True
+            return int(raw), True
+        except Exception as exc:  # noqa: BLE001 -- a price estimate must not block the solve.
+            logger.warning(
+                "payment_queryInfo did not answer (%s); quoting the %d planck fallback fee", exc, FEE_HEADROOM_PLANCK
+            )
+            return FEE_HEADROOM_PLANCK, False
+
+    def _token(self) -> tuple[str, int]:
+        """Return the chain's token symbol and decimals, or ``("planck", 0)`` if unknown."""
+        try:
+            symbol, decimals = self._iface.token_symbol, self._iface.token_decimals
+        except Exception:  # noqa: BLE001 -- display only; never block a solve on it.
+            symbol = decimals = None
+        if symbol is None or decimals is None:
+            return "planck", 0
+        return str(symbol), int(decimals)
+
+    def _insufficient_error(
+        self, quote: JobQuote, *, beyond_drip: bool = False, above_ceiling: bool = False
+    ) -> QuipSubmissionError:
+        """Build the error for an account that cannot cover ``quote``, naming where to fund it.
+
+        ``beyond_drip`` marks a shortfall larger than one faucet drip, which
+        ``autofund`` never requests: that is more often a mistyped reward than
+        a real need. ``above_ceiling`` marks an account already holding more
+        than one drip, which the faucet refuses to top up.
+        """
+
+        def amount(planck: int) -> str:
+            return f"{_format_planck(planck, quote.token_decimals)} {quote.token_symbol}"
+
+        if beyond_drip:
+            remedy = (
+                f"That is more than one faucet drip ({amount(DEFAULT_DRIP_PLANCK)}), which is all autofund "
+                "requests; check reward=, or fund the account another way."
+            )
+        elif above_ceiling:
+            remedy = (
+                f"The faucet only tops up an account holding at most one drip ({amount(DEFAULT_DRIP_PLANCK)}); "
+                "fund the account another way."
+            )
+        elif self._faucet:
+            remedy = f"Fund it from the faucet at {self._faucet}."
+        else:
+            remedy = "Pass faucet=, set QUIP_FAUCET_URL, or build with SolverQuip.for_network(...) to name a faucet."
+        return QuipSubmissionError(
+            f"insufficient balance: account {_as_hex(self._signer.account_id)} holds "
+            f"{amount(quote.balance_planck)} but the job needs {amount(quote.total_planck)} "
+            f"(reward plus fee), {amount(quote.shortfall_planck)} short. {remedy}"
+        )
 
     # ------------------------------------------------------------------
     # Coefficient allowed-value warning
@@ -642,19 +801,8 @@ class SolverQuip(Solver):
         """
         return (value,)
 
-    def _propose_job(self, job: IsingJob) -> int:
-        """Submit ``job`` via ``propose_job`` and return the assigned order id.
-
-        Builds the ``QuantumComputeMempool.propose_job`` call params from the
-        placed :class:`~xqsa.quip_codec.IsingJob`, signs and submits the
-        extrinsic, then reads the ``JobProposed`` event from the inclusion block
-        for the ``order_id`` (the call has no return value -- the id is only
-        emitted as an event).
-
-        Raises:
-            QuipSubmissionError: if the extrinsic fails on-chain or no
-                ``JobProposed`` event is found in the inclusion block.
-        """
+    def _propose_call_params(self, job: IsingJob) -> dict:
+        """Build the ``QuantumComputeMempool.propose_job`` call params for a placed job."""
         ising_params = {
             "nodes": self._wrap_bounded(list(job.nodes)),
             "edges": self._wrap_bounded([list(edge) for edge in job.edges]),
@@ -678,7 +826,22 @@ class SolverQuip(Solver):
             "block_wait": self._block_wait,
             "delivery": self._delivery,
         }
-        receipt = self._submit_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, call_params)
+        return call_params
+
+    def _propose_job(self, wire: bytes, ext_hash: str) -> int:
+        """Submit a built ``propose_job`` extrinsic and return the assigned order id.
+
+        Takes the bytes :meth:`_prepare` built and quoted, so the job that was
+        priced is the job that is submitted. The immortal era means those bytes
+        stay valid however long a confirmation prompt takes. Reads the
+        ``JobProposed`` event from the inclusion block for the ``order_id``
+        (the call has no return value -- the id is only emitted as an event).
+
+        Raises:
+            QuipSubmissionError: if the extrinsic fails on-chain or no
+                ``JobProposed`` event is found in the inclusion block.
+        """
+        receipt = self._submit_built(MEMPOOL_PALLET, PROPOSE_JOB_CALL, wire, ext_hash)
         order_id = self._read_proposed_order_id(receipt.block_hash)
         logger.info(
             "proposed Quip job: order_id=%d spec_id=%s reward=%d planck (block %s)",
@@ -698,20 +861,48 @@ class SolverQuip(Solver):
     ) -> Any:
         """Sign, submit, and confirm an extrinsic, returning its receipt.
 
-        A thin wrapper over :func:`xqsa.quip_signing.build_signed_extrinsic`
-        plus :func:`~xqsa.quip_signing.submit_and_watch`. Inclusion alone is not
-        success on Substrate, so a receipt that did not reach a block or carries
-        a dispatch error is raised as a submission failure.
+        :meth:`_build_extrinsic` then :meth:`_submit_built`.
 
         Raises:
             QuipSubmissionError: if assembly/submission fails or the dispatch
                 was rejected by the chain.
         """
+        wire, ext_hash = self._build_extrinsic(call_module, call_function, call_params)
+        return self._submit_built(call_module, call_function, wire, ext_hash, wait_for=wait_for)
+
+    def _build_extrinsic(self, call_module: str, call_function: str, call_params: dict) -> tuple[bytes, str]:
+        """Sign an extrinsic via :func:`xqsa.quip_signing.build_signed_extrinsic`: ``(wire, hash)``.
+
+        Raises:
+            QuipSubmissionError: if assembly or signing fails.
+        """
         try:
-            wire_bytes, ext_hash = self._quip_signing.build_signed_extrinsic(
+            return self._quip_signing.build_signed_extrinsic(
                 self._iface, self._signer, call_module, call_function, call_params
             )
-            receipt = self._quip_signing.submit_and_watch(self._iface, wire_bytes, ext_hash, wait_for=wait_for)
+        except self._quip_signing.QuipSigningError as exc:
+            raise QuipSubmissionError(f"{call_module}.{call_function} could not be submitted: {exc}") from exc
+
+    def _submit_built(
+        self,
+        call_module: str,
+        call_function: str,
+        wire: bytes,
+        ext_hash: str,
+        wait_for: str = "inblock",
+    ) -> Any:
+        """Submit built extrinsic bytes via :func:`~xqsa.quip_signing.submit_and_watch`.
+
+        Inclusion alone is not success on Substrate, so a receipt that did not
+        reach a block or carries a dispatch error is raised as a submission
+        failure.
+
+        Raises:
+            QuipSubmissionError: if submission fails or the dispatch was
+                rejected by the chain.
+        """
+        try:
+            receipt = self._quip_signing.submit_and_watch(self._iface, wire, ext_hash, wait_for=wait_for)
         except self._quip_signing.QuipSigningError as exc:
             raise QuipSubmissionError(f"{call_module}.{call_function} could not be submitted: {exc}") from exc
         if not receipt.is_success:
@@ -913,15 +1104,132 @@ class SolverQuip(Solver):
     # Public surface
     # ------------------------------------------------------------------
 
+    def _prepare(self, model: XQMX, kwargs: Mapping[str, Any]) -> tuple[IsingJob, bytes, str, JobQuote]:
+        """Place ``model``, build its ``propose_job`` extrinsic once, and quote it.
+
+        Returns the placed job, the signed wire bytes and their hash, and the
+        quote priced off exactly those bytes, so :meth:`solve` submits what it
+        quoted without paying for a second build.
+        """
+        self._validate_model(model)
+        topology = self._fetch_topology(kwargs.get("topology"))
+        job = model_to_ising(model, topology, mapping=kwargs.get("mapping"))
+        self._maybe_warn_allowed_values(job)
+        wire, ext_hash = self._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, self._propose_call_params(job))
+        fee, fee_exact = self._query_fee(wire)
+        symbol, decimals = self._token()
+        quote = JobQuote(
+            network=self._network,
+            reward_planck=self._reward,
+            fee_planck=fee,
+            fee_exact=fee_exact,
+            balance_planck=self._free_balance(),
+            token_symbol=symbol,
+            token_decimals=decimals,
+        )
+        return job, wire, ext_hash, quote
+
+    @staticmethod
+    def _display(quote: JobQuote) -> None:
+        """Log the quote at INFO, and print it to stderr when stderr is a terminal.
+
+        Not ``warnings.warn``: that dedupes per call site, so the second solve
+        in a loop would show nothing.
+        """
+        text = str(quote)
+        for line in text.splitlines():
+            logger.info("%s", line)
+        if _isatty(sys.stderr):
+            print(text, file=sys.stderr)
+
+    @staticmethod
+    def _pass_gate(gate: bool | Callable[[JobQuote], bool], quote: JobQuote, *, name: str, question: str) -> None:
+        """Return if ``gate`` consents to ``quote``, else raise :class:`QuipCancelledError`.
+
+        ``True`` consents; a callable decides from the quote; ``False`` asks on
+        the terminal and never hangs: with no TTY on stdin, or on neither
+        stderr nor stdout, it raises at once.
+        """
+        if gate is True:
+            return
+        if callable(gate):
+            if gate(quote):
+                return
+            raise QuipCancelledError(quote, f"{name} declined: the {name} callable rejected the quote")
+        # Ask on whichever output stream is the terminal, so a redirect of the
+        # other cannot hide the question while the process waits. With both
+        # redirected there is nowhere to ask. When stderr is the terminal,
+        # _display already showed the quote there.
+        out = next((stream for stream in (sys.stderr, sys.stdout) if _isatty(stream)), None)
+        if not _isatty(sys.stdin) or out is None:
+            raise QuipCancelledError(
+                quote,
+                f"{name}=False asks for confirmation but stdin, or both stderr and stdout, is not a terminal; "
+                f"pass {name}=True or {name}=lambda q: ... to decide in code",
+            )
+        if out is sys.stdout:
+            print(str(quote), file=out)
+        print(f"[quip] {question} [y/N] ", end="", file=out, flush=True)
+        try:
+            answer = input()
+        except EOFError:
+            answer = ""
+        if answer.strip().lower() not in ("y", "yes"):
+            raise QuipCancelledError(quote, f"{name} declined: answered {answer.strip()!r} at the prompt")
+
+    def _fund(self, quote: JobQuote) -> None:
+        """Top the account up with one faucet drip and wait for it to cover ``quote``.
+
+        The faucet answers once the drip is on chain, but the node this solver
+        reads may lag, so the balance is re-read until it covers the quote.
+
+        Raises:
+            QuipFaucetError: if the faucet refuses or cannot be reached.
+            QuipSubmissionError: if the balance still falls short after
+                :data:`FUND_WAIT_SECONDS`.
+        """
+        # No amount: the faucet's default drip. solve() only gets here when the
+        # shortfall fits in one, so a mistyped reward is never funded.
+        fund_from_faucet("0x" + bytes(self._signer.account_id).hex(), url=self._faucet)
+        deadline = time.monotonic() + FUND_WAIT_SECONDS
+        while (balance := self._free_balance()) < quote.total_planck:
+            if time.monotonic() >= deadline:
+                raise self._insufficient_error(replace(quote, balance_planck=balance))
+            time.sleep(self._poll_interval)
+
+    def quote(self, model: XQMX, **kwargs: Any) -> JobQuote:
+        """Price ``model`` as a job without proposing it.
+
+        Places the model, builds and signs the ``propose_job`` extrinsic that
+        :meth:`solve` would submit, asks the chain for its fee, and reads the
+        account balance. Nothing is submitted and no nonce is consumed.
+
+        Keyword args:
+            topology: override topology hash for this quote.
+            mapping: explicit variable -> node placement (else searched).
+
+        Raises:
+            QuipConnectionError: if a chain read faults while resolving the
+                topology or the account balance.
+            QuipSubmissionError: if the extrinsic cannot be built.
+        """
+        return self._prepare(model, kwargs)[3]
+
     def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
         """Propose ``model`` as a job, await a solution, and decode the best one.
 
         Encodes the model onto the hardware topology, warns once about any
-        out-of-spec coefficients, checks the account can cover the reward plus
-        fees, proposes the job (reserving the reward on-chain), polls for
-        finality by block height, then decodes the winning solution. If the
-        order finalizes with no solutions, the reward is auto-reclaimed and
+        out-of-spec coefficients, builds the ``propose_job`` extrinsic, quotes
+        it (see :meth:`quote`) and shows the quote, passes the consent gates,
+        proposes the job (reserving the reward on-chain), polls for finality
+        by block height, then decodes the winning solution. If the order
+        finalizes with no solutions, the reward is auto-reclaimed and
         :class:`QuipJobFailedError` is raised.
+
+        The ``autoconfirm`` gate comes first, so the price is accepted before
+        funding is considered. Only if the account is short does the
+        ``autofund`` gate follow, then a faucet drip and a balance re-read.
+        A drip is not returned if the job fails after it.
 
         Keyword args:
             topology: override topology hash for this solve.
@@ -930,19 +1238,43 @@ class SolverQuip(Solver):
         Raises:
             QuipConnectionError: if a chain read faults (transport/decode) while
                 resolving the topology, the order, or the account balance.
-            QuipSubmissionError: if proposing the job fails.
+            QuipSubmissionError: if the account cannot cover the quote and no
+                faucet is configured, the shortfall exceeds one faucet drip, the
+                balance already exceeds the faucet's one-drip ceiling, or the
+                drip does not land; or if proposing the job fails. The first
+                three are raised before either gate is asked.
+            QuipCancelledError: if the ``autoconfirm`` or ``autofund`` gate
+                declines (carries the quote).
+            QuipFaucetError: if the faucet refuses or cannot be reached.
             QuipTimeoutError: if the order does not finalize within ``timeout``
                 (the order id is recoverable via :meth:`query`).
             QuipJobFailedError: if the order finalizes with no usable solution.
         """
-        self._validate_model(model)
-        topology = self._fetch_topology(kwargs.get("topology"))
-        job = model_to_ising(model, topology, mapping=kwargs.get("mapping"))
-        self._maybe_warn_allowed_values(job)
-        self._check_balance(self._reward + FEE_HEADROOM_PLANCK)
+        job, wire, ext_hash, quote = self._prepare(model, kwargs)
+        self._display(quote)
+        # A shortfall no drip can cover fails whatever the gates say, so raise
+        # it before asking anyone to confirm a job that cannot go out.
+        if quote.shortfall_planck > DEFAULT_DRIP_PLANCK:
+            raise self._insufficient_error(quote, beyond_drip=True)
+        if quote.shortfall_planck and quote.balance_planck > DEFAULT_DRIP_PLANCK:
+            raise self._insufficient_error(quote, above_ceiling=True)
+        if quote.shortfall_planck and not self._faucet:
+            raise self._insufficient_error(quote)
+        total = f"{_format_planck(quote.total_planck, quote.token_decimals)} {quote.token_symbol}"
+        self._pass_gate(self._autoconfirm, quote, name="autoconfirm", question=f"Submit this job for {total}?")
+        if quote.shortfall_planck:
+            self._pass_gate(
+                self._autofund,
+                quote,
+                name="autofund",
+                question=f"Fund {_as_hex(self._signer.account_id)} from {self._faucet}?",
+            )
+            # The drip does not touch this account's nonce, so the extrinsic
+            # built above stays valid.
+            self._fund(quote)
 
         start = time.perf_counter()
-        order_id = self._propose_job(job)
+        order_id = self._propose_job(wire, ext_hash)
         self._await_finality(order_id)
         elapsed = time.perf_counter() - start
         return self._collect_result(order_id, job, model, elapsed=elapsed)
@@ -988,6 +1320,55 @@ class SolverQuip(Solver):
             "solution_count": int(order.get("solution_count", 0) or 0),
             **lifecycle,
         }
+
+
+_TRUE_FLAGS = frozenset({"1", "true", "yes", "on"})
+_FALSE_FLAGS = frozenset({"0", "false", "no", "off"})
+
+
+def _isatty(stream: object) -> bool:
+    """Whether ``stream`` is a terminal; ``None`` (pythonw, some daemons) is not."""
+    isatty = getattr(stream, "isatty", None)
+    return bool(isatty and isatty())
+
+
+def _env_flag(name: str) -> bool | None:
+    """Read a boolean environment variable; ``None`` when unset or empty.
+
+    Raises:
+        ValueError: if the variable holds anything but a recognised spelling.
+    """
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return None
+    if raw in _TRUE_FLAGS:
+        return True
+    if raw in _FALSE_FLAGS:
+        return False
+    raise ValueError(f"{name}={raw!r} is not a boolean; use one of 1/true/yes/on or 0/false/no/off")
+
+
+def _resolve_gate(gate: object, name: str, env: str) -> bool | Callable[[JobQuote], bool]:
+    """Resolve a consent gate: the argument, then ``env``, then ``True``.
+
+    Raises:
+        TypeError: if the argument is neither a bool, a callable, nor ``None``.
+        ValueError: if ``env`` is set to an unrecognised spelling.
+    """
+    if gate is None:
+        flag = _env_flag(env)
+        return True if flag is None else flag
+    if isinstance(gate, bool) or callable(gate):
+        return gate  # type: ignore[return-value]
+    raise TypeError(f"{name} must be a bool or a callable taking a JobQuote, not {type(gate).__name__}")
+
+
+def _format_planck(planck: int, decimals: int) -> str:
+    """Render ``planck`` in token units with exactly ``decimals`` fractional digits."""
+    if decimals == 0:
+        return str(planck)
+    unit = 10**decimals
+    return f"{planck // unit}.{planck % unit:0{decimals}d}"
 
 
 def _require(mapping: Mapping[str, Any], key: str, order_id: int) -> Any:

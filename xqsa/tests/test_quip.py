@@ -26,6 +26,7 @@ No chain or networking dependency, so these run everywhere.
 from __future__ import annotations
 
 import itertools
+import logging
 import sys
 import types
 import warnings
@@ -767,7 +768,11 @@ class FakeSubstrate:
     """A minimal stand-in for SubstrateInterface: constants + single-entry storage.
 
     ``query`` ignores its key params (these tests configure one entry per
-    storage map), so a non-hashable mock AccountId is fine.
+    storage map), so a non-hashable mock AccountId is fine. ``token_symbol``/
+    ``token_decimals`` stand in for the chain's system properties, and
+    ``rpc_request`` answers from a method-keyed ``rpc`` mapping (a value may be
+    the dict to return, or an ``Exception`` instance to raise) so ``quote()``'s
+    ``payment_queryInfo`` call can be exercised without a real chain.
     """
 
     def __init__(
@@ -780,6 +785,9 @@ class FakeSubstrate:
         head: int = 0,
         init_runtime_raises: Exception | None = None,
         get_constant_raises: Exception | None = None,
+        token_symbol: str | None = "AGLS",
+        token_decimals: int | None = 12,
+        rpc: dict | None = None,
     ) -> None:
         self.constants = dict(constants or {})
         self.storage = dict(storage or {})
@@ -788,6 +796,17 @@ class FakeSubstrate:
         self.head = head
         self._init_runtime_raises = init_runtime_raises
         self._get_constant_raises = get_constant_raises
+        self.token_symbol = token_symbol
+        self.token_decimals = token_decimals
+        self.rpc = dict(rpc) if rpc is not None else {"payment_queryInfo": {"result": {"partialFee": "2182560255"}}}
+        self.rpc_calls: list[tuple[str, list | None]] = []
+
+    def rpc_request(self, method: str, params: list | None = None):
+        self.rpc_calls.append((method, params))
+        value = self.rpc[method]  # KeyError on an unconfigured method, deliberately.
+        if isinstance(value, Exception):
+            raise value
+        return value
 
     def init_runtime(self, block_hash: str | None = None, block_id: int | None = None) -> None:
         # SolverQuip resolves metadata explicitly at construction; the real
@@ -898,6 +917,9 @@ def _clear_quip_env(monkeypatch) -> None:
         "QUIP_KEYSTORE",
         "QUIP_REWARD",
         "QUIP_TOPOLOGY",
+        "QUIP_FAUCET_URL",
+        "QUIP_AUTOCONFIRM",
+        "QUIP_AUTOFUND",
         # CA configuration steers connect's wss:// default; keep it out of unit tests.
         "SSL_CERT_FILE",
         "SSL_CERT_DIR",
@@ -1073,6 +1095,76 @@ class TestSolverQuipConstruction:
         _clear_quip_env(monkeypatch)
         with pytest.raises(TypeError, match="multiple values for keyword argument 'url'"):
             SolverQuip.for_network("aglais", url="ws://x", seed=VALID_SEED)
+
+    def test_for_network_sets_preset_faucet_and_name(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+        from xqsa.quip_networks import NETWORKS
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_FAUCET_URL", "http://env-faucet")
+        solver = SolverQuip.for_network("aglais", seed=VALID_SEED)
+        # The preset enters as an argument, so it beats QUIP_FAUCET_URL.
+        assert solver._faucet == NETWORKS["aglais"].faucet
+        assert solver._network == "aglais"
+
+    def test_for_network_faucet_none_keeps_the_preset(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+        from xqsa.quip_networks import NETWORKS
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_FAUCET_URL", "http://env-faucet")
+        solver = SolverQuip.for_network("aglais", seed=VALID_SEED, faucet=None)
+        assert solver._faucet == NETWORKS["aglais"].faucet
+        solver = SolverQuip.for_network("aglais", seed=VALID_SEED, faucet="")
+        assert solver._faucet == NETWORKS["aglais"].faucet
+
+    def test_for_network_caller_faucet_overrides_preset(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        solver = SolverQuip.for_network("aglais", seed=VALID_SEED, faucet="http://mine")
+        assert solver._faucet == "http://mine"
+
+    def test_faucet_from_arg(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, faucet="http://arg-faucet")
+        assert solver._faucet == "http://arg-faucet"
+        # A raw url= names no network.
+        assert solver._network is None
+
+    def test_faucet_from_env(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_RPC_URL", "ws://fake")
+        monkeypatch.setenv("QUIP_FAUCET_URL", "http://env-faucet")
+        solver = SolverQuip(seed=VALID_SEED)
+        assert solver._faucet == "http://env-faucet"
+
+    def test_env_faucet_ignored_with_explicit_url(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_FAUCET_URL", "http://env-faucet")
+        # An explicit url= may name another chain than the exported faucet serves.
+        solver = SolverQuip(url="ws://fake", seed=VALID_SEED)
+        assert solver._faucet is None
+
+    def test_faucet_arg_beats_env(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_FAUCET_URL", "http://env-faucet")
+        solver = SolverQuip(url="ws://fake", seed=VALID_SEED, faucet="http://arg-faucet")
+        assert solver._faucet == "http://arg-faucet"
+
+    def test_faucet_unset_is_none(self, monkeypatch) -> None:
+        assert _make_solver(monkeypatch)._faucet is None
 
     def test_topology_from_env(self, monkeypatch) -> None:
         # QUIP_TOPOLOGY displaces the chain default. Constructed directly rather
@@ -1270,7 +1362,7 @@ class TestSolverQuipMetadataErrors:
 
 
 class TestSolverQuipChainReads:
-    """_fetch_topology and _check_balance against the mocked chain."""
+    """_fetch_topology and _free_balance against the mocked chain."""
 
     def test_fetch_topology_decodes_and_caches(self, monkeypatch) -> None:
         topo_hash = "0x" + "ab" * 32
@@ -1302,18 +1394,17 @@ class TestSolverQuipChainReads:
         with pytest.raises(ValueError, match="no topology hash"):
             solver._fetch_topology()
 
-    def test_check_balance_ok(self, monkeypatch) -> None:
+    def test_free_balance_ok(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch, iface=_default_iface(balance=5 * UNIT))
-        assert solver._check_balance(UNIT) == 5 * UNIT
+        assert solver._free_balance() == 5 * UNIT
 
-    def test_check_balance_insufficient(self, monkeypatch) -> None:
-        from xqsa.quip import QuipSubmissionError
-
+    def test_free_balance_low_is_returned_not_raised(self, monkeypatch) -> None:
+        # No threshold any more: _free_balance is a plain read. A zero balance
+        # is returned as-is; the shortfall decision moved to JobQuote/solve().
         solver = _make_solver(monkeypatch, iface=_default_iface(balance=0))
-        with pytest.raises(QuipSubmissionError, match="insufficient balance"):
-            solver._check_balance(UNIT)
+        assert solver._free_balance() == 0
 
-    def test_check_balance_unreadable_raises_connection_error(self, monkeypatch) -> None:
+    def test_free_balance_unreadable_raises_connection_error(self, monkeypatch) -> None:
         # A missing/undecodable System.Account read is a chain-read fault, not a
         # zero balance -- it must raise QuipConnectionError rather than blame a
         # possibly-funded account for "insufficient balance".
@@ -1321,7 +1412,7 @@ class TestSolverQuipChainReads:
 
         solver = _make_solver(monkeypatch, iface=_default_iface())  # no System.Account entry
         with pytest.raises(QuipConnectionError, match="could not read the free balance"):
-            solver._check_balance(UNIT)
+            solver._free_balance()
 
 
 def _install_storage_absent_exc(monkeypatch):
@@ -1465,22 +1556,27 @@ def _patch_signing(monkeypatch, solver, *, receipt=None, build_raises: Exception
     (raising ``build_raises`` if given) and ``submit_and_watch`` returns ``receipt``,
     so submission tests never touch real crypto or a chain. ``receipt`` may be a
     receipt or a callable ``(call_function) -> receipt`` to vary the outcome per
-    call (e.g. a successful propose followed by a failing reclaim).
+    call (e.g. a successful propose followed by a failing reclaim). ``captured["builds"]``
+    counts calls into ``build_signed_extrinsic``, so a test can assert an
+    extrinsic was assembled exactly once.
     """
-    captured: dict = {}
+    captured: dict = {"builds": 0}
     qs = solver._quip_signing
 
     def fake_build(iface, signer, call_module, call_function, call_params):
         captured.update(iface=iface, call_module=call_module, call_function=call_function, call_params=call_params)
+        captured["builds"] += 1
         if build_raises is not None:
             raise build_raises
         return b"\x00\x01", "0xext"
 
     def fake_submit(iface, wire_bytes, ext_hash, wait_for="inblock"):
         captured["wait_for"] = wait_for
+        captured["submitted_wire"] = wire_bytes
         return receipt(captured["call_function"]) if callable(receipt) else receipt
 
     monkeypatch.setattr(qs, "build_signed_extrinsic", fake_build)
+    monkeypatch.setattr(qs, "disarm_extrinsic", lambda wire: b"disarmed:" + wire)
     monkeypatch.setattr(qs, "submit_and_watch", fake_submit)
     return captured
 
@@ -1492,7 +1588,12 @@ def _ok_receipt(solver, *, error: str | None = None):
 
 
 class TestSolverQuipSubmission:
-    """_propose_job / _submit_extrinsic / _wrap_bounded against the mocked signing layer."""
+    """_propose_call_params / _build_extrinsic / _submit_built / _propose_job / _wrap_bounded.
+
+    ``_propose_job`` now takes a prebuilt ``(wire, ext_hash)`` pair rather than
+    building the extrinsic itself: ``solve()`` builds once, via ``_prepare``,
+    then displays the quote before deciding whether to submit that same wire.
+    """
 
     @staticmethod
     def _simple_job() -> IsingJob:
@@ -1506,17 +1607,11 @@ class TestSolverQuipSubmission:
         solver = _make_solver(monkeypatch)
         assert solver._wrap_bounded([1, 2, 3]) == ([1, 2, 3],)
 
-    def test_propose_job_composition_and_order_id(self, monkeypatch) -> None:
+    def test_propose_call_params_composition(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)
         job = self._simple_job()
-        solver._iface.events = [_job_proposed_event(42)]
-        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        params = solver._propose_call_params(job)
 
-        assert solver._propose_job(job) == 42
-
-        assert captured["call_module"] == "QuantumComputeMempool"
-        assert captured["call_function"] == "propose_job"
-        params = captured["call_params"]
         assert params["spec_id"] == solver._spec_id
         assert params["reward"] == solver._reward
         assert params["mode"] == "Open"
@@ -1532,6 +1627,68 @@ class TestSolverQuipSubmission:
         assert ising["j_values"] == (list(job.j_values),)
         assert ising["min_energy_milli"] is None
         assert ising["min_solutions"] is None
+
+    def test_build_extrinsic_returns_wire_and_hash(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+        captured = _patch_signing(monkeypatch, solver)
+        params = solver._propose_call_params(self._simple_job())
+
+        wire, ext_hash = solver._build_extrinsic("QuantumComputeMempool", "propose_job", params)
+
+        assert wire == b"\x00\x01"
+        assert ext_hash == "0xext"
+        assert captured["builds"] == 1
+        assert captured["call_module"] == "QuantumComputeMempool"
+        assert captured["call_function"] == "propose_job"
+        assert captured["call_params"] is params
+
+    def test_build_extrinsic_signing_error_wrapped(self, monkeypatch) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        solver = _make_solver(monkeypatch)
+        err = solver._quip_signing.QuipSigningError("self-check failed")
+        _patch_signing(monkeypatch, solver, build_raises=err)
+        with pytest.raises(QuipSubmissionError, match="could not be submitted"):
+            solver._build_extrinsic("QuantumComputeMempool", "propose_job", {})
+
+    def test_submit_built_returns_receipt(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        receipt = solver._submit_built("QuantumComputeMempool", "propose_job", b"\x00\x01", "0xext")
+        assert receipt.block_hash == "0xblock"
+        assert captured["wait_for"] == "inblock"
+        assert captured["builds"] == 0  # _submit_built never re-builds the extrinsic
+
+    def test_submit_built_failure_raises(self, monkeypatch) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        solver = _make_solver(monkeypatch)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error="System.ExtrinsicFailed: {...}"))
+        with pytest.raises(QuipSubmissionError, match="failed on-chain"):
+            solver._submit_built("QuantumComputeMempool", "propose_job", b"\x00\x01", "0xext")
+
+    def test_propose_job_returns_order_id(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+        solver._iface.events = [_job_proposed_event(42)]
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        assert solver._propose_job(b"\x00\x01", "0xext") == 42
+
+    def test_propose_job_submit_failure_raises(self, monkeypatch) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        solver = _make_solver(monkeypatch)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error="System.ExtrinsicFailed: {...}"))
+        with pytest.raises(QuipSubmissionError, match="failed on-chain"):
+            solver._propose_job(b"\x00\x01", "0xext")
+
+    def test_propose_job_missing_event_raises(self, monkeypatch) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        solver = _make_solver(monkeypatch)
+        solver._iface.events = []  # included, but no JobProposed event.
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipSubmissionError, match="no JobProposed"):
+            solver._propose_job(b"\x00\x01", "0xext")
 
     @pytest.mark.parametrize("attrs_form", ["mapping", "params"])
     def test_order_id_extraction_tolerates_attribute_shapes(self, monkeypatch, attrs_form) -> None:
@@ -1550,32 +1707,6 @@ class TestSolverQuipSubmission:
         solver._iface.events = [_job_proposed_event(7, attrs_form="positional")]
         with pytest.raises(QuipSubmissionError, match="no JobProposed"):
             solver._read_proposed_order_id("0xblock")
-
-    def test_submit_failure_raises(self, monkeypatch) -> None:
-        from xqsa.quip import QuipSubmissionError
-
-        solver = _make_solver(monkeypatch)
-        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error="System.ExtrinsicFailed: {...}"))
-        with pytest.raises(QuipSubmissionError, match="failed on-chain"):
-            solver._propose_job(self._simple_job())
-
-    def test_signing_error_wrapped(self, monkeypatch) -> None:
-        from xqsa.quip import QuipSubmissionError
-
-        solver = _make_solver(monkeypatch)
-        err = solver._quip_signing.QuipSigningError("self-check failed")
-        _patch_signing(monkeypatch, solver, build_raises=err)
-        with pytest.raises(QuipSubmissionError, match="could not be submitted"):
-            solver._propose_job(self._simple_job())
-
-    def test_missing_job_proposed_event_raises(self, monkeypatch) -> None:
-        from xqsa.quip import QuipSubmissionError
-
-        solver = _make_solver(monkeypatch)
-        solver._iface.events = []  # included, but no JobProposed event.
-        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
-        with pytest.raises(QuipSubmissionError, match="no JobProposed"):
-            solver._propose_job(self._simple_job())
 
     def test_no_block_hash_raises(self, monkeypatch) -> None:
         from xqsa.quip import QuipSubmissionError
@@ -1872,7 +2003,22 @@ class TestSolverQuipSolve:
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         with pytest.raises(QuipSubmissionError, match="insufficient balance"):
             solver.solve(_model())
-        assert "call_function" not in captured  # never reached submission
+        # _prepare builds the extrinsic (to quote the fee) before the balance
+        # gate, so "builds" is no longer the signal; submission is.
+        assert "wait_for" not in captured  # never reached submission
+
+    def test_solve_builds_extrinsic_exactly_once(self, monkeypatch) -> None:
+        iface = _chain_iface(order=_order(), head=200)
+        iface.maps[("QuantumPow", "MineableTopologies")] = [(TOPO_HASH, ())]
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        job = _job(solver)
+        vector = _spin_vector(job, {0: 1, 1: 1})
+        solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [
+            (b"solver", _submission("0xSOLVER", [vector], ising_energy_milli(job, vector)))
+        ]
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        solver.solve(_model())
+        assert captured["builds"] == 1
 
     def test_solve_proceeds_when_topology_is_not_mineable(self, monkeypatch) -> None:
         # Inverted guard. solve() used to reject a registered hash absent from
@@ -1939,3 +2085,741 @@ class TestSolverQuipQuery:
         with pytest.raises(QuipJobFailedError):
             solver.query(1, _model())
         assert captured["call_function"] == "reclaim_order"
+
+
+# ---------------------------------------------------------------------------
+# JobQuote: arithmetic, formatting, and solver.quote() / _display / _insufficient_error
+# ---------------------------------------------------------------------------
+
+
+def test_format_planck_matches_the_documented_formula() -> None:
+    from xqsa.quip import _format_planck
+
+    assert _format_planck(1_002_182_560_255, 12) == "1.002182560255"
+    assert _format_planck(20_000_000_000_000, 12) == "20.000000000000"
+    assert _format_planck(0, 12) == "0.000000000000"
+    assert _format_planck(5, 0) == "5"
+
+
+class TestJobQuote:
+    """JobQuote arithmetic and __str__ formatting, independent of any chain."""
+
+    @staticmethod
+    def _quote(**overrides: object):
+        from xqsa.quip import JobQuote
+
+        defaults = dict(
+            network="aglais",
+            reward_planck=1_000_000_000_000,
+            fee_planck=2_182_560_255,
+            fee_exact=True,
+            balance_planck=20_000_000_000_000,
+            token_symbol="AGLS",
+            token_decimals=12,
+        )
+        defaults.update(overrides)
+        return JobQuote(**defaults)
+
+    def test_total_is_reward_plus_fee(self) -> None:
+        quote = self._quote(reward_planck=1000, fee_planck=200)
+        assert quote.total_planck == 1200
+
+    def test_shortfall_zero_when_balance_covers_total(self) -> None:
+        quote = self._quote(reward_planck=1000, fee_planck=200, balance_planck=1200)
+        assert quote.shortfall_planck == 0
+
+    def test_shortfall_zero_when_balance_exceeds_total(self) -> None:
+        # Clamps at 0 rather than going negative.
+        quote = self._quote(reward_planck=1000, fee_planck=200, balance_planck=10_000)
+        assert quote.shortfall_planck == 0
+
+    def test_shortfall_positive_when_balance_short(self) -> None:
+        quote = self._quote(reward_planck=1000, fee_planck=200, balance_planck=500)
+        assert quote.shortfall_planck == 700
+
+    def test_str_lines_all_start_with_quip_tag_and_are_ascii(self) -> None:
+        text = str(self._quote())
+        lines = text.splitlines()
+        assert lines
+        assert all(line.startswith("[quip]") for line in lines)
+        assert text.isascii()
+
+    def test_str_decimal_points_align_across_amount_lines(self) -> None:
+        text = str(self._quote())
+        amount_lines = [line for line in text.splitlines() if "." in line]
+        assert len(amount_lines) == 5  # reward, fee, total, balance, shortfall
+        assert len({line.index(".") for line in amount_lines}) == 1
+
+    def test_str_header_names_the_network(self) -> None:
+        assert "network aglais" in str(self._quote(network="aglais"))
+
+    def test_str_header_says_custom_endpoint_when_network_is_none(self) -> None:
+        assert "custom endpoint" in str(self._quote(network=None))
+
+    def test_str_header_fee_exact_vs_estimated(self) -> None:
+        assert "fee exact" in str(self._quote(fee_exact=True))
+        assert "fee estimated" in str(self._quote(fee_exact=False))
+
+    def test_str_has_no_fractional_part_when_decimals_is_zero(self) -> None:
+        quote = self._quote(
+            token_symbol="planck", token_decimals=0, reward_planck=1000, fee_planck=0, balance_planck=1000
+        )
+        assert "." not in str(quote)
+
+
+class TestSolverQuipQuote:
+    """quote() / _query_fee / _prepare against the mocked chain.
+
+    ``quote()`` builds the extrinsic (to price the fee via ``payment_queryInfo``)
+    even though it never submits, so every test here patches the signing layer
+    just like a submission test would.
+    """
+
+    @staticmethod
+    def _iface(*, balance: int = 10 * UNIT) -> FakeSubstrate:
+        return _chain_iface(order=_order(), head=200, balance=balance)
+
+    def test_fee_exact_true_on_a_decimal_partial_fee(self, monkeypatch) -> None:
+        iface = self._iface()
+        iface.rpc["payment_queryInfo"] = {"result": {"partialFee": "2182560255"}}
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver)
+        quote = solver.quote(_model())
+        assert quote.fee_planck == 2182560255
+        assert quote.fee_exact is True
+
+    def test_fee_exact_true_on_a_hex_partial_fee(self, monkeypatch) -> None:
+        iface = self._iface()
+        iface.rpc["payment_queryInfo"] = {"result": {"partialFee": "0x82260fff"}}
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver)
+        quote = solver.quote(_model())
+        assert quote.fee_planck == int("0x82260fff", 16)
+        assert quote.fee_exact is True
+
+    def test_fee_falls_back_to_headroom_on_rpc_failure(self, monkeypatch) -> None:
+        from xqsa.quip import FEE_HEADROOM_PLANCK
+
+        iface = self._iface()
+        iface.rpc["payment_queryInfo"] = RuntimeError("rpc unavailable")
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver)
+        quote = solver.quote(_model())
+        assert quote.fee_planck == FEE_HEADROOM_PLANCK
+        assert quote.fee_exact is False
+
+    def test_token_props_none_fall_back_to_planck_and_zero_decimals(self, monkeypatch) -> None:
+        iface = self._iface()
+        iface.token_symbol = None
+        iface.token_decimals = None
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver)
+        quote = solver.quote(_model())
+        assert quote.token_symbol == "planck"
+        assert quote.token_decimals == 0
+        assert "." not in str(quote)
+
+    def test_quote_never_submits(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, iface=self._iface(), topology=TOPO_HASH)
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        solver.quote(_model())
+        assert "wait_for" not in captured  # submit_and_watch never called
+
+    def test_quote_network_is_none_for_a_raw_url(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, iface=self._iface(), topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver)
+        quote = solver.quote(_model())
+        assert quote.network is None
+        assert "custom endpoint" in str(quote)
+
+    def test_quote_network_carries_the_preset_name(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        iface = self._iface()
+        iface.storage[("QuantumPow", "DefaultTopology")] = TOPO_HASH
+        _install(monkeypatch, iface)
+        _clear_quip_env(monkeypatch)
+        solver = SolverQuip.for_network("aglais", seed=VALID_SEED)
+        _patch_signing(monkeypatch, solver)
+        quote = solver.quote(_model())
+        assert quote.network == "aglais"
+        assert "network aglais" in str(quote)
+
+
+class TestSolverQuipInsufficientBalance:
+    """_insufficient_error names a remedy, tailored to whether a faucet is known."""
+
+    def test_names_the_faucet_when_set(self, monkeypatch) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        iface = _chain_iface(order=_order(), head=200, balance=0)
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH, faucet="http://myfaucet")
+        _patch_signing(monkeypatch, solver)
+        quote = solver.quote(_model())
+        error = solver._insufficient_error(quote)
+        assert isinstance(error, QuipSubmissionError)
+        message = str(error)
+        assert message.startswith("insufficient balance")
+        assert "http://myfaucet" in message
+
+    def test_mentions_for_network_when_faucet_unset(self, monkeypatch) -> None:
+        iface = _chain_iface(order=_order(), head=200, balance=0)
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver)
+        quote = solver.quote(_model())
+        message = str(solver._insufficient_error(quote))
+        assert "faucet=" in message
+        assert "QUIP_FAUCET_URL" in message
+        assert "SolverQuip.for_network" in message
+
+
+class _FakeTTY:
+    """A minimal stderr stand-in whose isatty() is controllable."""
+
+    def __init__(self, *, isatty: bool) -> None:
+        self._isatty = isatty
+        self.written: list[str] = []
+
+    def isatty(self) -> bool:
+        return self._isatty
+
+    def write(self, text: str) -> int:
+        self.written.append(text)
+        return len(text)
+
+    def flush(self) -> None:
+        pass
+
+
+class TestSolverQuipDisplay:
+    """_display logs the quote on xqsa.quip and echoes to an interactive stderr only."""
+
+    @staticmethod
+    def _quote():
+        from xqsa.quip import JobQuote
+
+        return JobQuote(
+            network="aglais",
+            reward_planck=UNIT,
+            fee_planck=2_182_560_255,
+            fee_exact=True,
+            balance_planck=20 * UNIT,
+            token_symbol="AGLS",
+            token_decimals=12,
+        )
+
+    def test_logs_every_line_at_info_on_xqsa_quip(self, monkeypatch, caplog) -> None:
+        solver = _make_solver(monkeypatch)
+        quote = self._quote()
+        with caplog.at_level(logging.INFO, logger="xqsa.quip"):
+            solver._display(quote)
+        logged_lines = [record.getMessage() for record in caplog.records if record.name == "xqsa.quip"]
+        for line in str(quote).splitlines():
+            assert line in logged_lines
+
+    def test_prints_to_stderr_when_interactive(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+        quote = self._quote()
+        fake_stderr = _FakeTTY(isatty=True)
+        monkeypatch.setattr(sys, "stderr", fake_stderr)
+        solver._display(quote)
+        assert "".join(fake_stderr.written) != ""
+
+    def test_silent_on_stderr_when_not_interactive(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+        quote = self._quote()
+        fake_stderr = _FakeTTY(isatty=False)
+        monkeypatch.setattr(sys, "stderr", fake_stderr)
+        solver._display(quote)
+        assert fake_stderr.written == []
+
+
+def test_quip_metadata_logger_parents_under_xqsa_quip() -> None:
+    """xqsa.quip_metadata's logger renamed to xqsa.quip.metadata, nesting under xqsa.quip."""
+    assert logging.getLogger("xqsa.quip.metadata").parent.name == "xqsa.quip"
+
+
+# ---------------------------------------------------------------------------
+# _env_flag: boolean environment variable parsing
+# ---------------------------------------------------------------------------
+
+
+class TestEnvFlag:
+    """_env_flag's spelling matrix, independent of the solver."""
+
+    @pytest.mark.parametrize("spelling", ["1", "true", "yes", "on", "TRUE", " YES "])
+    def test_true_spellings(self, monkeypatch, spelling) -> None:
+        from xqsa.quip import _env_flag
+
+        monkeypatch.setenv("QUIP_TEST_FLAG", spelling)
+        assert _env_flag("QUIP_TEST_FLAG") is True
+
+    @pytest.mark.parametrize("spelling", ["0", "false", "no", "off", "FALSE", " NO "])
+    def test_false_spellings(self, monkeypatch, spelling) -> None:
+        from xqsa.quip import _env_flag
+
+        monkeypatch.setenv("QUIP_TEST_FLAG", spelling)
+        assert _env_flag("QUIP_TEST_FLAG") is False
+
+    def test_unset_is_none(self, monkeypatch) -> None:
+        from xqsa.quip import _env_flag
+
+        monkeypatch.delenv("QUIP_TEST_FLAG", raising=False)
+        assert _env_flag("QUIP_TEST_FLAG") is None
+
+    def test_empty_is_none(self, monkeypatch) -> None:
+        from xqsa.quip import _env_flag
+
+        monkeypatch.setenv("QUIP_TEST_FLAG", "")
+        assert _env_flag("QUIP_TEST_FLAG") is None
+
+    def test_garbage_raises_naming_the_variable(self, monkeypatch) -> None:
+        from xqsa.quip import _env_flag
+
+        monkeypatch.setenv("QUIP_TEST_FLAG", "maybe")
+        with pytest.raises(ValueError, match="QUIP_TEST_FLAG"):
+            _env_flag("QUIP_TEST_FLAG")
+
+
+# ---------------------------------------------------------------------------
+# autoconfirm / autofund resolution at construction (QUI-1456)
+# ---------------------------------------------------------------------------
+
+
+class TestSolverQuipGateResolution:
+    """Constructor resolution of autoconfirm/autofund: argument, then env, then True."""
+
+    def test_defaults_to_true_for_both(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+        assert solver._autoconfirm is True
+        assert solver._autofund is True
+
+    def test_autoconfirm_env_false(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_AUTOCONFIRM", "0")
+        solver = SolverQuip(url="ws://fake", seed=VALID_SEED)
+        assert solver._autoconfirm is False
+
+    def test_autofund_env_false(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_AUTOFUND", "no")
+        solver = SolverQuip(url="ws://fake", seed=VALID_SEED)
+        assert solver._autofund is False
+
+    def test_argument_beats_env(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_AUTOCONFIRM", "0")
+        solver = SolverQuip(url="ws://fake", seed=VALID_SEED, autoconfirm=True)
+        assert solver._autoconfirm is True
+
+    def test_env_garbage_raises(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_AUTOCONFIRM", "maybe")
+        with pytest.raises(ValueError, match="QUIP_AUTOCONFIRM"):
+            SolverQuip(url="ws://fake", seed=VALID_SEED)
+
+    def test_non_bool_non_callable_raises_type_error(self, monkeypatch) -> None:
+        with pytest.raises(TypeError, match="autoconfirm"):
+            _make_solver(monkeypatch, autoconfirm="yes")
+
+    def test_callable_gate_accepted(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, autoconfirm=lambda quote: True, autofund=lambda quote: True)
+        assert callable(solver._autoconfirm)
+        assert callable(solver._autofund)
+
+
+# ---------------------------------------------------------------------------
+# QuipCancelledError
+# ---------------------------------------------------------------------------
+
+
+def test_quip_cancelled_error_is_a_quip_error() -> None:
+    from xqsa.quip import QuipCancelledError
+    from xqsa.quip_codec import QuipError
+
+    assert issubclass(QuipCancelledError, QuipError)
+
+
+def test_quip_cancelled_error_carries_the_quote() -> None:
+    from xqsa.quip import JobQuote, QuipCancelledError
+
+    quote = JobQuote(
+        network="aglais",
+        reward_planck=UNIT,
+        fee_planck=0,
+        fee_exact=True,
+        balance_planck=0,
+        token_symbol="AGLS",
+        token_decimals=12,
+    )
+    error = QuipCancelledError(quote, "declined")
+    assert error.quote is quote
+    assert str(error) == "declined"
+
+
+# ---------------------------------------------------------------------------
+# solve(): autoconfirm / autofund consent gates (QUI-1456)
+# ---------------------------------------------------------------------------
+
+# The default FakeSubstrate.rpc["payment_queryInfo"] partialFee, in planck --
+# used to compute exact expected shortfalls without re-deriving a quote.
+FEE_PLANCK = 2_182_560_255
+
+
+def _solve_ready(monkeypatch, *, balance: int = 10 * UNIT, **solver_kwargs):
+    """A solver whose account is funded, with a winning submission waiting.
+
+    Mirrors ``TestSolverQuipSolve.test_solve_happy_path``: registers the
+    order, marks the topology mineable, and seeds the winning submission once
+    the solver (and therefore its deterministic placement) exists.
+    """
+    iface = _chain_iface(order=_order(), head=200, balance=balance)
+    solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH, **solver_kwargs)
+    job = _job(solver)
+    vector = _spin_vector(job, {0: 1, 1: 1})
+    iface.maps[("QuantumPow", "MineableTopologies")] = [(TOPO_HASH, ())]
+    iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [
+        (b"solver", _submission("0xSOLVER", [vector], ising_energy_milli(job, vector)))
+    ]
+    return solver
+
+
+def _solve_ready_short(
+    monkeypatch, *, balance: int = 0, reward: int = UNIT, faucet: str | None = "http://faucet", **solver_kwargs
+):
+    """A solver whose account is short of the quote, with a winning submission waiting once funded."""
+    iface = _chain_iface(order=_order(), head=200, balance=balance)
+    solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH, reward=reward, faucet=faucet, **solver_kwargs)
+    job = _job(solver)
+    vector = _spin_vector(job, {0: 1, 1: 1})
+    iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [
+        (b"solver", _submission("0xSOLVER", [vector], ising_energy_milli(job, vector)))
+    ]
+    return solver, iface
+
+
+class TestSolveAutoconfirmGate:
+    """The autoconfirm gate matrix on a funded account: submit, or QuipCancelledError."""
+
+    def test_true_submits(self, monkeypatch) -> None:
+        solver = _solve_ready(monkeypatch)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        result = solver.solve(_model())
+        assert isinstance(result, SolverResult)
+
+    def test_false_tty_answers_yes_submits(self, monkeypatch) -> None:
+        solver = _solve_ready(monkeypatch, autoconfirm=False)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
+        monkeypatch.setattr(sys, "stderr", _FakeTTY(isatty=True))
+        monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+        result = solver.solve(_model())
+        assert isinstance(result, SolverResult)
+
+    def test_false_tty_answers_no_cancels(self, monkeypatch) -> None:
+        from xqsa.quip import QuipCancelledError
+
+        solver = _solve_ready(monkeypatch, autoconfirm=False)
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
+        monkeypatch.setattr(sys, "stderr", _FakeTTY(isatty=True))
+        monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+        with pytest.raises(QuipCancelledError, match="answered 'n'") as excinfo:
+            solver.solve(_model())
+        assert excinfo.value.quote.total_planck > 0
+        assert "wait_for" not in captured
+
+    def test_false_tty_eof_declines(self, monkeypatch) -> None:
+        from xqsa.quip import QuipCancelledError
+
+        solver = _solve_ready(monkeypatch, autoconfirm=False)
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
+        monkeypatch.setattr(sys, "stderr", _FakeTTY(isatty=True))
+
+        def _raise_eof(prompt: str = "") -> str:
+            raise EOFError
+
+        monkeypatch.setattr("builtins.input", _raise_eof)
+        with pytest.raises(QuipCancelledError, match="at the prompt"):
+            solver.solve(_model())
+        assert "wait_for" not in captured
+
+    def test_false_tty_stdin_with_both_outputs_redirected_cancels(self, monkeypatch) -> None:
+        from xqsa.quip import QuipCancelledError
+
+        solver = _solve_ready(monkeypatch, autoconfirm=False)
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
+        monkeypatch.setattr(sys, "stderr", _FakeTTY(isatty=False))
+        monkeypatch.setattr(sys, "stdout", _FakeTTY(isatty=False))
+        calls: list[str] = []
+        monkeypatch.setattr("builtins.input", lambda prompt="": calls.append(prompt) or "y")
+        # A question written into the redirect target would block unseen.
+        with pytest.raises(QuipCancelledError, match="not a terminal"):
+            solver.solve(_model())
+        assert calls == []
+        assert "wait_for" not in captured
+
+    def test_false_no_tty_cancels_without_prompting(self, monkeypatch) -> None:
+        from xqsa.quip import QuipCancelledError
+
+        solver = _solve_ready(monkeypatch, autoconfirm=False)
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=False))
+        calls: list[str] = []
+        monkeypatch.setattr("builtins.input", lambda prompt="": calls.append(prompt) or "y")
+        with pytest.raises(QuipCancelledError, match="autoconfirm=False") as excinfo:
+            solver.solve(_model())
+        message = str(excinfo.value)
+        assert "not a terminal" in message
+        assert "autoconfirm=lambda q" in message
+        assert calls == []  # input() is never reached
+        assert "wait_for" not in captured
+
+    def test_callable_true_submits_and_receives_the_quote(self, monkeypatch) -> None:
+        from xqsa.quip import JobQuote
+
+        received: list[JobQuote] = []
+        solver = _solve_ready(monkeypatch, autoconfirm=lambda quote: received.append(quote) or True)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        result = solver.solve(_model())
+        assert isinstance(result, SolverResult)
+        assert len(received) == 1
+        assert isinstance(received[0], JobQuote)
+        assert received[0].total_planck > 0
+
+    def test_callable_false_cancels(self, monkeypatch) -> None:
+        from xqsa.quip import QuipCancelledError
+
+        solver = _solve_ready(monkeypatch, autoconfirm=lambda quote: False)
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipCancelledError) as excinfo:
+            solver.solve(_model())
+        assert excinfo.value.quote.total_planck > 0
+        assert "wait_for" not in captured
+
+
+class TestSolveAutofundGate:
+    """When the quote is short, autofund controls the faucet drip and the wait for it to land."""
+
+    def test_true_funds_then_submits(self, monkeypatch) -> None:
+        solver, iface = _solve_ready_short(monkeypatch)
+        calls: list[tuple] = []
+
+        def fake_fund(dest, *, url, amount=None):
+            calls.append((dest, url, amount))
+            iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
+            return {}
+
+        monkeypatch.setattr("xqsa.quip.fund_from_faucet", fake_fund)
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        result = solver.solve(_model())
+        assert isinstance(result, SolverResult)
+        assert len(calls) == 1
+        assert calls[0][0] == "0x" + bytes(solver._signer.account_id).hex()
+        assert calls[0][1] == "http://faucet"
+        assert "wait_for" in captured  # propose_job was submitted
+
+    def test_callable_false_cancels_and_skips_the_faucet(self, monkeypatch) -> None:
+        from xqsa.quip import QuipCancelledError
+
+        calls: list[tuple] = []
+        solver, _iface = _solve_ready_short(monkeypatch, autofund=lambda quote: False)
+        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: calls.append((dest, kwargs)))
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipCancelledError):
+            solver.solve(_model())
+        assert calls == []
+        assert "wait_for" not in captured
+
+    def test_requests_the_default_drip_without_an_amount(self, monkeypatch) -> None:
+        solver, iface = _solve_ready_short(monkeypatch)
+        calls: list[dict] = []
+
+        def fake_fund(dest, **kwargs):
+            calls.append(kwargs)
+            iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
+            return {}
+
+        monkeypatch.setattr("xqsa.quip.fund_from_faucet", fake_fund)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        solver.solve(_model())
+        assert calls == [{"url": "http://faucet"}]
+
+    def test_shortfall_beyond_one_drip_raises_without_asking(self, monkeypatch) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        asked: list = []
+        funded: list = []
+        # 20 AGLS reward on an empty account: twice a drip, the mistyped-reward case.
+        solver, _iface = _solve_ready_short(
+            monkeypatch,
+            reward=20 * UNIT,
+            autoconfirm=lambda quote: asked.append(quote) or True,
+            autofund=lambda quote: asked.append(quote) or True,
+        )
+        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: funded.append(dest))
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipSubmissionError, match="more than one faucet drip"):
+            solver.solve(_model())
+        assert asked == []
+        assert funded == []
+        assert "wait_for" not in captured
+
+    def test_balance_above_the_faucet_ceiling_raises_without_asking(self, monkeypatch) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        asked: list = []
+        funded: list = []
+        # 12 AGLS held, 13 needed: a 1 AGLS shortfall, but the faucet refuses an account above one drip.
+        solver, _iface = _solve_ready_short(
+            monkeypatch,
+            balance=12 * UNIT,
+            reward=13 * UNIT,
+            autoconfirm=lambda quote: asked.append(quote) or True,
+            autofund=lambda quote: asked.append(quote) or True,
+        )
+        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: funded.append(dest))
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipSubmissionError, match="at most one drip"):
+            solver.solve(_model())
+        assert asked == []
+        assert funded == []
+        assert "wait_for" not in captured
+
+    def test_false_no_tty_cancels_without_funding(self, monkeypatch) -> None:
+        from xqsa.quip import QuipCancelledError
+
+        calls: list = []
+        solver, _iface = _solve_ready_short(monkeypatch, autofund=False)
+        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: calls.append(dest))
+        monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=False))
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipCancelledError, match="autofund=lambda q"):
+            solver.solve(_model())
+        assert calls == []
+        assert "wait_for" not in captured
+
+    def test_faucet_error_propagates_without_proposing(self, monkeypatch) -> None:
+        from xqsa.quip_faucet import QuipFaucetError
+
+        solver, _iface = _solve_ready_short(monkeypatch)
+
+        def refuse(dest, *, url, amount=None):
+            raise QuipFaucetError(403, {"error": "destination already funded"}, "refused")
+
+        monkeypatch.setattr("xqsa.quip.fund_from_faucet", refuse)
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipFaucetError):
+            solver.solve(_model())
+        assert "wait_for" not in captured
+
+    def test_prompt_goes_to_stderr(self, monkeypatch) -> None:
+        solver, iface = _solve_ready_short(monkeypatch, autofund=False)
+
+        def fake_fund(dest, *, url, amount=None):
+            iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
+            return {}
+
+        monkeypatch.setattr("xqsa.quip.fund_from_faucet", fake_fund)
+        monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
+        stderr = _FakeTTY(isatty=True)
+        monkeypatch.setattr(sys, "stderr", stderr)
+        monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        solver.solve(_model())
+        assert "Fund 0x" in "".join(stderr.written)
+
+    def test_prompt_goes_to_stdout_when_stderr_is_redirected(self, monkeypatch) -> None:
+        solver, iface = _solve_ready_short(monkeypatch, autofund=False)
+
+        def fake_fund(dest, *, url, amount=None):
+            iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
+            return {}
+
+        monkeypatch.setattr("xqsa.quip.fund_from_faucet", fake_fund)
+        monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
+        stderr, stdout = _FakeTTY(isatty=False), _FakeTTY(isatty=True)
+        monkeypatch.setattr(sys, "stderr", stderr)
+        monkeypatch.setattr(sys, "stdout", stdout)
+        monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        solver.solve(_model())
+        shown = "".join(stdout.written)
+        assert "Fund 0x" in shown
+        assert "[quip] job quote" in shown
+        assert stderr.written == []
+
+    def test_no_faucet_raises_before_the_autofund_gate(self, monkeypatch) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        calls: list = []
+        solver, _iface = _solve_ready_short(
+            monkeypatch,
+            faucet=None,
+            autoconfirm=lambda quote: calls.append(quote) or True,
+            autofund=lambda quote: calls.append(quote) or True,
+        )
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipSubmissionError, match="insufficient balance"):
+            solver.solve(_model())
+        assert calls == []  # neither gate is asked when no faucet is configured
+        assert "wait_for" not in captured
+
+    def test_balance_never_rises_raises_after_the_wait(self, monkeypatch) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        solver, _iface = _solve_ready_short(monkeypatch)
+        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: {})
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        _force_timeout(monkeypatch)  # xqsa.quip.time.monotonic: 0.0 then 100.0, past FUND_WAIT_SECONDS
+        with pytest.raises(QuipSubmissionError, match="insufficient balance"):
+            solver.solve(_model())
+
+    def test_autoconfirm_declined_stops_before_the_autofund_gate(self, monkeypatch) -> None:
+        from xqsa.quip import QuipCancelledError
+
+        calls: list = []
+        solver, _iface = _solve_ready_short(monkeypatch, autoconfirm=lambda quote: False)
+        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: calls.append((dest, kwargs)))
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipCancelledError):
+            solver.solve(_model())
+        assert calls == []
+        assert "wait_for" not in captured
+
+
+def test_fee_is_priced_on_a_disarmed_copy_never_the_submitted_bytes(monkeypatch) -> None:
+    solver = _solve_ready(monkeypatch)
+    captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+    solver.solve(_model())
+    (method, params), *_ = solver._iface.rpc_calls
+    assert method == "payment_queryInfo"
+    assert params == ["0x" + (b"disarmed:" + b"\x00\x01").hex()]
+    assert captured["submitted_wire"] == b"\x00\x01"
+
+
+@pytest.mark.parametrize("stream", ["stdin", "stderr"])
+def test_gates_and_display_survive_a_missing_stream(monkeypatch, stream) -> None:
+    # pythonw and some daemons run with sys.stdin / sys.stderr set to None.
+    from xqsa.quip import QuipCancelledError
+
+    solver = _solve_ready(monkeypatch, autoconfirm=False)
+    _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+    monkeypatch.setattr(sys, stream, None)
+    # Not a terminal, so autoconfirm=False declines instead of raising AttributeError.
+    with pytest.raises(QuipCancelledError, match="not a terminal"):
+        solver.solve(_model())

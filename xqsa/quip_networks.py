@@ -45,7 +45,7 @@ class QuipNetwork:
 
     Attributes:
         rpc: Websocket RPC endpoint, passed to ``SolverQuip`` as ``url``.
-        faucet: Base URL of the network's faucet. Nothing reads it yet.
+        faucet: Base URL of the network's faucet, passed to ``SolverQuip`` as ``faucet``.
     """
 
     rpc: str
