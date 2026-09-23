@@ -37,7 +37,7 @@ URL = "http://localhost:20049/api/faucet"
 def _skip_ssl_context(monkeypatch):
     """Stub out CA bundle resolution and TLS context creation; not under test here."""
     monkeypatch.setattr("xqsa.quip_faucet.quip_metadata._default_ca_bundle", lambda: None)
-    monkeypatch.setattr("xqsa.quip_faucet.ssl.create_default_context", lambda cafile=None: object())
+    monkeypatch.setattr("xqsa.quip_faucet.ssl.create_default_context", lambda **kwargs: object())
 
 
 def _response(body: dict, status: int = 200):
@@ -213,9 +213,27 @@ def test_rate_limit_beyond_cap_raises_without_sleeping(mock_urlopen, mock_sleep)
     mock_sleep.assert_not_called()
 
 
+@pytest.mark.parametrize("kind", ["file", "dir", "missing"])
+def test_ca_bundle_env_is_read_like_websocket_client(monkeypatch, tmp_path, kind):
+    # A file is a cafile, a directory a capath, and a missing path is ignored.
+    bundle = tmp_path / "ca.pem"
+    if kind == "file":
+        bundle.write_text("")
+    elif kind == "dir":
+        bundle.mkdir()
+    monkeypatch.setenv("WEBSOCKET_CLIENT_CA_BUNDLE", str(bundle))
+    monkeypatch.setattr("xqsa.quip_faucet.quip_metadata._default_ca_bundle", lambda: "/certifi.pem")
+    seen: list[dict] = []
+    monkeypatch.setattr("xqsa.quip_faucet.ssl.create_default_context", lambda **kwargs: seen.append(kwargs))
+    with patch("xqsa.quip_faucet.urllib.request.urlopen", return_value=_response({"amount": 1})):
+        fund_from_faucet(DEST, url=URL)
+    expected = {"file": {"cafile": str(bundle)}, "dir": {"capath": str(bundle)}, "missing": {"cafile": "/certifi.pem"}}
+    assert seen == [expected[kind]]
+
+
 def test_bad_ca_bundle_raises_faucet_error(monkeypatch):
-    def boom(cafile=None):
-        raise FileNotFoundError(cafile)
+    def boom(**kwargs):
+        raise FileNotFoundError(kwargs)
 
     monkeypatch.setattr("xqsa.quip_faucet.ssl.create_default_context", boom)
     with pytest.raises(QuipFaucetError) as excinfo:

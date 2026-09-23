@@ -80,7 +80,8 @@ def _post_request(url: str, dest: str, amount: int | None, timeout: float) -> tu
         payload["amount"] = amount
     # Verifies TLS with the same CA default as xqsa.quip_metadata.connect, so
     # an https:// faucet works on macOS without an exported SSL_CERT_FILE.
-    # ssl ignores WEBSOCKET_CLIENT_CA_BUNDLE, so it is honoured here explicitly.
+    # ssl ignores WEBSOCKET_CLIENT_CA_BUNDLE, so it is honoured here explicitly,
+    # the way websocket-client reads it: a file, a directory, or ignored when missing.
     try:
         req = urllib.request.Request(
             url,
@@ -88,8 +89,13 @@ def _post_request(url: str, dest: str, amount: int | None, timeout: float) -> tu
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        cafile = os.environ.get("WEBSOCKET_CLIENT_CA_BUNDLE") or quip_metadata._default_ca_bundle()
-        context = ssl.create_default_context(cafile=cafile)
+        bundle = os.environ.get("WEBSOCKET_CLIENT_CA_BUNDLE", "")
+        if os.path.isfile(bundle):
+            context = ssl.create_default_context(cafile=bundle)
+        elif os.path.isdir(bundle):
+            context = ssl.create_default_context(capath=bundle)
+        else:
+            context = ssl.create_default_context(cafile=quip_metadata._default_ca_bundle())
         with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:  # noqa: S310 -- operator-supplied faucet URL
             return resp.status, _json_object(resp.read())
     except urllib.error.HTTPError as exc:
