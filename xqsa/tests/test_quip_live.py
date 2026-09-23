@@ -540,7 +540,7 @@ class TestEndToEnd:
         """A K6 model, which the default topology cannot place, solves in native mode."""
         model = _dense_spin_model()
         solver = make_solver()
-        if not NATIVE_MODE:
+        if not TOPOLOGY_OVERRIDE:  # the chain default; a registered override may hold K6.
             with pytest.raises(PlacementError):
                 solver._job_for(model, None, None)
         result = solver.solve(model, topology="native")
