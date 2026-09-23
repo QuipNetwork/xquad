@@ -162,6 +162,11 @@ MINEABLE_TOPOLOGIES_STORAGE = "MineableTopologies"
 NATIVE_TOPOLOGY = "native"
 
 
+def _is_native(topology: str | None) -> bool:
+    """Return whether a ``topology`` value selects native mode (case and whitespace ignored)."""
+    return (topology or "").strip().lower() == NATIVE_TOPOLOGY
+
+
 @dataclass(frozen=True)
 class JobQuote:
     """What proposing one job costs, and whether the account can pay for it.
@@ -518,7 +523,7 @@ class SolverQuip(Solver):
         env_topology = os.environ.get("QUIP_TOPOLOGY")
         # Native mode names no chain topology, so it wins before the chain
         # default is read and before the hash shape check.
-        if (topology or env_topology or "").strip() == NATIVE_TOPOLOGY:
+        if _is_native(topology or env_topology):
             logger.debug("native topology resolved from %s", "topology=" if topology else "QUIP_TOPOLOGY")
             return NATIVE_TOPOLOGY
         resolved = topology or env_topology or self._chain_default_topology()
@@ -592,10 +597,12 @@ class SolverQuip(Solver):
         reading a registered one.
 
         Raises:
-            ValueError: if no topology hash is configured.
+            ValueError: if no topology hash is configured, or the key is native.
             QuipConnectionError: if the topology is not registered on-chain.
         """
         key = topology_hash or self._topology_hash
+        if _is_native(key):
+            raise ValueError("native mode has no registered topology to fetch")
         if not key:
             raise ValueError(
                 "no topology hash configured. Pass topology= or set QUIP_TOPOLOGY "
@@ -1135,7 +1142,7 @@ class SolverQuip(Solver):
         Raises:
             ValueError: if ``mapping`` is given in native mode.
         """
-        if (topology or self._topology_hash) == NATIVE_TOPOLOGY:
+        if _is_native(topology or self._topology_hash):
             if mapping is not None:
                 raise ValueError(
                     f"mapping= cannot be combined with topology={NATIVE_TOPOLOGY!r}: native mode "
