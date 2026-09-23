@@ -55,6 +55,7 @@ from xqsa.quip_codec import (
     is_final,
     ising_energy_milli,
     model_to_ising,
+    native_placement,
 )
 from xqsa.solver import SolverResult
 from xqvm_py.xqmx import XQMX, XQMXDomain, compute_energy
@@ -408,6 +409,78 @@ class TestModelToIsing:
         assert job.mapping == {0: 3, 1: 4}
         assert job.nodes == (3, 4)
         assert job.j_values[job.topology.edge_index(3, 4)] == MILLI_SCALE
+
+
+# ---------------------------------------------------------------------------
+# native_placement
+# ---------------------------------------------------------------------------
+
+
+class TestNativePlacement:
+    """native_placement: building a topology from a model's own coupling graph."""
+
+    def test_full_graph_identity_mapping(self) -> None:
+        """A model already labelled 0..n-1, fully coupled, relabels to itself."""
+        n = 28
+        model = XQMX.spin_model(n)
+        for i in range(n):
+            model.set_linear(i, 1 if i % 2 == 0 else -1)
+        for u, v in itertools.combinations(range(n), 2):
+            model.set_quadratic(u, v, 1.0)
+
+        topo, mapping = native_placement(model)
+        assert mapping == {i: i for i in range(n)}
+
+        job = model_to_ising(model, topo, mapping=mapping)
+        assert job.nodes == tuple(range(n))
+        assert len(job.edges) == 378  # C(28, 2)
+
+    def test_sparse_variables_relabel_by_rank(self) -> None:
+        """Non-contiguous participating variables relabel to dense ranks."""
+        model = XQMX.spin_model(10)
+        model.set_quadratic(0, 5, 1.0)
+        model.set_quadratic(5, 9, -1.0)
+
+        topo, mapping = native_placement(model)
+        assert topo.nodes == (0, 1, 2)
+        assert topo.edges == ((0, 1), (1, 2))
+        assert mapping == {0: 0, 5: 1, 9: 2}
+
+        job = model_to_ising(model, topo, mapping=mapping)
+        spins = [1, -1, 1]  # node0(var0)=+1, node1(var5)=-1, node2(var9)=+1
+        sample = decode_solution(job, spins, model)
+        assert sample.get_linear(0) == 1
+        assert sample.get_linear(5) == -1
+        assert sample.get_linear(9) == 1
+
+    def test_binary_matches_model_to_ising_on_a_permissive_topology(self) -> None:
+        """The native placement covers the same variables and coefficients as
+        model_to_ising against a topology permissive enough to admit any mapping."""
+        model = XQMX.binary_model(6)
+        model.set_linear(0, 1)
+        model.set_linear(2, -1)
+        model.set_quadratic(0, 2, 2)
+        model.set_quadratic(2, 4, -3)
+        model.set_quadratic(0, 4, 1)
+
+        native_topo, native_mapping = native_placement(model)
+        native_job = model_to_ising(model, native_topo, mapping=native_mapping)
+
+        permissive = Topology.of(range(100), itertools.combinations(range(100), 2))
+        placed_job = model_to_ising(model, permissive)
+
+        assert set(native_job.mapping) == set(placed_job.mapping)
+        assert sorted(native_job.h_values) == sorted(placed_job.h_values)
+        assert sorted(native_job.j_values) == sorted(placed_job.j_values)
+
+    def test_no_allowed_value_sets(self) -> None:
+        """A native topology carries no allowed-value sets."""
+        model = XQMX.spin_model(2)
+        model.set_quadratic(0, 1, 1)
+        topo, _mapping = native_placement(model)
+        assert topo.allowed_h is None
+        assert topo.allowed_j is None
+        assert topo.allowed_spin is None
 
 
 # ---------------------------------------------------------------------------
@@ -1740,6 +1813,14 @@ def _job(solver) -> IsingJob:
     return model_to_ising(_model(), solver._fetch_topology())
 
 
+def _k5_model() -> XQMX:
+    """A 5-variable complete-graph SPIN model no path topology (e.g. TOPO_HASH) can place."""
+    model = XQMX.spin_model(5)
+    for u, v in itertools.combinations(range(5), 2):
+        model.set_quadratic(u, v, 1.0)
+    return model
+
+
 def _spin_vector(job: IsingJob, var_spins: dict[int, int], default: int = 1) -> list[int]:
     """Build a full per-node spin vector with the given variable spins."""
     vector = [default] * job.topology.num_nodes
@@ -2085,6 +2166,132 @@ class TestSolverQuipQuery:
         with pytest.raises(QuipJobFailedError):
             solver.query(1, _model())
         assert captured["call_function"] == "reclaim_order"
+
+
+class TestSolverQuipNativeTopology:
+    """topology="native" / QUIP_TOPOLOGY=native: submit over the model's own coupling graph."""
+
+    @staticmethod
+    def _iface_refusing_chain_default() -> FakeSubstrate:
+        """A FakeSubstrate whose DefaultTopology read raises, to catch a stray call."""
+        iface = _default_iface()
+
+        def _boom(module, name, params=None):
+            if (module, name) == ("QuantumPow", "DefaultTopology"):
+                raise AssertionError("QuantumPow.DefaultTopology must not be read in native mode")
+            return _StorageEntry(iface.storage.get((module, name)))
+
+        iface.query = _boom
+        return iface
+
+    def test_env_native_resolves_without_reading_chain_default(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        iface = self._iface_refusing_chain_default()
+        _install(monkeypatch, iface)
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_TOPOLOGY", "native")
+        solver = SolverQuip(url="ws://fake", seed=VALID_SEED)
+        assert solver._topology_hash == "native"
+
+    def test_arg_native_resolves_without_reading_chain_default(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        iface = self._iface_refusing_chain_default()
+        _install(monkeypatch, iface)
+        _clear_quip_env(monkeypatch)
+        solver = SolverQuip(url="ws://fake", seed=VALID_SEED, topology="native")
+        assert solver._topology_hash == "native"
+
+    def test_env_native_whitespace_resolves(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        iface = self._iface_refusing_chain_default()
+        _install(monkeypatch, iface)
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_TOPOLOGY", " native ")
+        solver = SolverQuip(url="ws://fake", seed=VALID_SEED)
+        assert solver._topology_hash == "native"
+
+    def test_native_solver_places_a_model_the_default_topology_cannot(self, monkeypatch) -> None:
+        # K5 needs degree 4 at every node; TOPO_HASH (a 5-node path) tops out at
+        # degree 2, so this would raise PlacementError against the chain default.
+        solver = _make_solver(monkeypatch, iface=_default_iface(balance=10 * UNIT), topology="native")
+
+        def _fail(*args, **kwargs):
+            raise AssertionError("_fetch_topology must not be called in native mode")
+
+        monkeypatch.setattr(solver, "_fetch_topology", _fail)
+        _patch_signing(monkeypatch, solver)
+        quote = solver.quote(_k5_model())
+        assert quote is not None
+
+    def test_per_call_native_override_places_k5_that_default_topology_rejects(self, monkeypatch) -> None:
+        iface = _chain_iface(order=_order(), head=200)
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        model = _k5_model()
+
+        job = solver._job_for(model, "native", None)
+        assert job.nodes == (0, 1, 2, 3, 4)
+
+        with pytest.raises(PlacementError):
+            solver._job_for(model, None, None)
+
+    def test_per_call_hash_override_on_native_solver_uses_fetch_topology(self, monkeypatch) -> None:
+        iface = _chain_iface(order=_order(), head=200)
+        solver = _make_solver(monkeypatch, iface=iface, topology="native")
+        model = _model()
+
+        calls: list[str | None] = []
+        original_fetch = solver._fetch_topology
+
+        def _tracking_fetch(topology_hash=None):
+            calls.append(topology_hash)
+            return original_fetch(topology_hash)
+
+        monkeypatch.setattr(solver, "_fetch_topology", _tracking_fetch)
+        job = solver._job_for(model, TOPO_HASH, None)
+        assert calls == [TOPO_HASH]
+        assert job.nodes  # a job was actually built against the fetched topology.
+
+    def test_query_native_rederives_the_same_job_prepare_built(self, monkeypatch) -> None:
+        iface = _chain_iface(order=_order(), head=200)
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        model = _k5_model()
+        _patch_signing(monkeypatch, solver)
+
+        prepared_job, _wire, _hash, _quote = solver._prepare(model, {"topology": "native"})
+
+        captured: dict = {}
+
+        def _fake_collect(order_id, job, model_arg, *, elapsed):
+            captured["job"] = job
+            return SolverResult(sample=model_arg, energy=0, timing=elapsed, metadata={})
+
+        monkeypatch.setattr(solver, "_collect_result", _fake_collect)
+        solver.query(1, model, topology="native")
+
+        queried_job = captured["job"]
+        assert queried_job.nodes == prepared_job.nodes
+        assert queried_job.edges == prepared_job.edges
+        assert queried_job.h_values == prepared_job.h_values
+        assert queried_job.j_values == prepared_job.j_values
+        assert dict(queried_job.mapping) == dict(prepared_job.mapping)
+
+    def test_native_topology_rejects_explicit_mapping(self, monkeypatch) -> None:
+        iface = _chain_iface(order=_order(), head=200)
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        model = _model()
+        explicit_mapping = {0: 0, 1: 1}
+
+        with pytest.raises(ValueError, match="mapping"):
+            solver._job_for(model, "native", explicit_mapping)
+
+        with pytest.raises(ValueError, match="mapping"):
+            solver.quote(model, topology="native", mapping=explicit_mapping)
+
+        with pytest.raises(ValueError, match="mapping"):
+            solver.query(1, model, topology="native", mapping=explicit_mapping)
 
 
 # ---------------------------------------------------------------------------
