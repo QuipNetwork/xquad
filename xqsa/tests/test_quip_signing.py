@@ -446,14 +446,18 @@ class TestBuildSignedExtrinsic:
         assert quip_signer.verify_envelope(digest, envelope, signer.account_id)
         assert not quip_signer.verify_envelope(payload, envelope, signer.account_id)
 
-    def test_disarmed_copy_keeps_length_and_fails_verification(self) -> None:
+    # 300 bytes gives a 2-byte length prefix; 17000 crosses into the 4-byte mode.
+    @pytest.mark.parametrize("call_len", [300, 17_000])
+    def test_disarmed_copy_keeps_length_and_fails_verification(self, call_len: int) -> None:
         signer = signer_from_seed(SEED)
-        iface = FakeIface(call_bytes=bytes(i % 256 for i in range(300)), nonce=0, spec_version=1, tx_version=1)
+        iface = FakeIface(call_bytes=bytes(i % 256 for i in range(call_len)), nonce=0, spec_version=1, tx_version=1)
         wire, _ = build_signed_extrinsic(iface, signer, "QuantumComputeMempool", "propose_job", {})
         disarmed = quip_signing.disarm_extrinsic(wire)
 
+        prefix_len = {0: 1, 1: 2, 2: 4}[wire[0] & 0b11]
+        changed = [i for i, (a, b) in enumerate(zip(wire, disarmed, strict=True)) if a != b]
         assert len(disarmed) == len(wire)
-        assert sum(a != b for a, b in zip(wire, disarmed, strict=True)) == 1
+        assert changed == [prefix_len + 2 + 32 + HYBRID_PUBLIC_LEN + 1]
         account, envelope, rest = _decode_wire(disarmed)
         assert (account, rest) == _decode_wire(wire)[::2]
         extra, additional = quip_signing._signed_extensions(
@@ -467,6 +471,15 @@ class TestBuildSignedExtrinsic:
     def test_disarm_rejects_a_frame_that_is_not_signed(self) -> None:
         with pytest.raises(QuipSigningError, match="cannot disarm"):
             quip_signing.disarm_extrinsic(b"\x04\x00")
+
+    def test_disarm_rejects_a_frame_with_another_version_byte(self) -> None:
+        signer = signer_from_seed(SEED)
+        wire, _ = build_signed_extrinsic(FakeIface(), signer, "QuantumComputeMempool", "propose_job", {})
+        prefix_len = {0: 1, 1: 2, 2: 4}[wire[0] & 0b11]
+        tampered = bytearray(wire)
+        tampered[prefix_len] = 0x05
+        with pytest.raises(QuipSigningError, match="cannot disarm"):
+            quip_signing.disarm_extrinsic(bytes(tampered))
 
     def test_call_composed_with_given_module_and_params(self) -> None:
         signer = signer_from_seed(SEED)

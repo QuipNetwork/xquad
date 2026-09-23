@@ -690,11 +690,11 @@ class SolverQuip(Solver):
 
         ``payment_queryInfo`` dry-runs the fee of a signed extrinsic, so the
         answer tracks the live runtime rather than a formula copied from it.
-        ``wire`` itself never leaves this process here; see
-        :func:`xqsa.quip_signing.disarm_extrinsic`. ``partialFee`` arrives as a decimal string, ``0x`` hex, or an int
-        depending on the node. Any failure falls back to
-        :data:`FEE_HEADROOM_PLANCK` with ``exact`` false rather than blocking
-        the solve on a price estimate.
+        ``wire`` itself never leaves this process here; the node prices a
+        copy from :func:`xqsa.quip_signing.disarm_extrinsic`. ``partialFee``
+        arrives as a decimal string, ``0x`` hex, or an int depending on the
+        node. Any failure falls back to :data:`FEE_HEADROOM_PLANCK` with
+        ``exact`` false rather than blocking the solve on a price estimate.
         """
         try:
             # Price a copy whose signature fails: the node sees a frame it can
@@ -1227,8 +1227,9 @@ class SolverQuip(Solver):
             QuipConnectionError: if a chain read faults (transport/decode) while
                 resolving the topology, the order, or the account balance.
             QuipSubmissionError: if the account cannot cover the quote and no
-                faucet is configured or the drip does not land, or if proposing
-                the job fails.
+                faucet is configured, the shortfall exceeds one faucet drip, or
+                the drip does not land; or if proposing the job fails. The
+                first two are raised before either gate is asked.
             QuipCancelledError: if the ``autoconfirm`` or ``autofund`` gate
                 declines (carries the quote).
             QuipFaucetError: if the faucet refuses or cannot be reached.
@@ -1238,13 +1239,15 @@ class SolverQuip(Solver):
         """
         job, wire, ext_hash, quote = self._prepare(model, kwargs)
         self._display(quote)
+        # A shortfall no drip can cover fails whatever the gates say, so raise
+        # it before asking anyone to confirm a job that cannot go out.
+        if quote.shortfall_planck > DEFAULT_DRIP_PLANCK:
+            raise self._insufficient_error(quote, beyond_drip=True)
+        if quote.shortfall_planck and not self._faucet:
+            raise self._insufficient_error(quote)
         total = f"{_format_planck(quote.total_planck, quote.token_decimals)} {quote.token_symbol}"
         self._pass_gate(self._autoconfirm, quote, name="autoconfirm", question=f"Submit this job for {total}?")
         if quote.shortfall_planck:
-            if not self._faucet:
-                raise self._insufficient_error(quote)
-            if quote.shortfall_planck > DEFAULT_DRIP_PLANCK:
-                raise self._insufficient_error(quote, beyond_drip=True)
             self._pass_gate(
                 self._autofund,
                 quote,

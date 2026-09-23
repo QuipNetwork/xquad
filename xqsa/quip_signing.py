@@ -431,7 +431,12 @@ def disarm_extrinsic(wire: bytes) -> bytes:
         None,
     )
     header_len = 2 + ACCOUNT_ID_LEN  # version byte, MultiAddress::Id tag, account
-    if prefix_len is None or len(wire) < prefix_len + header_len + HYBRID_ENVELOPE_LEN:
+    if (
+        prefix_len is None
+        or len(wire) < prefix_len + header_len + HYBRID_ENVELOPE_LEN
+        or wire[prefix_len] != EXTRINSIC_VERSION_SIGNED
+        or wire[prefix_len + 1] != MULTI_ADDRESS_ID
+    ):
         raise QuipSigningError("not a signed extrinsic frame; cannot disarm it")
     offset = prefix_len + header_len + HYBRID_PUBLIC_LEN + 1
     disarmed = bytearray(wire)

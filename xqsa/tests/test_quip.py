@@ -2636,7 +2636,10 @@ class TestSolveAutofundGate:
         funded: list = []
         # 20 AGLS reward on an empty account: twice a drip, the mistyped-reward case.
         solver, _iface = _solve_ready_short(
-            monkeypatch, reward=20 * UNIT, autofund=lambda quote: asked.append(quote) or True
+            monkeypatch,
+            reward=20 * UNIT,
+            autoconfirm=lambda quote: asked.append(quote) or True,
+            autofund=lambda quote: asked.append(quote) or True,
         )
         monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: funded.append(dest))
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
@@ -2714,12 +2717,15 @@ class TestSolveAutofundGate:
 
         calls: list = []
         solver, _iface = _solve_ready_short(
-            monkeypatch, faucet=None, autofund=lambda quote: calls.append(quote) or True
+            monkeypatch,
+            faucet=None,
+            autoconfirm=lambda quote: calls.append(quote) or True,
+            autofund=lambda quote: calls.append(quote) or True,
         )
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         with pytest.raises(QuipSubmissionError, match="insufficient balance"):
             solver.solve(_model())
-        assert calls == []  # the autofund gate is never asked with no faucet configured
+        assert calls == []  # neither gate is asked when no faucet is configured
         assert "wait_for" not in captured
 
     def test_balance_never_rises_raises_after_the_wait(self, monkeypatch) -> None:
