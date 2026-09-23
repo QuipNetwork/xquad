@@ -2334,6 +2334,12 @@ class TestSolverQuipNativeTopology:
         with pytest.raises(ValueError, match="mapping"):
             solver.query(1, model, topology="native", mapping=explicit_mapping)
 
+    def test_query_rejects_native_mapping_before_the_order_is_final(self, monkeypatch) -> None:
+        iface = _chain_iface(order=_order(status="Opened"), head=50)
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        with pytest.raises(ValueError, match="mapping"):
+            solver.query(1, _model(), topology="native", mapping={0: 0, 1: 1})
+
 
 # ---------------------------------------------------------------------------
 # JobQuote: arithmetic, formatting, and solver.quote() / _display / _insufficient_error

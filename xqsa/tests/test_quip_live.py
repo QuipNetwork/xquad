@@ -61,7 +61,6 @@ pytest.importorskip(
 
 from xqsa.quip import (
     MEMPOOL_PALLET,
-    NATIVE_TOPOLOGY,
     PROPOSE_JOB_CALL,
     QuipJobFailedError,
     QuipSubmissionError,
@@ -69,6 +68,7 @@ from xqsa.quip import (
     SolverQuip,
     _as_hex,
     _canonical_hex,
+    _is_native,
     _require_h256,
 )
 from xqsa.quip_codec import DEFAULT_ISING_SPEC_ID, PlacementError
@@ -85,7 +85,7 @@ FAUCET_URL = os.environ.get("QUIP_FAUCET_URL")
 # QUIP_TOPOLOGY=native names no registered hash, so the tests that read a
 # topology by hash skip under it.
 TOPOLOGY_OVERRIDE = os.environ.get("QUIP_TOPOLOGY")
-NATIVE_MODE = (TOPOLOGY_OVERRIDE or "").strip() == NATIVE_TOPOLOGY
+NATIVE_MODE = _is_native(TOPOLOGY_OVERRIDE)
 requires_hash_topology = pytest.mark.skipif(
     NATIVE_MODE,
     reason="assumes a chain-registered topology hash; QUIP_TOPOLOGY=native resolves none",
