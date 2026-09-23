@@ -143,7 +143,8 @@ matched and solved like any other.
 Passing `topology="native"` builds the topology from the model's own
 variables and couplings instead of reading one from the chain. It is
 accepted on the constructor, per call on `solve()`, `quote()` and
-`query()`, and through `QUIP_TOPOLOGY=native`:
+`query()`, and through `QUIP_TOPOLOGY=native`, matched without regard
+to case or surrounding whitespace:
 
 ```python
 result = solver.solve(model, topology="native")
