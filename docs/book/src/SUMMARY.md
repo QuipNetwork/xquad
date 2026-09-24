@@ -32,6 +32,7 @@
 - [Local Solvers](solving/local.md)
 - [D-Wave QPU](solving/dwave-qpu.md)
 - [Quip Network](solving/quip-network.md)
+  - [Your First Quip Job](solving/quip-first-job.md)
 - [Energy and Precision](solving/energy-and-precision.md)
 
 # Part IV -- Examples and Recipes
