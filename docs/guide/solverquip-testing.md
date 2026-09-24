@@ -215,8 +215,11 @@ is non-persistent and order ids reset, so never hard-code one.
   set `PUID=0` / `PGID=0`.
 - **Faucet:** on a fresh bring-up the miner's first requests hit
   `Connection refused` for ~30s until the faucet is up, then fund on retry
-  (expected). A repeat request for the same account returns HTTP 429
-  (rate-limited); use a fresh keystore per test if you hit the limit.
+  (expected). After that the faucet's two gates apply, as described
+  for Option B below: a repeat request inside the ~5s window is a 429
+  that `fund_from_faucet` retries once, and an account already holding
+  more than one drip gets a 403 that is not retried. Start from an
+  empty keystore, or spend the account below one drip.
 
 ## Option B -- the public aglais network
 
@@ -238,8 +241,18 @@ what the signing layer speaks.
 - **Faucet:** the `aglais` preset's faucet coordinate in
   `xqsa/quip_networks.py` is the source of truth, healthy as of 2026-09-15
   (`/health` returns `{"status":"ok"}`; the bare root returns 404, which is not a
-  fault). Set `QUIP_FAUCET_URL` to it and the funded tier runs. A repeat request
-  for the same account is rate-limited, so use a fresh keystore per run.
+  fault). Set `QUIP_FAUCET_URL` to it and the funded tier runs. The faucet
+  [gates requests two ways](https://gitlab.com/quip.network/faucet/-/blob/10ca67676777da0031be5bf8dd2f9ed6967d269a/README.md?plain=1#L54-62). A `429` with
+  `retry_after_seconds` is the per-destination rate limit, a window of
+  about 5s. A `429` without `retry_after_seconds` is a
+  [duplicate request still in flight](https://gitlab.com/quip.network/faucet/-/blob/10ca67676777da0031be5bf8dd2f9ed6967d269a/src/handlers.rs#L87-90) for the
+  same destination. Both are retryable, and `fund_from_faucet` retries
+  a `429` once, waiting 5s when no `retry_after_seconds` is given. A
+  `403` `destination already funded` with
+  `free_balance_plancks` is the balance ceiling: the faucet refuses any
+  account holding more than one drip (10 AGLS), and it is not retryable.
+  Spending below the ceiling makes the account eligible again, so there is
+  no lifetime quota; a fresh keystore works because it starts empty.
 - **Block time:** ~6s.
 - **Runtime:** advances over time (`specVersion 117` / `transactionVersion 7`,
   read live on 2026-09-15). ALWAYS re-check with `state_getRuntimeVersion` before

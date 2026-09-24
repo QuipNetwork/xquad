@@ -835,7 +835,7 @@ def test_i32_overflow_error_carries_doc_link() -> None:
 # A valid 32-byte seed so the real quip_signer (when built) accepts it; the
 # mock accepts anything.
 VALID_SEED = "0x" + "01" * 32
-UNIT = 1_000_000_000_000  # 1 tQUIP in planck (chain MinReward default).
+UNIT = 1_000_000_000_000  # 1 AGLS in planck (chain MinReward default).
 # Stand-in for a deployment's QuantumPow.DefaultTopology. The real hash is
 # per-deployment and read from the chain; nothing is pinned in the codebase.
 DEFAULT_TOPOLOGY_HASH = "0x" + "cb" * 32
