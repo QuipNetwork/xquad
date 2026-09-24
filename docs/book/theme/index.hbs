@@ -124,18 +124,38 @@
         <script>
             let sidebar = null;
             const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
-            if (document.body.clientWidth >= 1080) {
-                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
-                sidebar = sidebar || 'visible';
-            } else {
-                sidebar = 'hidden';
-                sidebar_toggle.checked = false;
+            // A webview can report 0 mid-navigation; treat that as unknown, not narrow.
+            // Place the sidebar as if wide, then place it again once the page has a real
+            // width, and hold off the slide transition until then so the jump from 0
+            // does not animate the sidebar shut and open.
+            function place(width) {
+                if (width >= 1080) {
+                    try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                    sidebar = sidebar || 'visible';
+                } else {
+                    sidebar = 'hidden';
+                }
+                sidebar_toggle.checked = sidebar === 'visible';
+                html.classList.toggle('sidebar-visible', sidebar === 'visible');
             }
-            if (sidebar === 'visible') {
-                sidebar_toggle.checked = true;
-            } else {
-                html.classList.remove('sidebar-visible');
-            }
+            const width = document.body.clientWidth;
+            html.classList.add('sidebar-resizing');
+            place(width === 0 ? 1080 : width);
+            // Stop after 120 frames of 0. Browsers throttle or pause animation frames in a
+            // hidden or zero-width frame, so the wait costs nothing there.
+            (function settle(frames) {
+                requestAnimationFrame(() => {
+                    const real = document.body.clientWidth;
+                    if (real === 0 && frames < 120) {
+                        settle(frames + 1);
+                        return;
+                    }
+                    if (width === 0 && real > 0) {
+                        place(real);
+                    }
+                    requestAnimationFrame(() => html.classList.remove('sidebar-resizing'));
+                });
+            })(0);
         </script>
 
         <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">

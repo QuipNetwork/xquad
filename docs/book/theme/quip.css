@@ -167,3 +167,36 @@ pre.mermaid > svg {
     max-width: 100%;
     height: auto;
 }
+
+/* -- Sidebar "on this page" reveal ----------------------------------- */
+
+/*
+ * mdBook inserts the current page's headings under its sidebar entry once
+ * the page loads, which pops the rest of the list down in one frame. Grow
+ * the block from zero height instead: a grid row animated from 0fr to 1fr
+ * reaches the content's natural height without a fixed max-height.
+ */
+@media (prefers-reduced-motion: no-preference) {
+    .on-this-page {
+        display: grid;
+        animation: quip-on-this-page-reveal 220ms ease-out;
+    }
+
+    /* clip, with a margin, so the heading links' focus outlines stay visible. */
+    .on-this-page > ol {
+        min-height: 0;
+        overflow: clip;
+        overflow-clip-margin: 3px;
+    }
+}
+
+@keyframes quip-on-this-page-reveal {
+    from {
+        grid-template-rows: 0fr;
+        opacity: 0;
+    }
+    to {
+        grid-template-rows: 1fr;
+        opacity: 1;
+    }
+}
