@@ -23,10 +23,13 @@ its fault in the conformance vocabulary, carrying the error's Display text.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
 import xqffi.vm as ffi
-from xqffi.asm import assemble_source
+from xqffi.asm import assemble_source, instruction_count
+from xqffi.verifier import verify
 
 #: The conformance fault vocabulary (`conformance/src/lib.rs`, `Fault`),
 #: spelled as the exception classes spell it.
@@ -168,3 +171,12 @@ def test_an_undecodable_program_is_not_a_vm_fault() -> None:
     with pytest.raises(RuntimeError, match="decode error") as excinfo:
         ffi.Vm().run(b"\x43")
     assert not isinstance(excinfo.value, ffi.XqvmError)
+    # Display, like the faults: the message, not the variant name.
+    assert str(excinfo.value) == "decode error: XQBC header is truncated"
+
+
+@pytest.mark.parametrize("decode", [instruction_count, verify], ids=["instruction_count", "verify"])
+def test_host_decoders_report_the_display_text(decode: Callable[[bytes], object]) -> None:
+    with pytest.raises(ValueError) as excinfo:
+        decode(b"\x43")
+    assert str(excinfo.value) == "decode error: XQBC header is truncated"

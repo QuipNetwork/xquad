@@ -19,9 +19,10 @@
 //!
 //! Every fault is a subclass of `XqvmError`, which is itself a
 //! `RuntimeError`, so a host that caught `RuntimeError` before these
-//! existed still catches every VM fault. The class names are the
-//! conformance fault vocabulary (`conformance/src/lib.rs`, `Fault`); the
-//! message is the error's `Display` text.
+//! existed still catches every VM fault. The class names are the fault
+//! identities of `spec/xqvm/SPEC.md` (section "Faults"), plus `TraceFailed`,
+//! which a host tracer raises rather than a program; the message is the
+//! error's `Display` text.
 
 use pyo3::create_exception;
 use pyo3::exceptions::PyRuntimeError;
@@ -123,5 +124,5 @@ pub(crate) fn vm_error(error: &xqvm::Error) -> PyErr {
 /// Not a VM fault: decoding happens before the VM runs, so this stays a
 /// plain `RuntimeError` rather than an `XqvmError`.
 pub(crate) fn decode_error(error: &xqvm::ProgramDecodeError) -> PyErr {
-    PyRuntimeError::new_err(format!("decode error: {error:?}"))
+    PyRuntimeError::new_err(format!("decode error: {error}"))
 }

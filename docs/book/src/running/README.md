@@ -126,7 +126,7 @@ try:
     s.run()
 except RuntimeError as e:
     print(e)
-# decode error: TruncatedHeader
+# decode error: XQBC header is truncated
 ```
 
 `Program.from_source` validates at load time instead: an unassemblable
