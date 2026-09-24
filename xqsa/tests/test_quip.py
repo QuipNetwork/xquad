@@ -1081,13 +1081,39 @@ class TestSolverQuipConstruction:
         with pytest.raises(ValueError, match="RPC URL"):
             SolverQuip(seed=VALID_SEED)
 
-    def test_missing_signer_raises(self, monkeypatch) -> None:
-        from xqsa.quip import SolverQuip
-
+    @staticmethod
+    def _install_with_home(monkeypatch, tmp_path) -> MagicMock:
+        """Install the fakes with ``HOME`` at ``tmp_path``; return ``HybridSigner``."""
         _install(monkeypatch, _default_iface())
         _clear_quip_env(monkeypatch)
-        with pytest.raises(ValueError, match="signer is required"):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        from xqsa import quip_signing
+
+        fake = sys.modules["quip_signer"]
+        fake.HybridSigner.from_seed.return_value.public_key = b"\x01" * 32
+        # quip_signing binds quip_signer at import, possibly to the real module.
+        monkeypatch.setattr(quip_signing, "quip_signer", fake)
+        return fake.HybridSigner
+
+    def test_default_keystore_created_and_reused(self, monkeypatch, tmp_path, caplog) -> None:
+        from xqsa.quip import SolverQuip
+
+        hybrid = self._install_with_home(monkeypatch, tmp_path)
+        path = tmp_path / ".quip" / "keystore.json"
+        with caplog.at_level(logging.INFO, logger="xqsa.quip"):
             SolverQuip(url="ws://fake")
+            SolverQuip(url="ws://fake")
+        assert path.exists()
+        first, second = hybrid.from_seed.call_args_list
+        assert first == second
+        assert str(path) in caplog.text
+
+    def test_seed_beats_default_keystore(self, monkeypatch, tmp_path) -> None:
+        from xqsa.quip import SolverQuip
+
+        self._install_with_home(monkeypatch, tmp_path)
+        SolverQuip(url="ws://fake", seed=VALID_SEED)
+        assert not (tmp_path / ".quip").exists()
 
     def test_connection_failure_wrapped(self, monkeypatch) -> None:
         from xqsa.quip import QuipConnectionError, SolverQuip

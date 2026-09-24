@@ -31,7 +31,7 @@ Configuration is resolved from constructor arguments first, then environment:
     =====================  =======================================================================
     ``url``                ``QUIP_RPC_URL``      websocket RPC endpoint
     ``seed``               ``QUIP_SIGNER_SEED``  32-byte hex master seed
-    ``keystore``           ``QUIP_KEYSTORE``     keystore path (load or create)
+    ``keystore``           ``QUIP_KEYSTORE``     keystore path (else ~/.quip/keystore.json)
     ``reward``             ``QUIP_REWARD``       reward in planck (else MinReward)
     ``topology``           ``QUIP_TOPOLOGY``     topology hash, or "native" (else DefaultTopology)
     ``faucet``             ``QUIP_FAUCET_URL``   faucet base URL (env read only without url=)
@@ -39,8 +39,8 @@ Configuration is resolved from constructor arguments first, then environment:
     ``autofund``           ``QUIP_AUTOFUND``     fund from the faucet without asking
     =====================  =======================================================================
 
-Provide exactly one of ``seed`` or ``keystore`` (a keystore is generated on
-first use if absent). Every :meth:`SolverQuip.solve` first quotes the job
+A seed wins over a keystore. With neither configured, the keystore at
+``~/.quip/keystore.json`` is loaded, or generated on first use. Every :meth:`SolverQuip.solve` first quotes the job
 (:class:`JobQuote`: reward plus the chain-reported fee, against the balance)
 and passes two consent gates. ``autoconfirm`` decides whether to submit at that
 price; ``autofund`` decides whether an account short of it is topped up with
@@ -52,7 +52,7 @@ Jupyter kernel), or a callable taking the quote and returning a verdict. The
 environment variables take ``1/true/yes/on`` or ``0/false/no/off``. A short
 account with no faucet configured raises :class:`QuipSubmissionError`.
 
-Named networks skip the URL: ``SolverQuip.for_network("aglais", keystore=...)``
+Named networks skip the URL: ``SolverQuip.for_network("aglais")``
 builds a solver against a preset, ``aglais`` (the public testnet) or ``devnet``
 (the localdev stack). The coordinates, and how often they move, are in
 :mod:`xqsa.quip_networks`.
@@ -141,6 +141,9 @@ FUND_WAIT_SECONDS = 30.0
 # runtime's weights and fee config, which an upgrade can move silently; it is a
 # bound for today's runtime, not a law.
 FEE_HEADROOM_PLANCK = 10_000_000_000  # 0.01 AGLS (12 decimals).
+
+# Keystore used when no seed or keystore is configured; created on first use.
+DEFAULT_KEYSTORE = "~/.quip/keystore.json"
 
 # The ``QuantumComputeMempool`` pallet name and the calls/storage/events this
 # backend uses; gathered here so the chain surface is easy to audit.
@@ -294,7 +297,7 @@ class SolverQuip(Solver):
         ImportError: if the ``[quip]`` extra is not installed
             (``pip install xqsa[quip]`` -- provides ``substrate-interface`` and
             the ``quip_signer`` signing extension).
-        ValueError: if no RPC URL or signer (seed/keystore) is configured.
+        ValueError: if no RPC URL is configured.
         QuipConnectionError: if the node is unreachable or the configured Ising
             spec is not registered on-chain.
         QuipMetadataError: if the node's runtime metadata cannot be decoded by
@@ -401,7 +404,7 @@ class SolverQuip(Solver):
         Examples:
             Connects to the network, so it is not run as a doctest::
 
-                solver = SolverQuip.for_network("aglais", keystore="~/.quip/keystore.json")
+                solver = SolverQuip.for_network("aglais")
 
         Raises:
             ValueError: if ``name`` is not a known network, before any
@@ -427,16 +430,19 @@ class SolverQuip(Solver):
     def _build_signer(quip_signing: Any, *, seed: str | None, keystore: str | None) -> Any:
         """Build the hybrid signer from a seed or keystore (env fallbacks applied).
 
-        Raises:
-            ValueError: if neither a seed nor a keystore is configured.
+        Resolution: ``seed``, ``QUIP_SIGNER_SEED``, ``keystore``, ``QUIP_KEYSTORE``,
+        then :data:`DEFAULT_KEYSTORE`, whose resolved path is logged at INFO so an
+        unconfigured caller sees which key file was loaded or created.
         """
         resolved_seed = seed or os.environ.get("QUIP_SIGNER_SEED")
-        resolved_keystore = keystore or os.environ.get("QUIP_KEYSTORE")
         if resolved_seed:
             return quip_signing.signer_from_seed(resolved_seed)
+        resolved_keystore = keystore or os.environ.get("QUIP_KEYSTORE")
         if resolved_keystore:
             return quip_signing.load_or_generate_keystore(resolved_keystore).signer
-        raise ValueError("A signer is required. Pass seed= (or QUIP_SIGNER_SEED) or keystore= (or QUIP_KEYSTORE).")
+        ks = quip_signing.load_or_generate_keystore(DEFAULT_KEYSTORE)
+        logger.info("no signer configured; using the keystore at %s", ks.path)
+        return ks.signer
 
     def _resolve_spec_id(self, spec_id: str | None) -> str:
         """Resolve and verify the Ising job spec id.
