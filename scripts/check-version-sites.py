@@ -321,7 +321,7 @@ class Site:
         return f"{self.dist}{extras}"
 
 
-_CRATES = ("xqvm", "xqasm", "xqcli", "xqffi", "conformance")
+_CRATES = ("xqvm", "xqasm", "xqcli", "xqffi")
 
 SITES: tuple[Site, ...] = (
     # The `version` alongside `path` on the two workspace dependency aliases.
@@ -336,9 +336,8 @@ SITES: tuple[Site, ...] = (
     # table by adding it.
     Site("Cargo.toml", Eco.CARGO, Role.WORKSPACE_DEP, dist="xqvm", table=("workspace", "dependencies")),
     Site("Cargo.toml", Eco.CARGO, Role.WORKSPACE_DEP, dist="xqasm", table=("workspace", "dependencies")),
-    # Every crate manifest. conformance and xqffi are publish = false, but
-    # xqffi is what maturin stamps on the PyPI wheel and conformance is
-    # packaged by `cargo publish --dry-run --workspace`.
+    # Every crate manifest. xqffi is publish = false, but it is what maturin
+    # stamps on the PyPI wheel.
     *(Site(f"{crate}/Cargo.toml", Eco.CARGO, Role.PACKAGE_VERSION, dist=crate) for crate in _CRATES),
     # The three hatchling packages that carry a literal version. xqvm_py and
     # xqffi are dynamic and appear under ASSERTIONS instead.

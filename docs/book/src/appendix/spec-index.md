@@ -1,11 +1,11 @@
 # Spec Index
 
 The book teaches; `spec/` is what XQuad actually is. Every file below is
-the normative source for its topic's intent. The conformance harness does
-not check either implementation against these documents: it checks the
-Rust and Python implementations against each other and against
-`conformance/opcodes.yaml`. The implementation is what ships, and the two
-can diverge; where a divergence is known, the relevant book page says so.
+the normative source for its topic's intent. The specification vectors
+check the Rust VM against these documents one program at a time, and its
+build checks the opcode table against `xqvm/opcodes.yaml`. The
+implementation is what ships, and the two can diverge; where a divergence
+is known, the relevant book page says so.
 [Conformance](../embedding/conformance.md#coverage-is-per-opcode-and-incomplete)
 explains why a green run is evidence about the programs a vector covers
 rather than a blanket guarantee.

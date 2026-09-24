@@ -16,7 +16,7 @@
         test-cuda test-qpu test-metal \
         opcode-parity opcode-parity-rs opcode-parity-py \
         metering-parity \
-        conformance conformance-rs conformance-py conformance-coverage \
+        conformance conformance-coverage \
         example-smoke \
         build-docs regen-docs regen-docs-opcodes regen-docs-examples \
         check-docs-generated check-docs-opcodes check-docs-examples \
@@ -124,9 +124,10 @@ test-python: test-py
 # conformance-coverage runs last and always passes: it prints the
 # per-opcode coverage report into the CI log so the holes are visible on
 # every pipeline rather than only when someone runs the target by hand.
-# The check that can *fail* on coverage is the ratchet in
-# conformance/tests/coverage.rs, which conformance-rs already runs.
-check-parity: opcode-parity conformance example-smoke metering-parity conformance-coverage
+# The check that can *fail* on coverage is the ratchet in the xqvm vector
+# suite (xqvm/tests/vector_suite/coverage.rs), which test-integ-rs runs
+# along with every vector.
+check-parity: opcode-parity example-smoke metering-parity conformance-coverage
 
 # All three are alpine, handwritten-docs checks -- no uv, no generation, no
 # mdbook. Kept apart from check-docs-generated (which needs uv) so the two
@@ -205,10 +206,9 @@ set-version:
 # scripts/validate-crate-publish.sh, deleted in this change.
 #
 # --workspace covers exactly xqvm, xqasm and xqcli. The workspace has
-# six members (Cargo.toml `members`); the other three carry
+# five members (Cargo.toml `members`); the other two carry
 # publish = false and are skipped: xqffi (pyo3 cdylib, shipped as a
-# PyPI wheel), conformance (cross-implementation test harness) and
-# fixtures/xqvm-wasm (no_std build fixture). Enumerated in full because
+# PyPI wheel) and fixtures/xqvm-wasm (no_std build fixture). Enumerated in full because
 # this comment is the justification for using --workspace here at all,
 # and a reader auditing it against `members` should not find a member
 # it does not account for.
@@ -576,13 +576,8 @@ test: test-unit-rs test-integ-rs test-doc test-py
 test-unit-rs:
 	cargo nextest run --locked --workspace --all-features --lib --cargo-profile ci-test
 
-# xquad-conformance is excluded here because its `python` feature gates
-# a test file that shells out to `uv run python -m xqvm_py`, and the
-# test:rust CI job does not install uv. The conformance suite has its
-# own dedicated job (verify:parity) that covers both runtimes with
-# the proper before_script setup.
 test-integ-rs:
-	cargo nextest run --locked --workspace --exclude xquad-conformance --all-features --test '*' --cargo-profile ci-test
+	cargo nextest run --locked --workspace --all-features --test '*' --cargo-profile ci-test
 
 # nextest cannot execute rustdoc doctests, so they are driven by the
 # built-in test harness on a dedicated target.
@@ -798,7 +793,7 @@ check-xqffi-fresh:
 
 # -- Conformance ------------------------------------------------------------
 
-# Cross-implementation parity (opcode table, spec conformance vectors).
+# Cross-implementation parity (opcode table).
 # `cargo build -p xqvm` exercises the compile-time YAML ↔ opcodes! macro
 # check via xqvm/build.rs; the Python script covers the xqvm_py side.
 opcode-parity: opcode-parity-rs opcode-parity-py
@@ -823,24 +818,18 @@ opcode-parity-py: deps-py
 metering-parity: deps-py
 	uv run --no-sync python scripts/check-metering-parity.py
 
-conformance: conformance-rs conformance-py
-
-conformance-rs:
-	cargo test --locked -p xquad-conformance --no-default-features --features rust
-
-# The Python side (run by CI's verify:parity job) shells out to
-# `uv run python -m xqvm_py run` from within the Rust test; the xqffi
-# extension (maturin-built) and xqvm_py (editable) must both be
-# installed in .venv/ first.
-conformance-py: deps-py
-	cargo test --locked -p xquad-conformance --no-default-features --features python
+# The specification vectors under xqvm/tests/vectors/, run on the VM. The
+# same test target runs under test-integ-rs; this is the short spelling
+# for running only the vectors.
+conformance:
+	cargo test --locked -p xqvm --test vectors
 
 # Per-opcode vector coverage: which of the 93 opcodes no vector covers.
-# Reports only. The ratchet that stops coverage regressing is a test
-# (conformance/tests/coverage.rs) and so already runs under
-# conformance-rs; this target is for reading the list.
+# Reports only. The ratchet that stops coverage regressing is a test in
+# the same target and so already runs under `conformance`; this target is
+# for reading the list.
 conformance-coverage:
-	cargo run --locked -q -p xquad-conformance -- --coverage
+	cargo test --locked -q -p xqvm --test vectors -- --ignored --exact coverage::report --nocapture
 
 # -- Dev ergonomics ---------------------------------------------------------
 
@@ -889,7 +878,7 @@ build-docs:
 # needs the full workspace synced.
 DOCSGEN := uv run --no-project --isolated --with pyyaml==$(PYYAML_VERSION) python
 
-# Regenerate generated documentation from conformance/opcodes.yaml and
+# Regenerate generated documentation from xqvm/opcodes.yaml and
 # examples/manifest.yaml.
 regen-docs: regen-docs-opcodes regen-docs-examples
 

@@ -34,7 +34,7 @@ make install-hooks    # point git at .githooks/ pre-commit hook
 make preflight         # preflight-rs + preflight-py + preflight-parity + preflight-docs + preflight-policy
 make preflight-rs      # fmt, taplo, clippy, rustdoc, deny, unit/integration/doc tests
 make preflight-py      # taplo, ruff format + lint, pytest, uv.lock freshness
-make preflight-parity  # opcode parity, conformance, example smoke
+make preflight-parity  # opcode parity, example smoke, vector coverage report
 make preflight-docs    # generated-doc freshness + docs drift + README length + prose (needs vale)
 make preflight-release # crate packaging dry-run + five Python dists (needs maturin/twine/uv; not in `preflight`)
 
@@ -46,7 +46,7 @@ make lint-doc         # RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-f
 make lint-deny-rs     # cargo deny check
 make test             # test-unit-rs + test-integ-rs + test-doc + test-py
 make test-unit-rs     # cargo nextest run --workspace --all-features --lib
-make test-integ-rs    # cargo nextest run --workspace --exclude xquad-conformance --all-features --test '*'
+make test-integ-rs    # cargo nextest run --workspace --all-features --test '*' (includes the vectors)
 make test-doc         # cargo test --doc --workspace --all-features
 make test-miri        # cargo +nightly miri test --workspace --all-features
 make deps             # install rustup components + pinned cargo tools
@@ -69,7 +69,7 @@ make repl             # Python REPL with xqffi + workspace packages
 
 # Cross-language
 make opcode-parity    # opcode-parity-rs + opcode-parity-py
-make conformance      # conformance-rs + conformance-py
+make conformance      # the specification vectors: cargo test -p xqvm --test vectors
 make example-smoke    # run examples on both interpreters, check valid == 1
 
 # Documentation
@@ -153,7 +153,7 @@ All commit messages must follow the [Conventional Commits](https://www.conventio
 
 **Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`, `security`, `deprecate`, `release`
 
-**Scope** is optional. When used, it should be the crate or package name (e.g. `xqvm`, `xqcp`, `conformance`).
+**Scope** is optional. When used, it should be the crate or package name (e.g. `xqvm`, `xqcp`, `xqasm`).
 
 **Rules:**
 - Subject line: imperative mood, lowercase start, no trailing period, max 72 characters
@@ -275,7 +275,6 @@ After modifying files, run `make fmt` to format everything, or the per-file equi
 | `xqasm` | `xqasm/` | Text assembler: pest parser -> AST -> bytecode |
 | `xqcli` | `xqcli/` | CLI binary (`xquad`): asm, dism, run, verify subcommands |
 | `xqffi` | `xqffi/` | PyO3 bindings exposing xqasm + xqvm to Python |
-| `xquad-conformance` | `conformance/` | Cross-implementation conformance harness |
 
 #### Key Patterns
 
@@ -325,15 +324,15 @@ The `spec/` directory contains authoritative specifications for each toolchain c
 - `spec/xqcp/README.md` -- XQCP constraint programming DSL
 - `spec/xqsa/README.md` -- XQSA solver adapter interface
 
-Spec changes are governed by the conformance harness: any modification affecting the opcode table, control-flow rules, stack depth, type system, or HLF expansions must be mirrored in `conformance/opcodes.yaml` and validated against `xqvm_py/opcodes.py` via `scripts/check-opcode-parity.py`.
+Spec changes are governed by the conformance harness: any modification affecting the opcode table, control-flow rules, stack depth, type system, or HLF expansions must be mirrored in `xqvm/opcodes.yaml` and validated against `xqvm_py/opcodes.py` via `scripts/check-opcode-parity.py`.
 
 ### Conformance Vectors
 
-Behavioural parity between `xqvm_py` (Python reference) and the Rust `xqvm` crate is enforced by the `xquad-conformance` test suite. Vectors live in `conformance/vectors/`. New semantics require a new vector; divergence between impls fails CI with no drift-tracking middle ground.
+The specification vectors live in `xqvm/tests/vectors/` and run as the `xqvm` crate's `vectors` test target (`cargo test -p xqvm --test vectors`); `xqvm/tests/vectors/README.md` documents the format. New semantics require a new vector, written from the spec rather than from the VM's output; a mismatch fails CI with no drift-tracking middle ground.
 
 ### Atomic Spec-MR Rule
 
-Any MR that changes VM semantics must touch **all four** layers in the same MR: (1) `spec/xqvm/*.md`, (2) `xqvm/src/**/*.rs`, (3) `xqvm_py/{executor,opcodes,xqmx,state,vector,tracer,errors}.py`, (4) `conformance/vectors/**` or `conformance/opcodes.yaml`. CI enforces this via `verify:policy` (`scripts/check-atomic-spec-mr.sh`). MRs touching 0 or all 4 layers pass; partial changes (1-3 layers) fail.
+Any MR that changes VM semantics must touch **all four** layers in the same MR: (1) `spec/xqvm/*.md`, (2) `xqvm/src/**/*.rs`, (3) `xqvm_py/{executor,opcodes,xqmx,state,vector,tracer,errors}.py`, (4) `xqvm/tests/vectors/**` or `xqvm/opcodes.yaml`. CI enforces this via `verify:policy` (`scripts/check-atomic-spec-mr.sh`). MRs touching 0 or all 4 layers pass; partial changes (1-3 layers) fail.
 
 For deliberately one-sided changes (e.g. aligning one impl to existing behaviour), add an `Atomic-Spec-Exempt: QUI-<id> <reason>` trailer to a commit message. It goes in the message's last paragraph at column 0, beside the sign-off, with the whole reason and the ticket on that one line; git reads trailers from the last paragraph only and truncates a wrapped reason, so the guard fails on either instead of bypassing. A `Fixes QUI-NNN` footer may share the paragraph but not the line directly below the trailer. The guard scans every commit in the MR range and bypasses when it finds at least one well-formed trailer. See `docs/guide/development-workflow.md` for the full rationale and exempt cases.
 
@@ -369,8 +368,8 @@ happened to share a stage barrier and nothing else:
 
 | Phase | Question it answers | What it covers |
 | --- | --- | --- |
-| `verify` | Does the workspace match what it's required to match? | clippy, rustdoc, cargo-deny, ruff, `uv.lock` freshness, the fresh-xqffi-cdylib check, opcode parity, Rust + Python conformance vectors, example smoke tests, atomic spec-MR guard, commit-message guard, merge-request-title guard, branch containment guard, changelog render |
-| `test` | Does the workspace do what it should when executed? | unit, integration, doc tests (Rust); pytest (Python); Quip signing-layer tests; WASM no_std tests; Substrate pallet fixture |
+| `verify` | Does the workspace match what it's required to match? | clippy, rustdoc, cargo-deny, ruff, `uv.lock` freshness, the fresh-xqffi-cdylib check, opcode parity, vector coverage report, example smoke tests, atomic spec-MR guard, commit-message guard, merge-request-title guard, branch containment guard, changelog render |
+| `test` | Does the workspace do what it should when executed? | unit, integration, doc tests and the specification vectors (Rust); pytest (Python); Quip signing-layer tests; WASM no_std tests; Substrate pallet fixture |
 | `hardware` | Does it work on real hardware? | CUDA, D-Wave QPU, and Metal solver tests on real hardware (protected refs only) |
 | `docs` | Is the documentation correct and buildable? | generated-docs freshness, docs drift guard, package README length guard, mdbook build, GitLab Pages publish (release tags only) |
 | `release` | Is the artefact publishable, and (on a tag) published? | `release:validate` packaging checks on every pipeline including tags; crates.io + PyPI publishing and GitLab Release notes via git-cliff on a pushed tag |

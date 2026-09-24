@@ -46,7 +46,7 @@ class OpcodeMeta:
     # True for an opcode that empties the stack outright rather than
     # applying a fixed net effect, in which case stack_pop and stack_push
     # are both 0. SCLR alone. Mirrors `stack_reset` in
-    # conformance/opcodes.yaml, which scripts/check-opcode-parity.py
+    # xqvm/opcodes.yaml, which scripts/check-opcode-parity.py
     # compares against this field.
     stack_reset: bool = False
 

@@ -17,7 +17,7 @@
 
 //! Compile-time parity check between the [`opcodes!`](crate::opcodes)
 //! x-macro (the canonical Rust opcode table) and
-//! `conformance/opcodes.yaml` (the canonical machine-readable table).
+//! `xqvm/opcodes.yaml` (the canonical machine-readable table).
 //!
 //! The build script [`build.rs`](../../../build.rs) parses the YAML and
 //! emits `YAML_OPCODES: &[(u8, &str, i8, &[(&str, u8)])]` into
@@ -180,10 +180,10 @@ const fn tables_match() -> bool {
 // literal, and the failing build stops the unit tests below from running.
 const _: () = assert!(
     tables_match(),
-    "opcodes! x-macro disagrees with conformance/opcodes.yaml — some row's \
+    "opcodes! x-macro disagrees with xqvm/opcodes.yaml — some row's \
      wire byte, mnemonic, net stack effect, or operand (name, width) list \
      differs. Compare xqvm/src/bytecode/types/table.rs against \
-     conformance/opcodes.yaml by hand: `make opcode-parity` will not narrow \
+     xqvm/opcodes.yaml by hand: `make opcode-parity` will not narrow \
      it down, because its Rust half is this same assertion and its Python \
      half compares operand types rather than names and does not see \
      `stack_reset` at all."

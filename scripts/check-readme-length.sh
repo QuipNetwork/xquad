@@ -33,8 +33,7 @@
 # so a new package is covered the day it is added. A directory is in scope when
 # it carries a `pyproject.toml` (ships to PyPI) or a `Cargo.toml` that does not
 # set `publish = false` (ships to crates.io). That covers the eight distributed
-# packages and excludes `conformance/`, which is an internal test harness. Note
-# `xqffi/` is in scope through its `pyproject.toml`: cargo does not publish it,
+# packages. Note `xqffi/` is in scope through its `pyproject.toml`: cargo does not publish it,
 # maturin does. The repository root README is out of scope; it is the project
 # landing page and answers to a different brief.
 #

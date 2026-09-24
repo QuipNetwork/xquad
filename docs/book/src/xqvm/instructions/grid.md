@@ -97,8 +97,8 @@ rather than reducing over nothing. That is the same identity `ONEHOTR`
 and `ONEHOTC` raise without a grid.
 
 `RESIZE`'s dimensions are a bound the VM enforces, not a convention
-correct bytecode is trusted to honour. Both implementations agree on all
-three cases, and `conformance/vectors/xqmx-grid/` pins them.
+correct bytecode is trusted to honour. `xqvm/tests/vectors/xqmx-grid/`
+pins all three cases.
 
 ## ROWFIND and COLFIND
 

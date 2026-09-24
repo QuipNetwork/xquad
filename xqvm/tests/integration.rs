@@ -3450,11 +3450,12 @@ fn reset_clears_the_outputs_of_the_previous_run() {
 // Guards whose only pin was a conformance vector
 // ---------------------------------------------------------------------------
 //
-// `conformance/` is not in the `xqvm` crate tarball and QUI-1082 deletes the
-// vectors after 0.4.0, so a guard reachable from bytecode needs a test that
-// travels with the crate. Each test below was verified by mutating its guard
-// to a no-op: before these tests existed, every per-language suite stayed
-// green under that mutation and only a vector went red.
+// The vector suite (`tests/vector_suite/`) assembles its programs with
+// `xqasm`, which the published tarball does not carry, so it runs from the
+// workspace only. A guard reachable from bytecode needs a test that travels
+// with the crate. Each test below was verified by mutating its guard to a
+// no-op: before these tests existed, every per-language suite stayed green
+// under that mutation and only a vector went red.
 
 #[test]
 fn one_hot_r_without_a_grid_raises() {

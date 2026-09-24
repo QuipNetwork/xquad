@@ -136,14 +136,6 @@
         # approximately never.
         - .cargo/config.toml
         - Makefile
-        # NOT redundant with `xqvm/**/*`. `xqvm/opcodes.yaml` is a SYMLINK
-        # to this file (xqvm/build.rs reads the symlinked path so the
-        # workspace build and the packaged-tarball build resolve
-        # identically). Editing the opcode table changes the target, and git
-        # reports that change at `conformance/opcodes.yaml` -- the symlink
-        # node itself never changes, so `xqvm/**/*` would not catch it. Do
-        # not delete this entry as noise.
-        - conformance/opcodes.yaml
         # wasm-only: `test:wasm` extends `.rust` and so runs `make deps`,
         # and wasm-pack is one of the pinned tools, so a bump there must
         # re-run this job. `test:substrate` has no `extends:` and sources
@@ -168,9 +160,6 @@
         # `cargo update` of the main workspace cannot move this build.
         - .cargo/config.toml
         - Makefile
-        # Symlink target -- see the wasm list above for why this entry is
-        # required and is not covered by `xqvm/**/*`.
-        - conformance/opcodes.yaml
         - xqvm/**/*
         - fixtures/pallet-xqvm/**/*
         - .gitlab-ci.yml

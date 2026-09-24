@@ -18,7 +18,7 @@
 """YAML-backed opcode parity test.
 
 Complements ``scripts/check-opcode-parity.py`` (which runs in CI and
-compares Python opcodes against ``conformance/opcodes.yaml``) with a
+compares Python opcodes against ``xqvm/opcodes.yaml``) with a
 pytest-integrated variant so local ``pytest xqvm_py/tests`` catches
 drift the same way. The check is kept intentionally narrow — it
 compares the fields both schemas describe:
@@ -43,7 +43,7 @@ import yaml
 from xqvm_py.opcodes import Opcode
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-YAML_PATH = REPO_ROOT / "conformance" / "opcodes.yaml"
+YAML_PATH = REPO_ROOT / "xqvm" / "opcodes.yaml"
 
 _YAML_TYPE_TO_PYTHON = {"register": "REGISTER", "label": "TARGET", "immediate": "IMMEDIATE"}
 
@@ -92,7 +92,7 @@ def py_rows() -> dict[int, dict]:
 
 def test_opcode_counts_match(yaml_rows: dict[int, dict], py_rows: dict[int, dict]) -> None:
     assert len(yaml_rows) == len(py_rows), (
-        f"conformance/opcodes.yaml has {len(yaml_rows)} entries; xqvm_py.Opcode has {len(py_rows)}"
+        f"xqvm/opcodes.yaml has {len(yaml_rows)} entries; xqvm_py.Opcode has {len(py_rows)}"
     )
 
 
@@ -110,4 +110,4 @@ def test_opcode_fields_match(yaml_rows: dict[int, dict], py_rows: dict[int, dict
         py_row = py_rows[code]
         if yaml_row != py_row:
             mismatches.append(f"  {code:#04x}: yaml={yaml_row!r}  py={py_row!r}")
-    assert not mismatches, "opcode field drift vs conformance/opcodes.yaml:\n" + "\n".join(mismatches)
+    assert not mismatches, "opcode field drift vs xqvm/opcodes.yaml:\n" + "\n".join(mismatches)

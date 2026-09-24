@@ -1,1 +1,546 @@
-../conformance/opcodes.yaml
+# XQVM Opcode Table — machine-readable canonical source
+#
+# This file is the single source of truth for the XQVM opcode set. Both the
+# Rust production implementation (xqvm/src/bytecode/types/table.rs,
+# validated at compile time by xqvm/build.rs) and the Python reference
+# implementation (xqvm_py/opcodes.py, validated by
+# scripts/check-opcode-parity.py) are checked against this table.
+#
+# Schema per entry:
+#   code:      u8 wire encoding (hex).
+#   mnemonic:  uppercase assembly name.
+#   variant:   PascalCase Rust enum identifier.
+#   category:  taxonomic bucket (matches spec/xqvm/SPEC.md sections).
+#   operands:  list of {name, type, width} objects. Empty list = no operands.
+#              type ∈ {register, label, immediate}; width = byte count.
+#   stack_pop: number of stack slots consumed.
+#   stack_push: number of stack slots produced.
+#   stack_reset: optional bool, default false. True marks an opcode that
+#              empties the stack outright instead of applying a fixed net
+#              effect; stack_pop and stack_push must both be 0 alongside it.
+#              SCLR is the only such opcode. The Rust opcode table spells
+#              this as the i8::MIN sentinel in place of a delta.
+#   doc:       single-sentence description (used by gen-bytecode-docs.py).
+#
+# Reserved wire bytes (rejected by the decoder as illegal) are derived by
+# scripts/gen-bytecode-docs.py as the complement of the assigned codes above;
+# no byte list is maintained here.
+
+version: 1
+
+opcodes:
+
+  # ------------------------------------------------------------------------
+  # Control Flow (0x00-0x09)
+  # ------------------------------------------------------------------------
+
+  - code: 0x00
+    mnemonic: TARGET
+    variant: Target
+    category: control-flow
+    operands: []
+    stack_pop: 0
+    stack_push: 0
+    doc: "Mark a valid jump destination."
+
+  - code: 0x01
+    mnemonic: JUMP1
+    variant: Jump1
+    category: control-flow
+    operands:
+      - {name: label, type: label, width: 1}
+    stack_pop: 0
+    stack_push: 0
+    doc: "Unconditionally jump to a basic block by u8 label index (narrow form)."
+
+  - code: 0x02
+    mnemonic: JUMPI1
+    variant: JumpI1
+    category: control-flow
+    operands:
+      - {name: label, type: label, width: 1}
+    stack_pop: 1
+    stack_push: 0
+    doc: "Jump to a basic block by u8 label index if the top of the stack is non-zero (narrow form)."
+
+  - code: 0x03
+    mnemonic: JUMP2
+    variant: Jump2
+    category: control-flow
+    operands:
+      - {name: label, type: label, width: 2}
+    stack_pop: 0
+    stack_push: 0
+    doc: "Unconditionally jump to a basic block by u16 label index (wide form)."
+
+  - code: 0x04
+    mnemonic: JUMPI2
+    variant: JumpI2
+    category: control-flow
+    operands:
+      - {name: label, type: label, width: 2}
+    stack_pop: 1
+    stack_push: 0
+    doc: "Jump to a basic block by u16 label index if the top of the stack is non-zero (wide form)."
+
+  - code: 0x05
+    mnemonic: LIDX
+    variant: Lidx
+    category: control-flow
+    operands:
+      - {name: reg, type: register, width: 1}
+    stack_pop: 0
+    stack_push: 0
+    doc: "Copy the current loop index (offset-adjusted) into a register."
+
+  - code: 0x06
+    mnemonic: LVAL
+    variant: LVal
+    category: control-flow
+    operands:
+      - {name: reg, type: register, width: 1}
+    stack_pop: 0
+    stack_push: 0
+    doc: "Copy the current loop value into a register."
+
+  - code: 0x07
+    mnemonic: NEXT
+    variant: Next
+    category: control-flow
+    operands: []
+    stack_pop: 0
+    stack_push: 0
+    doc: "Advance the loop index; jump back or exit the current loop."
+
+  - code: 0x08
+    mnemonic: RANGE
+    variant: Range
+    category: control-flow
+    operands: []
+    stack_pop: 2
+    stack_push: 0
+    doc: "Start a range loop over [start, start + count)."
+
+  - code: 0x09
+    mnemonic: ITER
+    variant: Iter
+    category: control-flow
+    operands:
+      - {name: reg, type: register, width: 1}
+    stack_pop: 2
+    stack_push: 0
+    doc: "Start a vec iteration over a slice of a register's vec."
+
+  # ------------------------------------------------------------------------
+  # Register I/O (0x0A-0x0F, gap at 0x0D)
+  # ------------------------------------------------------------------------
+
+  - code: 0x0A
+    mnemonic: LOAD
+    variant: Load
+    category: register-io
+    operands:
+      - {name: reg, type: register, width: 1}
+    stack_pop: 0
+    stack_push: 1
+    doc: "Push the value of an int register onto the stack."
+
+  - code: 0x0B
+    mnemonic: STOW
+    variant: Stow
+    category: register-io
+    operands:
+      - {name: reg, type: register, width: 1}
+    stack_pop: 1
+    stack_push: 0
+    doc: "Pop the top of the stack into an int register."
+
+  - code: 0x0C
+    mnemonic: DROP
+    variant: Drop
+    category: register-io
+    operands:
+      - {name: reg, type: register, width: 1}
+    stack_pop: 0
+    stack_push: 0
+    doc: "Reset a register to Unset, releasing any value it held."
+
+  - code: 0x0E
+    mnemonic: INPUT
+    variant: Input
+    category: register-io
+    operands:
+      - {name: reg, type: register, width: 1}
+    stack_pop: 1
+    stack_push: 0
+    doc: "Pop a calldata slot index and load that slot into a register."
+
+  - code: 0x0F
+    mnemonic: OUTPUT
+    variant: Output
+    category: register-io
+    operands:
+      - {name: reg, type: register, width: 1}
+    stack_pop: 1
+    stack_push: 0
+    doc: "Pop an output slot index and write the register to it."
+
+  # ------------------------------------------------------------------------
+  # Stack Manipulation (0x10-0x1C, gap at 0x19)
+  # ------------------------------------------------------------------------
+
+  - code: 0x10
+    mnemonic: POP
+    variant: Pop
+    category: stack
+    operands: []
+    stack_pop: 1
+    stack_push: 0
+    doc: "Discard the top of the stack."
+
+  - code: 0x11
+    mnemonic: PUSH1
+    variant: Push1
+    category: stack
+    operands:
+      - {name: val, type: immediate, width: 1}
+    stack_pop: 0
+    stack_push: 1
+    doc: "Push a 1-byte big-endian signed constant, sign-extended to i64."
+
+  - code: 0x12
+    mnemonic: PUSH2
+    variant: Push2
+    category: stack
+    operands:
+      - {name: val, type: immediate, width: 2}
+    stack_pop: 0
+    stack_push: 1
+    doc: "Push a 2-byte big-endian signed constant, sign-extended to i64."
+
+  - code: 0x13
+    mnemonic: PUSH3
+    variant: Push3
+    category: stack
+    operands:
+      - {name: val, type: immediate, width: 3}
+    stack_pop: 0
+    stack_push: 1
+    doc: "Push a 3-byte big-endian signed constant, sign-extended to i64."
+
+  - code: 0x14
+    mnemonic: PUSH4
+    variant: Push4
+    category: stack
+    operands:
+      - {name: val, type: immediate, width: 4}
+    stack_pop: 0
+    stack_push: 1
+    doc: "Push a 4-byte big-endian signed constant, sign-extended to i64."
+
+  - code: 0x15
+    mnemonic: PUSH5
+    variant: Push5
+    category: stack
+    operands:
+      - {name: val, type: immediate, width: 5}
+    stack_pop: 0
+    stack_push: 1
+    doc: "Push a 5-byte big-endian signed constant, sign-extended to i64."
+
+  - code: 0x16
+    mnemonic: PUSH6
+    variant: Push6
+    category: stack
+    operands:
+      - {name: val, type: immediate, width: 6}
+    stack_pop: 0
+    stack_push: 1
+    doc: "Push a 6-byte big-endian signed constant, sign-extended to i64."
+
+  - code: 0x17
+    mnemonic: PUSH7
+    variant: Push7
+    category: stack
+    operands:
+      - {name: val, type: immediate, width: 7}
+    stack_pop: 0
+    stack_push: 1
+    doc: "Push a 7-byte big-endian signed constant, sign-extended to i64."
+
+  - code: 0x18
+    mnemonic: PUSH8
+    variant: Push8
+    category: stack
+    operands:
+      - {name: val, type: immediate, width: 8}
+    stack_pop: 0
+    stack_push: 1
+    doc: "Push a full 8-byte big-endian signed constant (i64)."
+
+  - code: 0x1A
+    mnemonic: SCLR
+    variant: Sclr
+    category: stack
+    operands: []
+    stack_pop: 0
+    stack_push: 0
+    stack_reset: true
+    doc: "Clear the entire value stack."
+
+  - code: 0x1B
+    mnemonic: SWAP
+    variant: Swap
+    category: stack
+    operands: []
+    stack_pop: 2
+    stack_push: 2
+    doc: "Swap the top two stack elements."
+
+  - code: 0x1C
+    mnemonic: COPY
+    variant: Copy
+    category: stack
+    operands: []
+    stack_pop: 1
+    stack_push: 2
+    doc: "Duplicate the top of the stack."
+
+  # ------------------------------------------------------------------------
+  # Arithmetic (0x20-0x2B)
+  # ------------------------------------------------------------------------
+
+  - {code: 0x20, mnemonic: ADD, variant: Add, category: arithmetic, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push a + b."}
+  - {code: 0x21, mnemonic: SUB, variant: Sub, category: arithmetic, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push a - b."}
+  - {code: 0x22, mnemonic: MUL, variant: Mul, category: arithmetic, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push a * b."}
+  - {code: 0x23, mnemonic: DIV, variant: Div, category: arithmetic, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push a / b (floor division, rounds toward negative infinity)."}
+  - {code: 0x24, mnemonic: MOD, variant: Modulo, category: arithmetic, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push a % b."}
+  - {code: 0x25, mnemonic: SQR, variant: Sqr, category: arithmetic, operands: [], stack_pop: 1, stack_push: 1, doc: "Pop a; push a * a."}
+  - {code: 0x26, mnemonic: ABS, variant: Abs, category: arithmetic, operands: [], stack_pop: 1, stack_push: 1, doc: "Pop a; push |a|."}
+  - {code: 0x27, mnemonic: NEG, variant: Neg, category: arithmetic, operands: [], stack_pop: 1, stack_push: 1, doc: "Pop a; push -a."}
+  - {code: 0x28, mnemonic: MIN, variant: Min, category: arithmetic, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push min(a, b)."}
+  - {code: 0x29, mnemonic: MAX, variant: Max, category: arithmetic, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push max(a, b)."}
+  - {code: 0x2A, mnemonic: INC, variant: Inc, category: arithmetic, operands: [], stack_pop: 1, stack_push: 1, doc: "Pop a; push a + 1."}
+  - {code: 0x2B, mnemonic: DEC, variant: Dec, category: arithmetic, operands: [], stack_pop: 1, stack_push: 1, doc: "Pop a; push a - 1."}
+  - {code: 0x2C, mnemonic: BITLEN, variant: BitLen, category: arithmetic, operands: [], stack_pop: 1, stack_push: 1, doc: "Pop a; push floor(log2(a))+1. If a <= 0, push 0."}
+
+  # ------------------------------------------------------------------------
+  # Comparison (0x30-0x34) — result is 1 if true, 0 if false
+  # ------------------------------------------------------------------------
+
+  - {code: 0x30, mnemonic: EQ,  variant: Eq,  category: comparison, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push 1 if a == b, else 0."}
+  - {code: 0x31, mnemonic: LT,  variant: Lt,  category: comparison, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push 1 if a < b, else 0."}
+  - {code: 0x32, mnemonic: GT,  variant: Gt,  category: comparison, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push 1 if a > b, else 0."}
+  - {code: 0x33, mnemonic: LTE, variant: Lte, category: comparison, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push 1 if a <= b, else 0."}
+  - {code: 0x34, mnemonic: GTE, variant: Gte, category: comparison, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push 1 if a >= b, else 0."}
+
+  # ------------------------------------------------------------------------
+  # Logical Boolean (0x36-0x39, gap at 0x35)
+  # ------------------------------------------------------------------------
+
+  - {code: 0x36, mnemonic: NOT, variant: Not, category: logical, operands: [], stack_pop: 1, stack_push: 1, doc: "Pop a; push 1 if a == 0, else 0."}
+  - {code: 0x37, mnemonic: AND, variant: And, category: logical, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push 1 if both are non-zero, else 0."}
+  - {code: 0x38, mnemonic: OR,  variant: Or,  category: logical, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push 1 if either is non-zero, else 0."}
+  - {code: 0x39, mnemonic: XOR, variant: Xor, category: logical, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push 1 if exactly one is non-zero, else 0."}
+
+  # ------------------------------------------------------------------------
+  # Bitwise (0x3A-0x3F)
+  # ------------------------------------------------------------------------
+
+  - {code: 0x3A, mnemonic: BAND, variant: BAnd, category: bitwise, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push a & b."}
+  - {code: 0x3B, mnemonic: BOR,  variant: BOr,  category: bitwise, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push a | b."}
+  - {code: 0x3C, mnemonic: BXOR, variant: BXor, category: bitwise, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push a ^ b."}
+  - {code: 0x3D, mnemonic: BNOT, variant: BNot, category: bitwise, operands: [], stack_pop: 1, stack_push: 1, doc: "Pop a; push ~a."}
+  - {code: 0x3E, mnemonic: SHL,  variant: Shl,  category: bitwise, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push a << b."}
+  - {code: 0x3F, mnemonic: SHR,  variant: Shr,  category: bitwise, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop b and a; push a >> b (arithmetic right shift, sign-preserving)."}
+
+  # ------------------------------------------------------------------------
+  # Allocators — Models (0x40-0x45)
+  # ------------------------------------------------------------------------
+
+  - code: 0x40
+    mnemonic: BQMX
+    variant: Bqmx
+    category: allocators
+    operands: [{name: reg, type: register, width: 1}]
+    stack_pop: 1
+    stack_push: 0
+    doc: "Pop size; allocate a binary QUBO model ({0, 1} domain) into a register."
+
+  - code: 0x41
+    mnemonic: SQMX
+    variant: Sqmx
+    category: allocators
+    operands: [{name: reg, type: register, width: 1}]
+    stack_pop: 1
+    stack_push: 0
+    doc: "Pop size; allocate a spin Ising model ({-1, +1} domain) into a register."
+
+  - code: 0x42
+    mnemonic: XQMX
+    variant: Xqmx
+    category: allocators
+    operands: [{name: reg, type: register, width: 1}]
+    stack_pop: 2
+    stack_push: 0
+    doc: "Pop k then size; allocate an integer model with domain {0, ..., k-1} into a register. Errors when k < 2."
+
+  - code: 0x43
+    mnemonic: BSMX
+    variant: Bsmx
+    category: allocators
+    operands: [{name: reg, type: register, width: 1}]
+    stack_pop: 1
+    stack_push: 0
+    doc: "Pop size; allocate a binary sample ({0, 1} domain) into a register."
+
+  - code: 0x44
+    mnemonic: SSMX
+    variant: Ssmx
+    category: allocators
+    operands: [{name: reg, type: register, width: 1}]
+    stack_pop: 1
+    stack_push: 0
+    doc: "Pop size; allocate a spin sample ({-1, +1} domain) into a register."
+
+  - code: 0x45
+    mnemonic: XSMX
+    variant: Xsmx
+    category: allocators
+    operands: [{name: reg, type: register, width: 1}]
+    stack_pop: 2
+    stack_push: 0
+    doc: "Pop k then size; allocate an integer sample with domain {0, ..., k-1} into a register. Errors when k < 2."
+
+  # ------------------------------------------------------------------------
+  # Allocators — Vec (0x4A-0x4C)
+  # ------------------------------------------------------------------------
+
+  - {code: 0x4A, mnemonic: VEC,  variant: Vec,  category: allocators, operands: [{name: reg, type: register, width: 1}], stack_pop: 0, stack_push: 0, doc: "Create an empty `vec<int>` in a register, identical to VECI."}
+  - {code: 0x4B, mnemonic: VECI, variant: VecI, category: allocators, operands: [{name: reg, type: register, width: 1}], stack_pop: 0, stack_push: 0, doc: "Create an empty `vec<int>` in a register."}
+  - {code: 0x4C, mnemonic: VECX, variant: VecX, category: allocators, operands: [{name: reg, type: register, width: 1}], stack_pop: 0, stack_push: 0, doc: "Create an empty `vec<xqmx>` in a register."}
+
+  # ------------------------------------------------------------------------
+  # Vector Access (0x50-0x53)
+  # ------------------------------------------------------------------------
+
+  - {code: 0x50, mnemonic: VECPUSH, variant: VecPush, category: vector-ops, operands: [{name: reg, type: register, width: 1}], stack_pop: 1, stack_push: 0, doc: "Pop a value; append it to the register's vec."}
+  - {code: 0x51, mnemonic: VECGET,  variant: VecGet,  category: vector-ops, operands: [{name: reg, type: register, width: 1}], stack_pop: 1, stack_push: 1, doc: "Pop index; push `vec[index]` from the register's vec."}
+  - {code: 0x52, mnemonic: VECSET,  variant: VecSet,  category: vector-ops, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop value and index; set `vec[index]` in the register's vec."}
+  - {code: 0x53, mnemonic: VECLEN,  variant: VecLen,  category: vector-ops, operands: [{name: reg, type: register, width: 1}], stack_pop: 0, stack_push: 1, doc: "Push the length of the register's vec onto the stack."}
+
+  - code: 0x54
+    mnemonic: SLACK
+    variant: Slack
+    category: vector-ops
+    operands:
+      - {name: indices, type: register, width: 1}
+      - {name: coeffs, type: register, width: 1}
+    stack_pop: 2
+    stack_push: 0
+    doc: "Pop capacity and start_index; append slack variable indices and power-of-two coefficients to two register vecs."
+
+  # ------------------------------------------------------------------------
+  # Index Math (0x5A-0x5B)
+  # ------------------------------------------------------------------------
+
+  - {code: 0x5A, mnemonic: IDXGRID, variant: IdxGrid, category: index-math, operands: [], stack_pop: 3, stack_push: 1, doc: "Pop cols, col, row; push the flat grid index row * cols + col."}
+  - {code: 0x5B, mnemonic: IDXTRIU, variant: IdxTriu, category: index-math, operands: [], stack_pop: 2, stack_push: 1, doc: "Pop j and i; push the upper-triangular index for the unordered pair (i, j)."}
+
+  # ------------------------------------------------------------------------
+  # XQMX Coefficient Access (0x60-0x65)
+  # ------------------------------------------------------------------------
+
+  - {code: 0x60, mnemonic: GETLINE, variant: GetLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 1, stack_push: 1, doc: "Pop i; push `linear[i]` from the register's model, or a sample's assignment at i; raises IndexOutOfBounds outside [0, size)."}
+  - {code: 0x61, mnemonic: SETLINE, variant: SetLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop value and i; set `linear[i]` in the register's model, or a sample's assignment at i; a sample value outside its domain raises `SampleOutOfDomain`."}
+  - {code: 0x62, mnemonic: ADDLINE, variant: AddLine, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop delta and i; add delta to `linear[i]` in the register's model, or a sample's assignment at i; a sample result outside its domain raises `SampleOutOfDomain`."}
+  - {code: 0x63, mnemonic: GETQUAD, variant: GetQuad, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 1, doc: "Pop j and i; push `quadratic[i, j]` from the register's model; requires MODEL mode -- a sample register raises `TypeMismatch`; raises IndexOutOfBounds outside [0, size)."}
+  - {code: 0x64, mnemonic: SETQUAD, variant: SetQuad, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop value, j, and i; set `quadratic[i, j]` in the register's model; requires MODEL mode -- a sample register raises `TypeMismatch`; raises IndexOutOfBounds outside [0, size)."}
+  - {code: 0x65, mnemonic: ADDQUAD, variant: AddQuad, category: xqmx-access, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop delta, j, and i; add delta to `quadratic[i, j]` in the register's model; requires MODEL mode -- a sample register raises `TypeMismatch`; raises IndexOutOfBounds outside [0, size)."}
+
+  # ------------------------------------------------------------------------
+  # XQMX Grid (0x66-0x6A)
+  # ------------------------------------------------------------------------
+
+  - {code: 0x66, mnemonic: RESIZE,  variant: Resize,  category: xqmx-grid, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop cols and rows; set the grid dimensions of the register's model or sample."}
+  - {code: 0x67, mnemonic: ROWFIND, variant: RowFind, category: xqmx-grid, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 1, doc: "Pop value and row; push the first column where the value matches, or -1."}
+  - {code: 0x68, mnemonic: COLFIND, variant: ColFind, category: xqmx-grid, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 1, doc: "Pop value and col; push the first row where the value matches, or -1."}
+  - {code: 0x69, mnemonic: ROWSUM,  variant: RowSum,  category: xqmx-grid, operands: [{name: reg, type: register, width: 1}], stack_pop: 1, stack_push: 1, doc: "Pop row; push the sum of all linear values in that grid row."}
+  - {code: 0x6A, mnemonic: COLSUM,  variant: ColSum,  category: xqmx-grid, operands: [{name: reg, type: register, width: 1}], stack_pop: 1, stack_push: 1, doc: "Pop col; push the sum of all linear values in that grid column."}
+
+  # ------------------------------------------------------------------------
+  # XQMX High-Level Constraints (0x70-0x73, 0x7F)
+  # ------------------------------------------------------------------------
+
+  - {code: 0x70, mnemonic: ONEHOTR, variant: OneHotR, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop penalty and row; add a one-hot constraint over the grid row."}
+  - {code: 0x71, mnemonic: ONEHOTC, variant: OneHotC, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop penalty and col; add a one-hot constraint over the grid column."}
+  - {code: 0x72, mnemonic: EXCLUDE, variant: Exclude, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop penalty, j, and i; add a mutual-exclusion constraint between variables i and j; raises IndexOutOfBounds outside [0, size)."}
+  - {code: 0x73, mnemonic: IMPLIES, variant: Implies, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop penalty, j, and i; add an implication constraint from variable i to variable j; raises IndexOutOfBounds outside [0, size)."}
+
+  - code: 0x74
+    mnemonic: EQUALITY
+    variant: Equality
+    category: xqmx-high-level
+    operands:
+      - {name: model, type: register, width: 1}
+      - {name: indices, type: register, width: 1}
+      - {name: coeffs, type: register, width: 1}
+    stack_pop: 2
+    stack_push: 0
+    doc: "Pop penalty and target; expand weighted equality constraint into QUBO terms on a model."
+
+  - code: 0x75
+    mnemonic: ATLEAST
+    variant: AtLeast
+    category: xqmx-high-level
+    operands:
+      - {name: model, type: register, width: 1}
+      - {name: indices, type: register, width: 1}
+    stack_pop: 2
+    stack_push: 0
+    doc: "Pop penalty and k; allocate slack variables and apply at-least-k constraint."
+
+  - code: 0x76
+    mnemonic: ATLEASTW
+    variant: AtLeastW
+    category: xqmx-high-level
+    operands:
+      - {name: model, type: register, width: 1}
+      - {name: indices, type: register, width: 1}
+      - {name: coeffs, type: register, width: 1}
+    stack_pop: 2
+    stack_push: 0
+    doc: "Pop penalty and k; allocate slack variables and apply weighted at-least-k constraint."
+
+  - code: 0x77
+    mnemonic: REDUCE
+    variant: Reduce
+    category: xqmx-high-level
+    operands:
+      - {name: model, type: register, width: 1}
+    stack_pop: 3
+    stack_push: 1
+    doc: "Pop P_aux, var_b, var_a; allocate auxiliary variable and add Rosenberg enforcement terms; push aux index."
+
+  - code: 0x7F
+    mnemonic: ENERGY
+    variant: Energy
+    category: xqmx-high-level
+    operands:
+      - {name: model,  type: register, width: 1}
+      - {name: sample, type: register, width: 1}
+    stack_pop: 0
+    stack_push: 1
+    doc: "Compute the Hamiltonian energy of a sample against a model; push the result."
+
+  # ------------------------------------------------------------------------
+  # Special (0xF0, 0xFF)
+  # ------------------------------------------------------------------------
+
+  - {code: 0xF0, mnemonic: NOP,  variant: Nop,  category: special, operands: [], stack_pop: 0, stack_push: 0, doc: "No operation."}
+  - {code: 0xFF, mnemonic: HALT, variant: Halt, category: special, operands: [], stack_pop: 0, stack_push: 0, doc: "Stop execution."}
+
+reserved:
+  - 0x0D
+  - 0x19
+  - 0x35

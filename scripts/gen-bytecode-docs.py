@@ -16,7 +16,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Regenerate opcode reference pages from conformance/opcodes.yaml.
+"""Regenerate opcode reference pages from xqvm/opcodes.yaml.
 
 The YAML is the single source of truth for the XQVM opcode set. This
 script derives concise reference tables (one row per opcode, grouped by
@@ -25,8 +25,8 @@ richer instruction-by-instruction semantics live in
 docs/book/src/xqvm/instructions/*.md and are not generated.
 
 Modes:
-  (default)   Overwrite conformance/opcodes.md and docs/book/src/xqvm/opcodes.md.
-  --check     Render to strings and diff against the committed files;
+  (default)   Overwrite docs/book/src/xqvm/opcodes.md.
+  --check     Render to a string and diff against the committed file;
               exit 1 on any difference. Setup errors exit 2. Used by the
               docs-generated lint job.
 """
@@ -42,8 +42,7 @@ from _docsgen import Target, banner, emit
 from _scriptio import SetupError, format_setup_error, load_yaml, require_key, require_mapping
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-YAML_PATH = REPO_ROOT / "conformance" / "opcodes.yaml"
-CONFORMANCE_DOC_PATH = REPO_ROOT / "conformance" / "opcodes.md"
+YAML_PATH = REPO_ROOT / "xqvm" / "opcodes.yaml"
 BOOK_DOC_PATH = REPO_ROOT / "docs" / "book" / "src" / "xqvm" / "opcodes.md"
 GITLAB_BLOB_URL = "https://gitlab.com/quip.network/xquad/-/blob/main"
 
@@ -67,45 +66,10 @@ CATEGORIES: list[tuple[str, str]] = [
     ("special", "Special"),
 ]
 
-CONFORMANCE_HEADER = (
-    banner(
-        "scripts/gen-bytecode-docs.py",
-        "conformance/opcodes.yaml",
-        """
-        Edit the YAML (and the opcodes! x-macro in
-        xqvm/src/bytecode/types/table.rs, which is checked against the YAML at
-        compile time), then run `make regen-docs`.
-
-        For the long-form human-readable semantics of each instruction see
-        `docs/book/src/xqvm/instructions/*.md` or `spec/xqvm/SPEC.md`.
-        """,
-    )
-    + """
-
-# XQVM Bytecode Semantics
-
-Concise reference table for every opcode in the XQVM bytecode format.
-Derived directly from [`conformance/opcodes.yaml`](opcodes.yaml),
-which is kept in sync with the Rust `opcodes!` x-macro (enforced at
-compile time by `xqvm/build.rs`) and the Python `Opcode` enum (enforced
-by `scripts/check-opcode-parity.py`).
-
-Columns:
-- **Code** -- wire-encoding byte.
-- **Mnemonic** -- uppercase assembly name.
-- **Operands** -- post-opcode operand layout; empty for no-operand instructions.
-- **Stack** -- stack effect as `pop → push`; `0 → 1` means one value produced.
-  `any → 0` marks an instruction that empties the stack outright rather than
-  applying a fixed net effect.
-- **Description** -- single-sentence semantic summary.
-
-"""
-)
-
 BOOK_HEADER = (
     banner(
         "scripts/gen-bytecode-docs.py",
-        "conformance/opcodes.yaml",
+        "xqvm/opcodes.yaml",
         """
         Edit the YAML (and the opcodes! x-macro in
         xqvm/src/bytecode/types/table.rs, which is checked against the YAML at
@@ -120,9 +84,8 @@ BOOK_HEADER = (
 # Opcode Reference
 
 Concise reference table for every opcode in the XQVM bytecode format.
-Derived directly from [`conformance/opcodes.yaml`]({GITLAB_BLOB_URL}/conformance/opcodes.yaml),
-which is kept in sync with the Rust [`opcodes!` x-macro]({GITLAB_BLOB_URL}/xqvm/src/bytecode/types/table.rs)
-and the Python [`Opcode` enum]({GITLAB_BLOB_URL}/xqvm_py/opcodes.py).
+Derived directly from [`xqvm/opcodes.yaml`]({GITLAB_BLOB_URL}/xqvm/opcodes.yaml),
+which is kept in sync with the Rust [`opcodes!` x-macro]({GITLAB_BLOB_URL}/xqvm/src/bytecode/types/table.rs).
 
 For the normative bytecode specification, see
 [`spec/xqvm/SPEC.md`]({GITLAB_BLOB_URL}/spec/xqvm/SPEC.md).
@@ -164,7 +127,7 @@ def format_operands(operands: list[object], entry_path: str) -> str:
                 f"{op_path}: operand `{name}` has type `{kind}`, which is not one of "
                 "register/label/immediate recognised by format_operands in "
                 "scripts/gen-bytecode-docs.py; add support there or fix the type in "
-                "conformance/opcodes.yaml"
+                "xqvm/opcodes.yaml"
             )
     return ", ".join(parts)
 
@@ -227,7 +190,7 @@ def render_tables(data: dict) -> str:
             raise SetupError(
                 f"{entry_path}: opcode `{mnemonic}` has category `{category}`, which is not "
                 "in the CATEGORIES list in scripts/gen-bytecode-docs.py; add the slug there "
-                "or fix the category in conformance/opcodes.yaml"
+                "or fix the category in xqvm/opcodes.yaml"
             )
         by_category.setdefault(category, []).append(entry)
 
@@ -288,7 +251,6 @@ def main() -> int:
     try:
         data = load_yaml(YAML_PATH)
         targets = [
-            Target(CONFORMANCE_DOC_PATH, render_page(data, CONFORMANCE_HEADER)),
             Target(BOOK_DOC_PATH, render_page(data, BOOK_HEADER)),
         ]
     except SetupError as exc:

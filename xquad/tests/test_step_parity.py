@@ -31,7 +31,7 @@ import pytest
 
 from xquad.vm import VM, VMBackend
 
-VECTORS_DIR = Path(__file__).resolve().parents[2] / "conformance" / "vectors"
+VECTORS_DIR = Path(__file__).resolve().parents[2] / "xqvm" / "tests" / "vectors"
 
 
 def _discover_vectors() -> list[tuple[str, Path]]:

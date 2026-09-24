@@ -15,7 +15,7 @@ One repository, two implementations, one spec:
 | [`spec/xqvm/SPEC.md`](../../spec/xqvm/SPEC.md) | all | Normative description of VM behaviour. Every conformance vector derives from here. |
 | [`xqvm/`](../../xqvm/) | Rust track | Production interpreter. `no_std + alloc`. Used by the Substrate pallet, the `xquad` CLI, and the `xqffi` pyo3 extension. |
 | [`xqvm_py/`](../../xqvm_py/) | Python track | Reference interpreter. Pure Python. The conformance oracle. |
-| [`conformance/`](../../conformance/) | shared | Cross-impl parity harness. Every committed vector runs on both VMs in CI; disagreement fails the build. |
+| [`xqvm/tests/vectors/`](../../xqvm/tests/vectors/) | shared | Specification vectors. Every committed vector runs on the Rust VM in CI; a mismatch fails the build. |
 | [`xqffi/`](../../xqffi/) | Rust track | PyO3 FFI layer. Rust crate compiled via maturin to a Python wheel -- exposes `xqvm` and `xqasm` to the Python side. Not a pure-Python package. |
 | [`xqcp/`](../../xqcp/), [`xqsa/`](../../xqsa/), [`xquad/`](../../xquad/) | Python track | Python surface: DSL, solver adapters, and umbrella. Consume the VMs (via `xqffi`) rather than define their semantics. |
 
@@ -60,8 +60,8 @@ following in the same MR:**
 2. `xqvm/src/**/*.rs` -- the Rust production impl updated.
 3. `xqvm_py/{executor,opcodes,xqmx,state,vector,tracer,errors}.py` --
    the Python reference impl updated.
-4. `conformance/vectors/**` or `conformance/opcodes.yaml` -- a new
-   or modified conformance vector that exercises the change.
+4. `xqvm/tests/vectors/**` or `xqvm/opcodes.yaml` -- a new
+   or modified vector that exercises the change.
 
 ### Why
 
@@ -176,11 +176,11 @@ beyond review.
   semantic.
 - **Docs** -- everything under `docs/`, READMEs, CHANGELOG. Not
   semantic.
-- **Tests** -- `xqvm/src/**/tests.rs`, `xqvm_py/tests/**`,
-  `conformance/tests/**`. Tests exercise semantics but don't define
-  them; the conformance *vectors* (under `conformance/vectors/`) are
-  the authoritative cross-impl check and that's what the guard
-  watches.
+- **Tests** -- `xqvm/src/**/tests.rs`, `xqvm/tests/*.rs`,
+  `xqvm/tests/vector_suite/**`, `xqvm_py/tests/**`. Tests exercise
+  semantics but don't define them; the *vectors* (under
+  `xqvm/tests/vectors/`) are the authoritative check and that's what
+  the guard watches.
 
 ## The opcode-addition gate
 
