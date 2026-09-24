@@ -86,7 +86,7 @@ const VECTOR_FLOOR: usize = 154;
 /// x-macro, so the denominator cannot drift from the opcode table.
 macro_rules! all_opcodes_table {
     (
-        $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal, $delta:expr, {$($f:tt)*}) ),*
+        $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal, $_stack:expr, {$($f:tt)*}) ),*
         $(,)?
     ) => {
         &[ $( ($code, $mnem), )* ]

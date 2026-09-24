@@ -225,42 +225,13 @@ so both arms inherit it.
 ## What passing verification does not guarantee
 
 A pass means every phase's static checks succeeded. It does not mean the
-program runs to completion. The stack-depth phase reasons about each basic
-block's *net* effect, so an instruction that pops more operands than it
-pushes has its pop requirement absorbed whenever the running depth stays
-non-negative -- an operand-ordering error is invisible to it. `PUSH 1 / ADD
-/ HALT` passes because the scan sees a net effect of `+1 - 1 = 0` for the
-two instructions together, not that `ADD` needs two operands and only one
-was ever pushed:
-
-```sh
-$ xquad verify --text add_underflow.xqasm
-ok: add_underflow.xqasm (3 instructions)
-```
-
-```sh
-$ xquad run --text add_underflow.xqasm
-Error: xqvm::runtime_error
-
-  × stack underflow at byte 0x0002
-   ╭─[add_underflow.xqasm:2:1]
- 1 │   0x0000:  PUSH1   1
- 2 │   0x0002:  ADD     
-   · ─────────┬─────────
-   ·          ╰── execution failed here
- 3 │   0x0003:  HALT    
-   ╰────
-```
-
-This is a documented, current limitation of the per-basic-block analysis,
-not a bug specific to this program. [Verifier: what passing verification
+program runs to completion. [Verifier: what passing verification
 guarantees](../xqvm/verifier.md#what-passing-verification-guarantees) states
 the precise scope. Treat a pass as "structurally sound," not as "will run
 to completion."
 
-A whole class of faults is outside the verifier's reach for a different
-reason: they depend on values, and the verifier tracks types and depths
-rather than values. An allocator size, a grid extent, a loop bound, a
+A whole class of faults is outside the verifier's reach: they depend on
+values, and the verifier tracks types and depths rather than values. An allocator size, a grid extent, a loop bound, a
 calldata index and every arithmetic operand are ordinary popped stack
 values, so `InvalidAllocation`, `InvalidGridDimensions`,
 `InvalidIntegerK`, `ArithmeticOverflow`, `IndexOutOfBounds`,

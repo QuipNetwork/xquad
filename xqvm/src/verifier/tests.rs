@@ -823,12 +823,155 @@ fn stack_effect_underflow_on_pop_empty() {
 
 #[test]
 fn stack_effect_underflow_on_binary_op() {
-    // ADD on an empty stack: delta = -1, depth = 0 → depth + delta < 0 → underflow.
-    // Note: the conservative scan uses net delta, so ADD with depth=1 (one item) would
-    // not be caught here -- that is a documented limitation of the linear scan.
+    // ADD on an empty stack pops two values that are not there.
     let code = bytes(&[Instruction::Add {}, Instruction::Halt {}]);
     let err = StackDepthPhase.run(&Program::new(code)).unwrap_err();
     assert_eq!(err.variant_name(), "StackUnderflow");
+}
+
+#[test]
+fn stack_effect_underflow_on_binary_op_with_one_operand() {
+    // ADD pops two before pushing one; a single value is not enough, even
+    // though the block's net depth never goes negative (+1, then -1).
+    let code = bytes(&[
+        Instruction::Push1 { val: [1] },
+        Instruction::Add {},
+        Instruction::Halt {},
+    ]);
+    let err = StackDepthPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "StackUnderflow");
+}
+
+#[test]
+fn stack_effect_underflow_on_swap_with_one_value() {
+    // SWAP pops two and pushes two: net zero, but it needs two values.
+    let code = bytes(&[
+        Instruction::Push1 { val: [1] },
+        Instruction::Swap {},
+        Instruction::Halt {},
+    ]);
+    let program = Program::new(code);
+    let err = StackDepthPhase.run(&program).unwrap_err();
+    assert_eq!(err.variant_name(), "StackUnderflow");
+    // The full pipeline, which the CLI and the chain run, rejects it too.
+    assert!(matches!(
+        verify(&program),
+        Err(VerifierError::StackUnderflow { .. })
+    ));
+}
+
+#[test]
+fn stack_effect_underflow_on_copy_of_empty_stack() {
+    // COPY pops one and pushes two: net +1, but it needs a value to copy.
+    let code = bytes(&[Instruction::Copy {}, Instruction::Halt {}]);
+    let err = StackDepthPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "StackUnderflow");
+}
+
+#[test]
+fn stack_effect_underflow_on_idxgrid_with_two_operands() {
+    // The example spec/xqvm/VERIFIER.md uses: IDXGRID pops three.
+    let code = bytes(&[
+        Instruction::Push1 { val: [1] },
+        Instruction::Push1 { val: [2] },
+        Instruction::IdxGrid {},
+        Instruction::Halt {},
+    ]);
+    let err = StackDepthPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "StackUnderflow");
+}
+
+#[test]
+fn stack_effect_underflow_after_sclr_counts_pops() {
+    // After SCLR the depth is absolute: PUSH 1 / SWAP underflows there too.
+    let code = bytes(&[
+        Instruction::Sclr {},
+        Instruction::Push1 { val: [1] },
+        Instruction::Swap {},
+        Instruction::Halt {},
+    ]);
+    let err = StackDepthPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "StackUnderflow");
+}
+
+#[test]
+fn stack_effect_underflow_on_a_path_through_a_join() {
+    // Both arms leave depth 1 at the join, where SWAP needs 2.
+    let mut b = InstructionBuilder::new();
+    let join = b.label();
+    let _ = b.emit_push(1);
+    let _ = b.emit_push(0);
+    let _ = b.emit_jump_if(join);
+    let _ = b.place(join).unwrap();
+    let _ = b.emit(Instruction::Swap {});
+    let _ = b.emit_halt();
+    let program = b.build().unwrap();
+    let err = StackDepthPhase.run(&program).unwrap_err();
+    assert_eq!(err.variant_name(), "StackUnderflow");
+}
+
+/// Every opcode in the table, zero-initialised, for the table-driven test
+/// below.
+macro_rules! all_default_instructions {
+    (
+        $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal, $_stack:expr,
+            {$($fname:ident: $fty:ty),* $(,)?}) ),*
+        $(,)?
+    ) => {
+        [ $( Instruction::$variant { $($fname: <$fty as Default>::default(),)* } ),* ]
+    };
+}
+
+/// Every opcode that pops is rejected one value short of its pop count and
+/// accepted at exactly it, whatever it pushes. Control-flow openers and
+/// conditional jumps are left out: their programs need a matching `NEXT`
+/// or `TARGET`, and the plain pop-only case is already covered above.
+#[test]
+fn every_popping_opcode_needs_its_full_pop_count() {
+    let with = |instr: Instruction, values: u8| {
+        let mut instrs: Vec<Instruction> = (0..values)
+            .map(|_| Instruction::Push1 { val: [1] })
+            .collect();
+        instrs.extend([instr, Instruction::Halt {}]);
+        Program::new(bytes(&instrs))
+    };
+    let mut pop_and_push = Vec::new();
+    for instr in crate::opcodes!(all_default_instructions) {
+        let crate::StackEffect::Fixed { pops, pushes } = instr.stack_effect() else {
+            continue;
+        };
+        // `checked_sub` also skips the opcodes that pop nothing.
+        let Some(one_short) = pops.checked_sub(1) else {
+            continue;
+        };
+        if matches!(
+            instr,
+            Instruction::JumpI1 { .. }
+                | Instruction::JumpI2 { .. }
+                | Instruction::Range {}
+                | Instruction::Iter { .. }
+        ) {
+            continue;
+        }
+        if pushes > 0 {
+            pop_and_push.push(instr.mnemonic());
+        }
+        let short = StackDepthPhase.run(&with(instr, one_short));
+        assert!(
+            matches!(short, Err(VerifierError::StackUnderflow { .. })),
+            "{}: {one_short} values for {pops} pops should underflow, got {short:?}",
+            instr.mnemonic()
+        );
+        let exact = StackDepthPhase.run(&with(instr, pops));
+        assert!(
+            exact.is_ok(),
+            "{}: {pops} values for {pops} pops should verify, got {exact:?}",
+            instr.mnemonic()
+        );
+    }
+    // Every opcode that both pops and pushes went through the loop above;
+    // spec/xqvm/VERIFIER.md's per-opcode table lists the same forty.
+    assert_eq!(pop_and_push.len(), 40, "{pop_and_push:?}");
 }
 
 #[test]
