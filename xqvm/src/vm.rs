@@ -2236,21 +2236,8 @@ impl Vm {
     fn exec_idx_triu(&mut self, pos: usize) -> Result<StepResult, Error> {
         let j = self.pop(pos)?;
         let i = self.pop(pos)?;
-        // The pair is unordered: `spec/xqvm/ISA.md` requires the operands to
-        // be swapped when i > j, so (i, j) and (j, i) address the same cell.
-        let (i, j) = if i > j { (j, i) } else { (i, j) };
-        // Upper-triangular index for (i, j) with i <= j:
-        // index = j*(j-1)/2 + i
-        //
-        // j*(j-1) is a product of consecutive integers, so it is non-negative
-        // and even for every operand, negative ones included. Truncating and
-        // flooring division therefore agree here and cannot diverge.
-        let idx = j
-            .checked_sub(1)
-            .and_then(|jm1| j.checked_mul(jm1))
-            .and_then(|product| product.checked_div(2))
-            .and_then(|half| half.checked_add(i))
-            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
+        let idx =
+            crate::model::triu_index(i, j).ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
         self.push_stack(idx, pos)?;
         Ok(StepResult::Continue)
     }

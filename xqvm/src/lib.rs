@@ -123,7 +123,7 @@ pub use disasm::Disassembly;
 pub use error::Error;
 #[cfg(feature = "std")]
 pub use error::RuntimeDiagnostic;
-pub use model::{Domain, XqmxModel, XqmxSample};
+pub use model::{Domain, XqmxModel, XqmxSample, triu_index};
 #[cfg(feature = "std")]
 pub use tracer::{JsonTracer, TextTracer};
 pub use tracer::{NoopTracer, StepState, Tracer};
