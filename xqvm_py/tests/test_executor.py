@@ -3452,24 +3452,49 @@ class TestStepLimit:
         assert ex.instructions == 6
         assert ex.steps > ex.instructions
 
-    def test_charge_steps_saturates_rather_than_overflowing(self):
-        """Python ints don't overflow on their own, so an unlimited step
-        budget could let the stored total grow past what Rust's `u64`
-        counter would report for the same program -- exactly the
-        divergence `_saturating` in `xqvm_py/metering.py` exists to
-        prevent. Mirrors `expansion_saturates_rather_than_wrapping` in
-        `xqvm/src/metering.rs`, but at the counter itself rather than at
-        one cost formula.
+    def test_charge_steps_refuses_rather_than_saturates_at_the_ceiling(self):
+        """The step counter is a `u64` on both VMs (QUI-1342).
+
+        A charge landing exactly on `U64_MAX` is admitted under an unlimited
+        budget; the next one would carry the counter past it and is refused
+        rather than clamped, leaving `steps` where it was. Python ints do
+        not overflow on their own, so without the explicit ceiling this VM
+        would admit a charge Rust refuses. Mirrors
+        `step_counter_refuses_rather_than_saturates_at_its_ceiling` in
+        `xqvm/src/vm.rs`; no program reaches the ceiling in a test's
+        lifetime, so the counter is driven directly.
         """
+        from xqvm_py.errors import StepLimitExceeded
         from xqvm_py.metering import U64_MAX
 
-        # Explicitly unlimited: `execute` defaults to DEFAULT_STEP_LIMIT, and
-        # this test is about the stored total saturating, not the budget.
         ex = Executor()
         ex.execute(assemble("HALT"), step_limit=None)
-        ex._charge_steps(U64_MAX)
-        ex._charge_steps(U64_MAX)
+        ex.state.steps = U64_MAX - 1
+        with pytest.raises(StepLimitExceeded) as excinfo:
+            ex._charge_steps(2)
+        assert excinfo.value.limit == U64_MAX
+        assert excinfo.value.requested == 2
+        assert excinfo.value.used == U64_MAX - 1
+        assert ex.steps == U64_MAX - 1
+
+        ex._charge_steps(1)
         assert ex.steps == U64_MAX
+        with pytest.raises(StepLimitExceeded):
+            ex._charge_steps(1)
+        assert ex.steps == U64_MAX
+
+    def test_explicit_limit_above_the_ceiling_is_the_ceiling(self):
+        """Rust cannot take a limit past `u64::MAX`; Python can be handed
+        one, and must not let it lift the counter's ceiling."""
+        from xqvm_py.errors import StepLimitExceeded
+        from xqvm_py.metering import U64_MAX
+
+        ex = Executor()
+        ex.execute(assemble("HALT"), step_limit=U64_MAX * 2)
+        ex.state.steps = U64_MAX - 1
+        with pytest.raises(StepLimitExceeded) as excinfo:
+            ex._charge_steps(2)
+        assert excinfo.value.limit == U64_MAX
 
     def test_step_can_be_driven_directly_by_a_charging_opcode(self):
         """`step()` is public, so `_step_limit` must exist before `execute()`.

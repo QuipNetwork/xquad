@@ -1,0 +1,19 @@
+; step_limit_at_the_counter_ceiling: a run under a step limit of 2^64 - 1.
+;
+; The step counter is a u64, and the largest limit a host can set is the
+; counter's own ceiling -- the limit an unbounded budget stands for
+; (spec/xqvm/METERING.md, The Step Counter). Under it a run is metered
+; exactly as under any other limit: every instruction pays BASE_STEPS and
+; SETLINE pays COEFF_WRITE_STEPS on top, and the count it reports is the
+; count it spent. No program can carry the counter past 2^64 - 1 in a test's
+; lifetime, so the refusal at the ceiling is pinned by crate tests on both
+; VMs rather than here.
+
+PUSH 2
+BQMX r0
+PUSH 0
+PUSH 3
+SETLINE r0
+PUSH 0
+GETLINE r0
+HALT

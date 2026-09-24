@@ -517,6 +517,11 @@ impl Vm {
     ///
     /// Only safe where the caller controls the program or can abandon the
     /// thread. A program that never halts will not return.
+    ///
+    /// Equivalent to `set_step_limit(u64::MAX)`. The step counter is a
+    /// `u64`, so a run whose count would pass `u64::MAX` still fails with
+    /// [`Error::StepLimitExceeded`](crate::Error::StepLimitExceeded) rather
+    /// than reporting a clamped count.
     pub fn set_unlimited_steps(&mut self) -> &mut Self {
         self.step_limit = u64::MAX;
         self
@@ -907,18 +912,25 @@ impl Vm {
         self.charge_steps_at(None, metering::BASE_STEPS)
     }
 
+    /// The accumulation is exact, for the reason [`charge`](Self::charge)
+    /// gives: a saturating total is admitted at `step_limit = u64::MAX`, so
+    /// the budget would stop binding at its own ceiling. A count that does
+    /// not fit a `u64` exceeds every `u64` limit, so overflow is
+    /// [`Error::StepLimitExceeded`] and `steps()` never reports a clamped
+    /// value (`spec/xqvm/METERING.md`'s The Step Counter).
     fn charge_steps_at(&mut self, pos: Option<usize>, units: u64) -> Result<(), Error> {
-        let total = self.steps.saturating_add(units);
-        if total > self.step_limit {
-            return Err(Error::StepLimitExceeded {
+        match self.steps.checked_add(units) {
+            Some(total) if total <= self.step_limit => {
+                self.steps = total;
+                Ok(())
+            }
+            _ => Err(Error::StepLimitExceeded {
                 pos,
                 requested: units,
                 used: self.steps,
                 limit: self.step_limit,
-            });
+            }),
         }
-        self.steps = total;
-        Ok(())
     }
 
     /// Charge `bytes` against the allocation budget.
@@ -935,12 +947,7 @@ impl Vm {
     /// the budget stops binding at its own ceiling. A cost that does not fit
     /// a `u64` exceeds every `u64` budget by definition, so overflow is
     /// [`Error::MemoryLimitExceeded`] and there is no second answer to pick.
-    ///
-    /// The step budget in [`Vm::charge_steps_at`] deliberately does *not*
-    /// match: it saturates, and `xqvm_py._charge_steps` clamps to mirror it,
-    /// because a step count is observable through conformance in a way a
-    /// byte count is not. Changing that is a specification decision rather
-    /// than a bug fix, so the two budgets differ here on purpose.
+    /// The step budget in [`Vm::charge_steps_at`] follows the same rule.
     fn charge(&mut self, pos: usize, bytes: u64) -> Result<(), Error> {
         let Some(total) = self.memory_used.checked_add(bytes) else {
             return Err(Error::MemoryLimitExceeded {
@@ -3789,5 +3796,70 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A charge that lands exactly on `u64::MAX` is admitted at the largest
+    /// limit, and the next one, which would carry the counter past it, is
+    /// refused rather than clamped (QUI-1342). No program can reach the
+    /// ceiling in a test's lifetime, so the counter is set directly.
+    #[test]
+    fn step_counter_refuses_rather_than_saturates_at_its_ceiling() {
+        let mut vm = Vm::new();
+        let _ = vm.set_unlimited_steps();
+        vm.steps = u64::MAX - 1;
+
+        let err = vm.charge_steps(7, 2).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::StepLimitExceeded {
+                    pos: Some(7),
+                    requested: 2,
+                    used,
+                    limit: u64::MAX,
+                } if used == u64::MAX - 1
+            ),
+            "expected StepLimitExceeded at the counter's ceiling, got {err:?}"
+        );
+        assert_eq!(vm.steps(), u64::MAX - 1, "a refused charge must not land");
+
+        vm.charge_steps(7, 1)
+            .expect("a charge onto u64::MAX fits the counter");
+        assert_eq!(vm.steps(), u64::MAX);
+
+        let err = vm.charge_steps_base().unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::StepLimitExceeded {
+                    pos: None,
+                    used: u64::MAX,
+                    limit: u64::MAX,
+                    ..
+                }
+            ),
+            "expected the base charge to be refused at u64::MAX, got {err:?}"
+        );
+        assert_eq!(vm.steps(), u64::MAX);
+    }
+
+    /// The largest charge a cost formula can produce is `u64::MAX` (every
+    /// formula saturates). It is affordable from an empty counter and from
+    /// no other state, so one base step before it is enough to be refused.
+    #[test]
+    fn a_saturated_charge_is_refused_once_any_step_is_spent() {
+        let mut vm = Vm::new();
+        let _ = vm.set_unlimited_steps();
+        vm.charge_steps(0, u64::MAX)
+            .expect("u64::MAX fits an empty counter");
+
+        let mut vm = Vm::new();
+        let _ = vm.set_unlimited_steps();
+        vm.charge_steps_base().expect("one base step fits");
+        assert!(matches!(
+            vm.charge_steps(0, u64::MAX),
+            Err(Error::StepLimitExceeded { used: 1, .. })
+        ));
+        assert_eq!(vm.steps(), 1);
     }
 }

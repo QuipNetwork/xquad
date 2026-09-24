@@ -54,6 +54,7 @@ from .metering import (
     ELEMENT_COPY_STEPS,
     GRID_CELL_STEPS,
     SAMPLE_COPY_STEPS,
+    U64_MAX,
     _saturating,
     equality_expansion_steps,
     model_eval_steps,
@@ -416,16 +417,18 @@ class Executor:
         Callers charge *before* they do the work, so an instruction that
         cannot pay does none of it -- the same discipline as `_charge`.
 
-        The running total is clamped the way Rust's `u64` counter saturates
-        (`charge_steps_at`'s `self.steps.saturating_add(units)`): Python
-        integers do not overflow on their own, so without this an
-        unbounded `step_limit` would let the two VMs' `steps` diverge on a
-        program large enough to cross `u64::MAX`.
+        The counter is a `u64` on the Rust VM, and a charge that would
+        carry it past `U64_MAX` is refused whatever the limit
+        (`spec/xqvm/METERING.md`'s The Step Counter). Python integers do not
+        overflow on their own, so the ceiling is applied here explicitly;
+        an unbounded `step_limit` is a limit of `U64_MAX`, which is what
+        `Vm::set_unlimited_steps` sets and what the error reports.
         """
         limit = self._step_limit if limit is None else limit
-        total = _saturating(self.state.steps + units)
-        if limit is not None and total > limit:
-            raise StepLimitExceeded(limit, requested=units, used=self.state.steps)
+        ceiling = U64_MAX if limit is None else min(limit, U64_MAX)
+        total = self.state.steps + units
+        if total > ceiling:
+            raise StepLimitExceeded(ceiling, requested=units, used=self.state.steps)
         self.state.steps = total
 
     def _charge_variables(self, count: int) -> None:
