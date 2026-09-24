@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import pytest
 
+from xqffi.vm import StepLimitExceeded
 from xquad.program import Program
 from xquad.vm import DEFAULT_STEP_LIMIT, VM, VMBackend
 
@@ -42,7 +43,7 @@ def test_the_default_is_the_documented_bound() -> None:
 
 
 def test_a_fresh_session_bounds_a_runaway_program() -> None:
-    with pytest.raises(Exception, match="StepLimit"):
+    with pytest.raises(StepLimitExceeded):
         Program.from_source(RUNAWAY).session().run()
 
 

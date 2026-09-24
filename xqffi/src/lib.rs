@@ -23,8 +23,8 @@
 //!   `assemble_source`, `disassemble`, `instruction_count`.
 //! - `xqffi.vm` — bindings around [`xqvm::Vm`]: a low-level `Vm` class
 //!   with the `set_calldata` / `set_output_slots` / `run` / `outputs` /
-//!   `stack` surface that the conformance harness drives, plus thin
-//!   `XqmxModel` / `XqmxSample` wrappers with getters and setters.
+//!   `stack` surface, the `Domain` / `XqmxModel` / `XqmxSample` model
+//!   types, `triu`, the VM's limits, and one exception class per fault.
 //! - `xqffi.verifier` — bindings around [`xqvm::verifier`]: `verify`
 //!   (bytecode bytes) and `verify_source` (`.xqasm` text).
 //!
@@ -38,6 +38,7 @@
 use pyo3::prelude::*;
 
 mod asm;
+mod fault;
 mod verifier;
 mod vm;
 

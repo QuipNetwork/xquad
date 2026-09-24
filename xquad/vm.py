@@ -30,6 +30,7 @@ from typing import Any
 
 from xqffi.asm import assemble_source as _assemble_source
 from xqffi.vm import DEFAULT_STEP_LIMIT as _DEFAULT_STEP_LIMIT
+from xqffi.vm import Domain as DomainFFI
 from xqffi.vm import Vm as _RustVm
 from xqffi.vm import XqmxModel as ModelFFI
 from xqffi.vm import XqmxSample as SampleFFI
@@ -65,13 +66,20 @@ class VMBackend(Enum):
 # Domain mapping
 # ---------------------------------------------------------------------------
 
-_DOMAIN_TO_STR: dict[XQMXDomain, str] = {
-    XQMXDomain.BINARY: "binary",
-    XQMXDomain.SPIN: "spin",
-    XQMXDomain.INTEGER: "integer",
+_DOMAIN_FROM_NAME: dict[str, XQMXDomain] = {
+    "binary": XQMXDomain.BINARY,
+    "spin": XQMXDomain.SPIN,
+    "integer": XQMXDomain.INTEGER,
 }
 
-_DOMAIN_FROM_STR: dict[str, XQMXDomain] = {v: k for k, v in _DOMAIN_TO_STR.items()}
+
+def _domain_to_ffi(xqmx: XQMX) -> DomainFFI:
+    if xqmx.domain == XQMXDomain.BINARY:
+        return DomainFFI.BINARY
+    if xqmx.domain == XQMXDomain.SPIN:
+        return DomainFFI.SPIN
+    return DomainFFI.integer(xqmx.integer_k)
+
 
 # ---------------------------------------------------------------------------
 # FFI <-> XQMX conversion
@@ -79,9 +87,7 @@ _DOMAIN_FROM_STR: dict[str, XQMXDomain] = {v: k for k, v in _DOMAIN_TO_STR.items
 
 
 def _xqmx_to_model_ffi(xqmx: XQMX) -> ModelFFI:
-    domain_str = _DOMAIN_TO_STR[xqmx.domain]
-    k = xqmx.integer_k if xqmx.domain == XQMXDomain.INTEGER else None
-    model = ModelFFI(domain=domain_str, size=xqmx.size, rows=xqmx.rows, cols=xqmx.cols, k=k)
+    model = ModelFFI(_domain_to_ffi(xqmx), size=xqmx.size, rows=xqmx.rows, cols=xqmx.cols)
     for idx, coeff in xqmx.linear.items():
         model.set_linear(idx, coeff)
     for (i, j), coeff in xqmx.quadratic.items():
@@ -90,16 +96,14 @@ def _xqmx_to_model_ffi(xqmx: XQMX) -> ModelFFI:
 
 
 def _xqmx_to_sample_ffi(xqmx: XQMX) -> SampleFFI:
-    domain_str = _DOMAIN_TO_STR[xqmx.domain]
     # `get_linear` supplies the domain default for an absent entry, so the
     # dense vector Rust expects is built without restating that default here.
     values = [xqmx.get_linear(i) for i in range(xqmx.size)]
-    k = xqmx.integer_k if xqmx.domain == XQMXDomain.INTEGER else None
-    return SampleFFI(domain=domain_str, values=values, rows=xqmx.rows, cols=xqmx.cols, k=k)
+    return SampleFFI(_domain_to_ffi(xqmx), values=values, rows=xqmx.rows, cols=xqmx.cols)
 
 
 def _model_ffi_to_xqmx(model: ModelFFI) -> XQMX:
-    domain = _DOMAIN_FROM_STR[model.domain]
+    domain = _DOMAIN_FROM_NAME[model.domain.name]
     if domain == XQMXDomain.BINARY:
         xqmx = XQMX.binary_model(model.size, model.rows, model.cols)
     elif domain == XQMXDomain.SPIN:
@@ -114,7 +118,7 @@ def _model_ffi_to_xqmx(model: ModelFFI) -> XQMX:
 
 
 def _sample_ffi_to_xqmx(sample: SampleFFI) -> XQMX:
-    domain = _DOMAIN_FROM_STR[sample.domain]
+    domain = _DOMAIN_FROM_NAME[sample.domain.name]
     size = len(sample)
     if domain == XQMXDomain.BINARY:
         xqmx = XQMX.binary_sample(size, sample.rows, sample.cols)

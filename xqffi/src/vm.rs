@@ -15,28 +15,111 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! `xqffi.vm` — `PyO3` bindings around [`xqvm::Vm`].
+//! `xqffi.vm` -- `PyO3` bindings around [`xqvm::Vm`] and its model types.
 //!
-//! Exposes three Python classes:
+//! Exposes:
 //!
-//! - `Vm` — the interpreter. Construct, `set_calldata(list)`,
+//! - `Vm` -- the interpreter. Construct, `set_calldata(list)`,
 //!   `set_output_slots(n)`, `run(bytecode)`, then read `outputs()` /
-//!   `stack()`.
-//! - `XqmxModel` — a quadratic (QUBO/Ising/integer) optimisation
-//!   model. Passed into `Vm.set_calldata` for programs whose
-//!   `INPUT` reads a model slot, and returned from `Vm.outputs()`
-//!   when the final register held a [`RegVal::Model`].
-//! - `XqmxSample` — a candidate solution for a model. Same plumbing.
+//!   `stack()`. A fault raises the `XqvmError` subclass named for it.
+//! - `Domain` -- a variable domain: `Domain.BINARY`, `Domain.SPIN`, or
+//!   `Domain.integer(k)`.
+//! - `XqmxModel` -- a quadratic (QUBO/Ising/integer) optimisation model,
+//!   with `energy(sample)` evaluated by the VM's own energy function.
+//! - `XqmxSample` -- a candidate solution for a model.
+//! - `triu(i, j)` -- the index `IDXTRIU` computes.
+//! - `XqvmError` and one subclass per fault (see `fault.rs`).
+//! - `DEFAULT_STEP_LIMIT`, `DEFAULT_MEMORY_LIMIT`, `MAX_ALLOCATION_SIZE`.
 //!
-//! Calldata is now heterogeneous: each element may be an `int`, a
-//! `list[int]` (mapped to `RegVal::VecInt`), an `XqmxModel`, or an
-//! `XqmxSample`. `outputs()` mirrors the inverse dispatch.
+//! Calldata is heterogeneous: each element may be an `int`, a `list[int]`
+//! (mapped to `RegVal::VecInt`), an `XqmxModel`, an `XqmxSample`, or
+//! `None`. `outputs()` mirrors the inverse dispatch.
 
-use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 
 use xqvm::{Domain, Program, RegVal, Vm, XqmxModel, XqmxSample};
+
+use crate::fault;
+
+/// Python wrapper around [`xqvm::Domain`].
+///
+/// Immutable and hashable, so a domain can key a dict. Equality is by value:
+/// `Domain.integer(3) == Domain.integer(3)`.
+#[pyclass(name = "Domain", module = "xqffi.vm", frozen, eq, skip_from_py_object)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PyDomain {
+    inner: Domain,
+}
+
+#[pymethods]
+impl PyDomain {
+    /// The binary domain, `{0, 1}`.
+    #[classattr]
+    #[pyo3(name = "BINARY")]
+    const fn binary() -> Self {
+        Self {
+            inner: Domain::Binary,
+        }
+    }
+
+    /// The spin domain, `{-1, +1}`.
+    #[classattr]
+    #[pyo3(name = "SPIN")]
+    const fn spin() -> Self {
+        Self {
+            inner: Domain::Spin,
+        }
+    }
+
+    /// The integer domain `{0, ..., k-1}`. Raises `ValueError` for `k < 2`.
+    #[staticmethod]
+    fn integer(k: i64) -> PyResult<Self> {
+        Ok(Self {
+            inner: integer_domain(k)?,
+        })
+    }
+
+    /// `"binary"`, `"spin"`, or `"integer"`.
+    #[getter]
+    const fn name(&self) -> &'static str {
+        domain_name(&self.inner)
+    }
+
+    /// The number of values an integer domain holds; `None` otherwise.
+    #[getter]
+    const fn k(&self) -> Option<i64> {
+        domain_k(&self.inner)
+    }
+
+    /// The domain and its values, e.g. `"integer {0, ..., 2}"`.
+    #[getter]
+    fn description(&self) -> String {
+        self.inner.to_string()
+    }
+
+    /// Whether a sample variable in this domain may hold `value`.
+    const fn contains(&self, value: i64) -> bool {
+        self.inner.contains(value)
+    }
+
+    fn __hash__(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        (domain_name(&self.inner), domain_k(&self.inner)).hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn __repr__(&self) -> String {
+        match self.inner {
+            Domain::Binary => "Domain.BINARY".to_owned(),
+            Domain::Spin => "Domain.SPIN".to_owned(),
+            Domain::Integer(k) => format!("Domain.integer({k})"),
+        }
+    }
+}
 
 /// Python wrapper around [`xqvm::XqmxModel`].
 #[pyclass(name = "XqmxModel", module = "xqffi.vm", skip_from_py_object)]
@@ -47,43 +130,59 @@ struct PyXqmxModel {
 
 #[pymethods]
 impl PyXqmxModel {
-    /// Construct a fresh model. `domain` is `"binary"`, `"spin"`, or
-    /// `"integer"` (the latter requires `k`).
+    /// Construct an empty model of `size` variables over `domain`.
     #[new]
-    #[pyo3(signature = (domain, size, rows = 0, cols = 0, k = None))]
-    fn new(domain: &str, size: usize, rows: usize, cols: usize, k: Option<i64>) -> PyResult<Self> {
-        let dom = domain_from_str(domain, k)?;
-        let mut inner = XqmxModel::new(dom, size);
-        inner.rows = rows;
-        inner.cols = cols;
-        Ok(Self { inner })
+    #[pyo3(signature = (domain, size, rows = 0, cols = 0))]
+    fn new(domain: &Bound<'_, PyDomain>, size: usize, rows: usize, cols: usize) -> Self {
+        Self::build(domain.get().inner, size, rows, cols)
+    }
+
+    /// An empty binary model.
+    #[staticmethod]
+    #[pyo3(signature = (size, rows = 0, cols = 0))]
+    fn binary(size: usize, rows: usize, cols: usize) -> Self {
+        Self::build(Domain::Binary, size, rows, cols)
+    }
+
+    /// An empty spin model.
+    #[staticmethod]
+    #[pyo3(signature = (size, rows = 0, cols = 0))]
+    fn spin(size: usize, rows: usize, cols: usize) -> Self {
+        Self::build(Domain::Spin, size, rows, cols)
+    }
+
+    /// An empty integer model over `{0, ..., k-1}`. Raises `ValueError` for
+    /// `k < 2`.
+    #[staticmethod]
+    #[pyo3(signature = (size, k, rows = 0, cols = 0))]
+    fn integer(size: usize, k: i64, rows: usize, cols: usize) -> PyResult<Self> {
+        Ok(Self::build(integer_domain(k)?, size, rows, cols))
     }
 
     #[getter]
-    fn domain(&self) -> &'static str {
-        domain_name(&self.inner.domain)
-    }
-
-    #[getter]
-    fn k(&self) -> Option<i64> {
-        match &self.inner.domain {
-            Domain::Integer(k) => Some(*k),
-            _ => None,
+    const fn domain(&self) -> PyDomain {
+        PyDomain {
+            inner: self.inner.domain,
         }
     }
 
     #[getter]
-    fn size(&self) -> usize {
+    const fn k(&self) -> Option<i64> {
+        domain_k(&self.inner.domain)
+    }
+
+    #[getter]
+    const fn size(&self) -> usize {
         self.inner.size
     }
 
     #[getter]
-    fn rows(&self) -> usize {
+    const fn rows(&self) -> usize {
         self.inner.rows
     }
 
     #[getter]
-    fn cols(&self) -> usize {
+    const fn cols(&self) -> usize {
         self.inner.cols
     }
 
@@ -95,12 +194,32 @@ impl PyXqmxModel {
         self.inner.get_linear(i)
     }
 
+    /// Add `delta` to the linear coefficient of variable `i`.
+    ///
+    /// Raises `ArithmeticOverflow` and leaves the model unchanged when the
+    /// result leaves the signed 64-bit range.
+    fn add_linear(&mut self, i: usize, delta: i64) -> PyResult<()> {
+        self.inner
+            .add_linear(i, delta)
+            .map_err(|e| fault::vm_error(&e))
+    }
+
     fn set_quad(&mut self, i: usize, j: usize, value: i64) {
         self.inner.set_quad(i, j, value);
     }
 
     fn get_quad(&self, i: usize, j: usize) -> i64 {
         self.inner.get_quad(i, j)
+    }
+
+    /// Add `delta` to the quadratic coefficient of the pair `(i, j)`.
+    ///
+    /// Raises `ArithmeticOverflow` and leaves the model unchanged when the
+    /// result leaves the signed 64-bit range.
+    fn add_quad(&mut self, i: usize, j: usize, delta: i64) -> PyResult<()> {
+        self.inner
+            .add_quad(i, j, delta)
+            .map_err(|e| fault::vm_error(&e))
     }
 
     /// Return the sparse linear terms as `list[(index, coefficient)]`.
@@ -117,12 +236,32 @@ impl PyXqmxModel {
             .collect()
     }
 
+    /// The model's energy at `sample`, computed as `ENERGY` computes it.
+    ///
+    /// Raises `SizeMismatch` when the sample's length differs from the
+    /// model's size, and `ArithmeticOverflow` when a term or partial sum
+    /// leaves the signed 64-bit range.
+    fn energy(&self, sample: &Bound<'_, PyXqmxSample>) -> PyResult<i64> {
+        self.inner
+            .energy(&sample.borrow().inner.values)
+            .map_err(|e| fault::vm_error(&e))
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "XqmxModel(domain={}, size={})",
             domain_name(&self.inner.domain),
             self.inner.size,
         )
+    }
+}
+
+impl PyXqmxModel {
+    fn build(domain: Domain, size: usize, rows: usize, cols: usize) -> Self {
+        let mut inner = XqmxModel::new(domain, size);
+        inner.rows = rows;
+        inner.cols = cols;
+        Self { inner }
     }
 }
 
@@ -135,47 +274,52 @@ struct PyXqmxSample {
 
 #[pymethods]
 impl PyXqmxSample {
+    /// Construct a sample over `domain` holding `values`.
+    ///
+    /// Raises `ValueError` if any value lies outside `domain`.
     #[new]
-    #[pyo3(signature = (domain, values, rows = 0, cols = 0, k = None))]
+    #[pyo3(signature = (domain, values, rows = 0, cols = 0))]
     fn new(
-        domain: &str,
+        domain: &Bound<'_, PyDomain>,
         values: Vec<i64>,
         rows: usize,
         cols: usize,
-        k: Option<i64>,
     ) -> PyResult<Self> {
-        let dom = domain_from_str(domain, k)?;
-        // Independent guards rather than one fused condition, so the extent
-        // checks (QUI-1164) drop in beside this one.
-        //
-        // The VM's own check is on SETLINE and ADDLINE, which a host-supplied
-        // sample never passes through: `Vm::set_calldata` is infallible by
-        // design and stays the trusted-embedder path. Closing that gap is
-        // this constructor's job -- and because the type exposes only
-        // getters, a sample that constructs cannot afterwards be mutated out
-        // of domain, so nothing downstream has to re-scan it.
-        if let Some((index, value)) = values.iter().enumerate().find(|(_, v)| !dom.contains(**v)) {
-            return Err(PyValueError::new_err(format!(
-                "sample value {value} at variable {index} is outside the {dom} domain"
-            )));
-        }
-        let mut inner = XqmxSample::new(dom, values);
-        inner.rows = rows;
-        inner.cols = cols;
-        Ok(Self { inner })
+        Self::build(domain.get().inner, values, rows, cols)
+    }
+
+    /// A binary sample. Raises `ValueError` for a value outside `{0, 1}`.
+    #[staticmethod]
+    #[pyo3(signature = (values, rows = 0, cols = 0))]
+    fn binary(values: Vec<i64>, rows: usize, cols: usize) -> PyResult<Self> {
+        Self::build(Domain::Binary, values, rows, cols)
+    }
+
+    /// A spin sample. Raises `ValueError` for a value outside `{-1, +1}`.
+    #[staticmethod]
+    #[pyo3(signature = (values, rows = 0, cols = 0))]
+    fn spin(values: Vec<i64>, rows: usize, cols: usize) -> PyResult<Self> {
+        Self::build(Domain::Spin, values, rows, cols)
+    }
+
+    /// An integer sample over `{0, ..., k-1}`. Raises `ValueError` for
+    /// `k < 2` or for a value outside the domain.
+    #[staticmethod]
+    #[pyo3(signature = (values, k, rows = 0, cols = 0))]
+    fn integer(values: Vec<i64>, k: i64, rows: usize, cols: usize) -> PyResult<Self> {
+        Self::build(integer_domain(k)?, values, rows, cols)
     }
 
     #[getter]
-    fn domain(&self) -> &'static str {
-        domain_name(&self.inner.domain)
+    const fn domain(&self) -> PyDomain {
+        PyDomain {
+            inner: self.inner.domain,
+        }
     }
 
     #[getter]
-    fn k(&self) -> Option<i64> {
-        match &self.inner.domain {
-            Domain::Integer(k) => Some(*k),
-            _ => None,
-        }
+    const fn k(&self) -> Option<i64> {
+        domain_k(&self.inner.domain)
     }
 
     #[getter]
@@ -183,13 +327,19 @@ impl PyXqmxSample {
         self.inner.values.clone()
     }
 
+    /// The number of variables; the same as `len(sample)`.
     #[getter]
-    fn rows(&self) -> usize {
+    fn size(&self) -> usize {
+        self.inner.values.len()
+    }
+
+    #[getter]
+    const fn rows(&self) -> usize {
         self.inner.rows
     }
 
     #[getter]
-    fn cols(&self) -> usize {
+    const fn cols(&self) -> usize {
         self.inner.cols
     }
 
@@ -203,6 +353,33 @@ impl PyXqmxSample {
             domain_name(&self.inner.domain),
             self.inner.values.len(),
         )
+    }
+}
+
+impl PyXqmxSample {
+    fn build(domain: Domain, values: Vec<i64>, rows: usize, cols: usize) -> PyResult<Self> {
+        // Independent guards rather than one fused condition, so the extent
+        // checks (QUI-1164) drop in beside this one.
+        //
+        // The VM's own check is on SETLINE and ADDLINE, which a host-supplied
+        // sample never passes through: `Vm::set_calldata` is infallible by
+        // design and stays the trusted-embedder path. Closing that gap is
+        // this constructor's job -- and because the type exposes only
+        // getters, a sample that constructs cannot afterwards be mutated out
+        // of domain, so nothing downstream has to re-scan it.
+        if let Some((index, value)) = values
+            .iter()
+            .enumerate()
+            .find(|(_, v)| !domain.contains(**v))
+        {
+            return Err(PyValueError::new_err(format!(
+                "sample value {value} at variable {index} is outside the {domain} domain"
+            )));
+        }
+        let mut inner = XqmxSample::new(domain, values);
+        inner.rows = rows;
+        inner.cols = cols;
+        Ok(Self { inner })
     }
 }
 
@@ -282,15 +459,13 @@ impl PyVm {
     ///
     /// # Errors
     ///
-    /// Raises `RuntimeError` with a formatted VM error on any execution
-    /// failure (stack under/overflow, arithmetic overflow, type
-    /// mismatch, unset register, etc.).
+    /// Raises the `XqvmError` subclass named for the fault on any execution
+    /// failure (`StackUnderflow`, `ArithmeticOverflow`, `TypeMismatch`,
+    /// `StepLimitExceeded`, ...), with the fault's description as its
+    /// message. Raises `RuntimeError` when `bytecode` does not decode.
     fn run(&mut self, bytecode: &[u8]) -> PyResult<()> {
-        let program = Program::decode(bytecode)
-            .map_err(|e| PyRuntimeError::new_err(format!("decode error: {e:?}")))?;
-        self.inner
-            .run(&program)
-            .map_err(|e| PyRuntimeError::new_err(format!("{e:?}")))
+        let program = Program::decode(bytecode).map_err(|e| fault::decode_error(&e))?;
+        self.inner.run(&program).map_err(|e| fault::vm_error(&e))
     }
 
     /// Return the current output slots as a `list` of typed Python
@@ -343,30 +518,38 @@ impl PyVm {
     }
 }
 
-fn domain_from_str(domain: &str, k: Option<i64>) -> PyResult<Domain> {
-    match (domain, k) {
-        ("binary", None) => Ok(Domain::Binary),
-        ("spin", None) => Ok(Domain::Spin),
-        ("integer", Some(k)) if k >= 2 => Ok(Domain::Integer(k)),
-        ("integer", Some(k)) => Err(PyValueError::new_err(format!(
+fn integer_domain(k: i64) -> PyResult<Domain> {
+    if k >= 2 {
+        Ok(Domain::Integer(k))
+    } else {
+        Err(PyValueError::new_err(format!(
             "integer domain requires k >= 2, got k={k}"
-        ))),
-        ("integer", None) => Err(PyValueError::new_err("integer domain requires k argument")),
-        ("binary" | "spin", Some(_)) => Err(PyValueError::new_err(format!(
-            "domain={domain:?} does not take k"
-        ))),
-        _ => Err(PyValueError::new_err(format!(
-            "unknown domain {domain:?}; expected \"binary\", \"spin\", or \"integer\""
-        ))),
+        )))
     }
 }
 
-fn domain_name(domain: &Domain) -> &'static str {
+const fn domain_name(domain: &Domain) -> &'static str {
     match domain {
         Domain::Binary => "binary",
         Domain::Spin => "spin",
         Domain::Integer(_) => "integer",
     }
+}
+
+const fn domain_k(domain: &Domain) -> Option<i64> {
+    match domain {
+        Domain::Integer(k) => Some(*k),
+        Domain::Binary | Domain::Spin => None,
+    }
+}
+
+/// The index `IDXTRIU` pushes for the unordered pair `(i, j)`.
+///
+/// Raises `ArithmeticOverflow` where the opcode would.
+#[pyfunction]
+fn triu(i: i64, j: i64) -> PyResult<i64> {
+    xqvm::triu_index(i, j)
+        .ok_or_else(|| fault::vm_error(&xqvm::Error::ArithmeticOverflow { pos: None }))
 }
 
 fn py_to_regval(obj: &Bound<'_, PyAny>) -> PyResult<RegVal> {
@@ -417,12 +600,15 @@ fn regval_to_py<'py>(py: Python<'py>, rv: &RegVal) -> PyResult<Bound<'py, PyAny>
 
 pub(crate) fn register(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyVm>()?;
+    m.add_class::<PyDomain>()?;
     m.add_class::<PyXqmxModel>()?;
     m.add_class::<PyXqmxSample>()?;
+    m.add_function(wrap_pyfunction!(triu, m)?)?;
+    fault::register(m)?;
     // Exported so the Python hosts read the budgets off the VM rather than
-    // restating the literals. `xquad.vm` and the conformance harness both
-    // carried their own copy with a comment claiming to match these.
+    // restating the literals.
     m.add("DEFAULT_STEP_LIMIT", xqvm::DEFAULT_STEP_LIMIT)?;
     m.add("DEFAULT_MEMORY_LIMIT", xqvm::DEFAULT_MEMORY_LIMIT)?;
+    m.add("MAX_ALLOCATION_SIZE", xqvm::MAX_ALLOCATION_SIZE)?;
     Ok(())
 }

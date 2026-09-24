@@ -67,7 +67,13 @@ all. A fresh `Session` starts at `xquad.vm.DEFAULT_STEP_LIMIT`, which is
 10,000,000. `None` is the only unbounded spelling, and a caller has to
 write it -- unbounded execution is asked for, never inherited.
 
+A run that faults raises the `xqffi.vm.XqvmError` subclass named for the
+fault -- here `StepLimitExceeded` -- with the fault's description as its
+message. `XqvmError` is a `RuntimeError`.
+
 ```python
+from xqffi.vm import StepLimitExceeded
+
 session = program.session(output_slots=1)
 session.set_calldata([1, 2])
 assert "step_limit=10000000" in repr(session)
@@ -75,16 +81,17 @@ assert "step_limit=10000000" in repr(session)
 session.set_step_limit(3)
 try:
     session.run()
-except RuntimeError as e:
-    assert "StepLimitExceeded" in str(e)
+except StepLimitExceeded as e:
+    print(e)
+# step charge of 1 exceeds the step limit of 3 (3 steps already charged)
 
 # 0 is not a sentinel for "unlimited" -- it executes nothing, so this
 # 11-step program fails at its first instruction.
 session.set_step_limit(0)
 try:
     session.run()
-except RuntimeError as e:
-    assert "StepLimitExceeded" in str(e)
+except StepLimitExceeded:
+    pass
 
 # None removes the bound. A program that never halts will not return,
 # and it does not take SIGALRM: the GIL is held inside the Rust run.
@@ -132,13 +139,13 @@ A calldata list may mix any of `int`, `list[int]`, `xqffi.vm.XqmxModel`,
 every element's type as soon as you call it, not at run time:
 
 ```python
-from xqffi.vm import XqmxModel, XqmxSample
+from xqffi.vm import Domain, XqmxModel, XqmxSample
 
-model = XqmxModel("binary", size=4)
+model = XqmxModel.binary(size=4)   # or XqmxModel(Domain.BINARY, size=4)
 model.set_linear(0, -1)
 model.set_quad(0, 1, 2)
 
-sample = XqmxSample("spin", values=[-1, 1, -1, 1])
+sample = XqmxSample.spin(values=[-1, 1, -1, 1])
 
 session.set_calldata([model, sample, [1, 2, 3], 42])
 # session.run() now sees four typed input slots.
@@ -158,19 +165,28 @@ helper in this package today. Read a model's coefficients through its own
 accessors:
 
 ```python
-model = XqmxModel("binary", size=4)
+model = XqmxModel.binary(size=4)
 model.set_linear(0, -1)
 model.set_linear(2, 3)
-model.set_quad(0, 1, 2)
+model.add_quad(0, 1, 2)
 
-model.domain          # "binary"
+model.domain          # Domain.BINARY
+model.domain.name     # "binary"
 model.size            # 4
 list(model.linear_items())     # [(0, -1), (2, 3)]
 list(model.quadratic_items())  # [((0, 1), 2)]
 model.get_linear(0)   # -1
 model.get_quad(0, 1)  # 2
 repr(model)            # 'XqmxModel(domain=binary, size=4)'
+
+model.energy(XqmxSample.binary([1, 1, 0, 0]))  # 1, as ENERGY computes it
 ```
+
+`add_linear` and `add_quad` accumulate into a coefficient and raise
+`xqffi.vm.ArithmeticOverflow`, leaving the model unchanged, if the result
+leaves the signed 64-bit range. A sample's values are checked against its
+domain when it is constructed; `XqmxSample.binary([2])` raises
+`ValueError`.
 
 `__repr__` is intentionally minimal. Convert to `xquad.types.XQMX` (the
 canonical, backend-independent type covered next) if you want a Python
@@ -259,7 +275,7 @@ enc_session.set_calldata([n, weights, values, capacity])
 model = enc_session.run().outputs[0]
 
 # A hand-picked sample -- items 1, 2, 3 selected, no solver involved.
-sample = XqmxSample("binary", values=[0, 1, 1, 1, 0, 0, 0, 0])
+sample = XqmxSample.binary(values=[0, 1, 1, 1, 0, 0, 0, 0])
 
 # Verifier: the encoder's own inputs, then model and sample; (energy, valid) out.
 verifier = Program.from_source(programs.verifier)
