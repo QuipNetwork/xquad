@@ -632,6 +632,26 @@ def _ising_coefficients(
     return h, j
 
 
+def native_placement(model: XQMX) -> tuple[Topology, dict[int, int]]:
+    """Build a topology from a model's own coupling graph, relabelled densely.
+
+    The participating variables are the ones :func:`model_to_ising` places:
+    every variable with a spin field plus every coupling endpoint, after a
+    BINARY model is folded into the spin basis. Each is relabelled to its rank
+    in ascending order, so the returned topology has nodes ``0..n-1`` and one
+    edge per coupling, with no allowed-value sets.
+
+    Pass the pair to :func:`model_to_ising` as ``(topology, mapping=mapping)``.
+    The mapping is then validated rather than searched for, so placement is the
+    identity by construction and never depends on a search budget.
+    """
+    h, j = _ising_coefficients(model)
+    variables = sorted(set(h) | {index for edge in j for index in edge})
+    mapping = {var: rank for rank, var in enumerate(variables)}
+    topology = Topology.of(range(len(variables)), ((mapping[u], mapping[v]) for u, v in j))
+    return topology, mapping
+
+
 def model_to_ising(
     model: XQMX,
     topology: Topology,

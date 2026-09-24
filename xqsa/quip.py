@@ -26,18 +26,18 @@ there is no async surface here.
 
 Configuration is resolved from constructor arguments first, then environment:
 
-    =====================  ====================================================
+    =====================  =======================================================================
     Argument               Environment variable
-    =====================  ====================================================
+    =====================  =======================================================================
     ``url``                ``QUIP_RPC_URL``      websocket RPC endpoint
     ``seed``               ``QUIP_SIGNER_SEED``  32-byte hex master seed
     ``keystore``           ``QUIP_KEYSTORE``     keystore path (load or create)
     ``reward``             ``QUIP_REWARD``       reward in planck (else MinReward)
-    ``topology``           ``QUIP_TOPOLOGY``     topology hash (else DefaultTopology)
+    ``topology``           ``QUIP_TOPOLOGY``     topology hash, or "native" (else DefaultTopology)
     ``faucet``             ``QUIP_FAUCET_URL``   faucet base URL (env read only without url=)
     ``autoconfirm``        ``QUIP_AUTOCONFIRM``  submit without asking (default true)
     ``autofund``           ``QUIP_AUTOFUND``     fund from the faucet without asking
-    =====================  ====================================================
+    =====================  =======================================================================
 
 Provide exactly one of ``seed`` or ``keystore`` (a keystore is generated on
 first use if absent). Every :meth:`SolverQuip.solve` first quotes the job
@@ -93,6 +93,7 @@ from xqsa.quip_codec import (
     _TERMINAL_STATUSES,
     DEFAULT_ISING_SPEC_ID,
     QUIP_COEFFICIENTS_DOC_URL,
+    EncodingError,
     QuipError,
     QuipMetadataError,
     Topology,
@@ -107,6 +108,7 @@ from xqsa.quip_codec import (
     is_final,
     ising_energy_milli,
     model_to_ising,
+    native_placement,
 )
 from xqsa.quip_faucet import DEFAULT_DRIP_PLANCK, fund_from_faucet
 from xqsa.quip_networks import NETWORKS
@@ -155,6 +157,15 @@ ORDER_SOLUTIONS_STORAGE = "OrderSolutions"
 # ``submit_proof`` and not the compute mempool; nothing on the solve path
 # consults it, and ``_mineable_topologies`` is kept only as a chain reader.
 MINEABLE_TOPOLOGIES_STORAGE = "MineableTopologies"
+
+# The reserved ``topology`` value that submits a model over its own coupling
+# graph instead of placing it onto a registered chain topology.
+NATIVE_TOPOLOGY = "native"
+
+
+def _is_native(topology: str | None) -> bool:
+    """Return whether a ``topology`` value selects native mode (case and whitespace ignored)."""
+    return (topology or "").strip().lower() == NATIVE_TOPOLOGY
 
 
 @dataclass(frozen=True)
@@ -273,7 +284,11 @@ class SolverQuip(Solver):
     signer from a seed or keystore. The topology is resolved from ``topology=``,
     then ``QUIP_TOPOLOGY``, then the chain's ``QuantumPow.DefaultTopology``. An
     unresolvable topology raises rather than falling through to a hash no chain
-    would accept. See the module docstring for configuration and installation.
+    would accept. ``topology="native"`` skips chain lookup entirely and builds
+    the job's topology from the model's own coupling graph, so placement never
+    fails, at the cost of excluding miners that cannot embed an arbitrary graph
+    (for example QPU-backed ones). See the module docstring for configuration
+    and installation.
 
     Raises:
         ImportError: if the ``[quip]`` extra is not installed
@@ -480,6 +495,9 @@ class SolverQuip(Solver):
         then the chain's ``QuantumPow.DefaultTopology``. Resolved once at
         construction so :meth:`solve` and :meth:`query` on the same instance
         agree on the topology even if the chain default later changes.
+        ``"native"``, from either source, short-circuits and returns
+        :data:`NATIVE_TOPOLOGY` before the chain default is read and before
+        the hash shape check below.
 
         All three sources are deployment-local, deliberately, and none of them
         is a constant in this codebase. The same advantage2 graph hashes
@@ -504,6 +522,11 @@ class SolverQuip(Solver):
                 than for ``topology=``.
         """
         env_topology = os.environ.get("QUIP_TOPOLOGY")
+        # Native mode names no chain topology, so it wins before the chain
+        # default is read and before the hash shape check.
+        if _is_native(topology or env_topology):
+            logger.debug("native topology resolved from %s", "topology=" if topology else "QUIP_TOPOLOGY")
+            return NATIVE_TOPOLOGY
         resolved = topology or env_topology or self._chain_default_topology()
         if not resolved:
             raise ValueError(
@@ -570,13 +593,17 @@ class SolverQuip(Solver):
         :meth:`_resolve_topology_hash`: ``topology=``, then ``QUIP_TOPOLOGY``,
         then the chain's ``QuantumPow.DefaultTopology``). The decoded
         ``TopologyMeta`` carries the graph and the allowed-value sets (captured
-        for the educational warning).
+        for the educational warning). Never called in native mode: :meth:`_job_for`
+        builds the topology from the model's own coupling graph instead of
+        reading a registered one.
 
         Raises:
-            ValueError: if no topology hash is configured.
+            ValueError: if no topology hash is configured, or the key is native.
             QuipConnectionError: if the topology is not registered on-chain.
         """
         key = topology_hash or self._topology_hash
+        if _is_native(key):
+            raise ValueError("native mode has no registered topology to fetch")
         if not key:
             raise ValueError(
                 "no topology hash configured. Pass topology= or set QUIP_TOPOLOGY "
@@ -1104,6 +1131,69 @@ class SolverQuip(Solver):
     # Public surface
     # ------------------------------------------------------------------
 
+    def _native_for(self, topology: str | None, mapping: Mapping[int, int] | None) -> bool:
+        """Return whether a call runs in native mode: ``topology``, else the resolved one.
+
+        Raises:
+            ValueError: if ``mapping`` is given in native mode, which has no
+                hardware graph for it to target.
+        """
+        native = _is_native(topology or self._topology_hash)
+        if native and mapping is not None:
+            raise ValueError(
+                f"mapping= cannot be combined with topology={NATIVE_TOPOLOGY!r}: native mode "
+                "builds the topology from the model, so there is no hardware graph to map onto."
+            )
+        return native
+
+    def _check_order_size(self, topology: Topology) -> None:
+        """Raise if ``topology`` exceeds the mempool's ``MaxNodes`` / ``MaxEdges``.
+
+        A registered topology fits by construction, but a native one is as large
+        as the model. Checked before quoting, so an oversized order fails here
+        with the limit named rather than in SCALE encoding or on chain. A bound
+        the runtime does not expose is not checked.
+
+        Raises:
+            EncodingError: if the node or edge count exceeds its bound.
+            QuipConnectionError: if reading a bound fails (as opposed to the
+                bound simply not being defined on this runtime).
+            QuipMetadataError: if the node serves runtime metadata too old to
+                decode.
+        """
+        bounds = (("MaxNodes", "nodes", topology.num_nodes), ("MaxEdges", "edges", topology.num_edges))
+        for name, noun, count in bounds:
+            try:
+                const = self._iface.get_constant(MEMPOOL_PALLET, name)
+            except QuipMetadataError:
+                raise  # undecodable metadata, not an unreadable constant.
+            except Exception as exc:  # noqa: BLE001 -- a fault, not a genuine absence.
+                raise QuipConnectionError(f"could not read the {MEMPOOL_PALLET}.{name} constant: {exc}") from exc
+            limit = getattr(const, "value", None)
+            if limit is not None and count > int(limit):
+                raise EncodingError(
+                    f"native order has {count} {noun}, over the mempool's {MEMPOOL_PALLET}.{name} of {int(limit)}"
+                )
+
+    def _job_for(self, model: XQMX, topology: str | None, mapping: Mapping[int, int] | None) -> IsingJob:
+        """Encode ``model`` for the effective topology: ``topology``, else the resolved one.
+
+        In native mode the topology is the model's own coupling graph, so there
+        is nothing to fetch and nothing to search, and an explicit ``mapping``
+        has no graph to target. Otherwise the registered topology is fetched and
+        the model placed onto it. :meth:`_prepare` and :meth:`query` share this,
+        so a recovered order re-derives the job :meth:`solve` submitted.
+
+        Raises:
+            ValueError: if ``mapping`` is given in native mode.
+            EncodingError: if a native order exceeds the mempool's size bounds.
+        """
+        if self._native_for(topology, mapping):
+            native_topology, native_mapping = native_placement(model)
+            self._check_order_size(native_topology)
+            return model_to_ising(model, native_topology, mapping=native_mapping)
+        return model_to_ising(model, self._fetch_topology(topology), mapping=mapping)
+
     def _prepare(self, model: XQMX, kwargs: Mapping[str, Any]) -> tuple[IsingJob, bytes, str, JobQuote]:
         """Place ``model``, build its ``propose_job`` extrinsic once, and quote it.
 
@@ -1112,8 +1202,7 @@ class SolverQuip(Solver):
         quoted without paying for a second build.
         """
         self._validate_model(model)
-        topology = self._fetch_topology(kwargs.get("topology"))
-        job = model_to_ising(model, topology, mapping=kwargs.get("mapping"))
+        job = self._job_for(model, kwargs.get("topology"), kwargs.get("mapping"))
         self._maybe_warn_allowed_values(job)
         wire, ext_hash = self._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, self._propose_call_params(job))
         fee, fee_exact = self._query_fee(wire)
@@ -1205,10 +1294,13 @@ class SolverQuip(Solver):
         account balance. Nothing is submitted and no nonce is consumed.
 
         Keyword args:
-            topology: override topology hash for this quote.
-            mapping: explicit variable -> node placement (else searched).
+            topology: override topology hash for this quote, or ``"native"``
+                to submit over the model's own coupling graph.
+            mapping: explicit variable -> node placement (else searched); not
+                allowed with ``"native"``.
 
         Raises:
+            ValueError: if ``mapping`` is given with ``topology="native"``.
             QuipConnectionError: if a chain read faults while resolving the
                 topology or the account balance.
             QuipSubmissionError: if the extrinsic cannot be built.
@@ -1232,10 +1324,13 @@ class SolverQuip(Solver):
         A drip is not returned if the job fails after it.
 
         Keyword args:
-            topology: override topology hash for this solve.
-            mapping: explicit variable -> node placement (else searched).
+            topology: override topology hash for this solve, or ``"native"``
+                to submit over the model's own coupling graph.
+            mapping: explicit variable -> node placement (else searched); not
+                allowed with ``"native"``.
 
         Raises:
+            ValueError: if ``mapping`` is given with ``topology="native"``.
             QuipConnectionError: if a chain read faults (transport/decode) while
                 resolving the topology, the order, or the account balance.
             QuipSubmissionError: if the account cannot cover the quote and no
@@ -1294,15 +1389,21 @@ class SolverQuip(Solver):
         the winning solution -- so an order proposed in a different process (or
         recovered after a :class:`QuipTimeoutError`) can still be read, provided
         the same ``model`` (and ``mapping``/``topology`` if non-default) is
-        supplied. A final order with no solutions auto-reclaims and raises
+        supplied. Pass the ``topology`` the order was proposed with, ``"native"``
+        included, whenever it differs from this instance's own; otherwise the
+        re-derived placement targets the wrong graph. A final
+        order with no solutions auto-reclaims and raises
         :class:`QuipJobFailedError`.
+
+        Raises:
+            ValueError: if ``mapping`` is given with ``topology="native"``.
         """
         self._validate_model(model)
+        self._native_for(topology, mapping)  # reject native + mapping= before any chain read.
         order = self._fetch_order(order_id)
         if not self._order_lifecycle(order, self._current_block())["is_final"]:
             return None
-        resolved_topology = self._fetch_topology(topology)
-        job = model_to_ising(model, resolved_topology, mapping=mapping)
+        job = self._job_for(model, topology, mapping)
         return self._collect_result(order_id, job, model, elapsed=0.0)
 
     def status(self, order_id: int) -> dict[str, Any]:

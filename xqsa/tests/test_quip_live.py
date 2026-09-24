@@ -68,12 +68,10 @@ from xqsa.quip import (
     SolverQuip,
     _as_hex,
     _canonical_hex,
+    _is_native,
     _require_h256,
 )
-from xqsa.quip_codec import (
-    DEFAULT_ISING_SPEC_ID,
-    model_to_ising,
-)
+from xqsa.quip_codec import DEFAULT_ISING_SPEC_ID, PlacementError
 from xqsa.quip_faucet import fund_from_faucet
 from xqsa.quip_metadata import connect as connect_shimmed
 from xqsa.quip_signing import SIGNED_EXTENSIONS, _extension_fields, load_or_generate_keystore
@@ -84,7 +82,14 @@ FAUCET_URL = os.environ.get("QUIP_FAUCET_URL")
 # Set QUIP_TOPOLOGY to a registered non-default hash to run the whole suite
 # against it. SolverQuip reads the variable itself, in its constructor, so no
 # fixture threads it -- this is only how the tests know the override is in play.
+# QUIP_TOPOLOGY=native names no registered hash, so the tests that read a
+# topology by hash skip under it.
 TOPOLOGY_OVERRIDE = os.environ.get("QUIP_TOPOLOGY")
+NATIVE_MODE = _is_native(TOPOLOGY_OVERRIDE)
+requires_hash_topology = pytest.mark.skipif(
+    NATIVE_MODE,
+    reason="assumes a chain-registered topology hash; QUIP_TOPOLOGY=native resolves none",
+)
 
 pytestmark = [
     pytest.mark.quip,
@@ -207,8 +212,8 @@ def _miner_solves(tmp_path_factory) -> bool:
     # The same model the gated tests propose. A smaller one would place onto
     # different hardware nodes and so prove nothing about them: placement is
     # per-model, and whether an order is answered depends on the nodes it lands
-    # on. A gate must exercise what it gates.
-    job = model_to_ising(_asymmetric_spin_model(), solver._fetch_topology())
+    # on. A gate must exercise what it gates, native mode included.
+    job = solver._job_for(_asymmetric_spin_model(), None, None)
     try:
         wire, ext_hash = solver._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, solver._propose_call_params(job))
         order_id = solver._propose_job(wire, ext_hash)
@@ -252,6 +257,18 @@ def _asymmetric_spin_model() -> XQMX:
     return model
 
 
+def _dense_spin_model() -> XQMX:
+    """A K6 SPIN model: every pair of its 6 variables is coupled."""
+    size = 6
+    model = XQMX.spin_model(size)
+    for i in range(size):
+        model.set_linear(i, 1 if i % 2 == 0 else -1)
+    for i in range(size):
+        for j in range(i + 1, size):
+            model.set_quadratic(i, j, 1 if (i + j) % 2 == 0 else -1)
+    return model
+
+
 # ---------------------------------------------------------------------------
 # Connectivity -- runs against any healthy devnet
 # ---------------------------------------------------------------------------
@@ -263,6 +280,7 @@ class TestConnectivity:
         assert const is not None
         assert const.value == DEFAULT_ISING_SPEC_ID
 
+    @requires_hash_topology
     def test_topology_decodes_to_a_consistent_graph(self, make_solver) -> None:
         # Deliberately not an exact node/edge count. A count is a fingerprint of
         # one deployment -- aglais and a localdev DevNet register different
@@ -283,6 +301,7 @@ class TestConnectivity:
         assert all(u in nodes and v in nodes for u, v in topology.edges)
         assert all(u != v for u, v in topology.edges)
 
+    @requires_hash_topology
     def test_allowed_value_spec_names_match_the_pallet(self, chain, make_solver) -> None:
         # QUI-1374: Topology.from_chain read allowed_h / allowed_j / allowed_spin
         # while TopologyMeta serves allowed_*_values. Every lookup resolved to
@@ -387,6 +406,8 @@ class TestConnectivity:
         # solve() used to reject.
         if not TOPOLOGY_OVERRIDE:
             pytest.skip("QUIP_TOPOLOGY unset; the non-mineable path is opt-in")
+        if NATIVE_MODE:
+            pytest.skip("QUIP_TOPOLOGY=native names no registered topology")
         # Normalize once, the way the constructor does, and compare against that.
         # _as_hex only prefixes 0x, while the constructor resolves through
         # _require_h256, which also strips and lower-cases. An override spelled in
@@ -514,6 +535,18 @@ class TestEndToEnd:
         assert result.metadata["energy_matches_chain"] is True
         assert result.metadata["num_solutions"] >= 1
         assert _feasible(result.sample, model.size, {0, 1})
+
+    def test_native_topology_dense_model_round_trip(self, make_solver, solving_miner) -> None:
+        """A K6 model, which the default topology cannot place, solves in native mode."""
+        model = _dense_spin_model()
+        solver = make_solver()
+        if not TOPOLOGY_OVERRIDE:  # the chain default; a registered override may hold K6.
+            with pytest.raises(PlacementError):
+                solver._job_for(model, None, None)
+        result = solver.solve(model, topology="native")
+        assert result.metadata["energy_matches_chain"] is True
+        assert result.metadata["num_solutions"] >= 1
+        assert _feasible(result.sample, model.size, {-1, 1})
 
     def test_query_and_status_after_solve(self, make_solver, solving_miner) -> None:
         model = _asymmetric_spin_model()
