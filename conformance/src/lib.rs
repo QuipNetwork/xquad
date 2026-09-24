@@ -24,12 +24,13 @@
 //! - `inputs.json` — `{"calldata": [i64|null, ...]}`, where `null` is a
 //!   slot the host left unset.
 //! - `expected.json` — either `{"outputs": [i64|null, ...], "final_stack":
-//!   [i64, ...]}` for a program that runs to completion, or `{"error":
-//!   "<FAULT>"}` for one that must fault. See `conformance/README.md` for
-//!   the fault vocabulary and how each implementation maps onto it. A
-//!   successful vector may add an optional `"steps": u64` asserting the
-//!   exact metered execution cost (`spec/xqvm/METERING.md`); a vector that
-//!   omits it asserts nothing about cost.
+//!   [i64, ...], "steps": u64}` for a program that runs to completion, or
+//!   `{"error": "<FAULT>"}` for one that must fault. See
+//!   `conformance/README.md` for the fault vocabulary and how each
+//!   implementation maps onto it. `steps` is the exact metered execution
+//!   cost (`spec/xqvm/METERING.md`) and is required: it is what the chain
+//!   prices a run by, so a successful vector that left it out would pin
+//!   the result and not the cost.
 //!
 //! The harness assembles `program.xqasm` in-process for every run.
 //! Encoding correctness is owned by the `xqasm` crate's own test suite,
@@ -216,9 +217,9 @@ pub enum Fault {
 
 /// Parsed form of `expected.json`.
 ///
-/// A vector asserts either an outcome (`outputs` plus `final_stack`) or a
-/// fault (`error`), never both and never neither. Outputs use `null` for
-/// unset slots so the JSON representation is stable across runs.
+/// A vector asserts either an outcome (`outputs` plus `final_stack` plus
+/// `steps`) or a fault (`error`), never both and never neither. Outputs use
+/// `null` for unset slots so the JSON representation is stable across runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum Expected {
@@ -228,9 +229,8 @@ pub enum Expected {
         outputs: Vec<Option<i64>>,
         /// Expected residual stack contents after HALT.
         final_stack: Vec<i64>,
-        /// Expected step count, per `spec/xqvm/METERING.md`. `None` when
-        /// the vector asserts nothing about cost.
-        steps: Option<u64>,
+        /// Expected step count, per `spec/xqvm/METERING.md`.
+        steps: u64,
     },
     /// The program must fault with this identity.
     Failure {
@@ -241,8 +241,8 @@ pub enum Expected {
 
 /// Raw shape of `expected.json` before the success/failure split is
 /// validated. Deserialising through this lets a vector that asserts both
-/// (or neither) fail as an authoring mistake rather than silently
-/// preferring one half.
+/// (or neither), or a success without its step count, fail as an authoring
+/// mistake rather than silently preferring one half or asserting less.
 #[derive(Deserialize)]
 struct RawExpected {
     outputs: Option<Vec<Option<i64>>>,
@@ -266,11 +266,24 @@ impl<'de> Deserialize<'de> for Expected {
                 "expected.json asserts both an outcome and a fault: \
                  supply either `outputs`/`final_stack` or `error`, not both",
             )),
-            (Some(outputs), None) => Ok(Self::Success {
-                outputs,
-                final_stack: raw.final_stack,
-                steps: raw.steps,
-            }),
+            (Some(outputs), None) => {
+                let steps = raw.steps.ok_or_else(|| {
+                    D::Error::custom(
+                        "expected.json asserts an outcome without `steps`: a \
+                         successful vector must assert its metered step count",
+                    )
+                })?;
+                Ok(Self::Success {
+                    outputs,
+                    final_stack: raw.final_stack,
+                    steps,
+                })
+            }
+            (None, Some(_)) if raw.steps.is_some() => Err(D::Error::custom(
+                "expected.json asserts `steps` on a fault: the harness \
+                 compares no step count for a faulting run, so the value \
+                 would go unchecked; drop `steps` or `error`",
+            )),
             (None, Some(error)) => Ok(Self::Failure { error }),
             (None, None) => Err(D::Error::custom(
                 "expected.json asserts nothing: supply `outputs` for a \
@@ -778,8 +791,7 @@ pub fn check(actual: &Outcome, expected: &Expected) -> Result<(), String> {
                 steps: exp_steps,
             },
         ) => {
-            let steps_match = exp_steps.is_none_or(|exp_steps| *steps == exp_steps);
-            if outputs == exp_outputs && final_stack == exp_stack && steps_match {
+            if outputs == exp_outputs && final_stack == exp_stack && steps == exp_steps {
                 return Ok(());
             }
             if outputs != exp_outputs {
@@ -794,9 +806,7 @@ pub fn check(actual: &Outcome, expected: &Expected) -> Result<(), String> {
                     "  final_stack:\n    expected: {exp_stack:?}\n    actual:   {final_stack:?}"
                 );
             }
-            if let Some(exp_steps) = exp_steps
-                && *steps != *exp_steps
-            {
+            if steps != exp_steps {
                 let _ = writeln!(
                     msg,
                     "  steps:\n    expected: {exp_steps}\n    actual:   {steps}"
@@ -853,20 +863,6 @@ mod tests {
     #[test]
     fn expected_parses_a_success_vector() {
         let parsed: Expected =
-            serde_json::from_str(r#"{"outputs": [7], "final_stack": []}"#).expect("parse");
-        assert_eq!(
-            parsed,
-            Expected::Success {
-                outputs: vec![Some(7)],
-                final_stack: vec![],
-                steps: None,
-            }
-        );
-    }
-
-    #[test]
-    fn expected_parses_a_success_vector_with_steps() {
-        let parsed: Expected =
             serde_json::from_str(r#"{"outputs": [7], "final_stack": [], "steps": 42}"#)
                 .expect("parse");
         assert_eq!(
@@ -874,8 +870,28 @@ mod tests {
             Expected::Success {
                 outputs: vec![Some(7)],
                 final_stack: vec![],
-                steps: Some(42),
+                steps: 42,
             }
+        );
+    }
+
+    #[test]
+    fn expected_rejects_a_success_vector_without_steps() {
+        let err = serde_json::from_str::<Expected>(r#"{"outputs": [7], "final_stack": []}"#)
+            .expect_err("a successful vector must assert its step count");
+        assert!(
+            err.to_string().contains("steps"),
+            "error should name the missing field, got: {err}"
+        );
+    }
+
+    #[test]
+    fn expected_rejects_steps_on_an_error_vector() {
+        let err = serde_json::from_str::<Expected>(r#"{"error": "DIVISION_BY_ZERO", "steps": 3}"#)
+            .expect_err("a fault vector cannot assert a step count");
+        assert!(
+            err.to_string().contains("steps"),
+            "error should name the stray field, got: {err}"
         );
     }
 
@@ -928,7 +944,7 @@ mod tests {
         let expected = Expected::Success {
             outputs: vec![Some(1)],
             final_stack: vec![],
-            steps: None,
+            steps: 1,
         };
         let err = check(&actual, &expected).expect_err("mismatch");
         assert!(err.contains("DIVISION_BY_ZERO"), "got: {err}");
@@ -949,21 +965,6 @@ mod tests {
     }
 
     #[test]
-    fn check_ignores_steps_when_the_vector_omits_them() {
-        let actual = Outcome::Success {
-            outputs: vec![Some(1)],
-            final_stack: vec![],
-            steps: 999,
-        };
-        let expected = Expected::Success {
-            outputs: vec![Some(1)],
-            final_stack: vec![],
-            steps: None,
-        };
-        check(&actual, &expected).expect("steps are not asserted when the vector omits them");
-    }
-
-    #[test]
     fn check_rejects_a_step_count_mismatch() {
         let actual = Outcome::Success {
             outputs: vec![Some(1)],
@@ -973,7 +974,7 @@ mod tests {
         let expected = Expected::Success {
             outputs: vec![Some(1)],
             final_stack: vec![],
-            steps: Some(6),
+            steps: 6,
         };
         let err = check(&actual, &expected).expect_err("mismatch");
         assert!(
@@ -1032,7 +1033,7 @@ mod tests {
         let expected = Expected::Success {
             outputs: vec![Some(1)],
             final_stack: vec![],
-            steps: None,
+            steps: 1,
         };
         let err = check(&actual, &expected).expect_err("mismatch");
         assert!(err.contains("pos: 49"), "got: {err}");

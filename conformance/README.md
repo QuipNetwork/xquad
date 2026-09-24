@@ -80,7 +80,8 @@ preferring one half.
 ```json
 {
   "outputs": [42],
-  "final_stack": []
+  "final_stack": [],
+  "steps": 11
 }
 ```
 
@@ -92,6 +93,13 @@ unset slots are omitted entirely, so a program that writes slot 0 out of
 Explicitly-written zeroes are preserved; only slots that `OUTPUT` never
 touched disappear. `final_stack` is the residual stack at `HALT` (bottom
 to top); an empty stack is typical.
+
+`steps` is required on every successful vector: the exact metered cost of
+the run, per `spec/xqvm/METERING.md`. It is the quantity the chain prices
+execution by, so a vector that pinned the result without the cost would
+let a metering change through unnoticed. A successful vector without
+`steps`, or a fault vector with one, is rejected as a vector-authoring
+mistake.
 
 A vector that expects the program to fault writes the fault's identity
 instead:
