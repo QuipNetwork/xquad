@@ -18,12 +18,12 @@ leaves unanswered for a reader.
 Requires the `[quip]` extra:
 
 ```sh
-pip install xqsa[quip]
+pip install "xquad[quip]"
 ```
 
-The umbrella `xquad` package forwards `[cuda]`, `[dwave]`, and
-`[metal]` to the matching `xqsa` extra, but has no `[quip]` extra of
-its own -- install it against `xqsa` directly. The extra brings in
+The umbrella `xquad` package forwards `[quip]` to the matching `xqsa`
+extra, as it does `[cuda]`, `[dwave]`, and `[metal]`; with `xqsa` alone,
+`pip install "xqsa[quip]"` is the same install. The extra brings in
 `substrate-interface` (the chain RPC client), `certifi` (the CA
 bundle `wss://` falls back to on a macOS Python with none), and
 `quip-signer`, a
@@ -49,10 +49,13 @@ environment variables:
 | `autofund` | `QUIP_AUTOFUND` | Whether to draw one drip from `faucet` when the account cannot cover the quoted job; a shortfall larger than one drip, or an account already holding more than one drip, raises instead. Same forms and default as `autoconfirm` |
 
 Provide exactly one of `seed` or `keystore`. `spec_id` and `topology`
-are constructor-only overrides -- both default to chain state
-(`DefaultIsingSpecId` and `DefaultTopology`) and have no environment
-variable. `mode`, `resolution`, and `delivery` are pass-through job
-parameters defaulting to `Open`, `SingleBest`, and `OnChainOnly`; the
+both default to chain state (`DefaultIsingSpecId` and
+`DefaultTopology`). `spec_id` is a constructor-only override with no
+environment variable. `topology` also reads `QUIP_TOPOLOGY`, accepts
+`"native"`, and can be overridden per call; see
+[The Topology Constraint](#the-topology-constraint). `mode`,
+`resolution`, and `delivery` are pass-through job parameters
+defaulting to `Open`, `SingleBest`, and `OnChainOnly`; the
 pallet's data-carrying variants (`Callback` delivery, `Bid` mode) exist
 on-chain but `SolverQuip` does not exercise them.
 
@@ -279,18 +282,22 @@ encoding-correctness canary, confirming that the placement and decoding
 
 ## Failure Taxonomy
 
-Nine exception classes cover this backend, confirmed by import from
-`xqsa.__all__` -- one base class and eight concrete failures, spanning
-both local encoding checks and network-dependent lifecycle failures:
+Twelve exception classes cover this backend, confirmed by import from
+`xqsa.__all__` -- one base class and eleven concrete failures, spanning
+local encoding checks, the consent and funding gates, and
+network-dependent lifecycle failures:
 
 | Exception | Raised when |
 |---|---|
 | `QuipError` | Base class for every error below |
-| `EncodingError` | The model is not `MODEL`-mode, its domain is unsupported, or both its `linear` and `quadratic` dicts are empty. Also covers a coefficient that fails milli-scale conversion (see [Coefficient Encoding](#coefficient-encoding)) |
+| `EncodingError` | The model is not `MODEL`-mode, its domain is unsupported, or both its `linear` and `quadratic` dicts are empty. Also covers a coefficient that fails milli-scale conversion (see [Coefficient Encoding](#coefficient-encoding)), and a native order over the mempool's `MaxNodes` or `MaxEdges` |
 | `PlacementError` | The model's coupling graph is not a subgraph of the target topology. Raised in default mode only; see [Native topology mode](#native-topology-mode) |
 | `QuipSigningError` | Extrinsic assembly, keystore handling, or submission fails |
 | `QuipConnectionError` | The node is unreachable, or a configured Ising spec is not registered on-chain |
-| `QuipSubmissionError` | An extrinsic cannot be submitted or the chain rejects it |
+| `QuipMetadataError` | The node's runtime metadata cannot be decoded by this client |
+| `QuipSubmissionError` | An extrinsic cannot be submitted or the chain rejects it. Also raised before proposing when the account cannot cover the quote and `autofund` cannot help: no faucet is configured, the shortfall is larger than one drip, or the balance already exceeds one drip |
+| `QuipCancelledError` | The `autoconfirm` or `autofund` gate declines the job, at the prompt, by callable, or for want of a terminal; carries the declined `JobQuote` as `quote`. Nothing has been proposed or funded |
+| `QuipFaucetError` | The faucet refuses a drip or cannot be reached; carries the HTTP `status` (`None` for a transport failure) and the parsed JSON `body` |
 | `QuipTopologyError` | Retained for compatibility; nothing raises it. It reported a topology absent from `MineableTopologies`, which does not gate the mempool |
 | `QuipTimeoutError` | An order does not reach finality before the configured timeout; carries `order_id` so the caller can recover the result later with `query()` |
 | `QuipJobFailedError` | A final order has no usable solution; carries `order_id` |
@@ -308,7 +315,10 @@ submits all-zero coefficient arrays.
 `EncodingError` and `PlacementError` can be raised entirely locally,
 before anything touches the network -- they come from
 `xqsa.quip_codec`, the same module the coefficient encoding above uses.
-The rest depend on chain state or the round trip completing.
+The one exception is the native size check, which reads `MaxNodes` and
+`MaxEdges` from the chain first. `QuipCancelledError` is also raised
+before anything is proposed. The rest depend on chain state or the
+round trip completing.
 
 ## Gaps
 
