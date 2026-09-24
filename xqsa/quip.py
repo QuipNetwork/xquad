@@ -1156,10 +1156,19 @@ class SolverQuip(Solver):
 
         Raises:
             EncodingError: if the node or edge count exceeds its bound.
+            QuipConnectionError: if reading a bound fails (as opposed to the
+                bound simply not being defined on this runtime).
+            QuipMetadataError: if the node serves runtime metadata too old to
+                decode.
         """
         bounds = (("MaxNodes", "nodes", topology.num_nodes), ("MaxEdges", "edges", topology.num_edges))
         for name, noun, count in bounds:
-            const = self._iface.get_constant(MEMPOOL_PALLET, name)
+            try:
+                const = self._iface.get_constant(MEMPOOL_PALLET, name)
+            except QuipMetadataError:
+                raise  # undecodable metadata, not an unreadable constant.
+            except Exception as exc:  # noqa: BLE001 -- a fault, not a genuine absence.
+                raise QuipConnectionError(f"could not read the {MEMPOOL_PALLET}.{name} constant: {exc}") from exc
             limit = getattr(const, "value", None)
             if limit is not None and count > int(limit):
                 raise EncodingError(

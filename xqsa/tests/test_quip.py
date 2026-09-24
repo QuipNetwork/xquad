@@ -2349,6 +2349,24 @@ class TestSolverQuipNativeTopology:
         solver = _make_solver(monkeypatch, iface=iface, topology="native")
         assert solver._job_for(_k5_model(), None, None).topology.num_edges == 10
 
+    def test_native_order_bound_read_fault_raises_connection_error(self, monkeypatch) -> None:
+        from xqsa.quip import QuipConnectionError
+
+        iface = _default_iface()
+        solver = _make_solver(monkeypatch, iface=iface, topology="native")
+        iface._get_constant_raises = RuntimeError("socket closed")
+        with pytest.raises(QuipConnectionError, match="QuantumComputeMempool.MaxNodes constant: socket closed"):
+            solver._job_for(_k5_model(), None, None)
+
+    def test_native_order_bound_metadata_error_passes_through(self, monkeypatch) -> None:
+        from xqsa.quip import QuipMetadataError
+
+        iface = _default_iface()
+        solver = _make_solver(monkeypatch, iface=iface, topology="native")
+        iface._get_constant_raises = QuipMetadataError("serves V16 runtime metadata")
+        with pytest.raises(QuipMetadataError, match="serves V16"):
+            solver._job_for(_k5_model(), None, None)
+
     def test_query_rejects_native_mapping_before_the_order_is_final(self, monkeypatch) -> None:
         iface = _chain_iface(order=_order(status="Opened"), head=50)
         solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
