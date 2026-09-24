@@ -10,8 +10,9 @@ This page is derived from
 [`xqsa/quip.py`](https://gitlab.com/quip.network/xquad/-/blob/main/xqsa/quip.py),
 `spec/xqsa/SOLVERS.md`, and an internal contributor testing guide. The
 mechanism it describes has been exercised end to end against `aglais`,
-the public Quip test network; [Gaps](#gaps) lists what this page still
-leaves unanswered for a reader.
+the public Quip test network. [Your First Quip Job](quip-first-job.md)
+walks one job through it; [Gaps](#gaps) lists what the figures there
+cannot promise.
 
 ## Installation and Configuration
 
@@ -235,20 +236,58 @@ rejection.
 
 ## Cost Model
 
-Before submission, `solve()` reserves the configured `reward` (or the
-chain's `MinReward` if none is given) from the caller's account, in the
-chain's smallest denomination, planck. A client-side balance check adds
-a fee-headroom buffer on top of the reward to catch an insufficient
-balance early with a readable error; the chain itself is the
-authoritative source for the actual reserve and fee deduction. If the
-order finalizes with no solutions, the adapter best-effort reclaims the
-reserved reward before raising -- a failed job costs the transaction
-fee, not the reward. A successfully solved job's reward is paid out
-on-chain to the miner; `SolverQuip` does not expose that payout as part
-of `SolverResult`.
+A job costs two amounts, both in planck, the chain's smallest
+denomination:
 
-This page deliberately does not give a current `MinReward` figure or
-translate planck into any external currency -- see [Gaps](#gaps).
+- **The reward**, the configured `reward` or the chain's `MinReward` if
+  none is given. `propose_job` reserves it from the caller's account.
+  A solved job's reward is paid on-chain to the miner; `SolverQuip`
+  does not expose that payout in `SolverResult`. If the order
+  finalizes with no solutions, the adapter best-effort reclaims the
+  reward before raising, so a failed job costs the fee, not the reward.
+- **The transaction fee** for `propose_job`, burned either way.
+
+`quote(model)` prices a job without proposing it. It builds and signs
+the same `propose_job` extrinsic `solve()` would submit, asks the chain
+for its fee through `payment_queryInfo`, and reads the account balance.
+Nothing is submitted and no nonce is consumed. It takes the same
+`topology=` and `mapping=` keywords as `solve()` and returns a
+`JobQuote`:
+
+| Field | Meaning |
+|---|---|
+| `reward_planck` | The reward the job reserves |
+| `fee_planck` | The transaction fee |
+| `fee_exact` | `True` when the fee is the chain's answer; `False` when that query failed and a fixed headroom stands in for it |
+| `balance_planck` | The account's free balance |
+| `total_planck` | `reward_planck + fee_planck`: what the account must hold |
+| `shortfall_planck` | How far the balance falls short of the total, or `0` |
+
+`str(quote)` renders the same amounts in token units. `solve()` builds
+the same quote before proposing, prints it when a terminal is attached,
+and passes it to the `autoconfirm` and `autofund` gates.
+
+What each part of the price measures:
+
+- **The fee is metered.** It comes from benchmarked weights plus the
+  encoded length, so it grows with the model's nodes and edges. It is
+  small next to the reward. Fees are
+  [burned, not paid to the block author](https://gitlab.com/quip.network/quip-validator/-/blob/161667b2ed7e375390ada523a459258f0f576f78/runtime/src/configs/mod.rs#L348), and do not respond
+  to congestion: the runtime's
+  [fee multiplier is constant](https://gitlab.com/quip.network/quip-validator/-/blob/161667b2ed7e375390ada523a459258f0f576f78/runtime/src/configs/mod.rs#L343-352).
+- **The reward is arbitrary.** `MinReward` is a round
+  [runtime constant](https://gitlab.com/quip.network/quip-validator/-/blob/161667b2ed7e375390ada523a459258f0f576f78/runtime/src/configs/mod.rs#L558) that gates submissions. Nothing derives
+  it from the cost of solving, yet it is nearly all of what a job
+  costs.
+- **Solver compute is not metered.** The runtime declares
+  [`type VM = NoOpVm`](https://gitlab.com/quip.network/quip-validator/-/blob/161667b2ed7e375390ada523a459258f0f576f78/runtime/src/configs/mod.rs#L650), so nothing on-chain executes or
+  measures the miner's work, and that work never enters the price.
+- **The token is subsidised.** On `aglais`, AGLS comes free from the
+  faucet and has no external price.
+
+This page does not print a current figure, because every one of these
+amounts is live chain state; `quote()` reads it. For a dated figure
+from an observed job, see [Your First Quip Job](quip-first-job.md#what-the-figure-means).
 
 ## Metadata
 
@@ -322,21 +361,20 @@ round trip completing.
 
 ## Gaps
 
-This chapter answers the mechanism -- lifecycle, topology, encoding,
-cost accounting, failures -- in detail. It does not answer what a reader
-outside the project needs to actually run a job:
+[Your First Quip Job](quip-first-job.md) now walks a funded job end to
+end with the numbers one run produced. What stays open is that those
+numbers move:
 
-- **No funding walkthrough.** The `aglais` preset carries the faucet's
-  address, but `SolverQuip` does not request funds itself, and this
-  page does not walk through funding an account; the test network's
-  page above shows the faucet request.
-- **No current reward or fee figures.** `MinReward` and transaction fees
-  are live chain state that the contributor guide itself warns changes
-  between releases; this chapter does not assert a number that could go
-  stale in the published book.
-- **No numbers from an observed job.** The propose -> solve -> decode
-  path is exercised against a live deployment by the contributor suite,
-  but the figures a particular submission produces -- timing, an actual
-  `order_id`, a real `qpu_timing`-equivalent, how many blocks a fresh
-  job typically takes -- are deployment- and fleet-dependent, so none is
-  quoted here.
+- **`MinReward` is a runtime constant**, not storage governance can
+  set. It changes only with a runtime upgrade, with no extrinsic and no
+  event. `SolverQuip` reads it live, so the toolchain follows a change;
+  prose does not.
+- **The fee weights are benchmark output.** Re-running the runtime's
+  benchmarks moves the fee for the same model.
+- **Congestion is not a cause.** The fee multiplier is constant, so
+  for a given model and the default reward, only an upgrade moves
+  either figure. `quote()` is the only reading to trust at submission
+  time.
+- **Timing and fleet behaviour are unmeasured.** How long a job takes
+  and how many miners answer it depend on the fleet at that moment; the
+  tutorial reports one run, not a distribution.
