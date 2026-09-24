@@ -477,16 +477,27 @@ class SolverQuip(Solver):
             QuipMetadataError: propagated unchanged; undecodable metadata is not
                 an unreadable constant.
         """
+        value = self._read_constant("DefaultIsingSpecId")
+        return _as_hex(value) if value is not None else None
+
+    def _read_constant(self, name: str) -> Any | None:
+        """Read a ``QuantumComputeMempool`` runtime constant's value, or ``None`` if unset.
+
+        ``get_constant`` returns ``None`` for a constant absent from the runtime
+        metadata; any other failure is a fault, not a genuine absence.
+
+        Raises:
+            QuipConnectionError: if reading the constant fails.
+            QuipMetadataError: propagated unchanged; undecodable metadata is not
+                an unreadable constant.
+        """
         try:
-            const = self._iface.get_constant("QuantumComputeMempool", "DefaultIsingSpecId")
+            const = self._iface.get_constant(MEMPOOL_PALLET, name)
         except QuipMetadataError:
             raise  # undecodable metadata, not an unreadable constant.
         except Exception as exc:  # noqa: BLE001 -- a fault, not a genuine absence.
-            raise QuipConnectionError(
-                f"could not read the QuantumComputeMempool.DefaultIsingSpecId constant: {exc}"
-            ) from exc
-        value = getattr(const, "value", None)
-        return _as_hex(value) if value is not None else None
+            raise QuipConnectionError(f"could not read the {MEMPOOL_PALLET}.{name} constant: {exc}") from exc
+        return getattr(const, "value", None)
 
     def _resolve_topology_hash(self, topology: str | None) -> str:
         """Resolve the topology hash to target.
@@ -573,14 +584,27 @@ class SolverQuip(Solver):
         return _as_hex(value) if value is not None else None
 
     def _resolve_reward(self, reward: int | None) -> int:
-        """Resolve the proposal reward (planck): arg, then ``QUIP_REWARD``, then MinReward."""
+        """Resolve the proposal reward (planck): arg, then ``QUIP_REWARD``, then MinReward.
+
+        The reward spends funds, so a chain without ``MinReward`` is an error
+        rather than a silent default.
+
+        Raises:
+            QuipConnectionError: if reading ``MinReward`` fails, or the runtime
+                does not define it.
+            QuipMetadataError: propagated unchanged from the constant read.
+        """
         if reward is not None:
             return int(reward)
         env_reward = os.environ.get("QUIP_REWARD")
         if env_reward:
             return int(env_reward)
-        const = self._iface.get_constant("QuantumComputeMempool", "MinReward")
-        return int(const.value)
+        value = self._read_constant("MinReward")
+        if value is None:
+            raise QuipConnectionError(
+                f"the chain defines no {MEMPOOL_PALLET}.MinReward constant; pass reward= or set QUIP_REWARD"
+            )
+        return int(value)
 
     # ------------------------------------------------------------------
     # Chain reads
@@ -1163,13 +1187,7 @@ class SolverQuip(Solver):
         """
         bounds = (("MaxNodes", "nodes", topology.num_nodes), ("MaxEdges", "edges", topology.num_edges))
         for name, noun, count in bounds:
-            try:
-                const = self._iface.get_constant(MEMPOOL_PALLET, name)
-            except QuipMetadataError:
-                raise  # undecodable metadata, not an unreadable constant.
-            except Exception as exc:  # noqa: BLE001 -- a fault, not a genuine absence.
-                raise QuipConnectionError(f"could not read the {MEMPOOL_PALLET}.{name} constant: {exc}") from exc
-            limit = getattr(const, "value", None)
+            limit = self._read_constant(name)
             if limit is not None and count > int(limit):
                 raise EncodingError(
                     f"native order has {count} {noun}, over the mempool's {MEMPOOL_PALLET}.{name} of {int(limit)}"

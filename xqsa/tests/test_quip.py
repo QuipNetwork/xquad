@@ -1135,6 +1135,31 @@ class TestSolverQuipConstruction:
         # No reward arg, no QUIP_REWARD -> chain MinReward constant.
         assert _make_solver(monkeypatch)._reward == UNIT
 
+    def test_reward_read_fault_raises_connection_error(self, monkeypatch) -> None:
+        from xqsa.quip import QuipConnectionError
+
+        # spec_id= skips the DefaultIsingSpecId read, so the fault hits MinReward.
+        iface = _default_iface()
+        iface._get_constant_raises = RuntimeError("socket closed")
+        with pytest.raises(QuipConnectionError, match="QuantumComputeMempool.MinReward constant: socket closed"):
+            _make_solver(monkeypatch, iface=iface, spec_id=DEFAULT_ISING_SPEC_ID)
+
+    def test_reward_read_metadata_error_passes_through(self, monkeypatch) -> None:
+        from xqsa.quip import QuipMetadataError
+
+        iface = _default_iface()
+        iface._get_constant_raises = QuipMetadataError("serves V16 runtime metadata")
+        with pytest.raises(QuipMetadataError, match="serves V16"):
+            _make_solver(monkeypatch, iface=iface, spec_id=DEFAULT_ISING_SPEC_ID)
+
+    def test_reward_missing_min_reward_raises(self, monkeypatch) -> None:
+        from xqsa.quip import QuipConnectionError
+
+        iface = _default_iface()
+        del iface.constants[("QuantumComputeMempool", "MinReward")]
+        with pytest.raises(QuipConnectionError, match="reward=.*QUIP_REWARD"):
+            _make_solver(monkeypatch, iface=iface)
+
     def test_topology_explicit_arg_beats_env(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip
 
