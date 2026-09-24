@@ -180,7 +180,11 @@ def is_source(entry):
     # (`xqffi.abi3.so`) and its final suffix varies by platform, so it is
     # matched the way the top-level rule above matches it: on the stem before
     # the first dot.
-    return native and leaf.split(".", 1)[0] == name and leaf.endswith((".so", ".pyd"))
+    if native and leaf.split(".", 1)[0] == name and leaf.endswith((".so", ".pyd")):
+        return True
+    # The cdylib's type stubs and PEP 561 marker: its source is compiled, so
+    # the stubs are the only typing a checker can read.
+    return native and (leaf.endswith(".pyi") or leaf == "py.typed")
 
 
 # An allowlist, not a denylist of known-bad names. The set of files that could

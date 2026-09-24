@@ -42,9 +42,9 @@ mod fault;
 mod verifier;
 mod vm;
 
-/// Module entry point — registered as `xqffi` by maturin (via the
-/// `module-name` field in `pyproject.toml`, which matches the `[lib] name`
-/// in `Cargo.toml`).
+/// Module entry point -- built by maturin as `xqffi.xqffi` (the
+/// `module-name` field in `pyproject.toml`), inside the `xqffi` package whose
+/// `python/xqffi/__init__.py` imports it and whose `.pyi` files type it.
 ///
 /// Submodules (`xqffi.asm`, `xqffi.vm`, `xqffi.verifier`) are registered
 /// both as attributes of the parent module *and* in `sys.modules` so
