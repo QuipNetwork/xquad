@@ -22,6 +22,31 @@ additional units *before* doing that work, following the same discipline as
 the byte budget described in `spec/xqvm/SPEC.md` (Runtime Limits): a program
 that cannot pay for the work does none of it.
 
+## The Step Counter
+
+The step counter is an unsigned 64-bit integer: it holds every count from
+`0` to `2^64 - 1` and no other. A charge is admitted only if the counter
+plus the charge is representable *and* does not exceed the step limit.
+A charge that would carry the counter past `2^64 - 1` raises
+`StepLimitExceeded` whatever the limit, exactly as one that would carry it
+past the limit does, and the counter keeps the value it had before the
+charge. The counter never wraps and never saturates, so the count a run
+reports is always the count it spent.
+
+The rule is forced rather than chosen. A limit is itself at most
+`2^64 - 1`, so a count past that exceeds every limit a host can set. An
+unbounded budget is a limit of `2^64 - 1` -- the counter's own ceiling.
+The allocation budget refuses a cost past its own integer width for the
+same reason (`spec/xqvm/SPEC.md`, Allocation budget). The alternative,
+clamping the total at `2^64 - 1`, admits the charge at a limit of
+`2^64 - 1`, because the clamped total does not exceed it; the budget would
+stop refusing exactly where the charge is largest.
+
+One consequence is that the saturated charge the [formulas](#the-formulas)
+produce is always refused. Every instruction pays `BASE_STEPS` before its
+additional charge, so the counter is at least `1` when an additional
+charge is tested, and `1 + (2^64 - 1)` is not representable.
+
 ## The Constants
 
 The six constants below are shared, value for value, between the Rust VM
@@ -190,8 +215,9 @@ Runtime Limits table describes as an implementation-defined allocation
 budget). All arithmetic is integer and saturating: `n * (n - 1)`,
 `/ 2`, `n + pairs(n)`, and the final multiplication by `COEFF_WRITE_STEPS`
 each saturate at `u64::MAX` rather than wrapping, so an `n` large enough to
-overflow the pair count prices out to the maximum charge and is refused by
-the step budget rather than wrapping into an affordable number.
+overflow the pair count prices out to the maximum charge, which no step
+limit admits (see [The Step Counter](#the-step-counter)), rather than
+wrapping into an affordable number.
 
 This is a worst-case bound, not a measurement of the work the expansion
 actually does. Repeated indices in `indices` collide on the same sparse-map
