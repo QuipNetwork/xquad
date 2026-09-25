@@ -231,16 +231,16 @@ the precise scope. Treat a pass as "structurally sound," not as "will run
 to completion."
 
 A whole class of faults is outside the verifier's reach: they depend on
-values, and the verifier tracks types and depths rather than values. An allocator size, a grid extent, a loop bound, a
-calldata index and every arithmetic operand are ordinary popped stack
-values, so `InvalidAllocation`, `InvalidGridDimensions`,
-`InvalidIntegerK`, `ArithmeticOverflow`, `IndexOutOfBounds`,
-`SampleOutOfDomain`, `LoopStackOverflow`, `StepLimitExceeded` and
-`MemoryLimitExceeded` are all runtime faults with no static counterpart.
-`SampleOutOfDomain` is the clearest case of why: the value written into a
-sample can arrive from calldata, so no amount of static analysis can know
-it. A verified program can
-still raise any of them, and for an embedder that is the point: the
+values, and the verifier tracks types and depths rather than values. An
+allocator size, a grid extent, a loop bound, a calldata index and every
+arithmetic operand are ordinary popped stack values, so
+`InvalidAllocation`, `InvalidGridDimensions`, `InvalidIntegerK`,
+`ArithmeticOverflow`, `IndexOutOfBounds`, `SampleOutOfDomain`,
+`LoopStackOverflow`, `StepLimitExceeded` and `MemoryLimitExceeded` are all
+runtime faults with no static counterpart. `SampleOutOfDomain` is the
+clearest case of why: the value written into a sample can arrive from
+calldata, so no amount of static analysis can know it. A verified program
+can still raise any of them, and for an embedder that is the point: the
 budgets and the range checks are what bound a program the verifier has
 already passed. See [Limits and
 Errors](../xqvm/limits-and-errors.md#vm-runtime-errors).

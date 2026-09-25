@@ -191,8 +191,10 @@ most conservative depth to successors.
    Counting predecessor blocks alone would let `.0: PUSH 1 / JUMP .0 / HALT`
    verify clean and then overflow the stack at runtime.
 
-3. **`StackUnderflow`** / **`StackOverflowRisk`** -- blocks whose `before` or
-   `after` depth falls below 0 or exceeds 8192 are flagged.
+3. **`StackUnderflow`** / **`StackOverflowRisk`** -- an instruction whose
+   pops take the depth below 0 is flagged under the
+   [Stack underflow rule](#stack-underflow-rule), and a block whose depth
+   exceeds 8192 is flagged as `StackOverflowRisk`.
 
 ### Stack underflow rule
 
