@@ -3852,6 +3852,7 @@ mod tests {
         let _ = vm.set_unlimited_steps();
         vm.charge_steps(0, u64::MAX)
             .expect("u64::MAX fits an empty counter");
+        assert_eq!(vm.steps(), u64::MAX);
 
         let mut vm = Vm::new();
         let _ = vm.set_unlimited_steps();
