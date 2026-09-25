@@ -953,6 +953,16 @@ macro_rules! all_default_instructions {
 /// accepted at exactly it, whatever it pushes. Control-flow openers and
 /// conditional jumps are left out: their programs need a matching `NEXT`
 /// or `TARGET`, and the plain pop-only case is already covered above.
+///
+/// The verifier reads its pop counts from the opcode table, and the build
+/// checks the table against `opcodes.yaml`, so neither check reaches what
+/// the VM actually pops. Each program is therefore also run: one short, the
+/// VM must underflow (an overstated count would make the verifier reject
+/// valid programs); at exactly the count it must not (an understated one
+/// would make it accept programs that fault on every run). The VM pops
+/// before it resolves a register, so the underflow comes first even where
+/// the zeroed operands would fault later. Where the exact run completes,
+/// the stack it leaves is the push count.
 #[test]
 fn every_popping_opcode_needs_its_full_pop_count() {
     let with = |instr: Instruction, values: u8| {
@@ -995,6 +1005,27 @@ fn every_popping_opcode_needs_its_full_pop_count() {
             "{}: {pops} values for {pops} pops should verify, got {exact:?}",
             instr.mnemonic()
         );
+
+        let short_run = crate::Vm::new().run(&with(instr, one_short));
+        assert!(
+            matches!(short_run, Err(crate::Error::StackUnderflow { .. })),
+            "{}: the VM should underflow on {one_short} values for {pops} pops, got {short_run:?}",
+            instr.mnemonic()
+        );
+        let mut vm = crate::Vm::new();
+        match vm.run(&with(instr, pops)) {
+            Err(crate::Error::StackUnderflow { .. }) => panic!(
+                "{}: the VM underflowed on {pops} values; the table understates its pops",
+                instr.mnemonic()
+            ),
+            Ok(()) => assert_eq!(
+                vm.stack().len(),
+                usize::from(pushes),
+                "{}: the VM left a stack the table's push count does not predict",
+                instr.mnemonic()
+            ),
+            Err(_) => {}
+        }
     }
     // Every opcode that both pops and pushes went through the loop above;
     // spec/xqvm/VERIFIER.md's per-opcode table lists the same forty.
