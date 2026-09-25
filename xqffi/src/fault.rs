@@ -22,7 +22,8 @@
 //! existed still catches every VM fault. The class names are the fault
 //! identities of `spec/xqvm/SPEC.md` (section "Faults"), plus `TraceFailed`,
 //! which a host tracer raises rather than a program; the message is the
-//! error's `Display` text.
+//! error's `Display` text, and `offset` is the byte offset of the faulting
+//! instruction, or `None` where the fault has none.
 
 use pyo3::create_exception;
 use pyo3::exceptions::PyRuntimeError;
@@ -36,7 +37,10 @@ macro_rules! faults {
             xqffi.vm,
             XqvmError,
             PyRuntimeError,
-            "Base class of every fault the XQVM raises."
+            "Base class of every fault the XQVM raises.\n\n\
+             `offset` is the byte offset of the faulting instruction in the \
+             instruction stream, or `None` where the fault has no single \
+             instruction."
         );
         $(create_exception!(xqffi.vm, $name, XqvmError, $doc);)+
 
@@ -59,7 +63,7 @@ faults! {
     IndexOutOfBounds => "An index fell outside the addressed container.",
     NoActiveLoop => "A loop instruction executed with no active loop.",
     UnmatchedLoop => "A RANGE or ITER had no matching NEXT.",
-    BadJumpTarget => "A jump named a target outside the program.",
+    BadJumpTarget => "A jump named a target the pre-scan did not register.",
     InvalidLabel => "A jump named a label the program does not define.",
     BadOpcode => "An unknown opcode byte was decoded.",
     TruncatedInstruction => "An instruction's operands ran past the end of the program.",
@@ -70,7 +74,7 @@ faults! {
     ArithmeticOverflow => "An operation produced a value outside the signed 64-bit range.",
     StepLimitExceeded => "Execution ran past its step budget.",
     MemoryLimitExceeded => "An allocating instruction ran past its allocation budget.",
-    InvalidShift => "A shift amount fell outside the representable range.",
+    InvalidShift => "SHL or SHR was given a shift amount outside [0, 63].",
     InvalidGridDimensions => "Grid dimensions were not positive, or did not fit the model.",
     InvalidIntegerK => "An XQMX or XSMX allocation used k < 2.",
     SampleOutOfDomain => "A SETLINE or ADDLINE write put a value outside a sample's domain.",
@@ -89,7 +93,7 @@ pub(crate) fn vm_error(error: &xqvm::Error) -> PyErr {
     use xqvm::Error as E;
 
     let message = error.to_string();
-    match error {
+    let err = match error {
         E::StackUnderflow { .. } => StackUnderflow::new_err(message),
         E::StackOverflow { .. } => StackOverflow::new_err(message),
         E::RegisterType { .. } | E::IncompatibleType(_) => TypeMismatch::new_err(message),
@@ -116,7 +120,19 @@ pub(crate) fn vm_error(error: &xqvm::Error) -> PyErr {
         E::TraceFailed { .. } => TraceFailed::new_err(message),
         E::InvalidAllocation { .. } => InvalidAllocation::new_err(message),
         E::LoopStackOverflow { .. } => LoopStackOverflow::new_err(message),
-    }
+    };
+    with_offset(err, error.byte_pos())
+}
+
+/// Set the `offset` attribute every `XqvmError` carries.
+///
+/// A failure to set it is returned in place of `err`, so a fault never
+/// reaches Python without the attribute its type promises.
+fn with_offset(err: PyErr, offset: Option<usize>) -> PyErr {
+    Python::attach(|py| match err.value(py).setattr("offset", offset) {
+        Ok(()) => err,
+        Err(setattr_error) => setattr_error,
+    })
 }
 
 /// Error raised when bytes handed to `Vm.run` are not a decodable program.

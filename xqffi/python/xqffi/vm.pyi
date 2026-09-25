@@ -210,29 +210,84 @@ def triu(i: int, j: int) -> int:
 class XqvmError(RuntimeError):
     """Base class of every fault the XQVM raises."""
 
-class StackUnderflow(XqvmError): ...
-class StackOverflow(XqvmError): ...
-class TypeMismatch(XqvmError): ...
-class UnsetRegister(XqvmError): ...
-class DivisionByZero(XqvmError): ...
-class IndexOutOfBounds(XqvmError): ...
-class NoActiveLoop(XqvmError): ...
-class UnmatchedLoop(XqvmError): ...
-class BadJumpTarget(XqvmError): ...
-class InvalidLabel(XqvmError): ...
-class BadOpcode(XqvmError): ...
-class TruncatedInstruction(XqvmError): ...
-class CallDataIndex(XqvmError): ...
-class OutputIndex(XqvmError): ...
-class SizeMismatch(XqvmError): ...
-class VecLengthMismatch(XqvmError): ...
-class ArithmeticOverflow(XqvmError): ...
-class StepLimitExceeded(XqvmError): ...
-class MemoryLimitExceeded(XqvmError): ...
-class InvalidShift(XqvmError): ...
-class InvalidGridDimensions(XqvmError): ...
-class InvalidIntegerK(XqvmError): ...
-class SampleOutOfDomain(XqvmError): ...
-class TraceFailed(XqvmError): ...
-class InvalidAllocation(XqvmError): ...
-class LoopStackOverflow(XqvmError): ...
+    offset: int | None
+    """Byte offset of the faulting instruction in the instruction stream, or
+    `None` where the fault has no single instruction."""
+
+class StackUnderflow(XqvmError):
+    """A pop was attempted on an empty stack."""
+
+class StackOverflow(XqvmError):
+    """The value stack exceeded its depth limit."""
+
+class TypeMismatch(XqvmError):
+    """An operand had the wrong value kind."""
+
+class UnsetRegister(XqvmError):
+    """A register was read while unset."""
+
+class DivisionByZero(XqvmError):
+    """Division or modulo by zero."""
+
+class IndexOutOfBounds(XqvmError):
+    """An index fell outside the addressed container."""
+
+class NoActiveLoop(XqvmError):
+    """A loop instruction executed with no active loop."""
+
+class UnmatchedLoop(XqvmError):
+    """A RANGE or ITER had no matching NEXT."""
+
+class BadJumpTarget(XqvmError):
+    """A jump named a target the pre-scan did not register."""
+
+class InvalidLabel(XqvmError):
+    """A jump named a label the program does not define."""
+
+class BadOpcode(XqvmError):
+    """An unknown opcode byte was decoded."""
+
+class TruncatedInstruction(XqvmError):
+    """An instruction's operands ran past the end of the program."""
+
+class CallDataIndex(XqvmError):
+    """An INPUT addressed a calldata slot that does not exist."""
+
+class OutputIndex(XqvmError):
+    """An OUTPUT addressed an output slot that does not exist."""
+
+class SizeMismatch(XqvmError):
+    """A model and a sample disagreed on variable count."""
+
+class VecLengthMismatch(XqvmError):
+    """Two vector operands disagreed on length."""
+
+class ArithmeticOverflow(XqvmError):
+    """An operation produced a value outside the signed 64-bit range."""
+
+class StepLimitExceeded(XqvmError):
+    """Execution ran past its step budget."""
+
+class MemoryLimitExceeded(XqvmError):
+    """An allocating instruction ran past its allocation budget."""
+
+class InvalidShift(XqvmError):
+    """SHL or SHR was given a shift amount outside [0, 63]."""
+
+class InvalidGridDimensions(XqvmError):
+    """Grid dimensions were not positive, or did not fit the model."""
+
+class InvalidIntegerK(XqvmError):
+    """An XQMX or XSMX allocation used k < 2."""
+
+class SampleOutOfDomain(XqvmError):
+    """A SETLINE or ADDLINE write put a value outside a sample's domain."""
+
+class TraceFailed(XqvmError):
+    """A tracer refused a step."""
+
+class InvalidAllocation(XqvmError):
+    """An allocator was handed a size that is not an allocation."""
+
+class LoopStackOverflow(XqvmError):
+    """Loop nesting exceeded its depth limit."""

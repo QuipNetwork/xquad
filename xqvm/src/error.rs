@@ -312,7 +312,7 @@ pub enum Error {
     LoopStackOverflow { pos: usize },
 }
 
-// `into_diagnostic` and `byte_pos` require the disassembler (std-only).
+// `into_diagnostic` requires the disassembler (std-only).
 #[cfg(feature = "std")]
 impl Error {
     /// Convert this error into a [`RuntimeDiagnostic`] with a disassembly
@@ -355,9 +355,27 @@ impl Error {
             span,
         }
     }
+}
 
-    /// Returns the byte offset embedded in this error, if any.
-    fn byte_pos(&self) -> Option<usize> {
+impl Error {
+    /// The byte offset of the faulting instruction, where the error carries one.
+    ///
+    /// `None` for faults that belong to no single instruction (calldata and
+    /// output slot bounds, size and length mismatches, type errors), and for
+    /// `ArithmeticOverflow` and `StepLimitExceeded` when they are raised
+    /// through an API that carries no program counter, such as a model
+    /// mutation a host calls directly.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use xqvm::Error;
+    ///
+    /// assert_eq!(Error::DivisionByZero { pos: 7 }.byte_pos(), Some(7));
+    /// assert_eq!(Error::ArithmeticOverflow { pos: None }.byte_pos(), None);
+    /// ```
+    #[must_use]
+    pub const fn byte_pos(&self) -> Option<usize> {
         match self {
             Self::StackUnderflow { pos }
             | Self::StackOverflow { pos }

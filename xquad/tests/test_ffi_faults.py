@@ -23,6 +23,7 @@ its fault in the conformance vocabulary, carrying the error's Display text.
 
 from __future__ import annotations
 
+import zlib
 from collections.abc import Callable
 
 import pytest
@@ -93,11 +94,12 @@ def test_each_fault_is_an_xqvm_error_in_xqffi_vm(name: str) -> None:
     assert cls.__doc__
 
 
-# One program per fault reachable from assembled source. `BadJumpTarget`,
-# `InvalidLabel`, `BadOpcode` and `TruncatedInstruction` need hand-built
-# bytecode with a valid CRC, and `TraceFailed` needs a tracer, which `xqffi`
-# does not expose; their mapping is pinned at compile time by the exhaustive
-# match in `xqffi/src/fault.rs`.
+# One program per fault reachable from assembled source. `BadOpcode` and
+# `TruncatedInstruction` are raised below from hand-built bytecode.
+# `BadJumpTarget` and `InvalidLabel` need a jump table the decoder would
+# accept and the run would not, and `TraceFailed` needs a tracer, which
+# `xqffi` does not expose; their mapping is pinned at compile time by the
+# exhaustive match in `xqffi/src/fault.rs`.
 RAISED = [
     ("StackUnderflow", "ADD\nHALT", []),
     ("StackOverflow", "TARGET .0\nPUSH 1\nJUMP .0", []),
@@ -140,6 +142,43 @@ def test_run_raises_the_fault_named_for_the_error(name: str, source: str, callda
     with pytest.raises(ffi.XqvmError) as excinfo:
         _run(source, calldata)
     assert type(excinfo.value) is getattr(ffi, name)
+
+
+def _xqbc(payload: bytes) -> bytes:
+    """Wrap `payload` in the 15-byte XQBC header of `spec/xqvm/ENCODING.md`."""
+    code_len = len(payload).to_bytes(4, "big")
+    crc = zlib.crc32(payload).to_bytes(4, "big")
+    return b"XQBC\x01\x00\x00" + code_len + crc + payload
+
+
+# `PUSH1 1` (two bytes) followed by the faulting instruction at byte 2:
+# `0x0D` is the table's reserved gap, and `PUSH2` (`0x12`) with one of its
+# two operand bytes runs off the end of the stream.
+HAND_BUILT = [
+    ("BadOpcode", b"\x11\x01\x0d"),
+    ("TruncatedInstruction", b"\x11\x01\x12\x00"),
+]
+
+
+@pytest.mark.parametrize(("name", "payload"), HAND_BUILT, ids=[case[0] for case in HAND_BUILT])
+def test_hand_built_bytecode_raises_the_fault_named_for_the_error(name: str, payload: bytes) -> None:
+    with pytest.raises(ffi.XqvmError) as excinfo:
+        ffi.Vm().run(_xqbc(payload))
+    assert type(excinfo.value) is getattr(ffi, name)
+    assert excinfo.value.offset == 2
+
+
+def test_the_offset_is_the_faulting_instruction() -> None:
+    # PUSH1 1 and PUSH1 0 take two bytes each, so DIV sits at byte 4.
+    with pytest.raises(ffi.DivisionByZero) as excinfo:
+        _run("PUSH 1\nPUSH 0\nDIV\nHALT", [])
+    assert excinfo.value.offset == 4
+
+
+def test_a_fault_with_no_instruction_has_no_offset() -> None:
+    with pytest.raises(ffi.CallDataIndex) as excinfo:
+        _run("PUSH 3\nINPUT r0\nHALT", [])
+    assert excinfo.value.offset is None
 
 
 def test_size_mismatch_from_energy() -> None:
