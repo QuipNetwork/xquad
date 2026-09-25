@@ -72,7 +72,7 @@ position.
 ```python
 from xquad.sa import SolverQuip
 
-solver = SolverQuip.for_network("aglais", keystore="~/.quip/keystore.json", topology="native")
+solver = SolverQuip.for_network("aglais", topology="native")
 print(solver.quote(model))
 ```
 
@@ -85,18 +85,25 @@ print(solver.quote(model))
 [quip]   shortfall  1.002193037538 AGLS
 ```
 
-Three arguments do the work:
+Two arguments do the work:
 
 - `"aglais"` selects the preset carrying the network's RPC endpoint
   and faucet; see [Named networks](quip-network.md#named-networks).
-- `keystore` names a file that does not exist yet. `SolverQuip`
-  creates it with a new signing key, so the account starts empty.
-  Keep the file: it is the account.
 - `topology="native"` submits the order over the model's own coupling
   graph. In the default mode, the placement search finds no embedding
   of this model in the network's topology within its step budget and
   raises `PlacementError`; native mode skips placement. See
   [Native topology mode](quip-network.md#native-topology-mode).
+
+No signer is passed, so `SolverQuip` uses the keystore at
+`~/.quip/keystore.json`. On a first run the file does not exist yet:
+`SolverQuip` creates it with a new signing key and warns with its path,
+so the account starts empty. Keep the file: it is the account.
+To use a different one, pass it:
+
+```python
+solver = SolverQuip.for_network("aglais", keystore="~/.quip/work.json", topology="native")
+```
 
 `quote()` builds and signs the job's `propose_job` extrinsic and asks
 the chain what it would cost, without submitting anything. The
@@ -185,7 +192,7 @@ the quote:
 ```python
 from xquad.sa import QuipCancelledError
 
-solver = SolverQuip.for_network("aglais", keystore="~/.quip/keystore.json", topology="native", autoconfirm=False)
+solver = SolverQuip.for_network("aglais", topology="native", autoconfirm=False)
 try:
     result = solver.solve(model)
 except QuipCancelledError as exc:
@@ -217,7 +224,6 @@ to 2 AGLS (a token here has 12 decimals):
 ```python
 solver = SolverQuip.for_network(
     "aglais",
-    keystore="~/.quip/keystore.json",
     topology="native",
     autoconfirm=lambda quote: quote.total_planck <= 2 * 10**12,
 )

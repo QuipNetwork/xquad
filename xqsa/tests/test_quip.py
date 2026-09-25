@@ -1081,13 +1081,43 @@ class TestSolverQuipConstruction:
         with pytest.raises(ValueError, match="RPC URL"):
             SolverQuip(seed=VALID_SEED)
 
-    def test_missing_signer_raises(self, monkeypatch) -> None:
-        from xqsa.quip import SolverQuip
-
+    @staticmethod
+    def _install_with_home(monkeypatch, tmp_path) -> MagicMock:
+        """Install the fakes with ``HOME`` at ``tmp_path``; return ``HybridSigner``."""
         _install(monkeypatch, _default_iface())
         _clear_quip_env(monkeypatch)
-        with pytest.raises(ValueError, match="signer is required"):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        from xqsa import quip_signing
+
+        fake = sys.modules["quip_signer"]
+        fake.HybridSigner.from_seed.return_value.public_key = b"\x01" * 32
+        # quip_signing binds quip_signer at import, possibly to the real module.
+        monkeypatch.setattr(quip_signing, "quip_signer", fake)
+        return fake.HybridSigner
+
+    def test_default_keystore_created_and_reused(self, monkeypatch, tmp_path, caplog) -> None:
+        from xqsa.quip import SolverQuip
+
+        hybrid = self._install_with_home(monkeypatch, tmp_path)
+        path = tmp_path / ".quip" / "keystore.json"
+        with caplog.at_level(logging.INFO, logger="xqsa.quip"):
             SolverQuip(url="ws://fake")
+            SolverQuip(url="ws://fake")
+        assert path.exists()
+        first, second = hybrid.from_seed.call_args_list
+        assert first == second
+        # A new key warns (visible without logging config); a reused one is INFO.
+        created, reused = (r for r in caplog.records if str(path) in r.getMessage())
+        assert created.levelno == logging.WARNING
+        assert "generated a new keystore" in created.getMessage()
+        assert reused.levelno == logging.INFO
+
+    def test_seed_beats_default_keystore(self, monkeypatch, tmp_path) -> None:
+        from xqsa.quip import SolverQuip
+
+        self._install_with_home(monkeypatch, tmp_path)
+        SolverQuip(url="ws://fake", seed=VALID_SEED)
+        assert not (tmp_path / ".quip").exists()
 
     def test_connection_failure_wrapped(self, monkeypatch) -> None:
         from xqsa.quip import QuipConnectionError, SolverQuip
@@ -1134,6 +1164,31 @@ class TestSolverQuipConstruction:
     def test_reward_defaults_to_min_reward(self, monkeypatch) -> None:
         # No reward arg, no QUIP_REWARD -> chain MinReward constant.
         assert _make_solver(monkeypatch)._reward == UNIT
+
+    def test_reward_read_fault_raises_connection_error(self, monkeypatch) -> None:
+        from xqsa.quip import QuipConnectionError
+
+        # spec_id= skips the DefaultIsingSpecId read, so the fault hits MinReward.
+        iface = _default_iface()
+        iface._get_constant_raises = RuntimeError("socket closed")
+        with pytest.raises(QuipConnectionError, match="QuantumComputeMempool.MinReward constant: socket closed"):
+            _make_solver(monkeypatch, iface=iface, spec_id=DEFAULT_ISING_SPEC_ID)
+
+    def test_reward_read_metadata_error_passes_through(self, monkeypatch) -> None:
+        from xqsa.quip import QuipMetadataError
+
+        iface = _default_iface()
+        iface._get_constant_raises = QuipMetadataError("serves V16 runtime metadata")
+        with pytest.raises(QuipMetadataError, match="serves V16"):
+            _make_solver(monkeypatch, iface=iface, spec_id=DEFAULT_ISING_SPEC_ID)
+
+    def test_reward_missing_min_reward_raises(self, monkeypatch) -> None:
+        from xqsa.quip import QuipConnectionError
+
+        iface = _default_iface()
+        del iface.constants[("QuantumComputeMempool", "MinReward")]
+        with pytest.raises(QuipConnectionError, match="reward=.*QUIP_REWARD"):
+            _make_solver(monkeypatch, iface=iface)
 
     def test_topology_explicit_arg_beats_env(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip

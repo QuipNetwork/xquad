@@ -31,7 +31,7 @@ Configuration is resolved from constructor arguments first, then environment:
     =====================  =======================================================================
     ``url``                ``QUIP_RPC_URL``      websocket RPC endpoint
     ``seed``               ``QUIP_SIGNER_SEED``  32-byte hex master seed
-    ``keystore``           ``QUIP_KEYSTORE``     keystore path (load or create)
+    ``keystore``           ``QUIP_KEYSTORE``     keystore path (else ~/.quip/keystore.json)
     ``reward``             ``QUIP_REWARD``       reward in planck (else MinReward)
     ``topology``           ``QUIP_TOPOLOGY``     topology hash, or "native" (else DefaultTopology)
     ``faucet``             ``QUIP_FAUCET_URL``   faucet base URL (env read only without url=)
@@ -39,8 +39,8 @@ Configuration is resolved from constructor arguments first, then environment:
     ``autofund``           ``QUIP_AUTOFUND``     fund from the faucet without asking
     =====================  =======================================================================
 
-Provide exactly one of ``seed`` or ``keystore`` (a keystore is generated on
-first use if absent). Every :meth:`SolverQuip.solve` first quotes the job
+A seed wins over a keystore. With neither configured, the keystore at
+``~/.quip/keystore.json`` is loaded, or generated on first use. Every :meth:`SolverQuip.solve` first quotes the job
 (:class:`JobQuote`: reward plus the chain-reported fee, against the balance)
 and passes two consent gates. ``autoconfirm`` decides whether to submit at that
 price; ``autofund`` decides whether an account short of it is topped up with
@@ -52,7 +52,7 @@ Jupyter kernel), or a callable taking the quote and returning a verdict. The
 environment variables take ``1/true/yes/on`` or ``0/false/no/off``. A short
 account with no faucet configured raises :class:`QuipSubmissionError`.
 
-Named networks skip the URL: ``SolverQuip.for_network("aglais", keystore=...)``
+Named networks skip the URL: ``SolverQuip.for_network("aglais")``
 builds a solver against a preset, ``aglais`` (the public testnet) or ``devnet``
 (the localdev stack). The coordinates, and how often they move, are in
 :mod:`xqsa.quip_networks`.
@@ -86,6 +86,7 @@ import time
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 
 from xqsa import quip_metadata
@@ -141,6 +142,9 @@ FUND_WAIT_SECONDS = 30.0
 # runtime's weights and fee config, which an upgrade can move silently; it is a
 # bound for today's runtime, not a law.
 FEE_HEADROOM_PLANCK = 10_000_000_000  # 0.01 AGLS (12 decimals).
+
+# Keystore used when no seed or keystore is configured; created on first use.
+DEFAULT_KEYSTORE = "~/.quip/keystore.json"
 
 # The ``QuantumComputeMempool`` pallet name and the calls/storage/events this
 # backend uses; gathered here so the chain surface is easy to audit.
@@ -294,7 +298,7 @@ class SolverQuip(Solver):
         ImportError: if the ``[quip]`` extra is not installed
             (``pip install xqsa[quip]`` -- provides ``substrate-interface`` and
             the ``quip_signer`` signing extension).
-        ValueError: if no RPC URL or signer (seed/keystore) is configured.
+        ValueError: if no RPC URL is configured.
         QuipConnectionError: if the node is unreachable or the configured Ising
             spec is not registered on-chain.
         QuipMetadataError: if the node's runtime metadata cannot be decoded by
@@ -401,7 +405,7 @@ class SolverQuip(Solver):
         Examples:
             Connects to the network, so it is not run as a doctest::
 
-                solver = SolverQuip.for_network("aglais", keystore="~/.quip/keystore.json")
+                solver = SolverQuip.for_network("aglais")
 
         Raises:
             ValueError: if ``name`` is not a known network, before any
@@ -427,16 +431,29 @@ class SolverQuip(Solver):
     def _build_signer(quip_signing: Any, *, seed: str | None, keystore: str | None) -> Any:
         """Build the hybrid signer from a seed or keystore (env fallbacks applied).
 
-        Raises:
-            ValueError: if neither a seed nor a keystore is configured.
+        Resolution: ``seed``, ``QUIP_SIGNER_SEED``, ``keystore``, ``QUIP_KEYSTORE``,
+        then :data:`DEFAULT_KEYSTORE`. Falling back to the default warns when the
+        file is new, since that is a fresh, empty account a caller may not have
+        meant to use, and logs its path at INFO when an existing file is loaded.
         """
         resolved_seed = seed or os.environ.get("QUIP_SIGNER_SEED")
-        resolved_keystore = keystore or os.environ.get("QUIP_KEYSTORE")
         if resolved_seed:
             return quip_signing.signer_from_seed(resolved_seed)
+        resolved_keystore = keystore or os.environ.get("QUIP_KEYSTORE")
         if resolved_keystore:
             return quip_signing.load_or_generate_keystore(resolved_keystore).signer
-        raise ValueError("A signer is required. Pass seed= (or QUIP_SIGNER_SEED) or keystore= (or QUIP_KEYSTORE).")
+        default_path = Path(DEFAULT_KEYSTORE).expanduser()
+        existed = default_path.exists()
+        ks = quip_signing.load_or_generate_keystore(default_path)
+        if existed:
+            logger.info("no signer configured; using the keystore at %s", ks.path)
+        else:
+            logger.warning(
+                "no signer configured; generated a new keystore at %s. Its account starts empty; "
+                "keep the file, it is the account",
+                ks.path,
+            )
+        return ks.signer
 
     def _resolve_spec_id(self, spec_id: str | None) -> str:
         """Resolve and verify the Ising job spec id.
@@ -477,16 +494,27 @@ class SolverQuip(Solver):
             QuipMetadataError: propagated unchanged; undecodable metadata is not
                 an unreadable constant.
         """
+        value = self._read_constant("DefaultIsingSpecId")
+        return _as_hex(value) if value is not None else None
+
+    def _read_constant(self, name: str) -> Any | None:
+        """Read a ``QuantumComputeMempool`` runtime constant's value, or ``None`` if unset.
+
+        ``get_constant`` returns ``None`` for a constant absent from the runtime
+        metadata; any other failure is a fault, not a genuine absence.
+
+        Raises:
+            QuipConnectionError: if reading the constant fails.
+            QuipMetadataError: propagated unchanged; undecodable metadata is not
+                an unreadable constant.
+        """
         try:
-            const = self._iface.get_constant("QuantumComputeMempool", "DefaultIsingSpecId")
+            const = self._iface.get_constant(MEMPOOL_PALLET, name)
         except QuipMetadataError:
             raise  # undecodable metadata, not an unreadable constant.
         except Exception as exc:  # noqa: BLE001 -- a fault, not a genuine absence.
-            raise QuipConnectionError(
-                f"could not read the QuantumComputeMempool.DefaultIsingSpecId constant: {exc}"
-            ) from exc
-        value = getattr(const, "value", None)
-        return _as_hex(value) if value is not None else None
+            raise QuipConnectionError(f"could not read the {MEMPOOL_PALLET}.{name} constant: {exc}") from exc
+        return getattr(const, "value", None)
 
     def _resolve_topology_hash(self, topology: str | None) -> str:
         """Resolve the topology hash to target.
@@ -573,14 +601,27 @@ class SolverQuip(Solver):
         return _as_hex(value) if value is not None else None
 
     def _resolve_reward(self, reward: int | None) -> int:
-        """Resolve the proposal reward (planck): arg, then ``QUIP_REWARD``, then MinReward."""
+        """Resolve the proposal reward (planck): arg, then ``QUIP_REWARD``, then MinReward.
+
+        The reward spends funds, so a chain without ``MinReward`` is an error
+        rather than a silent default.
+
+        Raises:
+            QuipConnectionError: if reading ``MinReward`` fails, or the runtime
+                does not define it.
+            QuipMetadataError: propagated unchanged from the constant read.
+        """
         if reward is not None:
             return int(reward)
         env_reward = os.environ.get("QUIP_REWARD")
         if env_reward:
             return int(env_reward)
-        const = self._iface.get_constant("QuantumComputeMempool", "MinReward")
-        return int(const.value)
+        value = self._read_constant("MinReward")
+        if value is None:
+            raise QuipConnectionError(
+                f"the chain defines no {MEMPOOL_PALLET}.MinReward constant; pass reward= or set QUIP_REWARD"
+            )
+        return int(value)
 
     # ------------------------------------------------------------------
     # Chain reads
@@ -1163,13 +1204,7 @@ class SolverQuip(Solver):
         """
         bounds = (("MaxNodes", "nodes", topology.num_nodes), ("MaxEdges", "edges", topology.num_edges))
         for name, noun, count in bounds:
-            try:
-                const = self._iface.get_constant(MEMPOOL_PALLET, name)
-            except QuipMetadataError:
-                raise  # undecodable metadata, not an unreadable constant.
-            except Exception as exc:  # noqa: BLE001 -- a fault, not a genuine absence.
-                raise QuipConnectionError(f"could not read the {MEMPOOL_PALLET}.{name} constant: {exc}") from exc
-            limit = getattr(const, "value", None)
+            limit = self._read_constant(name)
             if limit is not None and count > int(limit):
                 raise EncodingError(
                     f"native order has {count} {noun}, over the mempool's {MEMPOOL_PALLET}.{name} of {int(limit)}"
