@@ -44,10 +44,10 @@ drops its `+P` and leaves `-P` in the stored model instead of `0` -- see
 forces each position to hold exactly one city. Both terms are zero *as
 written* on a valid tour, so they never change which valid tour is
 shortest -- but because of the dropped constant above, what a satisfied
-constraint actually contributes is `-P`, not `0`, which is where the
-worked example's `-800` below comes from. A violation (a city visiting
-two positions, or a position holding two cities) still costs more than a
-satisfied constraint.
+constraint actually contributes is `-P`, not `0`. That is the
+`-2 * P * n = -800` term in the worked example below. A violation (a
+city visiting two positions, or a position holding two cities) still
+costs more than a satisfied constraint.
 
 Whether that makes every invalid grid's energy exceed every valid
 tour's depends on \\(P\\) relative to the tour-length difference a
