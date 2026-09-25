@@ -86,6 +86,7 @@ import time
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 
 from xqsa import quip_metadata
@@ -431,8 +432,9 @@ class SolverQuip(Solver):
         """Build the hybrid signer from a seed or keystore (env fallbacks applied).
 
         Resolution: ``seed``, ``QUIP_SIGNER_SEED``, ``keystore``, ``QUIP_KEYSTORE``,
-        then :data:`DEFAULT_KEYSTORE`, whose resolved path is logged at INFO so an
-        unconfigured caller sees which key file was loaded or created.
+        then :data:`DEFAULT_KEYSTORE`. Falling back to the default warns when the
+        file is new, since that is a fresh, empty account a caller may not have
+        meant to use, and logs its path at INFO when an existing file is loaded.
         """
         resolved_seed = seed or os.environ.get("QUIP_SIGNER_SEED")
         if resolved_seed:
@@ -440,8 +442,17 @@ class SolverQuip(Solver):
         resolved_keystore = keystore or os.environ.get("QUIP_KEYSTORE")
         if resolved_keystore:
             return quip_signing.load_or_generate_keystore(resolved_keystore).signer
-        ks = quip_signing.load_or_generate_keystore(DEFAULT_KEYSTORE)
-        logger.info("no signer configured; using the keystore at %s", ks.path)
+        default_path = Path(DEFAULT_KEYSTORE).expanduser()
+        existed = default_path.exists()
+        ks = quip_signing.load_or_generate_keystore(default_path)
+        if existed:
+            logger.info("no signer configured; using the keystore at %s", ks.path)
+        else:
+            logger.warning(
+                "no signer configured; generated a new keystore at %s. Its account starts empty; "
+                "keep the file, it is the account",
+                ks.path,
+            )
         return ks.signer
 
     def _resolve_spec_id(self, spec_id: str | None) -> str:

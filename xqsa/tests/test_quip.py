@@ -1106,7 +1106,11 @@ class TestSolverQuipConstruction:
         assert path.exists()
         first, second = hybrid.from_seed.call_args_list
         assert first == second
-        assert str(path) in caplog.text
+        # A new key warns (visible without logging config); a reused one is INFO.
+        created, reused = (r for r in caplog.records if str(path) in r.getMessage())
+        assert created.levelno == logging.WARNING
+        assert "generated a new keystore" in created.getMessage()
+        assert reused.levelno == logging.INFO
 
     def test_seed_beats_default_keystore(self, monkeypatch, tmp_path) -> None:
         from xqsa.quip import SolverQuip

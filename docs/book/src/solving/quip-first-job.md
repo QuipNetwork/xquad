@@ -97,8 +97,8 @@ Two arguments do the work:
 
 No signer is passed, so `SolverQuip` uses the keystore at
 `~/.quip/keystore.json`. On a first run the file does not exist yet:
-`SolverQuip` creates it with a new signing key and logs its path at
-INFO, so the account starts empty. Keep the file: it is the account.
+`SolverQuip` creates it with a new signing key and warns with its path,
+so the account starts empty. Keep the file: it is the account.
 To use a different one, pass it:
 
 ```python
