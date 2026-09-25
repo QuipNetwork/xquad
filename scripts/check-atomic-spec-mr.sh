@@ -11,8 +11,8 @@
 #   2. xqvm/src/**/*.rs              -- the Rust production impl
 #   3. xqvm_py/{executor,opcodes,xqmx,state,vector,tracer,errors}.py
 #                                     -- the Python reference impl
-#   4. conformance/vectors/** or conformance/opcodes.yaml
-#                                     -- cross-impl parity coverage
+#   4. xqvm/tests/vectors/** or xqvm/opcodes.yaml
+#                                     -- the specification vectors and table
 #
 # in the same MR. Partial changes silently create drift between the
 # spec and the two implementations; this guard catches them at CI
@@ -393,8 +393,8 @@ while IFS= read -r file; do
             ;;
     esac
 
-    # Layer 4 -- cross-impl parity coverage.
-    if [[ "${file}" == conformance/opcodes.yaml ]] || [[ "${file}" == conformance/vectors/* ]]; then
+    # Layer 4 -- the specification vectors and the opcode table.
+    if [[ "${file}" == xqvm/opcodes.yaml ]] || [[ "${file}" == xqvm/tests/vectors/* ]]; then
         has_conformance=1
         touched_conformance+=("${file}")
         continue
@@ -425,7 +425,7 @@ echo ""
 echo "  spec        (spec/xqvm/*.md)                                    : $([[ ${has_spec} -eq 1 ]] && echo '✓' || echo '✗')"
 echo "  xqvm        (xqvm/src/**/*.rs)                                  : $([[ ${has_xqvm} -eq 1 ]] && echo '✓' || echo '✗')"
 echo "  xqvm_py     (xqvm_py/{executor,opcodes,xqmx,state,vector,..}.py): $([[ ${has_xqvm_py} -eq 1 ]] && echo '✓' || echo '✗')"
-echo "  conformance (conformance/{vectors/**,opcodes.yaml})             : $([[ ${has_conformance} -eq 1 ]] && echo '✓' || echo '✗')"
+echo "  vectors     (xqvm/{tests/vectors/**,opcodes.yaml})              : $([[ ${has_conformance} -eq 1 ]] && echo '✓' || echo '✗')"
 echo ""
 echo "If this MR is deliberately one-sided (e.g. a Python-only fix aligning to"
 echo "existing Rust behaviour), add a commit-message trailer at column 0 in the"

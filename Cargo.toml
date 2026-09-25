@@ -4,7 +4,6 @@ members = [
     "xqvm",
     "xqasm",
     "xqcli",
-    "conformance",
     "xqffi",
     "fixtures/xqvm-wasm",
 ]

@@ -1358,9 +1358,10 @@ fn idx_triu_checks_its_intermediate_product() {
 fn idx_triu_does_not_require_ordered_operands() {
     // The mnemonic's doc string claimed `(i <= j)` as a caller precondition
     // long after the handler started swapping the pair itself, in the opcode
-    // table, in `conformance/opcodes.yaml` and on two generated pages that
-    // ship with the crate. Neither ordering is a precondition, and negative
-    // operands are admissible: the consuming opcode bounds-checks the index.
+    // table, in `opcodes.yaml` (then under `conformance/`) and on two
+    // generated pages that ship with the crate. Neither ordering is a
+    // precondition, and negative operands are admissible: the consuming
+    // opcode bounds-checks the index.
     let ordered = run(|b| {
         b.emit_push(1).emit_push(3).emit_idx_triu().emit_halt();
     });
@@ -3450,11 +3451,12 @@ fn reset_clears_the_outputs_of_the_previous_run() {
 // Guards whose only pin was a conformance vector
 // ---------------------------------------------------------------------------
 //
-// `conformance/` is not in the `xqvm` crate tarball and QUI-1082 deletes the
-// vectors after 0.4.0, so a guard reachable from bytecode needs a test that
-// travels with the crate. Each test below was verified by mutating its guard
-// to a no-op: before these tests existed, every per-language suite stayed
-// green under that mutation and only a vector went red.
+// The vector suite (`tests/vector_suite/`) assembles its programs with
+// `xqasm`, which the published tarball does not carry, so it runs from the
+// workspace only. A guard reachable from bytecode needs a test that travels
+// with the crate. Each test below was verified by mutating its guard to a
+// no-op: before these tests existed, every per-language suite stayed green
+// under that mutation and only a vector went red.
 
 #[test]
 fn one_hot_r_without_a_grid_raises() {

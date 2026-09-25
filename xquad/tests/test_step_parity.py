@@ -31,7 +31,7 @@ import pytest
 
 from xquad.vm import VM, VMBackend
 
-VECTORS_DIR = Path(__file__).resolve().parents[2] / "conformance" / "vectors"
+VECTORS_DIR = Path(__file__).resolve().parents[2] / "xqvm" / "tests" / "vectors"
 
 
 def _discover_vectors() -> list[tuple[str, Path]]:
@@ -60,7 +60,9 @@ def test_step_count_parity(label: str, vector_dir: Path) -> None:
         # A vector that asserts a fault has no completed run to compare step
         # counts for, and an unbounded one (step_limit_exceeded) would never
         # return here, since this test deliberately runs without a budget.
-        # Fault parity is the conformance suite's job.
+        # Nothing compares the Python VM's fault identity against the vectors
+        # any more: `cargo test -p xqvm --test vectors` checks the Rust VM
+        # alone, and this module goes with xqvm_py in QUI-1481.
         pytest.skip(f"{label} asserts a fault ({expected['error']}), not a step count")
 
     source = (vector_dir / "program.xqasm").read_text(encoding="utf-8")

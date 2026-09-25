@@ -16,7 +16,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Cross-check the Python reference opcode table against conformance/opcodes.yaml.
+"""Cross-check the Python reference opcode table against xqvm/opcodes.yaml.
 
 The Rust side is checked at compile time by xqvm/build.rs. This script is
 the Python counterpart: it loads the canonical YAML and compares every
@@ -43,7 +43,7 @@ from pathlib import Path
 from _scriptio import SetupError, load_yaml, require_key, require_mapping
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-YAML_PATH = REPO_ROOT / "conformance" / "opcodes.yaml"
+YAML_PATH = REPO_ROOT / "xqvm" / "opcodes.yaml"
 
 
 YAML_TYPE_TO_PYTHON = {"register": "REGISTER", "label": "TARGET", "immediate": "IMMEDIATE"}

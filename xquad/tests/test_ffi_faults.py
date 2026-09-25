@@ -32,7 +32,7 @@ import xqffi.vm as ffi
 from xqffi.asm import assemble_source, instruction_count
 from xqffi.verifier import verify
 
-#: The conformance fault vocabulary (`conformance/src/lib.rs`, `Fault`),
+#: The conformance fault vocabulary (`xqvm/tests/vector_suite/vector.rs`, `Fault`),
 #: spelled as the exception classes spell it.
 FAULTS = [
     "StackUnderflow",

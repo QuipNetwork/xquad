@@ -2,7 +2,7 @@
 # Rust lint/policy checks (formatting, clippy, rustdoc, cargo-deny, the
 # changelog smoke render, the atomic spec-MR guard, the commit-message
 # guard), the Python lint (ruff), cross-implementation parity (opcode
-# table, conformance vectors, example smoke), and the fresh-xqffi-cdylib
+# table, example smoke), and the fresh-xqffi-cdylib
 # guarantee all live here -- see setup.yml's verify-vs-test header for
 # what makes these `verify` jobs rather than `test` jobs.
 #
@@ -244,15 +244,16 @@ verify:python:
         - make -k check-uv-lock
 
 # Cross-implementation parity -- do the two implementations agree? Opcode
-# table parity, the shared xquad-conformance vector suite (both
-# runtimes), and end-to-end example-smoke, merged into one job running
-# `make -k check-parity` (opcode-parity conformance example-smoke).
+# table parity, metering-constant parity and end-to-end example-smoke,
+# merged into one job running `make -k check-parity`. The specification
+# vectors are not here: they are the xqvm crate's own tests and run under
+# test:rust, and this job only prints their per-opcode coverage report.
 #
 # `.python` (uv sync + the three-entry cargo/tools/uv cache) lives in
 # .gitlab/ci/setup.yml. This job needs both a Rust and a Python
 # toolchain: opcode-parity-rs exercises the compile-time YAML <->
 # opcodes! macro check via `cargo build -p xqvm` (xqvm/build.rs);
-# opcode-parity-py and the Python-side conformance/example runs shell
+# opcode-parity-py and the Python-side example runs shell
 # out to `uv run python -m xqvm_py …`, so the venv (editable xqvm_py +
 # maturin-built xqffi) has to be active. `.python` gives both: cargo is
 # already on PATH from the base rust:latest image, and `uv sync`
@@ -261,7 +262,7 @@ verify:python:
 # Before this merge each of the four jobs paid its own `make deps`
 # (full cargo-tools.lock install) and three of the four also paid a
 # full `uv sync` -- three of the heaviest bootstraps in the pipeline,
-# repeated. None of opcode-parity, conformance-rs/py, or example-smoke
+# repeated. None of opcode-parity or example-smoke
 # actually needs a cargo-tools.lock binary (clippy, taplo, cargo-deny,
 # ...), so `.python`'s plain uv-sync before_script is enough; the old
 # `!reference [.fragments, cargo-tools]` step was doing work nothing
@@ -270,7 +271,7 @@ verify:python:
 # `-k` preserves the property the four separate jobs gave for free: a
 # failure in one runtime cannot mask a failure in the other. Without
 # it, e.g. a failing opcode-parity-rs would stop `make` before
-# opcode-parity-py, conformance-rs, or conformance-py ever ran, and a
+# opcode-parity-py or example-smoke ever ran, and a
 # real Python-side regression could ship unnoticed behind the Rust-side
 # failure.
 verify:parity:
@@ -278,9 +279,8 @@ verify:parity:
     extends: .python
     needs: []
     # 25m: cold-cache room for the uv resolve and maturin xqffi build,
-    # then opcode parity, the conformance vectors on both implementations
-    # and the example smoke run on top. See setup.yml's "Job timeouts"
-    # section.
+    # then opcode parity, the coverage report and the example smoke run
+    # on top. See setup.yml's "Job timeouts" section.
     timeout: 25m
     script:
         - make -k check-parity

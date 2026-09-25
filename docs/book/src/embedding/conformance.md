@@ -1,21 +1,19 @@
 # Conformance
 
-XQuad ships two independent VM implementations: the Rust `xqvm` crate this
-book otherwise documents, and a pure-Python reference VM, `xqvm_py`. A
-program compiled once to XQVM bytecode is meant to produce the same result
-on either. The conformance harness --
-[`xquad-conformance`](https://gitlab.com/quip.network/xquad/-/tree/main/conformance)
--- is the mechanical check of that claim. This page explains what its
-result means for you: whether you are embedding `xqvm`, writing against
-`xqvm_py`, or deciding how much to trust either one.
+`spec/xqvm/` says what an XQVM program must do, and the Rust `xqvm` crate
+this book documents implements it. The specification vectors --
+[`xqvm/tests/vectors/`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm/tests/vectors) -- are the mechanical
+check that the crate does what the spec says. This page explains what
+their result means for you: whether you are embedding `xqvm` or deciding
+how much to trust it.
 
 ## What a Vector Is
 
 A conformance vector is a directory holding a fixed test case: a canonical
 `.xqasm` program, the calldata it runs with, and the outputs and residual
-stack it is expected to produce. The harness assembles the program, runs
-it on both VMs, and asserts each one's observed result matches the
-recorded expectation.
+stack it is expected to produce. The runner assembles the program, runs
+it on the VM, and asserts the observed result matches the recorded
+expectation.
 
 Each vector directory holds three files:
 
@@ -27,10 +25,9 @@ Each vector directory holds three files:
   run is given, for example `{"calldata": [6, 7], "output_slots": 16}`.
   Every key but `calldata` is optional: `output_slots` defaults to 16,
   `step_limit` to 10000000 and `memory_limit` to 1073741824, each matching
-  `xquad run`. The harness resolves the defaults itself and passes them to
-  both VMs, so a budget is a property of the vector rather than of whichever
-  default each runner carries. Set one only for a vector that is about that
-  budget.
+  `xquad run`. The runner resolves the defaults itself, so a budget is a
+  property of the vector rather than of whichever default the runner
+  carries. Set one only for a vector that is about that budget.
 - **`expected.json`** -- the recorded result, for example
   `{"outputs": [42], "final_stack": [], "steps": 11}`. `outputs` is a
   sparse map: each entry is an `i64` written by `OUTPUT`, or `null` for a
@@ -45,10 +42,10 @@ Each vector directory holds three files:
   instead, with neither `steps` nor `final_stack`.
 
 Vectors are grouped, for human navigation, into eight directories under
-`conformance/vectors/`: `arithmetic`, `constraints`, `control-flow`,
+`xqvm/tests/vectors/`: `arithmetic`, `constraints`, `control-flow`,
 `energy`, `index-math`, `metering`, `vector-ops`, and `xqmx-grid`. These
 names are not the same vocabulary as
-[`opcodes.yaml`](https://gitlab.com/quip.network/xquad/-/blob/main/conformance/opcodes.yaml)'s
+[`opcodes.yaml`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/opcodes.yaml)'s
 own `category` field, which has 15 values and matches `spec/xqvm/SPEC.md`'s
 section names, not the vector directories. Only five names happen to
 coincide (`arithmetic`, `control-flow`, `index-math`, `vector-ops`,
@@ -59,66 +56,57 @@ is `ENERGY` itself, while a metering vector is about a budget rather than
 about any one opcode. Don't expect a vector directory to line up with an
 `opcodes.yaml` category by name.
 
-## Running the Harness Locally
+## Running the Vectors Locally
 
 ```sh
-# Full matrix: both runtimes, every vector
-cargo test -p xquad-conformance
+# Every vector
+cargo test -p xqvm --test vectors
 
-# Rust only
-cargo test -p xquad-conformance --no-default-features --features rust
+# One category
+cargo test -p xqvm --test vectors -- arithmetic
 
-# Python only (needs uv and a synced workspace venv)
-cargo test -p xquad-conformance --no-default-features --features python
-
-# Triage a single vector on both runtimes
-cargo run -p xquad-conformance -- --filter arithmetic/add_basic --impl both
+# One vector
+cargo test -p xqvm --test vectors -- --exact vector::arithmetic::add_basic
 ```
 
-The Python runs shell out through `uv run python -m xqvm_py`, so the
-workspace venv is picked up without a manual activation step.
-`XQUAD_CONFORMANCE_PYTHON` overrides the `uv` wrapper command, not the
-interpreter behind it.
+The runner assembles each program with `xqasm`, which the published `xqvm`
+tarball does not carry, so the vectors run from a checkout of the
+repository rather than from the crate downloaded from crates.io.
 
 ## What Passing Means
 
-Every vector runs as two separate tests, one per runtime, generated at build
-time so a regression in one implementation cannot be masked by the other
-passing. CI runs those two test suites within the `verify:parity` job's
-`make -k check-parity`, which keeps running every target after one fails so a
-Rust-side failure cannot suppress a Python-side one (or vice versa). A vector
-that passes on both VMs means: for that specific program and that specific
-calldata, both implementations agree on every output value and the final
-stack. It says nothing about programs the vector does not cover.
+Every vector runs as its own named test in the `xqvm` crate's `vectors`
+test target, which CI runs with the rest of the Rust integration tests. A
+passing vector means: for that specific program and that specific
+calldata, the VM produces every output value, the final stack and the step
+count the vector records. It says nothing about programs the vector does
+not cover.
 
-Two more guarantees apply alongside vector agreement, each checked
-separately:
+Two more guarantees apply alongside the vectors, each checked separately:
 
 - **The opcode table itself** -- a build-time assertion ties the Rust
-  `opcodes!` macro to `opcodes.yaml`, and a CI script ties `opcodes.yaml` to
-  `xqvm_py`'s own opcode table, so the two implementations cannot silently
-  diverge on which opcodes exist or how many operands they take.
-- **Bytecode encoding** -- owned by the `xqasm` crate's own test suite, not
-  by this harness. Conformance vectors trust the assembler to produce
-  correct bytecode from `.xqasm` source; they do not re-check the encoding
-  independently.
+  `opcodes!` macro to `opcodes.yaml`, so the VM cannot silently diverge from
+  the published table on which opcodes exist or how many operands they
+  take.
+- **Bytecode encoding** -- owned by the `xqasm` crate's own test suite.
+  The vectors trust the assembler to produce correct bytecode from
+  `.xqasm` source; they do not re-check the encoding independently, though
+  each vector does run a second time after an encode/decode round trip and
+  must produce the same result.
 
-For the architectural reason two implementations exist at all --
-independent verification of a solver's answer, not just parity between
-runtimes -- see [Three Programs](../concepts/three-programs.md). For what
-each VM actually does with a program, see the [XQVM
+For what the VM actually does with a program, see the [XQVM
 Reference](../xqvm/).
 
 ## Coverage Is Per-Opcode, and Incomplete
 
-A vector exists only where someone wrote one, and `conformance/vectors/`
+A vector exists only where someone wrote one, and `xqvm/tests/vectors/`
 holds far more vectors than it covers distinct opcodes: `bitlen_small`
 and `bitlen_negative` both cover `BITLEN`; three separate `slack_*`
 vectors all cover `SLACK`; the `xqmx-grid` directory alone spends
-seventeen vectors on six opcodes. Where a vector is missing, the harness
+seventeen vectors on six opcodes. Where a vector is missing, the suite
 makes no claim about that opcode at all. Passing CI does not mean every
-opcode has been checked for cross-implementation agreement -- only that
-every opcode a vector currently exercises has been.
+opcode has been checked against the spec -- only that every opcode a
+vector currently exercises has been.
 
 Which opcodes those are is now computed rather than guessed. CI prints
 the report on every pipeline, as the last step of `make check-parity`,
@@ -148,7 +136,7 @@ it does when it succeeds.
 
 Coverage reports; it does not gate on completeness, which would fail
 today. It does gate on regression --
-[`conformance/tests/coverage.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/conformance/tests/coverage.rs)
+[`xqvm/tests/vector_suite/coverage.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/tests/vector_suite/coverage.rs)
 holds both numbers as floors that a merge request may raise and may not
 lower without saying why.
 
@@ -163,6 +151,6 @@ gap was exotic; both were simply in the part of the opcode table nothing
 had written a vector for -- which is the hole the coverage report exists
 to make visible before someone has to find it by reading.
 
-Treat a green conformance run as evidence for the programs it actually
-tests, not as a blanket guarantee that the two implementations agree on
-every opcode in every configuration.
+Treat a green vector run as evidence for the programs it actually tests,
+not as a blanket guarantee that the VM matches the spec on every opcode in
+every configuration.

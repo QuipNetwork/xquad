@@ -180,7 +180,7 @@ hold typed values -- integers, integer vectors, QUBO/Ising models
 drives `RANGE`/`ITER` iteration.
 
 The opcode table is declared once in `xqvm/src/bytecode/types/table.rs` via
-the `opcodes!` x-macro; `conformance/opcodes.yaml` is the machine-readable
+the `opcodes!` x-macro; `xqvm/opcodes.yaml` is the machine-readable
 mirror that all three representations (YAML, Rust macro, `xqvm_py.opcodes`)
 are checked against at build time and in CI
 (`scripts/check-opcode-parity.py`).
@@ -190,8 +190,8 @@ magic, version, calldata/output-slot counts, code length, and a CRC-32
 checksum of the payload -- followed by the instruction stream: an
 opcode byte followed by its operands in big-endian byte order.
 
-See [`conformance/opcodes.md`](conformance/opcodes.md) for
-instruction-by-instruction semantics and
+See [`docs/book/src/xqvm/opcodes.md`](docs/book/src/xqvm/opcodes.md) for
+the opcode reference and
 [`spec/xqvm/SPEC.md`](spec/xqvm/SPEC.md) for the normative spec.
 
 ## Development
@@ -225,7 +225,7 @@ make repl
 
 ```sh
 make preflight    # what CI enforces, split into preflight-rs / -py / -parity / -docs / -policy
-make conformance  # cross-impl parity suite (Rust + Python)
+make conformance  # the specification vectors under xqvm/tests/vectors/
 ```
 
 ### Contributing

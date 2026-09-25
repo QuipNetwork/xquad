@@ -79,7 +79,7 @@ fn expects_runtime_error(expected_path: &Path) -> bool {
     value.get("error").is_some()
 }
 
-/// Collect `conformance/vectors/<category>/<vector>/` directories whose
+/// Collect `xqvm/tests/vectors/<category>/<vector>/` directories whose
 /// `expected.json` has no top-level `error` key.
 ///
 /// Returns the selected directories and the total number of vector
@@ -131,7 +131,7 @@ fn clean_vector_dirs(vectors_root: &Path) -> (Vec<PathBuf>, usize) {
 #[test]
 fn verify_vectors() {
     let root = repo_root();
-    let vectors_root = root.join("conformance").join("vectors");
+    let vectors_root = root.join("xqvm").join("tests").join("vectors");
 
     let (clean_dirs, walked) = clean_vector_dirs(&vectors_root);
 

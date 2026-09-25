@@ -31,7 +31,7 @@ file opens with a `DO NOT EDIT` banner as its first line, which you will
 see immediately if you open it in an editor.
 
 They are the [instruction reference](../xqvm/opcodes.md), generated from
-`conformance/opcodes.yaml`, and the fifteen
+`xqvm/opcodes.yaml`, and the fifteen
 [example pages](../examples/), generated from
 `examples/manifest.yaml` together with each example's own `README.md`.
 

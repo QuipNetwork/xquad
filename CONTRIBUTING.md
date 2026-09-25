@@ -326,7 +326,7 @@ Any MR that changes VM semantics must touch **all four** of these layers in the 
 1. `spec/xqvm/SPEC.md` -- the normative specification
 2. `xqvm/src/**/*.rs` -- the Rust production implementation
 3. `xqvm_py/{executor,opcodes,xqmx,state,vector,tracer,errors}.py` -- the Python reference implementation
-4. `conformance/vectors/**` or `conformance/opcodes.yaml` -- cross-impl parity coverage
+4. `xqvm/tests/vectors/**` or `xqvm/opcodes.yaml` -- the specification vectors and opcode table
 
 CI enforces this via `verify:policy` (`scripts/check-atomic-spec-mr.sh`). MRs touching 0 or all 4 layers pass; partial changes fail.
 

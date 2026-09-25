@@ -239,7 +239,7 @@ fixed placeholder is QUI-1012.
 Cross-implementation agreement, meanwhile, is close to where the bar
 wants it.
 `make opcode-parity` holds the two opcode tables to each other,
-`make conformance` runs every vector on both interpreters, and the metering
+`make conformance` runs every vector on the Rust VM, and the metering
 constants are mirrored value for value in `xqvm_py/metering.py` under their
 own parity check. The vectors now cover the model-building surface that the
 arithmetic-only suite once missed, including failure paths: constraints

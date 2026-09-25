@@ -4016,7 +4016,7 @@ class TestFaultOrdering:
 
         A square grid so the same setup drives both ONEHOTR (charges on
         `cols`) and ONEHOTC (charges on `rows`) with the same nonzero
-        magnitude. Mirrors `conformance/vectors/constraints/onehotr_coeff`.
+        magnitude. Mirrors `xqvm/tests/vectors/constraints/onehotr_coeff`.
         """
         return [
             Instruction(Opcode.PUSH1, (dim * dim,)),

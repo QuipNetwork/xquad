@@ -7,7 +7,7 @@
 ; MemoryLimitExceeded under one that does not -- the ordering is only
 ; observable at the boundary between the two.
 ;
-; conformance/README.md's fault-ordering table listed this row as pinned by
+; tests/vectors/README.md's fault-ordering table listed this row as pinned by
 ; xqvm_py's unit tests alone, because `Inputs` carried no memory budget and
 ; no vector could express it (QUI-1289). It now can: VECPUSH charges
 ; VEC_ELEMENT_BYTES (16 -- a Vec holds up to two elements' worth of buffer

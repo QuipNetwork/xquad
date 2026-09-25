@@ -1,0 +1,22 @@
+; implies_charge_before_index_check: IMPLIES is charged the entries it
+; writes before its index is range-checked, so an exhausted budget decides
+; the fault.
+;
+; spec/xqvm/SPEC.md orders the work within one instruction: pops, then the
+; allocation charge, then validation, and charges a coefficient write on a
+; model register ("Charging points and counting units"). The model below is
+; four binary variables (32 bytes at the variable rate) under a budget of
+; exactly 32, so any further charge is refused. Index 9 is out of range, so
+; with budget to spare this instruction raises IndexOutOfBounds; with none
+; the charge comes first and decides the fault.
+;
+; The fault-ordering table in this directory's README once listed this
+; opcode as pinned by xqvm_py's unit tests alone.
+
+PUSH 4
+BQMX r0          ; 32 bytes: the whole budget
+PUSH 9           ; i, out of range [0, 4)
+PUSH 0           ; j
+PUSH 1           ; penalty
+IMPLIES r0
+HALT

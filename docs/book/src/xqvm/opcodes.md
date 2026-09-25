@@ -1,6 +1,6 @@
 <!--
   AUTO-GENERATED FILE. DO NOT EDIT.
-  This file is regenerated from `conformance/opcodes.yaml` by
+  This file is regenerated from `xqvm/opcodes.yaml` by
   `scripts/gen-bytecode-docs.py`.
   Edit the YAML (and the opcodes! x-macro in
   xqvm/src/bytecode/types/table.rs, which is checked against the YAML at
@@ -13,9 +13,8 @@
 # Opcode Reference
 
 Concise reference table for every opcode in the XQVM bytecode format.
-Derived directly from [`conformance/opcodes.yaml`](https://gitlab.com/quip.network/xquad/-/blob/main/conformance/opcodes.yaml),
-which is kept in sync with the Rust [`opcodes!` x-macro](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/bytecode/types/table.rs)
-and the Python [`Opcode` enum](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm_py/opcodes.py).
+Derived directly from [`xqvm/opcodes.yaml`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/opcodes.yaml),
+which is kept in sync with the Rust [`opcodes!` x-macro](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/bytecode/types/table.rs).
 
 For the normative bytecode specification, see
 [`spec/xqvm/SPEC.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/SPEC.md).
