@@ -32,13 +32,17 @@ Each vector directory holds three files:
   default each runner carries. Set one only for a vector that is about that
   budget.
 - **`expected.json`** -- the recorded result, for example
-  `{"outputs": [42], "final_stack": []}`. `outputs` is a sparse map: each
-  entry is an `i64` written by `OUTPUT`, or `null` for a slot that was
-  reserved but never written; trailing unset slots are omitted entirely,
-  so a program that writes slot 0 of 16 reserved slots produces `[42]`,
-  not `[42, null, ...]`. Explicitly-written zeroes are preserved -- only
-  slots `OUTPUT` never touched disappear. `final_stack` is the residual
-  stack at `HALT`, bottom to top.
+  `{"outputs": [42], "final_stack": [], "steps": 11}`. `outputs` is a
+  sparse map: each entry is an `i64` written by `OUTPUT`, or `null` for a
+  slot that was reserved but never written; trailing unset slots are
+  omitted entirely, so a program that writes slot 0 of 16 reserved slots
+  produces `[42]`, not `[42, null, ...]`. Explicitly-written zeroes are
+  preserved -- only slots `OUTPUT` never touched disappear. `final_stack`
+  is the residual stack at `HALT`, bottom to top. `steps` is the run's
+  metered cost, per `spec/xqvm/METERING.md`, and every successful vector
+  must assert it: it is the quantity the chain prices execution by. A
+  vector that expects a fault writes `{"error": "DIVISION_BY_ZERO"}`
+  instead, with neither `steps` nor `final_stack`.
 
 Vectors are grouped, for human navigation, into eight directories under
 `conformance/vectors/`: `arithmetic`, `constraints`, `control-flow`,
