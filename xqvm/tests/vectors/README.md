@@ -201,8 +201,9 @@ QUI-1481 must replace it before deleting the package.
 ## What is checked
 
 - **Opcode table** -- `xqvm/build.rs` asserts `opcodes.yaml` against the
-  `opcodes!` x-macro at compile time: the wire byte, the mnemonic, the net
-  stack effect and each operand's name and encoded byte width.
+  `opcodes!` x-macro at compile time: the wire byte, the mnemonic, the pop
+  and push counts (or `SCLR`'s reset) and each operand's name and encoded
+  byte width.
 - **Observable behaviour** -- every vector's outputs, residual stack and
   step count, or its fault identity, against `expected.json`.
 - **Coverage** -- `xqvm/tests/vector_suite/coverage.rs` computes

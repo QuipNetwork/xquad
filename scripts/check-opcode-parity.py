@@ -24,10 +24,8 @@ the Python counterpart: it loads the canonical YAML and compares every
 operand_types) tuple against xqvm_py/opcodes.py. Any mismatch prints a
 diff-style report and the script exits 1.
 
-This side compares stack_pop and stack_push separately. The Rust check
-cannot: the opcodes! x-macro stores only the net delta, so xqvm/build.rs
-narrows the pair before comparing. The pop/push split is therefore pinned
-here and nowhere else.
+Like the Rust check, this side compares stack_pop and stack_push
+separately rather than their difference.
 
 Intended to be invoked from the `opcode-parity` CI job and the
 `make opcode-parity` Makefile target.

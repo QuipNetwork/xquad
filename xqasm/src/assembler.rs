@@ -547,7 +547,7 @@ impl FromOperand for u8 {
 /// runtime because the caller routes them to `assemble_jump` first.
 macro_rules! impl_build_instr {
     ( $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal,
-          $_delta:expr, {$($fname:ident: $ftype:ty),*}) ),* $(,)? ) => {
+          $_stack:expr, {$($fname:ident: $ftype:ty),*}) ),* $(,)? ) => {
 
         fn build_instr(
             instr: &ParsedInstr,

@@ -27,12 +27,13 @@
 //! Unlike a linear scan, this analysis follows conditional branches so
 //! underflows only reachable on non-fall-through paths are caught.
 //!
-//! # Correctness note
+//! # Pops before pushes
 //!
-//! Block effects are computed using the net stack delta from the opcode table.
-//! This deliberately does not model the internal pop/push split for instructions
-//! like `ADD` (pop 2, push 1, delta -1).  Any false negatives are the same as
-//! those already present in a linear net-delta scan.
+//! Block effects apply each instruction's pops, check the running depth, and
+//! only then apply its pushes, using the pop/push pair from the opcode table.
+//! A block's `min_input` is therefore the depth its deepest pop reaches, not
+//! just the lowest net depth: `PUSH 1 / SWAP` needs one more value than it
+//! has, although `SWAP`'s net effect is zero.
 //!
 //! # Invariant: program entry is an incoming edge
 //!
@@ -302,17 +303,22 @@ fn compute_block_effect(
                 if !fixed && depth < 0 {
                     min_input = min_input.max(depth.unsigned_abs() as usize);
                 }
+                // `static_underflow` is deliberately left set: an underflow
+                // after an earlier SCLR has already faulted by the time this
+                // one runs, so resetting the depth cannot undo it.
                 fixed = true;
-                static_underflow = false;
                 depth = 0;
             }
+            // The pops are checked before the pushes are applied: an
+            // instruction needs `pops` values on the stack when it runs,
+            // whatever it pushes afterwards. Checking the net result instead
+            // lets `PUSH 1 / SWAP` through, since SWAP's net effect is 0.
             #[expect(
                 clippy::arithmetic_side_effects,
-                reason = "`depth` moves by at most one slot per instruction (max stack_push - stack_pop is +1 across the opcode table), so it is bounded by the block's instruction count and only a program at `spec/xqvm/ENCODING.md`'s 4 GiB `code_len` cap could approach i32::MAX"
+                reason = "`depth` moves by at most three slots per instruction (the largest pop or push count in the opcode table), so it is bounded by three times the block's instruction count and only a program near `spec/xqvm/ENCODING.md`'s 4 GiB `code_len` cap could approach i32::MAX"
             )]
-            StackEffect::Delta(d) => {
-                let d = i32::from(d);
-                depth += d;
+            StackEffect::Fixed { pops, pushes } => {
+                depth -= i32::from(pops);
                 if !fixed {
                     if depth < 0 {
                         min_input = min_input.max(depth.unsigned_abs() as usize);
@@ -320,6 +326,7 @@ fn compute_block_effect(
                 } else if depth < 0 {
                     static_underflow = true;
                 }
+                depth += i32::from(pushes);
             }
         }
 

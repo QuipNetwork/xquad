@@ -24,11 +24,9 @@ guaranteed structurally sound: every opcode decodes, every jump lands on a
 real `TARGET`, every loop is balanced, and every register is read only after
 it is written on every reachable path. For the value stack, phase 4 found no
 underflow, no join-point depth disagreement, and no basic block whose depth
-exceeds the 8,192-item limit. That analysis models each basic block as a
-*net* stack delta, so an instruction that pops more operands than it pushes
-has its pop requirement absorbed whenever the running depth stays
-non-negative -- a stack underflow caused by an operand-ordering error can
-still pass verification.
+exceeds the 8,192-item limit. Every instruction on every reachable path has
+at least as many values on the stack as it pops, counted before any of its
+pushes, so a program that passes cannot underflow the value stack.
 
 Every phase reasons about types, control flow and depths. None reasons
 about values, so no phase can decide a question whose answer the program
@@ -156,13 +154,15 @@ Checks run in this order:
    depth is compared against entry's depth 0.
 3. **Underflow and overflow risk.** A block whose converged depth would
    fall below zero, or exceed 8,192, is flagged. The block's entry
-   requirement is a running minimum that rises only when the depth within
-   the block goes negative: a pop requirement absorbed by pushes earlier
-   in the same block never makes the running depth negative, so it is
-   invisible to this check.
+   requirement is the lowest depth any of its instructions' pops reaches:
+   each instruction's pops are counted before its pushes, so `PUSH 1 /
+   SWAP` needs one more value than it has, even though `SWAP` leaves the
+   depth unchanged.
 
 `SCLR` resets the abstract depth unconditionally to zero, which the analysis
-treats as a reset rather than a delta. If the entry depth was `N > 0` and the
+treats as a reset rather than a delta. A reset does not undo an underflow
+before it: `SCLR / POP / SCLR / HALT` is rejected, because the `POP` faults
+before the second `SCLR` runs. If the entry depth was `N > 0` and the
 exit depth is `0`, that reset is itself the imbalance: inside a loop it is
 reported directly as `LoopStackImbalance` by check 1, ahead of everything
 else in that loop. Outside a loop, the same reset is only a problem if it

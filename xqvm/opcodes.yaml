@@ -19,7 +19,7 @@
 #              empties the stack outright instead of applying a fixed net
 #              effect; stack_pop and stack_push must both be 0 alongside it.
 #              SCLR is the only such opcode. The Rust opcode table spells
-#              this as the i8::MIN sentinel in place of a delta.
+#              this as StackEffect::Reset in place of a pop/push pair.
 #   doc:       single-sentence description (used by gen-bytecode-docs.py).
 #
 # Reserved wire bytes (rejected by the decoder as illegal) are derived by

@@ -19,13 +19,11 @@
 //! opcode table that the crate compares against the `opcodes!` x-macro in
 //! `src/bytecode/types/parity.rs`. Any mismatch becomes a compile error.
 //!
-//! The emitted table carries the wire byte, the mnemonic, the net stack
-//! delta (with `i8::MIN` marking a stack reset, matching the x-macro's own
-//! sentinel) and the operand layout as `(name, byte width)` pairs. The
-//! YAML's `stack_pop`/`stack_push` pair is narrowed to that single delta
-//! here, because the delta is what the x-macro stores and therefore all
-//! the two tables can agree on; the pop/push split is compared against
-//! `xqvm_py` by `scripts/check-opcode-parity.py` instead.
+//! The emitted table carries the wire byte, the mnemonic, the stack effect
+//! and the operand layout as `(name, byte width)` pairs. The stack effect
+//! is the YAML's `stack_pop`/`stack_push` pair spelled as the same
+//! `StackEffect` the x-macro stores, or `StackEffect::Reset` for an opcode
+//! with `stack_reset`, so pops and pushes are compared separately.
 //!
 //! Build scripts run at compile time with no caller to propagate errors
 //! to, so panicking on failure is the correct behaviour. The workspace's
@@ -54,11 +52,11 @@ struct Op {
     mnemonic: String,
     #[serde(default)]
     operands: Vec<Operand>,
-    stack_pop: i32,
-    stack_push: i32,
+    stack_pop: u8,
+    stack_push: u8,
     /// True for an opcode that empties the stack outright rather than
-    /// applying a fixed net effect. `SCLR` alone; see the sentinel note
-    /// on `stack_delta` in `src/bytecode/types/table.rs`.
+    /// popping and pushing a fixed count. `SCLR` alone; it is
+    /// `StackEffect::Reset` in `src/bytecode/types/table.rs`.
     #[serde(default)]
     stack_reset: bool,
 }
@@ -74,39 +72,20 @@ const fn default_operand_width() -> u8 {
     1
 }
 
-/// Collapse the YAML's `stack_pop`/`stack_push`/`stack_reset` triple into
-/// the single `i8` the `opcodes!` x-macro carries.
-///
-/// The macro stores a net delta with `i8::MIN` reserved as the "reset the
-/// stack" sentinel, so the YAML's richer spelling has to be narrowed to
-/// compare at all. Narrowing here rather than in `parity.rs` keeps the
-/// `const` comparison a plain equality.
-fn stack_delta(op: &Op) -> i8 {
+/// Spell the YAML's `stack_pop`/`stack_push`/`stack_reset` triple as the
+/// `StackEffect` expression the `opcodes!` x-macro carries for that row.
+fn stack_effect(op: &Op) -> String {
     if op.stack_reset {
         assert!(
             op.stack_pop == 0 && op.stack_push == 0,
             "opcode {} ({:#04X}): stack_reset is true, so stack_pop and stack_push must both \
-             be 0 — a reset has no fixed net effect to declare",
+             be 0 -- a reset has no fixed count to declare",
             op.mnemonic,
             op.code
         );
-        return i8::MIN;
+        return "StackEffect::Reset".to_owned();
     }
-    let delta = op.stack_push - op.stack_pop;
-    let narrowed = i8::try_from(delta).unwrap_or_else(|_| {
-        panic!(
-            "opcode {} ({:#04X}): net stack effect {delta} does not fit in i8",
-            op.mnemonic, op.code
-        )
-    });
-    assert!(
-        narrowed != i8::MIN,
-        "opcode {} ({:#04X}): net stack effect {delta} collides with the i8::MIN reset \
-         sentinel; widen the encoding rather than letting the two spellings alias",
-        op.mnemonic,
-        op.code
-    );
-    narrowed
+    format!("StackEffect::fixed({}, {})", op.stack_pop, op.stack_push)
 }
 
 fn main() {
@@ -133,19 +112,14 @@ fn main() {
     code.push_str(
         "// Do not edit; regenerate by touching opcodes.yaml and re-running `cargo build`.\n\n",
     );
-    // Each row is (code, mnemonic, stack delta, operands), where an
+    // Each row is (code, mnemonic, stack effect, operands), where an
     // operand is (name, byte width). `OpcodeRow` is the alias parity.rs
     // declares for that tuple; the shape mirrors what parity.rs derives
     // from the `opcodes!` x-macro so the comparison there stays a
     // field-by-field equality.
     code.push_str("const YAML_OPCODES: &[OpcodeRow] = &[\n");
     for op in &parsed.opcodes {
-        let delta = stack_delta(op);
-        let delta = if delta == i8::MIN {
-            "i8::MIN".to_owned()
-        } else {
-            delta.to_string()
-        };
+        let effect = stack_effect(op);
         let mut operands = String::new();
         for operand in &op.operands {
             assert!(
@@ -160,7 +134,7 @@ fn main() {
         }
         writeln!(
             code,
-            "    ({:#04X}, \"{}\", {delta}, &[{}]),",
+            "    ({:#04X}, \"{}\", {effect}, &[{}]),",
             op.code,
             op.mnemonic,
             operands.trim_end_matches(", ")

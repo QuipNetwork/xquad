@@ -191,20 +191,30 @@ most conservative depth to successors.
    Counting predecessor blocks alone would let `.0: PUSH 1 / JUMP .0 / HALT`
    verify clean and then overflow the stack at runtime.
 
-3. **`StackUnderflow`** / **`StackOverflowRisk`** -- blocks whose `before` or
-   `after` depth falls below 0 or exceeds 8192 are flagged.
+3. **`StackUnderflow`** / **`StackOverflowRisk`** -- an instruction whose
+   pops take the depth below 0 is flagged under the
+   [Stack underflow rule](#stack-underflow-rule), and a block whose depth
+   exceeds 8192 is flagged as `StackOverflowRisk`.
 
-### Net-delta blindness
+### Stack underflow rule
 
-`BlockEffect` characterises a block by its net stack delta, and its
-`min_input` rises only when the running depth goes negative within the block.
-An opcode with both `stack_pop > 0` and `stack_push > 0` therefore has its pop
-requirement absorbed whenever the running depth stays non-negative: `PUSH 1 /
-PUSH 2 / IDXGRID / HALT` passes Phase 4 (running depth 0, 1, 2, 0) and
-underflows at runtime, because `IDXGRID` pops 3 before pushing 1. This is a
-property of the current analysis, documented as the resolution of QUI-1026
-Case B; making the verifier reject such programs is future work, and a
-breaking change to what `verify()` accepts.
+An instruction that pops `p` values needs at least `p` values on the stack
+when it runs, whatever it pushes afterwards. The analysis applies each
+instruction's pops, checks the running depth, and only then applies its
+pushes, so a block's minimum entry depth is the lowest depth any of its
+pops reaches. An opcode that both pops and pushes is held to its full pop
+count: `PUSH 1 / SWAP / HALT`, `COPY / HALT` and `PUSH 1 / PUSH 2 / IDXGRID
+/ HALT` are all rejected with `StackUnderflow`, although `SWAP` leaves the
+depth unchanged, `COPY` raises it, and the running net depth of the third
+never goes negative.
+
+An underflow stands once it has happened. A later `SCLR` resets the depth
+for the instructions after it but does not clear an underflow before it,
+because at run time that instruction has already faulted: `SCLR / POP /
+SCLR / HALT` and `SCLR / PUSH 1 / SWAP / SCLR / HALT` are rejected.
+
+The pop and push counts are the `Pops` and `Pushes` columns of the table
+under [Per-Opcode Stack Effects](#per-opcode-stack-effects).
 
 ### Loop handling
 
@@ -247,95 +257,98 @@ Errors: `LoopStackImbalance`, `StackDepthMismatch`, `StackUnderflow`,
 
 ## Per-Opcode Stack Effects
 
-The `stack_delta` column of the `opcodes!` x-macro is the single source of
-truth. The table below is derived from it. `Reset` means
-`StackEffect::Reset` -- depth is set to 0 unconditionally (not a delta).
+The stack-effect column of the `opcodes!` x-macro is the single source of
+truth, checked at build time against `stack_pop` and `stack_push` in
+`xqvm/opcodes.yaml`. The table below is derived from it. `Pops` is checked
+against the depth before `Pushes` is applied, per the [stack underflow
+rule](#stack-underflow-rule). `Reset` means `StackEffect::Reset` -- depth is
+set to 0 unconditionally, with no fixed pop or push count.
 
-| Mnemonic | Stack delta | Notes |
-|----------|-------------|-------|
-| `TARGET` | 0 | |
-| `JUMP1` | 0 | |
-| `JUMPI1` | -1 | Pops condition |
-| `JUMP2` | 0 | |
-| `JUMPI2` | -1 | Pops condition |
-| `LIDX` | 0 | |
-| `LVAL` | 0 | |
-| `NEXT` | 0 | |
-| `RANGE` | -2 | Pops start, count |
-| `ITER` | -2 | Pops start_idx, end_idx |
-| `LOAD` | +1 | |
-| `STOW` | -1 | |
-| `DROP` | 0 | |
-| `INPUT` | -1 | Pops slot index |
-| `OUTPUT` | -1 | Pops slot index |
-| `POP` | -1 | |
-| `PUSH1`..`PUSH8` | +1 | |
-| `SCLR` | Reset | depth -> 0 |
-| `SWAP` | 0 | |
-| `COPY` | +1 | |
-| `ADD` | -1 | |
-| `SUB` | -1 | |
-| `MUL` | -1 | |
-| `DIV` | -1 | |
-| `MOD` | -1 | |
-| `SQR` | 0 | |
-| `ABS` | 0 | |
-| `NEG` | 0 | |
-| `MIN` | -1 | |
-| `MAX` | -1 | |
-| `INC` | 0 | |
-| `DEC` | 0 | |
-| `BITLEN` | 0 | |
-| `EQ` | -1 | |
-| `LT` | -1 | |
-| `GT` | -1 | |
-| `LTE` | -1 | |
-| `GTE` | -1 | |
-| `NOT` | 0 | |
-| `AND` | -1 | |
-| `OR` | -1 | |
-| `XOR` | -1 | |
-| `BAND` | -1 | |
-| `BOR` | -1 | |
-| `BXOR` | -1 | |
-| `BNOT` | 0 | |
-| `SHL` | -1 | |
-| `SHR` | -1 | |
-| `BQMX` | -1 | Pops size |
-| `SQMX` | -1 | Pops size |
-| `XQMX` | -2 | Pops size, k |
-| `BSMX` | -1 | Pops size |
-| `SSMX` | -1 | Pops size |
-| `XSMX` | -2 | Pops size, k |
-| `VEC` | 0 | |
-| `VECI` | 0 | |
-| `VECX` | 0 | |
-| `VECPUSH` | -1 | |
-| `VECGET` | 0 | Pops index, pushes element (net 0) |
-| `VECSET` | -2 | Pops value, index |
-| `VECLEN` | +1 | |
-| `SLACK` | -2 | Pops capacity, start_index |
-| `IDXGRID` | -2 | Pops cols, col, row; pushes index (net -2) |
-| `IDXTRIU` | -1 | Pops j, i; pushes index (net -1) |
-| `GETLINE` | 0 | Pops i, pushes value (net 0) |
-| `SETLINE` | -2 | Pops value, i |
-| `ADDLINE` | -2 | Pops delta, i |
-| `GETQUAD` | -1 | Pops j, i; pushes value (net -1) |
-| `SETQUAD` | -3 | Pops value, j, i |
-| `ADDQUAD` | -3 | Pops delta, j, i |
-| `RESIZE` | -2 | Pops cols, rows |
-| `ROWFIND` | -1 | Pops value, row; pushes col (net -1) |
-| `COLFIND` | -1 | Pops value, col; pushes row (net -1) |
-| `ROWSUM` | 0 | Pops row, pushes sum (net 0) |
-| `COLSUM` | 0 | Pops col, pushes sum (net 0) |
-| `ONEHOTR` | -2 | Pops penalty, row |
-| `ONEHOTC` | -2 | Pops penalty, col |
-| `EXCLUDE` | -3 | Pops penalty, j, i |
-| `IMPLIES` | -3 | Pops penalty, j, i |
-| `EQUALITY` | -2 | Pops penalty, target |
-| `ATLEAST` | -2 | Pops penalty, k |
-| `ATLEASTW` | -2 | Pops penalty, k |
-| `REDUCE` | -2 | Pops P_aux, var_b, var_a; pushes aux index (net -2) |
-| `ENERGY` | +1 | Reads model and sample registers; pushes energy |
-| `NOP` | 0 | |
-| `HALT` | 0 | |
+| Mnemonic | Pops | Pushes | Notes |
+|----------|------|--------|-------|
+| `TARGET` | 0 | 0 | |
+| `JUMP1` | 0 | 0 | |
+| `JUMPI1` | 1 | 0 | Pops condition |
+| `JUMP2` | 0 | 0 | |
+| `JUMPI2` | 1 | 0 | Pops condition |
+| `LIDX` | 0 | 0 | |
+| `LVAL` | 0 | 0 | |
+| `NEXT` | 0 | 0 | |
+| `RANGE` | 2 | 0 | Pops start, count |
+| `ITER` | 2 | 0 | Pops start_idx, end_idx |
+| `LOAD` | 0 | 1 | |
+| `STOW` | 1 | 0 | |
+| `DROP` | 0 | 0 | |
+| `INPUT` | 1 | 0 | Pops slot index |
+| `OUTPUT` | 1 | 0 | Pops slot index |
+| `POP` | 1 | 0 | |
+| `PUSH1`..`PUSH8` | 0 | 1 | |
+| `SCLR` | Reset | Reset | depth -> 0 |
+| `SWAP` | 2 | 2 | |
+| `COPY` | 1 | 2 | |
+| `ADD` | 2 | 1 | |
+| `SUB` | 2 | 1 | |
+| `MUL` | 2 | 1 | |
+| `DIV` | 2 | 1 | |
+| `MOD` | 2 | 1 | |
+| `SQR` | 1 | 1 | |
+| `ABS` | 1 | 1 | |
+| `NEG` | 1 | 1 | |
+| `MIN` | 2 | 1 | |
+| `MAX` | 2 | 1 | |
+| `INC` | 1 | 1 | |
+| `DEC` | 1 | 1 | |
+| `BITLEN` | 1 | 1 | |
+| `EQ` | 2 | 1 | |
+| `LT` | 2 | 1 | |
+| `GT` | 2 | 1 | |
+| `LTE` | 2 | 1 | |
+| `GTE` | 2 | 1 | |
+| `NOT` | 1 | 1 | |
+| `AND` | 2 | 1 | |
+| `OR` | 2 | 1 | |
+| `XOR` | 2 | 1 | |
+| `BAND` | 2 | 1 | |
+| `BOR` | 2 | 1 | |
+| `BXOR` | 2 | 1 | |
+| `BNOT` | 1 | 1 | |
+| `SHL` | 2 | 1 | |
+| `SHR` | 2 | 1 | |
+| `BQMX` | 1 | 0 | Pops size |
+| `SQMX` | 1 | 0 | Pops size |
+| `XQMX` | 2 | 0 | Pops size, k |
+| `BSMX` | 1 | 0 | Pops size |
+| `SSMX` | 1 | 0 | Pops size |
+| `XSMX` | 2 | 0 | Pops size, k |
+| `VEC` | 0 | 0 | |
+| `VECI` | 0 | 0 | |
+| `VECX` | 0 | 0 | |
+| `VECPUSH` | 1 | 0 | |
+| `VECGET` | 1 | 1 | Pops index, pushes element |
+| `VECSET` | 2 | 0 | Pops value, index |
+| `VECLEN` | 0 | 1 | |
+| `SLACK` | 2 | 0 | Pops capacity, start_index |
+| `IDXGRID` | 3 | 1 | Pops cols, col, row; pushes index |
+| `IDXTRIU` | 2 | 1 | Pops j, i; pushes index |
+| `GETLINE` | 1 | 1 | Pops i, pushes value |
+| `SETLINE` | 2 | 0 | Pops value, i |
+| `ADDLINE` | 2 | 0 | Pops delta, i |
+| `GETQUAD` | 2 | 1 | Pops j, i; pushes value |
+| `SETQUAD` | 3 | 0 | Pops value, j, i |
+| `ADDQUAD` | 3 | 0 | Pops delta, j, i |
+| `RESIZE` | 2 | 0 | Pops cols, rows |
+| `ROWFIND` | 2 | 1 | Pops value, row; pushes col |
+| `COLFIND` | 2 | 1 | Pops value, col; pushes row |
+| `ROWSUM` | 1 | 1 | Pops row, pushes sum |
+| `COLSUM` | 1 | 1 | Pops col, pushes sum |
+| `ONEHOTR` | 2 | 0 | Pops penalty, row |
+| `ONEHOTC` | 2 | 0 | Pops penalty, col |
+| `EXCLUDE` | 3 | 0 | Pops penalty, j, i |
+| `IMPLIES` | 3 | 0 | Pops penalty, j, i |
+| `EQUALITY` | 2 | 0 | Pops penalty, target |
+| `ATLEAST` | 2 | 0 | Pops penalty, k |
+| `ATLEASTW` | 2 | 0 | Pops penalty, k |
+| `REDUCE` | 3 | 1 | Pops P_aux, var_b, var_a; pushes aux index |
+| `ENERGY` | 0 | 1 | Reads model and sample registers; pushes energy |
+| `NOP` | 0 | 0 | |
+| `HALT` | 0 | 0 | |

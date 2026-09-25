@@ -245,7 +245,7 @@ impl<const N: usize> DecodeOperand for [u8; N] {
 /// [`EncodeOperand`] / [`DecodeOperand`] calls in declaration order.
 macro_rules! impl_codec {
     ( $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal,
-          $_delta:expr, {$($fname:ident: $ftype:ty),*}) ),* $(,)? ) => {
+          $_stack:expr, {$($fname:ident: $ftype:ty),*}) ),* $(,)? ) => {
 
         /// Encode a single instruction to a `Vec<u8>` in the wire format
         /// `[opcode: u8][operand fields]`.
@@ -340,7 +340,7 @@ mod tests {
 
     macro_rules! all_instructions {
         ( $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal,
-              $_delta:expr, {$($fname:ident: $ftype:ty),*}) ),* $(,)? ) => {
+              $_stack:expr, {$($fname:ident: $ftype:ty),*}) ),* $(,)? ) => {
             [ $( Instruction::$variant { $($fname: <$ftype as Default>::default(),)* } ),* ]
         };
     }
