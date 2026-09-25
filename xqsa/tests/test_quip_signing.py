@@ -317,6 +317,38 @@ class TestKeystore:
         second = load_or_generate_keystore(path)
         assert first.seed == second.seed
 
+    def test_load_or_generate_loses_race_to_concurrent_writer(self, tmp_path, monkeypatch) -> None:
+        # Another process creates the file after our existence check but before
+        # our write: we must load its seed, not overwrite it with ours.
+        path = tmp_path / "keystore.json"
+        real_urandom = quip_signing.os.urandom
+        theirs: list[bytes] = []
+
+        def racing_urandom(n: int) -> bytes:
+            monkeypatch.setattr(quip_signing.os, "urandom", real_urandom)
+            theirs.append(generate_keystore(path).seed)
+            return real_urandom(n)
+
+        monkeypatch.setattr(quip_signing.os, "urandom", racing_urandom)
+        ours = load_or_generate_keystore(path)
+        assert ours.seed == theirs[0]
+        assert load_keystore(path).seed == theirs[0]
+        assert list(tmp_path.iterdir()) == [path]  # no temp file left behind.
+
+    def test_generate_loses_race_raises_already_exists(self, tmp_path, monkeypatch) -> None:
+        path = tmp_path / "keystore.json"
+        real_urandom = quip_signing.os.urandom
+
+        def racing_urandom(n: int) -> bytes:
+            monkeypatch.setattr(quip_signing.os, "urandom", real_urandom)
+            generate_keystore(path)
+            return real_urandom(n)
+
+        monkeypatch.setattr(quip_signing.os, "urandom", racing_urandom)
+        with pytest.raises(QuipSigningError, match="already exists"):
+            generate_keystore(path)
+        assert list(tmp_path.iterdir()) == [path]
+
     def test_persisted_fields(self, tmp_path) -> None:
         path = tmp_path / "keystore.json"
         ks = generate_keystore(path)

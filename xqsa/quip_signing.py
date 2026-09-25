@@ -52,6 +52,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -161,11 +162,12 @@ def generate_keystore(path: Path | str, *, overwrite: bool = False) -> Keystore:
     """
     resolved = Path(path).expanduser()
     if resolved.exists() and not overwrite:
-        raise QuipSigningError(f"keystore already exists at {resolved}; pass overwrite=True to replace")
-    seed = os.urandom(MASTER_SEED_LEN)
-    signer = quip_signer.HybridSigner.from_seed(seed)
-    _write_keystore(resolved, seed, signer)
-    return Keystore(path=resolved, seed=seed, signer=signer)
+        raise _keystore_exists(resolved)
+    try:
+        return _create_keystore(resolved, overwrite=overwrite)
+    except FileExistsError as exc:
+        # Another writer created it between the check above and the write.
+        raise _keystore_exists(resolved) from exc
 
 
 def load_keystore(path: Path | str) -> Keystore:
@@ -216,11 +218,18 @@ def load_keystore(path: Path | str) -> Keystore:
 
 
 def load_or_generate_keystore(path: Path | str) -> Keystore:
-    """Open the keystore at ``path`` if present, otherwise generate a fresh one."""
+    """Open the keystore at ``path`` if present, otherwise generate a fresh one.
+
+    Safe against concurrent first use: when two callers race to create the same
+    file, exactly one seed is written and both return it.
+    """
     resolved = Path(path).expanduser()
-    if resolved.exists():
-        return load_keystore(resolved)
-    return generate_keystore(resolved)
+    if not resolved.exists():
+        try:
+            return _create_keystore(resolved, overwrite=False)
+        except FileExistsError:
+            pass  # a concurrent caller created it first; load theirs so both share one key.
+    return load_keystore(resolved)
 
 
 # ---------------------------------------------------------------------------
@@ -675,8 +684,32 @@ def _verify_cached_field(raw: dict, field: str, expected: bytes, path: Path) -> 
         )
 
 
-def _write_keystore(path: Path, seed: bytes, signer: HybridSigner) -> None:
-    """Atomically write a 0600 keystore for ``seed`` (cached identity included)."""
+def _keystore_exists(path: Path) -> QuipSigningError:
+    return QuipSigningError(f"keystore already exists at {path}; pass overwrite=True to replace")
+
+
+def _create_keystore(path: Path, *, overwrite: bool) -> Keystore:
+    """Generate a fresh seed and write it to ``path``.
+
+    Raises:
+        FileExistsError: if ``path`` exists and ``overwrite`` is False.
+    """
+    seed = os.urandom(MASTER_SEED_LEN)
+    signer = quip_signer.HybridSigner.from_seed(seed)
+    _write_keystore(path, seed, signer, overwrite=overwrite)
+    return Keystore(path=path, seed=seed, signer=signer)
+
+
+def _write_keystore(path: Path, seed: bytes, signer: HybridSigner, *, overwrite: bool) -> None:
+    """Atomically write a 0600 keystore for ``seed`` (cached identity included).
+
+    Without ``overwrite`` the file is published with a hard link, which fails
+    rather than replaces when ``path`` already exists, so a concurrent writer's
+    seed is never clobbered.
+
+    Raises:
+        FileExistsError: if ``path`` exists and ``overwrite`` is False.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "version": KEYSTORE_VERSION,
@@ -686,19 +719,20 @@ def _write_keystore(path: Path, seed: bytes, signer: HybridSigner) -> None:
         "account_id_hex": "0x" + signer.account_id.hex(),
         "public_key_hex": "0x" + signer.public_key.hex(),
     }
-    # Create the temp file with O_EXCL at mode 0600 so the seed is never briefly
-    # world-readable between write and chmod.
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.unlink(missing_ok=True)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, KEYSTORE_FILE_MODE)
+    # mkstemp creates a uniquely named file with O_EXCL at mode 0600, so the seed
+    # is never briefly world-readable and concurrent writers never share a temp.
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp = Path(tmp_name)
     try:
         with os.fdopen(fd, "w") as handle:
+            os.fchmod(handle.fileno(), KEYSTORE_FILE_MODE)  # tie the mode to the constant.
             handle.write(json.dumps(payload, indent=2) + "\n")
-    except BaseException:
+        if overwrite:
+            tmp.replace(path)
+        else:
+            os.link(tmp, path)
+    finally:
         tmp.unlink(missing_ok=True)
-        raise
-    os.chmod(tmp, KEYSTORE_FILE_MODE)  # defeat umask widening.
-    tmp.replace(path)
 
 
 def _warn_if_world_readable(path: Path) -> None:
