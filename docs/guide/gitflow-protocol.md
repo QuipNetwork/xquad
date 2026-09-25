@@ -58,8 +58,10 @@ template's Compatibility block asks it.
   `main` like any other, and it ships in the next patch release.
 - **`main` is a working branch** carrying a `-dev` version between releases.
   What shipped is read from the tag range, never from `main`'s log.
-- **`main` takes merge requests only.** Direct pushes are closed, so reopening
-  it after a release is a merge request too.
+- **`main` takes merge requests, plus the reopening bump.** The one direct
+  push `main` accepts is the version bump that reopens it after a release. CI
+  fails any other commit that lands on `main` without a merge request; see
+  [Protected branches](#protected-branches).
 - **`dev` takes direct pushes for back-merges and version bumps, and nothing
   else.** Anything authored goes through a merge request. A direct push skips
   the guards scoped to a merge request -- the title check and the atomic
@@ -155,6 +157,35 @@ A hotfix branch is the opposite case. It is cut from `main`, so squashing it
 discards nothing `main` did not already have, and one clean subject is the right
 granularity for a patch.
 
+### Merge commits
+
+A merge commit is made in three places and nowhere else: a merge request
+merging into `main` or `dev`, a release branch merging into `main`, and the
+back-merge of `main` into `dev`. A feature branch never contains one. Every
+merge commit a branch carries lands on the line behind the merge's second
+parent, so a merge made inside a branch becomes permanent history on `dev` or
+`main`.
+
+- **Update a branch by rebasing it, never by merging its target in.**
+  `git rebase origin/dev`, not `git merge origin/dev`, and the merge request's
+  **Rebase** button rather than a merge.
+- **Stack branches on each other's tips.** A branch stacked on another is
+  rebased onto that branch's current tip, never synced by merging it in.
+  `git rebase --update-refs` rebases a whole stack in one pass and moves every
+  branch in it.
+- **Merge a stack from the bottom up.** Merge the lowest merge request into its
+  line first, with "Delete source branch" ticked, and GitLab retargets the next
+  one onto the line. Never merge a stacked merge request into the branch below
+  it: that merge commit lands on the lower branch and reaches the line with it.
+
+Release branches are the exception. A minor's release branch carries every
+merge `dev` made, and a fix merge request onto a release branch adds its own,
+and both reach `main` through the release merge.
+
+`verify:policy` enforces this on merge request pipelines:
+`scripts/check-commit-messages.sh` fails a merge request whose branch carries a
+merge commit, unless the branch is a `release/*` branch.
+
 ## Cutting a release
 
 Cut the release branch when the milestone's scope is done, not when someone
@@ -180,8 +211,20 @@ happens. Pre-freeze snapshots are what betas are for.
 4. Open the merge request into `main` with the `release` template and merge it
    without squashing. `release:auto-tag` pushes `vX.Y.Z` and the tag pipeline
    publishes.
-5. Reopen `main` at the next patch `-dev` version, through a merge request.
-   Until it merges, `release:validate` fails on `main`'s pipelines.
+5. Reopen `main` at the next patch `-dev` version, by pushing the bump
+   straight to `main`:
+
+   ```sh
+   git switch -c reopen origin/main                 # local only, never pushed
+   make set-version VERSION=X.Y.(Z+1)-dev
+   cargo check && uv lock
+   cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml
+   git commit -sam "chore: reopen main at X.Y.(Z+1)-dev"
+   git push origin HEAD:main
+   git switch - && git branch -D reopen
+   ```
+
+   Until it lands, `release:validate` fails on `main`'s pipelines.
 6. Back-merge `main` into `dev`, below. Until it lands, `dev` carries a
    standing red.
 
@@ -207,7 +250,7 @@ git switch -c beta/v0.5.0-beta1 origin/dev     # or origin/main, for a 0.4.x bet
 make set-version VERSION=0.5.0-beta1
 cargo check && uv lock
 cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml
-git commit -sam "chore: bump workspace to 0.5.0-beta1"
+git commit -sam "chore: cut 0.5.0-beta1"
 git tag v0.5.0-beta1 && git push origin v0.5.0-beta1
 git switch - && git branch -D beta/v0.5.0-beta1
 ```
@@ -287,9 +330,28 @@ who may write without a merge request.
 
 | Branch | Protected | Push | Merge | Why |
 | --- | --- | --- | --- | --- |
-| `main` | yes | No one | Maintainers | The line consumers pin. Closing pushes is what makes "everything lands through a merge request" a mechanism rather than discipline. |
+| `main` | yes | Code owners | Maintainers | The line consumers pin. Pushes are open to the code owners for the reopening bump only, and CI enforces that. |
 | `dev` | yes | Maintainers | Maintainers | The back-merge is a push. Closing it would tax the one routine operation. |
 | `release/*` | yes | Maintainers | Maintainers | Protection alone is the point: a release candidate runs the full CI tier. |
 
 Force push is off on all three, and code owner approval is off on all three.
 `v*` tags are protected separately, Maintainers only.
+
+Push access cannot say "version bumps only", so a CI check says it for `main`.
+[`scripts/check-main-direct-push.sh`](../../scripts/check-main-direct-push.sh)
+runs in `verify:policy` on every push to `main` and judges each commit the push
+put on `main`'s first-parent line. A commit passes if it is a merge request's
+merge commit, or if every file it touches is identical before and after once
+the old and new versions are masked out. Anything else turns `main` red. The
+check detects and does not prevent: the commit is already on `main` when it
+runs, and the fix is a revert through a merge request.
+
+*Code owners* means the users listed in
+[`.gitlab/CODEOWNERS`](../../.gitlab/CODEOWNERS), named one by one in the
+branch's push setting. GitLab does not link the two, so a change to either one
+is made by hand in the other.
+
+Opening pushes to the code owners was a trade. A release costs one merge
+request fewer, and in exchange a stray `git push origin main` from a code
+owner's clone now lands, where it used to be rejected. The check turns that into a red
+pipeline rather than a silent change.

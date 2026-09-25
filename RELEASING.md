@@ -122,8 +122,11 @@ Before cutting a tag:
    needed to push tags; full `api` is simpler to configure. Used only by
    `release:auto-tag` to look up the merged MR and push the tag.
 3. **Settings → Repository → Protected branches** -- protect `main`
-   (push: No one, merge: Maintainers), `dev` and `release/*` (push and
-   merge: Maintainers), force push off on all three. Protecting
+   (push: the code owners in `.gitlab/CODEOWNERS`, named one by one;
+   merge: Maintainers), `dev` and `release/*` (push and merge:
+   Maintainers), force push off on all three. `main` takes direct pushes
+   for the reopening bump only, which `scripts/check-main-direct-push.sh`
+   enforces in CI. Protecting
    `release/*` is what runs the full CI tier, hardware included, on a
    release candidate. The table and the reasoning are in
    [`docs/guide/gitflow-protocol.md`](docs/guide/gitflow-protocol.md).
@@ -241,10 +244,12 @@ The merge triggers `release:auto-tag` on `main`, which pushes tag
 After the tag, two follow-ups, and CI marks each one outstanding until
 it lands:
 
-1. **Reopen `main`** at the next patch's `-dev` version, by merge
-   request from a `chore/` branch -- `main` is closed to direct pushes.
-   Until it merges, `release:validate` fails on `main`'s pipelines,
-   because `main` carries a release version.
+1. **Reopen `main`** at the next patch's `-dev` version, by direct
+   push, following step 5 of "Cutting a release" in
+   [`docs/guide/gitflow-protocol.md`](docs/guide/gitflow-protocol.md).
+   Until it lands, `release:validate` fails on `main`'s pipelines,
+   because `main` carries a release version. The commit must change
+   the version and nothing else, or `verify:policy` fails on `main`.
 2. **Back-merge `main` into `dev`**, by direct push, following the
    recipe in [`docs/guide/gitflow-protocol.md`](docs/guide/gitflow-protocol.md)
    under "Back-merging". After a minor this is also where `dev` takes the
