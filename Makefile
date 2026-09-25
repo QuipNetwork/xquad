@@ -6,7 +6,7 @@
         test-rust test-python check-parity check-docs-handwritten \
         check-crate-publish check-python-dists check-release \
         check-version-sites list-version-sites set-version \
-        check-branch-containment \
+        check-branch-containment check-main-direct-push \
         deps deps-miri deps-py deps-wasm \
         install-hooks \
         lint lint-clippy lint-doc lint-deny-rs lint-py check-uv-lock \
@@ -84,6 +84,9 @@ lint-python: fmt-check-py lint-py
 # 0 on every ref it does not judge, so it needs no job of its own and
 # stays runnable locally -- a `rules:`-gated job is neither.
 #
+# check-main-direct-push joins for the same reason: it judges only a
+# push to main and exits 0 everywhere else.
+#
 # check-version-sites is deliberately NOT here, although its branch
 # assertion is policy too. It runs through $(VERPY), which needs uv,
 # and verify:policy's image carries none. It also does not need to be:
@@ -95,7 +98,7 @@ lint-python: fmt-check-py lint-py
 # contributor gets the TOML check without running the rest of the
 # policy phase.
 lint-policy: fmt-check-toml lint-deny-rs render-changelog check-atomic-spec check-commit-messages \
-             check-release-notes check-branch-containment
+             check-release-notes check-branch-containment check-main-direct-push
 
 # Wraps scripts/check-atomic-spec-mr.sh, forwarding the optional positional
 # BASE/HEAD refs the way the script expects. Both are quoted so that
@@ -635,8 +638,8 @@ test-substrate-fixture:
 # QUIP_RPC_URL, so drive it with the devnet env vars set (see test-quip-e2e):
 #
 #   make test-quip \
-#       QUIP_RPC_URL=ws://127.0.0.1:9944 \
-#       QUIP_FAUCET_URL=http://127.0.0.1:8087
+#       QUIP_RPC_URL=ws://localhost:20049/rpc \
+#       QUIP_FAUCET_URL=http://localhost:20049/api/faucet
 test-quip: test-quip-sign test-quip-e2e
 
 # Run the quip-marked signing tests (xqsa/tests/test_quip_signing.py): the
@@ -677,8 +680,8 @@ test-quip-sign:
 # env vars at the devnet's RPC + faucet:
 #
 #   make test-quip-e2e \
-#       QUIP_RPC_URL=ws://127.0.0.1:9944 \
-#       QUIP_FAUCET_URL=http://127.0.0.1:8087
+#       QUIP_RPC_URL=ws://localhost:20049/rpc \
+#       QUIP_FAUCET_URL=http://localhost:20049/api/faucet
 #
 # QUIP_RPC_URL gates the whole module (unset -> every test skips), so the
 # target hard-errors when it is missing rather than reporting a hollow, all-
@@ -692,7 +695,7 @@ test-quip-sign:
 # for the full rationale; not repeated here.
 test-quip-e2e:
 	@if [ -z "$(QUIP_RPC_URL)" ]; then \
-		echo "error: QUIP_RPC_URL is required (e.g. make test-quip-e2e QUIP_RPC_URL=ws://127.0.0.1:9944 QUIP_FAUCET_URL=http://127.0.0.1:8087)" >&2; \
+		echo "error: QUIP_RPC_URL is required (e.g. make test-quip-e2e QUIP_RPC_URL=ws://localhost:20049/rpc QUIP_FAUCET_URL=http://localhost:20049/api/faucet)" >&2; \
 		exit 2; \
 	fi
 	uv sync --extra quip
@@ -981,8 +984,9 @@ check-release-notes:
 	bash scripts/check-release-notes.sh
 
 # Wraps scripts/check-branch-containment.sh, which asserts the two-branch
-# protocol's one invariant: origin/main is contained in dev, and in every
-# release branch cut from it (docs/guide/gitflow-protocol.md).
+# protocol's one invariant: dev contains the highest release tag on
+# origin/main, and every release branch contains origin/main itself
+# (docs/guide/gitflow-protocol.md).
 #
 # Takes no arguments. The script reads the ref from the environment and
 # judges only dev and release/*, so a local run on any other branch is a
@@ -990,6 +994,14 @@ check-release-notes:
 # does in its before_script and a local clone usually has.
 check-branch-containment:
 	bash scripts/check-branch-containment.sh
+
+# Wraps scripts/check-main-direct-push.sh, which fails a push to main
+# that lands anything other than a merge request's merge commit or a
+# version-only bump (docs/guide/gitflow-protocol.md). Judges nothing off
+# main. To judge a range by hand:
+#   bash scripts/check-main-direct-push.sh v0.4.0..origin/main
+check-main-direct-push:
+	bash scripts/check-main-direct-push.sh
 
 # Generate the changelog / release notes for a tagged release.
 # Invoked from `release:notes` in .gitlab/ci/release.yml with

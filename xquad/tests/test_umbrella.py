@@ -49,6 +49,13 @@ def test_identity_reexports():
     assert sa.SolverMetalGPU is _xqsa.SolverMetalGPU
     assert sa.Solver is _xqsa.Solver
     assert sa.SolverResult is _xqsa.SolverResult
+    assert sa.JobQuote is _xqsa.JobQuote
+    assert sa.QuipCancelledError is _xqsa.QuipCancelledError
+    assert sa.QuipFaucetError is _xqsa.QuipFaucetError
+    assert sa.QuipMetadataError is _xqsa.QuipMetadataError
+    assert sa.QuipSigningError is _xqsa.QuipSigningError
+    assert sa.QuipTopologyError is _xqsa.QuipTopologyError
+    assert sa.fund_from_faucet is _xqsa.fund_from_faucet
     assert types.XQMX is _xqvm_py_xqmx.XQMX
     assert types.XQMXDomain is _xqvm_py_xqmx.XQMXDomain
     assert types.XQMXMode is _xqvm_py_xqmx.XQMXMode

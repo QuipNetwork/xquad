@@ -45,6 +45,7 @@ from xqsa import quip_signing
 from xqsa.quip_signing import (
     EXTRINSIC_VERSION_SIGNED,
     HYBRID_ENVELOPE_LEN,
+    HYBRID_PUBLIC_LEN,
     MULTI_ADDRESS_ID,
     ExtrinsicReceipt,
     QuipSigningError,
@@ -316,6 +317,38 @@ class TestKeystore:
         second = load_or_generate_keystore(path)
         assert first.seed == second.seed
 
+    def test_load_or_generate_loses_race_to_concurrent_writer(self, tmp_path, monkeypatch) -> None:
+        # Another process creates the file after our existence check but before
+        # our write: we must load its seed, not overwrite it with ours.
+        path = tmp_path / "keystore.json"
+        real_urandom = quip_signing.os.urandom
+        theirs: list[bytes] = []
+
+        def racing_urandom(n: int) -> bytes:
+            monkeypatch.setattr(quip_signing.os, "urandom", real_urandom)
+            theirs.append(generate_keystore(path).seed)
+            return real_urandom(n)
+
+        monkeypatch.setattr(quip_signing.os, "urandom", racing_urandom)
+        ours = load_or_generate_keystore(path)
+        assert ours.seed == theirs[0]
+        assert load_keystore(path).seed == theirs[0]
+        assert list(tmp_path.iterdir()) == [path]  # no temp file left behind.
+
+    def test_generate_loses_race_raises_already_exists(self, tmp_path, monkeypatch) -> None:
+        path = tmp_path / "keystore.json"
+        real_urandom = quip_signing.os.urandom
+
+        def racing_urandom(n: int) -> bytes:
+            monkeypatch.setattr(quip_signing.os, "urandom", real_urandom)
+            generate_keystore(path)
+            return real_urandom(n)
+
+        monkeypatch.setattr(quip_signing.os, "urandom", racing_urandom)
+        with pytest.raises(QuipSigningError, match="already exists"):
+            generate_keystore(path)
+        assert list(tmp_path.iterdir()) == [path]
+
     def test_persisted_fields(self, tmp_path) -> None:
         path = tmp_path / "keystore.json"
         ks = generate_keystore(path)
@@ -444,6 +477,41 @@ class TestBuildSignedExtrinsic:
         # The envelope must verify against the HASH, not the raw payload.
         assert quip_signer.verify_envelope(digest, envelope, signer.account_id)
         assert not quip_signer.verify_envelope(payload, envelope, signer.account_id)
+
+    # 300 bytes gives a 2-byte length prefix; 17000 crosses into the 4-byte mode.
+    @pytest.mark.parametrize("call_len", [300, 17_000])
+    def test_disarmed_copy_keeps_length_and_fails_verification(self, call_len: int) -> None:
+        signer = signer_from_seed(SEED)
+        iface = FakeIface(call_bytes=bytes(i % 256 for i in range(call_len)), nonce=0, spec_version=1, tx_version=1)
+        wire, _ = build_signed_extrinsic(iface, signer, "QuantumComputeMempool", "propose_job", {})
+        disarmed = quip_signing.disarm_extrinsic(wire)
+
+        prefix_len = {0: 1, 1: 2, 2: 4}[wire[0] & 0b11]
+        changed = [i for i, (a, b) in enumerate(zip(wire, disarmed, strict=True)) if a != b]
+        assert len(disarmed) == len(wire)
+        assert changed == [prefix_len + 2 + 32 + HYBRID_PUBLIC_LEN + 1]
+        account, envelope, rest = _decode_wire(disarmed)
+        assert (account, rest) == _decode_wire(wire)[::2]
+        extra, additional = quip_signing._signed_extensions(
+            nonce=0, spec_version=1, tx_version=1, genesis_bytes=GENESIS
+        )
+        digest = hashlib.blake2b(iface.call_bytes + extra + additional, digest_size=32).digest()
+        assert quip_signer.verify_envelope(digest, _decode_wire(wire)[1], signer.account_id)
+        assert not quip_signer.verify_envelope(digest, envelope, signer.account_id)
+        assert envelope[:HYBRID_PUBLIC_LEN] == _decode_wire(wire)[1][:HYBRID_PUBLIC_LEN]
+
+    def test_disarm_rejects_a_frame_that_is_not_signed(self) -> None:
+        with pytest.raises(QuipSigningError, match="cannot disarm"):
+            quip_signing.disarm_extrinsic(b"\x04\x00")
+
+    def test_disarm_rejects_a_frame_with_another_version_byte(self) -> None:
+        signer = signer_from_seed(SEED)
+        wire, _ = build_signed_extrinsic(FakeIface(), signer, "QuantumComputeMempool", "propose_job", {})
+        prefix_len = {0: 1, 1: 2, 2: 4}[wire[0] & 0b11]
+        tampered = bytearray(wire)
+        tampered[prefix_len] = 0x05
+        with pytest.raises(QuipSigningError, match="cannot disarm"):
+            quip_signing.disarm_extrinsic(bytes(tampered))
 
     def test_call_composed_with_given_module_and_params(self) -> None:
         signer = signer_from_seed(SEED)

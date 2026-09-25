@@ -6,8 +6,8 @@ reads, and the model those inputs fill. Both happen before anything else --
 `Problem(name) -> input()* -> define_model() -> body* -> output()* -> compile()`,
 and `input()` calls after `define_model()` raise `RuntimeError`.
 
-Every code sample in this chapter, and the rest of Part III, assumes the
-same import:
+Every code sample in this chapter, and the rest of Modelling and
+Solving, assumes the same import:
 
 ```python
 from xquad.cp import Domain, Problem, Types

@@ -49,14 +49,17 @@ self-install the `[quip]` extra via `uv run --extra quip`.
 | Variable | When | Meaning |
 | --- | --- | --- |
 | `QUIP_RPC_URL` | required for e2e | chain RPC, `ws://` (DevNet) or `wss://` (aglais). `make test-quip` / `make test-quip-e2e` pass it through explicitly. |
-| `QUIP_FAUCET_URL` | optional | faucet **base** URL; the funded fixture POSTs to `<QUIP_FAUCET_URL>/request`. Without it only the read-only connectivity tests run. |
+| `QUIP_FAUCET_URL` | optional | faucet **base** URL; the funded fixture POSTs to `<QUIP_FAUCET_URL>/request`. `SolverQuip` reads it too, as the faucet `autofund` draws from, but only when its RPC URL also comes from `QUIP_RPC_URL`; the fixtures pass `url=` and fund directly. Without it only the read-only connectivity tests run. |
 | `QUIP_TOPOLOGY` | optional | registered topology hash for `SolverQuip` to target instead of the chain default. Unlike the rest of this table it configures the solver, not the harness, so it also applies outside the tests. Setting it un-skips the override tier. |
 | `QUIP_MINER_PROBE_TIMEOUT` | optional (default 60) | how long the `solving_miner` probe waits before skipping the end-to-end tier. Raise it on a slow or remote fleet. |
-| `SSL_CERT_FILE` | macOS + `wss://` only | CA bundle for the TLS handshake (see [macOS TLS](#macos-tls-wss-only)). |
 
 Any variable exported in your shell -- or passed as `make VAR=val` -- reaches
-pytest, so you can set `SSL_CERT_FILE` and `QUIP_MINER_PROBE_TIMEOUT` alongside
-the two the recipe forwards.
+pytest, so you can set `QUIP_MINER_PROBE_TIMEOUT` alongside the two the
+recipe forwards. On macOS, whose python.org and uv Pythons ship no CA
+bundle, `xqsa.quip_metadata.connect` and the suite's faucet requests verify
+TLS against certifi's bundle unless `SSL_CERT_FILE` or `SSL_CERT_DIR` is
+set, or `WEBSOCKET_CLIENT_CA_BUNDLE` names an existing file or directory, so
+aglais needs no CA export.
 
 ### The two test tiers
 
@@ -85,16 +88,6 @@ the two the recipe forwards.
   format check rejects it, and H4 derives a different account id from the same
   master seed, so the balance does not carry over either. Generate a fresh one
   and fund that.
-
-### macOS TLS (`wss://` only)
-
-The python.org / uv Python build ships no system CA bundle, so `wss://`
-handshakes fail on macOS unless you point OpenSSL at certifi's bundle:
-
-    export SSL_CERT_FILE=$(uv run --extra quip python -m certifi)
-
-Export it for every command that touches aglais (REPL, tests, scripts). It
-is harmless on Linux and unnecessary for the `ws://` DevNet.
 
 ## Option A -- local DevNet
 
@@ -192,9 +185,8 @@ so use a differently-named override and pass it with `-f`.
         QUIP_RPC_URL=ws://localhost:20049/rpc \
         QUIP_FAUCET_URL=http://localhost:20049/api/faucet
 
-No `SSL_CERT_FILE` is needed for the `ws://` DevNet. A fresh order solves in
-~2-4 blocks at localdev block time (~14-21s propose to on-chain solution under
-emulation).
+A fresh order solves in ~2-4 blocks at localdev block time (~14-21s propose to
+on-chain solution under emulation).
 
 ### Teardown
 
@@ -223,8 +215,11 @@ is non-persistent and order ids reset, so never hard-code one.
   set `PUID=0` / `PGID=0`.
 - **Faucet:** on a fresh bring-up the miner's first requests hit
   `Connection refused` for ~30s until the faucet is up, then fund on retry
-  (expected). A repeat request for the same account returns HTTP 429
-  (rate-limited); use a fresh keystore per test if you hit the limit.
+  (expected). After that the faucet's two gates apply, as described
+  for Option B below: a repeat request inside the ~5s window is a 429
+  that `fund_from_faucet` retries once, and an account already holding
+  more than one drip gets a 403 that is not retried. Start from an
+  empty keystore, or spend the account below one drip.
 
 ## Option B -- the public aglais network
 
@@ -235,17 +230,29 @@ what the signing layer speaks.
 
 ### Coordinates (verify before a run -- these move)
 
-- **RPC:** use a validator node, e.g. `wss://bootnode-1.aglais.quip.network:20049/rpc`
-  (bootnode-2 and bootnode-3 serve the same chain).
-  Any node can fall behind the chain tip and serve a stale, frozen view -- balances
-  read as 0 and freshly submitted extrinsics look like they never land, even though
-  the chain is live. Confirm the node is caught up before trusting reads (see the
-  liveness check below), and point `QUIP_RPC_URL` at a different RPC if the one you
-  are on is not syncing.
-- **Faucet:** `https://faucet.aglais.quip.network`, healthy as of 2026-09-15
+- **RPC:** the `aglais` preset in `xqsa/quip_networks.py` is the source of
+  truth; it points at bootnode-1's validator RPC (bootnode-2 and bootnode-3
+  serve the same chain). The commands below spell out its current RPC and
+  faucet values; if they disagree with the preset, the preset wins. Any
+  node can fall behind the chain tip and serve a stale, frozen view -- balances read as 0 and freshly submitted extrinsics look
+  like they never land, even though the chain is live. Confirm the node is
+  caught up before trusting reads (see the liveness check below), and point
+  `QUIP_RPC_URL` at a different RPC if the one you are on is not syncing.
+- **Faucet:** the `aglais` preset's faucet coordinate in
+  `xqsa/quip_networks.py` is the source of truth, healthy as of 2026-09-15
   (`/health` returns `{"status":"ok"}`; the bare root returns 404, which is not a
-  fault). Set `QUIP_FAUCET_URL` to it and the funded tier runs. A repeat request
-  for the same account is rate-limited, so use a fresh keystore per run.
+  fault). Set `QUIP_FAUCET_URL` to it and the funded tier runs. The faucet
+  [gates requests two ways](https://gitlab.com/quip.network/faucet/-/blob/10ca67676777da0031be5bf8dd2f9ed6967d269a/README.md?plain=1#L54-62). A `429` with
+  `retry_after_seconds` is the per-destination rate limit, a window of
+  about 5s. A `429` without `retry_after_seconds` is a
+  [duplicate request still in flight](https://gitlab.com/quip.network/faucet/-/blob/10ca67676777da0031be5bf8dd2f9ed6967d269a/src/handlers.rs#L87-90) for the
+  same destination. Both are retryable, and `fund_from_faucet` retries
+  a `429` once, waiting 5s when no `retry_after_seconds` is given. A
+  `403` `destination already funded` with
+  `free_balance_plancks` is the balance ceiling: the faucet refuses any
+  account holding more than one drip (10 AGLS), and it is not retryable.
+  Spending below the ceiling makes the account eligible again, so there is
+  no lifetime quota; a fresh keystore works because it starts empty.
 - **Block time:** ~6s.
 - **Runtime:** advances over time (`specVersion 117` / `transactionVersion 7`,
   read live on 2026-09-15). ALWAYS re-check with `state_getRuntimeVersion` before
@@ -262,10 +269,9 @@ what the signing layer speaks.
 Quick version + liveness check. A synced node reports `isSyncing == false` and
 `currentBlock == highestBlock`; if it is behind, its state reads are stale:
 
-    CERT=$(uv run --extra quip python -m certifi)
-    RPC=wss://bootnode-1.aglais.quip.network:20049/rpc
-    SSL_CERT_FILE="$CERT" uv run --extra quip python -c "from xqsa.quip_metadata import connect; \
-        s=connect('$RPC'); \
+    uv run --extra quip python -c "from xqsa.quip_metadata import connect; \
+        from xqsa.quip_networks import NETWORKS; \
+        s=connect(NETWORKS['aglais'].rpc); \
         print('runtime', s.rpc_request('state_getRuntimeVersion',[])['result']); \
         print('sync   ', s.rpc_request('system_syncState',[])['result']); \
         print('health ', s.rpc_request('system_health',[])['result'])"
@@ -294,8 +300,7 @@ a complete graph on 16 nodes (K16), hash
 at block 232673. It is registered, not mineable, and not the default. Point
 `QUIP_TOPOLOGY` at it to run the whole suite against it:
 
-    CERT=$(uv run --extra quip python -m certifi)
-    SSL_CERT_FILE="$CERT" QUIP_MINER_PROBE_TIMEOUT=180 \
+    QUIP_MINER_PROBE_TIMEOUT=180 \
       QUIP_TOPOLOGY=0x830abc16c0b28b26f119f3a1279d07811bdeb9c0234d7f442ae46d6698d9a797 \
       make test-quip \
         QUIP_RPC_URL=wss://bootnode-1.aglais.quip.network:20049/rpc \
@@ -306,8 +311,7 @@ registration is permanent.
 
 ### Run the suite
 
-    CERT=$(uv run --extra quip python -m certifi)
-    SSL_CERT_FILE="$CERT" QUIP_MINER_PROBE_TIMEOUT=180 \
+    QUIP_MINER_PROBE_TIMEOUT=180 \
       make test-quip \
         QUIP_RPC_URL=wss://bootnode-1.aglais.quip.network:20049/rpc \
         QUIP_FAUCET_URL=https://faucet.aglais.quip.network
@@ -365,18 +369,15 @@ once when the fleet is active.
 ## Manual smoke solve (optional)
 
 Beyond the pytest suite, a single small model round-trips the propose + decode +
-energy-canary path. Export the same env you used above (for aglais also
-export `SSL_CERT_FILE` and set `QUIP_RPC_URL`/`QUIP_KEYSTORE`), fund a keystore,
-then:
+energy-canary path. Set `QUIP_KEYSTORE` and fund the keystore, then:
 
-    export QUIP_RPC_URL=ws://localhost:20049/rpc     # or wss://bootnode-1.aglais.quip.network:20049/rpc (aglais)
     export QUIP_KEYSTORE=/tmp/quip-ks.json
     uv run --extra quip python - <<'PY'
     from xqsa.quip import SolverQuip
     from xqvm_py.xqmx import XQMX
     m = XQMX.spin_model(2)
     m.set_linear(0, 1); m.set_quadratic(0, 1, -1)   # brute-force optimum = -2
-    r = SolverQuip().solve(m)
+    r = SolverQuip.for_network("aglais").solve(m)   # or "devnet"
     print("energy:", r.energy, "| matches chain:", r.metadata["energy_matches_chain"])
     PY
 

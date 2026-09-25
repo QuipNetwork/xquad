@@ -38,6 +38,8 @@ than asserted about a decoder that ignores its input.
 
 from __future__ import annotations
 
+import os
+import ssl
 import sys
 import types
 
@@ -47,6 +49,8 @@ from xqsa.quip_codec import QuipMetadataError
 from xqsa.quip_metadata import (
     METADATA_AT_VERSION_API,
     TARGET_METADATA_VERSION,
+    _default_ca_bundle,
+    connect,
     v14_interface_class,
 )
 
@@ -480,3 +484,103 @@ class TestIsolation:
 
     def test_the_subclass_is_built_once_per_base(self) -> None:
         assert v14_interface_class(_StubInterface) is v14_interface_class(_StubInterface)
+
+
+# ---------------------------------------------------------------------------
+# connect: the certifi CA default for wss://
+# ---------------------------------------------------------------------------
+
+CA_BUNDLE = "/stub/certifi/cacert.pem"
+
+
+@pytest.fixture
+def connect_stubs(monkeypatch) -> None:
+    """Stub ``substrateinterface`` and ``certifi``, pose as macOS, clear CA env vars.
+
+    A fresh ``SubstrateInterface`` class per test: ``v14_interface_class`` is
+    cached per base, so a shared class would share its subclass too.
+    """
+
+    class SubstrateInterface:
+        def __init__(self, url: str | None = None, **kwargs) -> None:
+            self.url = url
+            self.kwargs = kwargs
+
+    substrate = types.ModuleType("substrateinterface")
+    substrate.SubstrateInterface = SubstrateInterface  # type: ignore[attr-defined]
+    certifi = types.ModuleType("certifi")
+    certifi.where = lambda: CA_BUNDLE  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "substrateinterface", substrate)
+    monkeypatch.setitem(sys.modules, "certifi", certifi)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    # An empty OpenSSL store, as on python.org macOS builds, unless the env points
+    # at one -- mirroring how OpenSSL resolves SSL_CERT_FILE / SSL_CERT_DIR.
+    monkeypatch.setattr(
+        ssl,
+        "get_default_verify_paths",
+        lambda: types.SimpleNamespace(cafile=os.environ.get("SSL_CERT_FILE"), capath=os.environ.get("SSL_CERT_DIR")),
+    )
+    for name in ("SSL_CERT_FILE", "SSL_CERT_DIR", "WEBSOCKET_CLIENT_CA_BUNDLE"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.usefixtures("connect_stubs")
+class TestConnect:
+    def test_wss_gets_the_certifi_bundle(self) -> None:
+        iface = connect("wss://node:443/rpc")
+        assert iface.url == "wss://node:443/rpc"
+        assert iface.kwargs == {"ws_options": {"sslopt": {"ca_certs": CA_BUNDLE}}}
+
+    def test_scheme_is_case_insensitive(self) -> None:
+        assert connect("WSS://node/rpc").kwargs == {"ws_options": {"sslopt": {"ca_certs": CA_BUNDLE}}}
+
+    def test_populated_store_is_kept(self, monkeypatch) -> None:
+        # Homebrew-style macOS Python: OpenSSL already has a CA file.
+        monkeypatch.setattr(
+            ssl, "get_default_verify_paths", lambda: types.SimpleNamespace(cafile="/brew/cert.pem", capath=None)
+        )
+        assert connect("wss://node/rpc").kwargs == {}
+
+    def test_ws_gets_no_tls_options(self) -> None:
+        assert connect("ws://localhost:20049/rpc").kwargs == {}
+
+    @pytest.mark.parametrize("key", ["ca_certs", "ca_cert_path", "context"])
+    def test_caller_ca_source_passes_through(self, monkeypatch, key: str) -> None:
+        monkeypatch.setitem(sys.modules, "certifi", None)  # never consulted
+        options = {"sslopt": {key: "/corp/ca"}}
+        assert connect("wss://node/rpc", ws_options=options).kwargs == {"ws_options": options}
+
+    def test_caller_ws_options_keep_the_bundle(self) -> None:
+        # Options naming no CA source must not switch the default off.
+        options = {"timeout": 30, "sslopt": {"cert_reqs": 2}}
+        kwargs = connect("wss://node/rpc", ws_options=options).kwargs
+        assert kwargs == {"ws_options": {"timeout": 30, "sslopt": {"cert_reqs": 2, "ca_certs": CA_BUNDLE}}}
+        assert options == {"timeout": 30, "sslopt": {"cert_reqs": 2}}
+
+    @pytest.mark.parametrize("var", ["SSL_CERT_FILE", "SSL_CERT_DIR"])
+    def test_env_ca_config_wins(self, monkeypatch, var: str) -> None:
+        monkeypatch.setenv(var, "/corp/ca.pem")
+        assert connect("wss://node/rpc").kwargs == {}
+
+    @pytest.mark.parametrize("kind", ["file", "dir"])
+    def test_websocket_ca_bundle_wins(self, monkeypatch, tmp_path, kind: str) -> None:
+        bundle = tmp_path / "ca"
+        if kind == "file":
+            bundle.write_text("")
+        else:
+            bundle.mkdir()
+        monkeypatch.setenv("WEBSOCKET_CLIENT_CA_BUNDLE", str(bundle))
+        assert connect("wss://node/rpc").kwargs == {}
+
+    def test_missing_websocket_ca_bundle_is_ignored(self, monkeypatch, tmp_path) -> None:
+        # websocket-client ignores a path that does not exist, so the default stays.
+        monkeypatch.setenv("WEBSOCKET_CLIENT_CA_BUNDLE", str(tmp_path / "missing.pem"))
+        assert connect("wss://node/rpc").kwargs == {"ws_options": {"sslopt": {"ca_certs": CA_BUNDLE}}}
+
+    def test_other_platforms_keep_the_system_store(self, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert connect("wss://node/rpc").kwargs == {}
+        assert _default_ca_bundle() is None
+
+    def test_default_bundle_on_macos(self) -> None:
+        assert _default_ca_bundle() == CA_BUNDLE
