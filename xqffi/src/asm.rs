@@ -152,7 +152,7 @@ fn disassemble(bytecode: &[u8]) -> PyResult<String> {
 #[pyfunction]
 fn instruction_count(bytecode: &[u8]) -> PyResult<usize> {
     let program = xqvm::Program::decode(bytecode)
-        .map_err(|e| PyValueError::new_err(format!("decode error: {e:?}")))?;
+        .map_err(|e| PyValueError::new_err(format!("decode error: {e}")))?;
     let mut stream = xqvm::InstructionStream::from_program(&program);
     let mut n: usize = 0;
     while stream.next().is_some() {

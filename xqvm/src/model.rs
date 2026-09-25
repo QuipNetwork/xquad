@@ -106,6 +106,38 @@ impl core::fmt::Display for Domain {
     }
 }
 
+/// Upper-triangular index of the unordered pair `(i, j)`: `j*(j-1)/2 + i`
+/// after ordering the pair so that `i <= j`.
+///
+/// This is the arithmetic `IDXTRIU` performs, exposed so a host computes the
+/// same index the VM does rather than restating the formula. The pair is
+/// unordered, as `spec/xqvm/ISA.md` requires: `(i, j)` and `(j, i)` address
+/// the same cell.
+///
+/// `j*(j-1)` is a product of consecutive integers, so it is non-negative and
+/// even for every operand, negative ones included, and truncating and
+/// flooring division agree on it.
+///
+/// Returns `None` when any intermediate leaves the signed 64-bit range; the
+/// VM raises that as [`crate::Error::ArithmeticOverflow`].
+///
+/// # Examples
+///
+/// ```rust
+/// use xqvm::triu_index;
+///
+/// assert_eq!(triu_index(1, 3), Some(4));
+/// assert_eq!(triu_index(3, 1), Some(4));
+/// assert_eq!(triu_index(0, i64::MAX), None);
+/// ```
+pub fn triu_index(i: i64, j: i64) -> Option<i64> {
+    let (i, j) = if i > j { (j, i) } else { (i, j) };
+    j.checked_sub(1)
+        .and_then(|jm1| j.checked_mul(jm1))
+        .and_then(|product| product.checked_div(2))
+        .and_then(|half| half.checked_add(i))
+}
+
 /// A quadratic optimization model (QUBO/Ising/integer).
 ///
 /// Encodes H(x) = `sum_i` linear\[i\] * x\[i\] + sum_{i<j} quadratic\[(i,j)\] * x\[i\] * x\[j\].
@@ -346,7 +378,7 @@ impl XqmxSample {
 
 #[cfg(test)]
 mod tests {
-    use super::{Domain, XqmxModel};
+    use super::{Domain, XqmxModel, triu_index};
     use crate::Error;
 
     #[test]
@@ -528,5 +560,25 @@ mod tests {
             matches!(err, Error::ArithmeticOverflow { .. }),
             "got {err:?}"
         );
+    }
+
+    #[test]
+    fn triu_index_is_symmetric_and_matches_the_formula() {
+        for j in -20_i64..20 {
+            for i in -20_i64..=j {
+                let expected = j * (j - 1) / 2 + i;
+                assert_eq!(triu_index(i, j), Some(expected), "({i}, {j})");
+                assert_eq!(triu_index(j, i), Some(expected), "({j}, {i})");
+            }
+        }
+    }
+
+    #[test]
+    fn triu_index_reports_overflow_as_none() {
+        // j*(j-1) leaves the range.
+        assert_eq!(triu_index(0, i64::MAX), None);
+        assert_eq!(triu_index(i64::MAX, 0), None);
+        // j-1 itself leaves the range.
+        assert_eq!(triu_index(i64::MIN, i64::MIN), None);
     }
 }

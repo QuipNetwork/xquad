@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import pytest
 
-from xqffi.vm import XqmxModel, XqmxSample
+from xqffi.vm import Domain, XqmxModel, XqmxSample
 from xquad.vm import VM, VMBackend
 from xqvm_py.errors import SampleOutOfDomain
 from xqvm_py.limits import I64_MAX, I64_MIN
@@ -39,40 +39,38 @@ BACKENDS = [VMBackend.RUST, VMBackend.PYTHON]
 
 
 @pytest.mark.parametrize(
-    ("domain", "values", "k"),
+    ("domain", "values"),
     [
-        ("binary", [0, 2], None),
-        ("binary", [-1], None),
-        ("spin", [0], None),
-        ("spin", [2], None),
-        ("integer", [-1], 3),
-        ("integer", [3], 3),
+        (Domain.BINARY, [0, 2]),
+        (Domain.BINARY, [-1]),
+        (Domain.SPIN, [0]),
+        (Domain.SPIN, [2]),
+        (Domain.integer(3), [-1]),
+        (Domain.integer(3), [3]),
     ],
 )
-def test_constructor_rejects_out_of_domain_values(domain, values, k):
-    kwargs = {"k": k} if k is not None else {}
+def test_constructor_rejects_out_of_domain_values(domain, values):
     with pytest.raises(ValueError, match="outside the"):
-        XqmxSample(domain, values, **kwargs)
+        XqmxSample(domain, values)
 
 
 @pytest.mark.parametrize(
-    ("domain", "values", "k"),
+    ("domain", "values"),
     [
-        ("binary", [0, 1, 1, 0], None),
-        ("spin", [-1, 1, -1], None),
-        ("integer", [0, 1, 2], 3),
+        (Domain.BINARY, [0, 1, 1, 0]),
+        (Domain.SPIN, [-1, 1, -1]),
+        (Domain.integer(3), [0, 1, 2]),
     ],
 )
-def test_constructor_accepts_in_domain_values(domain, values, k):
-    kwargs = {"k": k} if k is not None else {}
-    sample = XqmxSample(domain, values, **kwargs)
+def test_constructor_accepts_in_domain_values(domain, values):
+    sample = XqmxSample(domain, values)
     assert sample.values == values
 
 
 def test_model_coefficients_stay_unbounded():
     # A bias is not an assignment. Only the sample constructor gained a
     # value check.
-    model = XqmxModel("binary", 2)
+    model = XqmxModel.binary(2)
     model.set_linear(0, I64_MIN)
     model.set_linear(1, I64_MAX)
     assert model.get_linear(0) == I64_MIN
@@ -82,7 +80,7 @@ def test_model_coefficients_stay_unbounded():
 def test_sample_exposes_no_value_setter():
     # This is what makes xquad/program.py safe without a second scan: once
     # the constructor validates, no out-of-domain instance can exist.
-    sample = XqmxSample("binary", [0, 1])
+    sample = XqmxSample.binary([0, 1])
     for attr in ("set_linear", "set_value", "__setitem__"):
         assert not hasattr(sample, attr), attr
     with pytest.raises((AttributeError, TypeError)):
@@ -207,7 +205,7 @@ def test_both_host_guards_are_catchable_as_value_error():
     # should not need to know which backend refused. `xqffi` raises
     # `PyValueError`; `SampleOutOfDomain` is one too.
     with pytest.raises(ValueError):
-        XqmxSample(domain="binary", values=[2])
+        XqmxSample.binary(values=[2])
 
     sample = XQMX.binary_sample(1)
     sample.linear[0] = 5
