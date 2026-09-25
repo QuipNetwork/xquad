@@ -51,8 +51,9 @@
 //!
 //! Coverage **reports**; it does not gate on completeness. What it gates on
 //! is **regression**: [`PRESENT_FLOOR`] and [`REACHED_FLOOR`] are the
-//! measured coverage. Adding a vector may raise them; nothing may lower
-//! them. Raise a floor in the same commit that raises the coverage.
+//! measured coverage, and [`VECTOR_FLOOR`] is the number of vectors. Adding
+//! a vector may raise them; nothing may lower them. Raise a floor in the
+//! same commit that raises the coverage.
 //! Lowering one means deleting vector coverage, which wants a reason in the
 //! commit message.
 
@@ -73,6 +74,13 @@ const PRESENT_FLOOR: usize = 65;
 /// [`PRESENT_FLOOR`] because several opcodes appear only in vectors that
 /// assert the fault they raise.
 const REACHED_FLOOR: usize = 56;
+
+/// Vectors in the suite.
+///
+/// The opcode floors only trip when a deleted vector was the last to cover
+/// an opcode, so removing one of several `ADD` vectors passes them. This
+/// one trips on any removal.
+const VECTOR_FLOOR: usize = 154;
 
 /// Build the full `(code, mnemonic)` opcode list from the `opcodes!`
 /// x-macro, so the denominator cannot drift from the opcode table.
@@ -315,6 +323,13 @@ fn coverage_does_not_regress() {
         Coverage::total(),
         coverage.render(),
     );
+
+    assert!(
+        coverage.vectors >= VECTOR_FLOOR,
+        "vector count regressed: {} vectors, floor is {VECTOR_FLOOR}.\n\
+         Restore the missing vector, or lower VECTOR_FLOOR with a reason.",
+        coverage.vectors,
+    );
 }
 
 /// A floor that has fallen behind the real number is a floor nobody is
@@ -337,6 +352,11 @@ fn floors_do_not_fall_behind_coverage() {
         "coverage grew to {} opcodes reached; raise REACHED_FLOOR to match.\n\n{}",
         coverage.reached_count(),
         coverage.render(),
+    );
+    assert!(
+        coverage.vectors <= VECTOR_FLOOR,
+        "the suite grew to {} vectors; raise VECTOR_FLOOR to match.",
+        coverage.vectors,
     );
 }
 
