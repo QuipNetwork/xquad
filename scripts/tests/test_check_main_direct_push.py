@@ -75,9 +75,11 @@ def released_repo(tmp_path: Path) -> tuple[Path, str]:
     return repo, commit_all(repo, "chore: bump workspace to 0.4.1")
 
 
-def run_push(repo: Path, before: str) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "CI_COMMIT_BRANCH": "main", "CI_COMMIT_BEFORE_SHA": before}
-    env.pop("CI_MERGE_REQUEST_IID", None)
+def run_push(repo: Path, before: str, **overrides: str) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "CI_COMMIT_BRANCH": "main", "CI_COMMIT_BEFORE_SHA": before, **overrides}
+    for name in ("CI_MERGE_REQUEST_IID", "CI_PROJECT_PATH"):
+        if name not in overrides:
+            env.pop(name, None)
     return subprocess.run(["bash", str(SCRIPT)], cwd=repo, env=env, capture_output=True, text=True)
 
 
@@ -129,3 +131,78 @@ def test_merge_request_merge_passes_and_bare_merge_fails(tmp_path: Path) -> None
     result = run_push(repo, before)
     assert result.returncode == 1
     assert "no merge request produced" in result.stderr
+
+
+MR_TRAILER = "refer to merge request quip.network/xquad!1"
+
+
+def test_bump_that_adds_a_file_fails(tmp_path: Path) -> None:
+    repo, before = released_repo(tmp_path)
+    write_version(repo, "0.4.2-dev", "0.4.2.dev0")
+    (repo / "NEW.md").write_text("new\n")
+    commit_all(repo, "chore: reopen main at 0.4.2-dev")
+    result = run_push(repo, before)
+    assert result.returncode == 1
+    assert "adds, deletes or renames NEW.md" in result.stderr
+
+
+def test_missing_before_sha_judges_the_tip(tmp_path: Path) -> None:
+    """A zero or absent CI_COMMIT_BEFORE_SHA falls back to HEAD~1..HEAD."""
+    repo, _ = released_repo(tmp_path)
+    (repo / "README.md").write_text("hello\n")
+    commit_all(repo, "docs: add readme")
+    assert run_push(repo, "0" * 40).returncode == 1
+    assert run_push(repo, "").returncode == 1
+
+
+def test_off_main_and_merge_request_pipelines_are_not_judged(tmp_path: Path) -> None:
+    repo, before = released_repo(tmp_path)
+    (repo / "README.md").write_text("hello\n")
+    commit_all(repo, "docs: add readme")
+    assert run_push(repo, before, CI_COMMIT_BRANCH="dev").returncode == 0
+    assert run_push(repo, before, CI_MERGE_REQUEST_IID="1").returncode == 0
+
+
+def test_merge_request_reference_must_name_this_project(tmp_path: Path) -> None:
+    repo, before = released_repo(tmp_path)
+    git(repo, "switch", "-q", "-c", "feature")
+    (repo / "README.md").write_text("hello\n")
+    commit_all(repo, "docs: add readme")
+    git(repo, "switch", "-q", "main")
+    git(
+        repo,
+        "merge",
+        "--no-ff",
+        "-q",
+        "feature",
+        "-m",
+        "merge: branch 'feature' into 'main'\n\nrefer to merge request other/project!1",
+    )
+    result = run_push(repo, before)
+    assert result.returncode == 1
+    assert "no merge request produced" in result.stderr
+
+
+def test_release_merge_is_judged_by_its_merge_commit_alone(tmp_path: Path) -> None:
+    """Merges and direct commits inside the release branch sit behind the second parent."""
+    repo, before = released_repo(tmp_path)
+    git(repo, "switch", "-q", "-c", "fix")
+    (repo / "FIX.md").write_text("fix\n")
+    commit_all(repo, "fix: a fix")
+    git(repo, "switch", "-q", "-c", "release/v0.4.2", "main")
+    git(repo, "merge", "--no-ff", "-q", "fix", "-m", "merge: branch 'fix' into 'release/v0.4.2'")
+    write_version(repo, "0.4.2", "0.4.2")
+    commit_all(repo, "chore: bump workspace to 0.4.2")
+    git(repo, "switch", "-q", "main")
+    git(
+        repo,
+        "merge",
+        "--no-ff",
+        "-q",
+        "release/v0.4.2",
+        "-m",
+        f"merge: branch 'release/v0.4.2' into 'main'\n\n{MR_TRAILER}",
+    )
+    result = run_push(repo, before)
+    assert result.returncode == 0, result.stderr
+    assert "1 first-parent commit(s)" in result.stdout

@@ -25,7 +25,9 @@
 # be one of
 #
 #   - a merge request's merge commit, recognised by the
-#     "merge request <project>!<iid>" reference GitLab writes into it, or
+#     "merge request <project>!<iid>" reference GitLab writes into it,
+#     naming this project ($CI_PROJECT_PATH, quip.network/xquad off
+#     CI), or
 #   - a version-only change: each file it touches is identical before
 #     and after once the old and new workspace versions, in both their
 #     Cargo and PEP 440 spellings, are masked out on both sides.
@@ -61,6 +63,7 @@
 set -euo pipefail
 
 MASK="@VERSION@"
+PROJECT_PATH="${CI_PROJECT_PATH:-quip.network/xquad}"
 
 if [[ $# -gt 0 ]]; then
     RANGE="$1"
@@ -133,7 +136,8 @@ while IFS= read -r sha; do
     checked=$((checked + 1))
     subject="$(git log -1 --format='%h %s' "${sha}")"
     if [[ "$(git rev-list --parents -n1 "${sha}" | wc -w)" -gt 2 ]]; then
-        if git log -1 --format=%B "${sha}" | grep -qE 'merge request [^[:space:]]+![0-9]+'; then
+        if git log -1 --format=%B "${sha}" | grep -oE 'merge request [^[:space:]]+![0-9]+' \
+            | grep -xE "merge request ${PROJECT_PATH//./\\.}![0-9]+" >/dev/null; then
             continue
         fi
         reason="it is a merge commit that no merge request produced"
