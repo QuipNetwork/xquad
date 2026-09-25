@@ -6,7 +6,7 @@
         test-rust test-python check-parity check-docs-handwritten \
         check-crate-publish check-python-dists check-release \
         check-version-sites list-version-sites set-version \
-        check-branch-containment \
+        check-branch-containment check-main-direct-push \
         deps deps-miri deps-py deps-wasm \
         install-hooks \
         lint lint-clippy lint-doc lint-deny-rs lint-py check-uv-lock \
@@ -84,6 +84,9 @@ lint-python: fmt-check-py lint-py
 # 0 on every ref it does not judge, so it needs no job of its own and
 # stays runnable locally -- a `rules:`-gated job is neither.
 #
+# check-main-direct-push joins for the same reason: it judges only a
+# push to main and exits 0 everywhere else.
+#
 # check-version-sites is deliberately NOT here, although its branch
 # assertion is policy too. It runs through $(VERPY), which needs uv,
 # and verify:policy's image carries none. It also does not need to be:
@@ -95,7 +98,7 @@ lint-python: fmt-check-py lint-py
 # contributor gets the TOML check without running the rest of the
 # policy phase.
 lint-policy: fmt-check-toml lint-deny-rs render-changelog check-atomic-spec check-commit-messages \
-             check-release-notes check-branch-containment
+             check-release-notes check-branch-containment check-main-direct-push
 
 # Wraps scripts/check-atomic-spec-mr.sh, forwarding the optional positional
 # BASE/HEAD refs the way the script expects. Both are quoted so that
@@ -990,6 +993,14 @@ check-release-notes:
 # does in its before_script and a local clone usually has.
 check-branch-containment:
 	bash scripts/check-branch-containment.sh
+
+# Wraps scripts/check-main-direct-push.sh, which fails a push to main
+# that lands anything other than a merge request's merge commit or a
+# version-only bump (docs/guide/gitflow-protocol.md). Judges nothing off
+# main. To judge a range by hand:
+#   bash scripts/check-main-direct-push.sh v0.4.0..origin/main
+check-main-direct-push:
+	bash scripts/check-main-direct-push.sh
 
 # Generate the changelog / release notes for a tagged release.
 # Invoked from `release:notes` in .gitlab/ci/release.yml with

@@ -92,6 +92,7 @@ def run_guard(repo: Path, *args: str, **env: str) -> subprocess.CompletedProcess
         "HOME": str(repo),
         "CI_MERGE_REQUEST_DIFF_BASE_SHA": "",
         "CI_MERGE_REQUEST_SOURCE_BRANCH_SHA": "",
+        "CI_MERGE_REQUEST_SOURCE_BRANCH_NAME": "",
         "CI_COMMIT_BRANCH": "",
         "CI_COMMIT_BEFORE_SHA": "",
     }
@@ -394,3 +395,21 @@ def test_missing_origin_main_is_a_setup_error(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "could not derive BASE_REF" in result.stderr
+
+
+@pytest.mark.parametrize(("source", "code"), [("feature/qui-1", 1), ("release/v0.4.1", 0)])
+def test_merge_request_carrying_a_merge_commit(repo: Path, source: str, code: int) -> None:
+    """A feature branch that merged something in fails; a release branch may carry merges."""
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "switch", "-q", "-c", "other")
+    commit(repo, "feat: add the other thing")
+    git(repo, "switch", "-q", "-c", "feature", base)
+    commit(repo, "feat: add the feature")
+    git(repo, "merge", "--no-ff", "-q", "-m", "merge: branch 'other' into 'feature'", "other")
+    env = {
+        "CI_MERGE_REQUEST_DIFF_BASE_SHA": base,
+        "CI_MERGE_REQUEST_SOURCE_BRANCH_SHA": git(repo, "rev-parse", "HEAD"),
+        "CI_MERGE_REQUEST_SOURCE_BRANCH_NAME": source,
+    }
+    result = run_guard(repo, **env)
+    assert result.returncode == code, result.stderr

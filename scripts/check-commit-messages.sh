@@ -15,6 +15,17 @@
 # authored, and "merge" is deliberately not a Conventional Commits
 # type. See scripts/commit-grammar.sh's MERGE_SUBJECT_PATTERN.
 #
+# Except in a merge request pipeline, where a merge commit in the range
+# fails. A branch that carries one -- from syncing by merge instead of
+# rebase, or from a stacked merge request merged into its parent --
+# hands it to the line behind the merge's second parent, and feature
+# branches stay linear (docs/guide/gitflow-protocol.md, "Merge
+# commits"). A `release/*` source is exempt: a minor carries every merge
+# `dev` made, and a patch the merges of fixes landed on it. Only the CI
+# range is judged this way. A local run guesses its base from
+# origin/main, and a branch cut from `dev` would see `dev`'s own merges
+# there.
+#
 # Usage:
 #   scripts/check-commit-messages.sh [BASE_REF] [HEAD_REF]
 #
@@ -310,6 +321,12 @@ while IFS= read -r sha; do
     fi
 
     if is_merge_subject "${subject}"; then
+        if [[ "${BASE_SOURCE}" == "ci" && "${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME:-}" != release/* ]]; then
+            echo "FAIL ${short}: merge commit inside a merge request (${subject})" >&2
+            echo "  ${short}: rebase the branch onto its target instead of merging it in" >&2
+            failed=$((failed + 1))
+            continue
+        fi
         echo "skip ${short}: merge commit (${subject})"
         skipped=$((skipped + 1))
         continue

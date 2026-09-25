@@ -58,8 +58,9 @@ gets no Release page and publishes no documentation: those two jobs match
 ## After the tag
 
 - [ ] Reopen `main` at the next patch `-dev` version (`make set-version`),
-      **through a merge request** -- `main` is closed to direct pushes. Until
-      it merges, `release:validate` fails on `main`'s pipelines, which is the
+      by direct push -- recipe in `docs/guide/gitflow-protocol.md`. The commit
+      changes the version and nothing else, or `verify:policy` fails. Until
+      it lands, `release:validate` fails on `main`'s pipelines, which is the
       check that exists because this step has been skipped before
 - [ ] Back-merge `main` into `dev` -- recipe in `docs/guide/gitflow-protocol.md`.
       This one is a direct push, and after a minor it also carries `dev` to

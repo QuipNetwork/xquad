@@ -29,10 +29,11 @@ description -- routing, releases, betas and the back-merge -- and what
 follows is only the naming.
 
 - **`main`** -- the non-breaking line, at the next patch's `-dev`
-  version. Protected and closed to direct pushes: everything lands by
-  merge request, as a real merge commit with a GitLab-generated
-  `merge: branch '<source>' into 'main'` subject. Merges are not
-  squashed.
+  version. Protected: everything lands by merge request except the
+  version bump that reopens it after a release, which Maintainers push
+  directly and CI holds to a version-only change. A merge lands as a
+  real merge commit with a GitLab-generated `merge: branch '<source>'
+  into 'main'` subject. Merges are not squashed.
 - **`dev`** -- the breaking line, at the next minor's `-dev` version.
   Protected; Maintainers may push to it, for back-merges and version
   bumps only. It contains `main` at all times, and CI marks `dev` red
@@ -46,8 +47,7 @@ follows is only the naming.
   patch or from `dev` for a minor, carries the version bump, and merges
   into `main` unsquashed. `release:auto-tag` cuts the tag from the
   merge.
-- **`chore/<tag>`** -- repository maintenance belonging to no ticket,
-  such as reopening `main` at its next `-dev` version after a release.
+- **`chore/<tag>`** -- repository maintenance belonging to no ticket.
 
 ## The atomic spec-MR rule
 

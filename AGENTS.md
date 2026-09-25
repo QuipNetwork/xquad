@@ -128,7 +128,7 @@ Commits must be signed off: `git commit -s` (DCO requirement from `CONTRIBUTING.
 
 Two long-lived branches. [`docs/guide/gitflow-protocol.md`](docs/guide/gitflow-protocol.md) is normative for routing, releases, betas and the back-merge; do not restate it. Before 1.0:
 
-- **`main`** is the non-breaking line, at the next patch's `-dev` version. It is closed to direct pushes; everything lands by merge request.
+- **`main`** is the non-breaking line, at the next patch's `-dev` version. Everything lands by merge request, except the version bump that reopens it after a release: Maintainers push that directly, and `verify:policy` (`scripts/check-main-direct-push.sh`) fails any other direct push.
 - **`dev`** is the breaking line, at the next minor's `-dev` version. Maintainers push to it for back-merges and version bumps only. Anything authored goes through a merge request, because a direct push skips the title check and the atomic spec-MR rule.
 
 Route every change by one question: **does it break?** Before 1.0 the minor is the breaking bump, so "is this a fix?" is the wrong question -- a non-breaking feature goes to `main` and a breaking fix goes to `dev`. A breaking change branches from `dev`, targets `dev`, and carries `!` in its merge request title and commit subjects. Everything else branches from and targets `main`. There is no `hotfix/` branch before 1.0. Branch names stay `feature/qui-<id>` on either line; the target is set on the merge request, not in the name.
@@ -136,6 +136,8 @@ Route every change by one question: **does it break?** Before 1.0 the minor is t
 When opening a merge request, answer the **Compatibility** block in `.gitlab/merge_request_templates/default.md` -- GitLab auto-populates that template, and its answer decides the target branch, so it has to match the branch chosen on the form. Leaving it blank means an unrouted change. A non-breaking claim needs two or three lines naming what the change touched and why a consumer pinned to the current minor can take it without editing their code. Releases use `release.md` instead (`glab mr create --template release`).
 
 Nothing is squashed on merge. The one exception is post-1.0 `hotfix/*` into `main`.
+
+Feature branches stay linear: update one by rebasing onto its target, never by merging the target in, and merge stacked merge requests bottom-up rather than into each other. A merge commit inside a branch reaches the line with it; `verify:policy` fails the merge request. See "Merge commits" in the git protocol.
 
 ### Conventional Commits
 
@@ -417,7 +419,7 @@ Local `make preflight-rs` runs both targets unconditionally.
 **CI signals.** Two reds are expected, and each means a step of the release protocol is outstanding rather than that something is broken. Do not "fix" either by anything but the step it names:
 
 - **`dev` red from `check-branch-containment`** (in `verify:policy`): `main` has moved since the last back-merge. Every push pipeline on `dev` stays red until someone back-merges `main` into `dev`. Merge requests into `dev` are not judged by it, so work continues in parallel.
-- **`main` red from `check-version-sites`** (in `release:validate`): `main` carries a release version. This follows every release merge until the merge request reopening `main` at the next patch's `-dev` version lands.
+- **`main` red from `check-version-sites`** (in `release:validate`): `main` carries a release version. This follows every release merge until the direct push reopening `main` at the next patch's `-dev` version lands.
 
 A third is a gate, not a signal: a merge request from `release/*` fails `verify:policy` when the release branch does not contain `origin/main`. The fix is a back-merge of `main` into the release branch.
 
