@@ -30,7 +30,7 @@ follows is only the naming.
 
 - **`main`** -- the non-breaking line, at the next patch's `-dev`
   version. Protected: everything lands by merge request except the
-  version bump that reopens it after a release, which Maintainers push
+  version bump that reopens it after a release, which the code owners push
   directly and CI holds to a version-only change. A merge lands as a
   real merge commit with a GitLab-generated `merge: branch '<source>'
   into 'main'` subject. Merges are not squashed.

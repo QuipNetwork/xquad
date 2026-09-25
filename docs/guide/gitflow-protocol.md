@@ -330,7 +330,7 @@ who may write without a merge request.
 
 | Branch | Protected | Push | Merge | Why |
 | --- | --- | --- | --- | --- |
-| `main` | yes | Maintainers | Maintainers | The line consumers pin. Pushes are open for the reopening bump only, and CI enforces that. |
+| `main` | yes | Code owners | Maintainers | The line consumers pin. Pushes are open to the code owners for the reopening bump only, and CI enforces that. |
 | `dev` | yes | Maintainers | Maintainers | The back-merge is a push. Closing it would tax the one routine operation. |
 | `release/*` | yes | Maintainers | Maintainers | Protection alone is the point: a release candidate runs the full CI tier. |
 
@@ -346,7 +346,12 @@ the old and new versions are masked out. Anything else turns `main` red. The
 check detects and does not prevent: the commit is already on `main` when it
 runs, and the fix is a revert through a merge request.
 
-Opening pushes to Maintainers was a trade. A release costs one merge request
-fewer, and in exchange a stray `git push origin main` from any Maintainer's
-clone now lands, where it used to be rejected. The check turns that into a red
+*Code owners* means the users listed in
+[`.gitlab/CODEOWNERS`](../../.gitlab/CODEOWNERS), named one by one in the
+branch's push setting. GitLab does not link the two, so a change to either one
+is made by hand in the other.
+
+Opening pushes to the code owners was a trade. A release costs one merge
+request fewer, and in exchange a stray `git push origin main` from a code
+owner's clone now lands, where it used to be rejected. The check turns that into a red
 pipeline rather than a silent change.

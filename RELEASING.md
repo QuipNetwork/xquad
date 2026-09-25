@@ -121,10 +121,12 @@ Before cutting a tag:
    access token, `api` scope, masked). `write_repository` is the minimum
    needed to push tags; full `api` is simpler to configure. Used only by
    `release:auto-tag` to look up the merged MR and push the tag.
-3. **Settings → Repository → Protected branches** -- protect `main`,
-   `dev` and `release/*` (push and merge: Maintainers), force push off
-   on all three. `main` takes direct pushes for the reopening bump only,
-   which `scripts/check-main-direct-push.sh` enforces in CI. Protecting
+3. **Settings → Repository → Protected branches** -- protect `main`
+   (push: the code owners in `.gitlab/CODEOWNERS`, named one by one;
+   merge: Maintainers), `dev` and `release/*` (push and merge:
+   Maintainers), force push off on all three. `main` takes direct pushes
+   for the reopening bump only, which `scripts/check-main-direct-push.sh`
+   enforces in CI. Protecting
    `release/*` is what runs the full CI tier, hardware included, on a
    release candidate. The table and the reasoning are in
    [`docs/guide/gitflow-protocol.md`](docs/guide/gitflow-protocol.md).

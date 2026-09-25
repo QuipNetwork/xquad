@@ -18,7 +18,7 @@
 #
 # Direct-push guard for `main`.
 #
-# Maintainers can push to `main` so that reopening it after a release
+# The code owners can push to `main` so that reopening it after a release
 # (the `-dev` version bump) needs no merge request of its own. Branch
 # protection cannot say "version bumps only", so this guard says it
 # instead: every commit a push puts on `main`'s first-parent line must

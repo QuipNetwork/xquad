@@ -128,7 +128,7 @@ Commits must be signed off: `git commit -s` (DCO requirement from `CONTRIBUTING.
 
 Two long-lived branches. [`docs/guide/gitflow-protocol.md`](docs/guide/gitflow-protocol.md) is normative for routing, releases, betas and the back-merge; do not restate it. Before 1.0:
 
-- **`main`** is the non-breaking line, at the next patch's `-dev` version. Everything lands by merge request, except the version bump that reopens it after a release: Maintainers push that directly, and `verify:policy` (`scripts/check-main-direct-push.sh`) fails any other direct push.
+- **`main`** is the non-breaking line, at the next patch's `-dev` version. Everything lands by merge request, except the version bump that reopens it after a release: the code owners push that directly, and `verify:policy` (`scripts/check-main-direct-push.sh`) fails any other direct push.
 - **`dev`** is the breaking line, at the next minor's `-dev` version. Maintainers push to it for back-merges and version bumps only. Anything authored goes through a merge request, because a direct push skips the title check and the atomic spec-MR rule.
 
 Route every change by one question: **does it break?** Before 1.0 the minor is the breaking bump, so "is this a fix?" is the wrong question -- a non-breaking feature goes to `main` and a breaking fix goes to `dev`. A breaking change branches from `dev`, targets `dev`, and carries `!` in its merge request title and commit subjects. Everything else branches from and targets `main`. There is no `hotfix/` branch before 1.0. Branch names stay `feature/qui-<id>` on either line; the target is set on the merge request, not in the name.
