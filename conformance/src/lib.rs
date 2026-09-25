@@ -241,13 +241,14 @@ pub enum Expected {
 
 /// Raw shape of `expected.json` before the success/failure split is
 /// validated. Deserialising through this lets a vector that asserts both
-/// (or neither), or a success without its step count, fail as an authoring
-/// mistake rather than silently preferring one half or asserting less.
+/// (or neither), a success without its step count, or a fault with a field
+/// only a success is compared on, fail as an authoring mistake rather than
+/// silently preferring one half or asserting less.
 #[derive(Deserialize)]
 struct RawExpected {
     outputs: Option<Vec<Option<i64>>>,
     #[serde(default)]
-    final_stack: Vec<i64>,
+    final_stack: Option<Vec<i64>>,
     #[serde(default)]
     steps: Option<u64>,
     error: Option<Fault>,
@@ -275,7 +276,7 @@ impl<'de> Deserialize<'de> for Expected {
                 })?;
                 Ok(Self::Success {
                     outputs,
-                    final_stack: raw.final_stack,
+                    final_stack: raw.final_stack.unwrap_or_default(),
                     steps,
                 })
             }
@@ -283,6 +284,11 @@ impl<'de> Deserialize<'de> for Expected {
                 "expected.json asserts `steps` on a fault: the harness \
                  compares no step count for a faulting run, so the value \
                  would go unchecked; drop `steps` or `error`",
+            )),
+            (None, Some(_)) if raw.final_stack.is_some() => Err(D::Error::custom(
+                "expected.json asserts `final_stack` on a fault: the harness \
+                 compares no stack for a faulting run, so the value would go \
+                 unchecked; drop `final_stack` or `error`",
             )),
             (None, Some(error)) => Ok(Self::Failure { error }),
             (None, None) => Err(D::Error::custom(
@@ -891,6 +897,18 @@ mod tests {
             .expect_err("a fault vector cannot assert a step count");
         assert!(
             err.to_string().contains("steps"),
+            "error should name the stray field, got: {err}"
+        );
+    }
+
+    #[test]
+    fn expected_rejects_a_final_stack_on_an_error_vector() {
+        let err = serde_json::from_str::<Expected>(
+            r#"{"error": "DIVISION_BY_ZERO", "final_stack": [1]}"#,
+        )
+        .expect_err("a fault vector cannot assert a final stack");
+        assert!(
+            err.to_string().contains("final_stack"),
             "error should name the stray field, got: {err}"
         );
     }
