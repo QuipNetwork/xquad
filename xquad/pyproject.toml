@@ -8,7 +8,7 @@ description = "Umbrella meta-package for the XQuad toolchain — re-exports xqff
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "AGPL-3.0-or-later" }
-version = "0.4.1"
+version = "0.4.2.dev0"
 dependencies = [
     # Pinned exact, and bumped with the workspace version on every release.
     # The umbrella re-exports the peers by identity (`xquad.cp.Problem is
@@ -16,17 +16,17 @@ dependencies = [
     # package was never built against. Exact pins also make a partial
     # `release:pypi` upload fail resolution loudly instead of silently
     # resolving a sibling back to the previous release.
-    "xqffi==0.4.1",
-    "xqcp==0.4.1",
-    "xqsa==0.4.1",
-    "xqvm_py==0.4.1",
+    "xqffi==0.4.2.dev0",
+    "xqcp==0.4.2.dev0",
+    "xqsa==0.4.2.dev0",
+    "xqvm_py==0.4.2.dev0",
 ]
 
 [project.optional-dependencies]
-cuda  = [ "xqsa[cuda]==0.4.1" ]
-dwave = [ "xqsa[dwave]==0.4.1" ]
-metal = [ "xqsa[metal]==0.4.1" ]
-quip  = [ "xqsa[quip]==0.4.1" ]
+cuda  = [ "xqsa[cuda]==0.4.2.dev0" ]
+dwave = [ "xqsa[dwave]==0.4.2.dev0" ]
+metal = [ "xqsa[metal]==0.4.2.dev0" ]
+quip  = [ "xqsa[quip]==0.4.2.dev0" ]
 
 [tool.uv.sources]
 xqffi.workspace   = true

@@ -8,12 +8,12 @@ description = "High-level constraint programming DSL compiling to XQVM assembly.
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "AGPL-3.0-or-later" }
-version = "0.4.1"
+version = "0.4.2.dev0"
 dependencies = [
     # Pinned exact. The five published distributions share one workspace
     # version and are uploaded as a set, so a mixed-version install is never
     # a supported combination; see RELEASING.md for the bump touchpoints.
-    "xqvm_py==0.4.1",
+    "xqvm_py==0.4.2.dev0",
 ]
 
 [tool.uv.sources]

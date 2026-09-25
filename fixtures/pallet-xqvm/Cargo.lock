@@ -3951,7 +3951,7 @@ dependencies = [
 
 [[package]]
 name = "xqvm"
-version = "0.4.1"
+version = "0.4.2-dev"
 dependencies = [
  "crc32fast",
  "hashbrown 0.15.5",

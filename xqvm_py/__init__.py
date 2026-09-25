@@ -28,7 +28,7 @@ runtime); see the package README for the full status note.
 
 from __future__ import annotations
 
-__version__ = "0.4.1"
+__version__ = "0.4.2.dev0"
 
 from .errors import (
     ArithmeticOverflow,
