@@ -21,7 +21,7 @@ conformance/
 │   ├── arithmetic/<name>/
 │   │   ├── program.xqasm       canonical assembly source
 │   │   ├── inputs.json         {"calldata": [i64, ...], "output_slots": N}
-│   │   └── expected.json       {"outputs": [...], "final_stack": [...]} or {"error": FAULT}
+│   │   └── expected.json       {"outputs": [...], "final_stack": [...], "steps": N} or {"error": FAULT}
 │   ├── control-flow/<name>/
 │   ├── energy/<name>/
 │   ├── constraints/<name>/
@@ -98,8 +98,9 @@ to top); an empty stack is typical.
 the run, per `spec/xqvm/METERING.md`. It is the quantity the chain prices
 execution by, so a vector that pinned the result without the cost would
 let a metering change through unnoticed. A successful vector without
-`steps`, or a fault vector with one, is rejected as a vector-authoring
-mistake.
+`steps`, or a fault vector with `steps` or `final_stack`, is rejected as
+a vector-authoring mistake: the harness compares neither for a faulting
+run, so the value would go unchecked.
 
 A vector that expects the program to fault writes the fault's identity
 instead:
@@ -253,8 +254,8 @@ the build is broken. Concrete enforcement:
 - **Bytecode encoding** -- owned by the `xqasm` crate's own test suite
   (`xqasm/tests/integration.rs` plus assembler unit tests).
 - **Observable behaviour** -- [`check_vector`](src/lib.rs) asserts the
-  observed `{outputs, final_stack}`, or the observed fault identity,
-  matches `expected.json` for both runtimes.
+  observed `{outputs, final_stack, steps}`, or the observed fault
+  identity, matches `expected.json` for both runtimes.
 - **Coverage** -- [`coverage.rs`](src/coverage.rs) computes which opcodes
   the vectors cover, and CI prints the report on every pipeline as the
   last step of `make check-parity`. It does not require completeness,
