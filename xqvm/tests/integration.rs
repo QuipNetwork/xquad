@@ -1358,9 +1358,10 @@ fn idx_triu_checks_its_intermediate_product() {
 fn idx_triu_does_not_require_ordered_operands() {
     // The mnemonic's doc string claimed `(i <= j)` as a caller precondition
     // long after the handler started swapping the pair itself, in the opcode
-    // table, in `conformance/opcodes.yaml` and on two generated pages that
-    // ship with the crate. Neither ordering is a precondition, and negative
-    // operands are admissible: the consuming opcode bounds-checks the index.
+    // table, in `opcodes.yaml` (then under `conformance/`) and on two
+    // generated pages that ship with the crate. Neither ordering is a
+    // precondition, and negative operands are admissible: the consuming
+    // opcode bounds-checks the index.
     let ordered = run(|b| {
         b.emit_push(1).emit_push(3).emit_idx_triu().emit_halt();
     });

@@ -2,9 +2,9 @@
 
 Each directory under here is one small program, with its inputs and the
 result `spec/xqvm/` requires of it. The `vectors` test target
-([`../vector_suite/`](../vector_suite/)) runs every vector on the VM and
-compares the result, so `cargo test -p xqvm` checks the VM against the
-spec one vector at a time.
+(`xqvm/tests/vector_suite/` in the source tree) runs every vector on the
+VM and compares the result, so `cargo test -p xqvm` checks the VM against
+the spec one vector at a time.
 
 The vectors are data files rather than Rust tests so they stay reviewable
 as spec artefacts and replayable by other harnesses, such as the chain's
@@ -205,7 +205,7 @@ QUI-1481 must replace it before deleting the package.
   stack effect and each operand's name and encoded byte width.
 - **Observable behaviour** -- every vector's outputs, residual stack and
   step count, or its fault identity, against `expected.json`.
-- **Coverage** -- [`coverage.rs`](../vector_suite/coverage.rs) computes
+- **Coverage** -- `xqvm/tests/vector_suite/coverage.rs` computes
   which opcodes the vectors cover. It does not require completeness; it
   holds the current numbers as floors so coverage cannot regress
   unremarked, and CI prints the report on every pipeline.
