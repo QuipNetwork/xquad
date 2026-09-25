@@ -962,7 +962,9 @@ macro_rules! all_default_instructions {
 /// would make it accept programs that fault on every run). The VM pops
 /// before it resolves a register, so the underflow comes first even where
 /// the zeroed operands would fault later. Where the exact run completes,
-/// the stack it leaves is the push count.
+/// the stack it leaves is the push count. An opcode that pops nothing is
+/// run on an empty stack for the same push-count check: a push count that
+/// is too high would let the verifier accept a later pop that underflows.
 #[test]
 fn every_popping_opcode_needs_its_full_pop_count() {
     let with = |instr: Instruction, values: u8| {
@@ -973,12 +975,26 @@ fn every_popping_opcode_needs_its_full_pop_count() {
         Program::new(bytes(&instrs))
     };
     let mut pop_and_push = Vec::new();
+    let mut pushes_only = Vec::new();
     for instr in crate::opcodes!(all_default_instructions) {
         let crate::StackEffect::Fixed { pops, pushes } = instr.stack_effect() else {
             continue;
         };
-        // `checked_sub` also skips the opcodes that pop nothing.
+        // An opcode that pops nothing cannot underflow, but its push count
+        // still decides the depth the verifier assumes after it.
         let Some(one_short) = pops.checked_sub(1) else {
+            let mut vm = crate::Vm::new();
+            if vm.run(&with(instr, 0)).is_ok() {
+                assert_eq!(
+                    vm.stack().len(),
+                    usize::from(pushes),
+                    "{}: the VM left a stack the table's push count does not predict",
+                    instr.mnemonic()
+                );
+                if pushes > 0 {
+                    pushes_only.push(instr.mnemonic());
+                }
+            }
             continue;
         };
         if matches!(
@@ -1030,6 +1046,15 @@ fn every_popping_opcode_needs_its_full_pop_count() {
     // Every opcode that both pops and pushes went through the loop above;
     // spec/xqvm/VERIFIER.md's per-opcode table lists the same forty.
     assert_eq!(pop_and_push.len(), 40, "{pop_and_push:?}");
+    // Of the opcodes that pop nothing and push, only the PUSHn family runs
+    // to completion on zeroed operands; LOAD, VECLEN and ENERGY stop at an
+    // unset register. The list pins that the push check above ran at all.
+    assert_eq!(
+        pushes_only,
+        [
+            "PUSH1", "PUSH2", "PUSH3", "PUSH4", "PUSH5", "PUSH6", "PUSH7", "PUSH8"
+        ],
+    );
 }
 
 #[test]
