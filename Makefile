@@ -984,8 +984,9 @@ check-release-notes:
 	bash scripts/check-release-notes.sh
 
 # Wraps scripts/check-branch-containment.sh, which asserts the two-branch
-# protocol's one invariant: origin/main is contained in dev, and in every
-# release branch cut from it (docs/guide/gitflow-protocol.md).
+# protocol's one invariant: dev contains the highest release tag on
+# origin/main, and every release branch contains origin/main itself
+# (docs/guide/gitflow-protocol.md).
 #
 # Takes no arguments. The script reads the ref from the environment and
 # judges only dev and release/*, so a local run on any other branch is a
