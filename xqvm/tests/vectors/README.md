@@ -153,8 +153,8 @@ degrading to an "unknown" fault.
 ### Fault ordering (QUI-1178)
 
 `spec/xqvm/SPEC.md` fixes the order of work within one instruction: pops,
-then the allocation charge, then validation. An operand fault that the
-order raises ahead of a register read is consensus-visible, and these
+then the allocation charge, then validation. A fault that the order raises
+ahead of a register read or an index check is consensus-visible, and these
 vectors pin it:
 
 | Opcode(s) | Fault raised ahead of the register read | Pinned by |
@@ -164,9 +164,26 @@ vectors pin it:
 | `ATLEAST` | `IndexOutOfBounds` on `k`, unconditional | `constraints/atleast_k_range_before_model_type` |
 | `ATLEASTW` | `VecLengthMismatch`, unconditional | `constraints/atleastw_length_before_model_type` |
 | `EQUALITY` | `VecLengthMismatch`, unconditional -- the vec lengths are compared before the model register is discriminated, and the charge follows both vec reads | `constraints/equality_length_mismatch_beats_model_type` |
+| `SETLINE`, `ADDLINE`, `SETQUAD`, `ADDQUAD`, `EXCLUDE`, `IMPLIES`, `REDUCE` | `MemoryLimitExceeded` ahead of the index check, on a model register against an exhausted budget | `metering/<opcode>_charge_before_index_check`, one per opcode |
+| `ONEHOTR`, `ONEHOTC` | none -- a sample register is charged nothing, so the type check decides (QUI-1202) | `xqvm_py/tests/test_executor.py` alone (`test_onehot_does_not_charge_for_a_sample`); see below |
 
-`SETLINE`, `ADDLINE`, `SETQUAD`, `ADDQUAD`, `EXCLUDE`, `IMPLIES` and
-`REDUCE` share `VECPUSH`'s ordering and have no vector of their own yet.
+The seven coefficient-write rows used to be pinned by `xqvm_py`'s unit
+tests alone. Coefficient writes are charged only on a model register, so
+an int or vec register in their place is a `TypeMismatch` at any budget;
+the observable ordering is the charge against the index check, which is
+what their vectors pin.
+
+The `ONEHOTR`/`ONEHOTC` row has no vector because the spec does not yet
+say what it pins. Both VMs size the charge from a model-only peek, so a
+sample is charged nothing and the run reaches the type check. The
+charging table in `spec/xqvm/SPEC.md` charges ONEHOT "the expansion over
+the row's or column's variables" with no exception for a sample, and its
+error-precedence rule puts that charge ahead of type validation, which
+read literally gives `MemoryLimitExceeded` against a budget with no
+headroom. A vector written from the spec would contradict both VMs, and
+one written from the VMs would not be a spec vector. The spec has to
+decide first. Until it does, the `xqvm_py` test is the only pin and
+QUI-1481 must replace it before deleting the package.
 
 ## Authoring a new vector
 
