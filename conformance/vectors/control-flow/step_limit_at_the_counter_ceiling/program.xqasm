@@ -6,8 +6,8 @@
 ; exactly as under any other limit: every instruction pays BASE_STEPS and
 ; SETLINE pays COEFF_WRITE_STEPS on top, and the count it reports is the
 ; count it spent. No program can carry the counter past 2^64 - 1 in a test's
-; lifetime, so the refusal at the ceiling is pinned by crate tests on both
-; VMs rather than here.
+; lifetime, so the refusal at the ceiling is pinned by crate tests rather
+; than here.
 
 PUSH 2
 BQMX r0

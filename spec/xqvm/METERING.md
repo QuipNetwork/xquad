@@ -215,9 +215,9 @@ Runtime Limits table describes as an implementation-defined allocation
 budget). All arithmetic is integer and saturating: `n * (n - 1)`,
 `/ 2`, `n + pairs(n)`, and the final multiplication by `COEFF_WRITE_STEPS`
 each saturate at `u64::MAX` rather than wrapping, so an `n` large enough to
-overflow the pair count prices out to the maximum charge and is refused by
-the step budget at any limit (see [The Step Counter](#the-step-counter))
-rather than wrapping into an affordable number.
+overflow the pair count prices out to the maximum charge, which no step
+limit admits (see [The Step Counter](#the-step-counter)), rather than
+wrapping into an affordable number.
 
 This is a worst-case bound, not a measurement of the work the expansion
 actually does. Repeated indices in `indices` collide on the same sparse-map
