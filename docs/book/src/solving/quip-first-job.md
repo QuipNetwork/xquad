@@ -31,7 +31,7 @@ from xquad.cp import Domain, Problem, Types, xq_triu
 from xquad.vm import VM
 
 n = 4
-distances = [12, 30, 25, 18, 40, 22]  # upper triangle: 0-1, 0-2, 0-3, 1-2, 1-3, 2-3
+distances = [12, 30, 25, 18, 40, 22]  # xq_triu order: 0-1, 0-2, 1-2, 0-3, 1-3, 2-3
 
 problem = Problem("TSP")
 num_cities = problem.input("num_cities", type=Types.Int)
@@ -162,7 +162,7 @@ print(list(vm.outputs()[0]))
 ```
 
 - The decoded tour visits cities 1, 2, 3, 0 and returns to 1. Its
-  length is 18 + 22 + 25 + 12 = 77, the shortest of the three distinct
+  length is 25 + 22 + 18 + 12 = 77, the shortest of the three distinct
   tours on four cities.
 - `result.energy` is that length plus -800, the constant the eight
   one-hot penalties contribute at any valid assignment.
