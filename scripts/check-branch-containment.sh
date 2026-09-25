@@ -70,6 +70,18 @@
 # success would stay green if someone deleted `dev`. It is not reached
 # before `dev` exists because the scope test excludes every other ref.
 #
+# What `dev` is held to
+# ----------------------
+# `dev` is judged against the highest release tag on `main`, not against
+# `main`'s tip. The protocol back-merges after every tag, and `main`
+# takes non-breaking work every day in between; judged against the tip,
+# `dev` was red after almost every push and the signal meant nothing.
+# Against the tag, `dev` goes red when a release ships and green at its
+# back-merge. A release tag is three numeric fields and nothing else
+# (cliff.toml's tag_pattern), so a beta or rc never counts. `release/*`
+# is still judged against `main`'s tip: that is the gate, and a
+# candidate must carry everything `main` has.
+#
 # Usage:
 #   scripts/check-branch-containment.sh
 #
@@ -80,7 +92,7 @@
 
 set -euo pipefail
 
-BASE_REF="origin/main"
+MAIN_REF="origin/main"
 
 # --- Which ref is judged, and at which commit -------------------------------
 
@@ -111,10 +123,24 @@ esac
 
 # --- Setup ------------------------------------------------------------------
 
-if ! git rev-parse -q --verify "${BASE_REF}^{commit}" >/dev/null; then
-    echo "error: containment: ${BASE_REF} is not in this clone." >&2
+if ! git rev-parse -q --verify "${MAIN_REF}^{commit}" >/dev/null; then
+    echo "error: containment: ${MAIN_REF} is not in this clone." >&2
     echo "error: containment: fetch it (git fetch origin main) and run again." >&2
     exit 2
+fi
+
+BASE_REF="${MAIN_REF}"
+if [[ "${REF_NAME}" == "dev" ]]; then
+    # See "What `dev` is held to" above. No release tag is a setup
+    # error, not a pass: the guard must not go quiet because the clone
+    # was fetched without tags.
+    BASE_REF="$(git tag --merged "${MAIN_REF}" --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname \
+        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)"
+    if [[ -z "${BASE_REF}" ]]; then
+        echo "error: containment: no release tag is reachable from ${MAIN_REF}." >&2
+        echo "error: containment: fetch tags (git fetch --tags origin) and run again." >&2
+        exit 2
+    fi
 fi
 
 if ! git rev-parse -q --verify "${REF_SHA}^{commit}" >/dev/null; then

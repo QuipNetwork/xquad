@@ -25,9 +25,12 @@ from the branch that fell behind.
 [`scripts/check-branch-containment.sh`](../../scripts/check-branch-containment.sh)
 runs in `verify:policy` and judges two kinds of branch:
 
-- **`dev`, as a signal.** Every push to `dev` runs it. While a back-merge is
-  outstanding, `dev`'s pipelines carry a standing red until it lands. Merge
-  requests into `dev` are not judged, so work continues in parallel.
+- **`dev`, as a signal.** Every push to `dev` runs it, against the highest
+  release tag on `main` rather than `main`'s tip. The protocol back-merges
+  after every tag, not after every change to `main`, so `dev` goes red when a
+  release ships and stays red until its back-merge lands. Non-breaking work
+  merging into `main` between releases does not turn it red. Merge requests
+  into `dev` are not judged, so work continues in parallel.
 - **`release/*`, as a gate.** A merge request from a release branch is judged
   on the branch's own tip, so a candidate that does not contain `main` cannot
   merge -- which is the case that would ship a release missing everything

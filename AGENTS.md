@@ -92,7 +92,7 @@ make check-release-notes                    # regression guard: every release re
 # Versions and branches (docs/guide/gitflow-protocol.md is normative)
 make list-version-sites                     # every place a release version is written
 make set-version VERSION=0.4.1-dev          # write them all; then cargo check && uv lock
-make check-branch-containment               # origin/main contained in dev / release/* (no-op elsewhere)
+make check-branch-containment               # last release tag in dev, origin/main in release/* (no-op elsewhere)
 ```
 
 ## Shared Conventions
@@ -418,7 +418,7 @@ Local `make preflight-rs` runs both targets unconditionally.
 
 **CI signals.** Two reds are expected, and each means a step of the release protocol is outstanding rather than that something is broken. Do not "fix" either by anything but the step it names:
 
-- **`dev` red from `check-branch-containment`** (in `verify:policy`): `main` has moved since the last back-merge. Every push pipeline on `dev` stays red until someone back-merges `main` into `dev`. Merge requests into `dev` are not judged by it, so work continues in parallel.
+- **`dev` red from `check-branch-containment`** (in `verify:policy`): a release tag on `main` is not yet in `dev`. Every push pipeline on `dev` stays red until someone back-merges `main` into `dev`. Ordinary merges into `main` between releases do not trigger it. Merge requests into `dev` are not judged by it, so work continues in parallel.
 - **`main` red from `check-version-sites`** (in `release:validate`): `main` carries a release version. This follows every release merge until the direct push reopening `main` at the next patch's `-dev` version lands.
 
 A third is a gate, not a signal: a merge request from `release/*` fails `verify:policy` when the release branch does not contain `origin/main`. The fix is a back-merge of `main` into the release branch.
