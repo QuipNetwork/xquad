@@ -175,6 +175,52 @@ def test_adding_back_to_zero_removes_the_term() -> None:
     assert model.quadratic_items() == []
 
 
+# Every accessor, with the indices it takes after `self`.
+ACCESSORS = [
+    ("set_linear", 1),
+    ("get_linear", 1),
+    ("add_linear", 1),
+    ("set_quad", 2),
+    ("get_quad", 2),
+    ("add_quad", 2),
+]
+
+
+def _call(model: XqmxModel, name: str, indices: list[int]) -> object:
+    extra = [] if name.startswith("get_") else [1]
+    return getattr(model, name)(*indices, *extra)
+
+
+@pytest.mark.parametrize("bad", [4, 99, -1])
+@pytest.mark.parametrize(("name", "arity"), ACCESSORS, ids=[case[0] for case in ACCESSORS])
+def test_an_index_outside_the_model_raises_index_out_of_bounds(name: str, arity: int, bad: int) -> None:
+    # The quadratic accessors check both indices, so put the bad one second.
+    model = XqmxModel.binary(4)
+    indices = [0, bad] if arity == 2 else [bad]
+    with pytest.raises(ffi.IndexOutOfBounds) as excinfo:
+        _call(model, name, indices)
+    assert str(excinfo.value) == f"index {bad} out of bounds (len 4)"
+    assert excinfo.value.offset is None
+    assert model.linear_items() == []
+    assert model.quadratic_items() == []
+
+
+@pytest.mark.parametrize(("name", "arity"), ACCESSORS, ids=[case[0] for case in ACCESSORS])
+def test_the_last_variable_is_in_bounds(name: str, arity: int) -> None:
+    _call(XqmxModel.binary(4), name, [3] * arity)
+
+
+def test_host_and_vm_agree_on_the_out_of_bounds_fault() -> None:
+    # `GETLINE` on a four-variable model reads index 4 and raises the same
+    # fault the host accessor does.
+    vm = ffi.Vm()
+    vm.set_calldata([XqmxModel.binary(4)])
+    with pytest.raises(ffi.IndexOutOfBounds):
+        vm.run(assemble_source("PUSH 0\nINPUT r0\nPUSH 4\nGETLINE r0\nHALT"))
+    with pytest.raises(ffi.IndexOutOfBounds):
+        XqmxModel.binary(4).get_linear(4)
+
+
 def test_overflowing_add_raises_and_leaves_the_model_unchanged() -> None:
     model = XqmxModel.binary(2)
     model.set_linear(0, I64_MAX)

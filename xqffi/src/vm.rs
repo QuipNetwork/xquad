@@ -186,37 +186,59 @@ impl PyXqmxModel {
         self.inner.cols
     }
 
-    fn set_linear(&mut self, i: usize, value: i64) {
+    /// Set the linear coefficient of variable `i`.
+    ///
+    /// Raises `IndexOutOfBounds` unless `0 <= i < size`, as `SETLINE` does.
+    fn set_linear(&mut self, i: i64, value: i64) -> PyResult<()> {
+        let i = self.variable(i)?;
         self.inner.set_linear(i, value);
+        Ok(())
     }
 
-    fn get_linear(&self, i: usize) -> i64 {
-        self.inner.get_linear(i)
+    /// The linear coefficient of variable `i`.
+    ///
+    /// Raises `IndexOutOfBounds` unless `0 <= i < size`, as `GETLINE` does.
+    fn get_linear(&self, i: i64) -> PyResult<i64> {
+        Ok(self.inner.get_linear(self.variable(i)?))
     }
 
     /// Add `delta` to the linear coefficient of variable `i`.
     ///
-    /// Raises `ArithmeticOverflow` and leaves the model unchanged when the
-    /// result leaves the signed 64-bit range.
-    fn add_linear(&mut self, i: usize, delta: i64) -> PyResult<()> {
+    /// Raises `IndexOutOfBounds` unless `0 <= i < size`, and
+    /// `ArithmeticOverflow` when the result leaves the signed 64-bit range;
+    /// either way the model is left unchanged.
+    fn add_linear(&mut self, i: i64, delta: i64) -> PyResult<()> {
+        let i = self.variable(i)?;
         self.inner
             .add_linear(i, delta)
             .map_err(|e| fault::vm_error(&e))
     }
 
-    fn set_quad(&mut self, i: usize, j: usize, value: i64) {
+    /// Set the quadratic coefficient of the pair `(i, j)`.
+    ///
+    /// Raises `IndexOutOfBounds` unless both indices lie in `[0, size)`, as
+    /// `SETQUAD` does.
+    fn set_quad(&mut self, i: i64, j: i64, value: i64) -> PyResult<()> {
+        let (i, j) = (self.variable(i)?, self.variable(j)?);
         self.inner.set_quad(i, j, value);
+        Ok(())
     }
 
-    fn get_quad(&self, i: usize, j: usize) -> i64 {
-        self.inner.get_quad(i, j)
+    /// The quadratic coefficient of the pair `(i, j)`.
+    ///
+    /// Raises `IndexOutOfBounds` unless both indices lie in `[0, size)`, as
+    /// `GETQUAD` does.
+    fn get_quad(&self, i: i64, j: i64) -> PyResult<i64> {
+        Ok(self.inner.get_quad(self.variable(i)?, self.variable(j)?))
     }
 
     /// Add `delta` to the quadratic coefficient of the pair `(i, j)`.
     ///
-    /// Raises `ArithmeticOverflow` and leaves the model unchanged when the
-    /// result leaves the signed 64-bit range.
-    fn add_quad(&mut self, i: usize, j: usize, delta: i64) -> PyResult<()> {
+    /// Raises `IndexOutOfBounds` unless both indices lie in `[0, size)`, and
+    /// `ArithmeticOverflow` when the result leaves the signed 64-bit range;
+    /// either way the model is left unchanged.
+    fn add_quad(&mut self, i: i64, j: i64, delta: i64) -> PyResult<()> {
+        let (i, j) = (self.variable(i)?, self.variable(j)?);
         self.inner
             .add_quad(i, j, delta)
             .map_err(|e| fault::vm_error(&e))
@@ -257,6 +279,18 @@ impl PyXqmxModel {
 }
 
 impl PyXqmxModel {
+    /// `i` as a variable index of this model, or `IndexOutOfBounds`.
+    ///
+    /// The underlying model stores coefficients sparsely and accepts any
+    /// index, so the bound is checked here, at the host boundary, the way
+    /// the coefficient opcodes check it inside the VM.
+    fn variable(&self, i: i64) -> PyResult<usize> {
+        usize::try_from(i)
+            .ok()
+            .filter(|&index| index < self.inner.size)
+            .ok_or_else(|| fault::index_out_of_bounds(i, self.inner.size))
+    }
+
     fn build(domain: Domain, size: usize, rows: usize, cols: usize) -> Self {
         let mut inner = XqmxModel::new(domain, size);
         inner.rows = rows;

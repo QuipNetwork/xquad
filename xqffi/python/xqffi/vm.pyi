@@ -126,15 +126,25 @@ class XqmxModel:
     def rows(self) -> int: ...
     @property
     def cols(self) -> int: ...
-    def set_linear(self, i: int, value: int) -> None: ...
-    def get_linear(self, i: int) -> int: ...
-    def add_linear(self, i: int, delta: int) -> None:
-        """Raises `ArithmeticOverflow`, leaving the model unchanged, on overflow."""
+    def set_linear(self, i: int, value: int) -> None:
+        """Raises `IndexOutOfBounds` unless `0 <= i < size`."""
 
-    def set_quad(self, i: int, j: int, value: int) -> None: ...
-    def get_quad(self, i: int, j: int) -> int: ...
+    def get_linear(self, i: int) -> int:
+        """Raises `IndexOutOfBounds` unless `0 <= i < size`."""
+
+    def add_linear(self, i: int, delta: int) -> None:
+        """Raises `IndexOutOfBounds` unless `0 <= i < size`, and
+        `ArithmeticOverflow` on overflow; either leaves the model unchanged."""
+
+    def set_quad(self, i: int, j: int, value: int) -> None:
+        """Raises `IndexOutOfBounds` unless both indices lie in `[0, size)`."""
+
+    def get_quad(self, i: int, j: int) -> int:
+        """Raises `IndexOutOfBounds` unless both indices lie in `[0, size)`."""
+
     def add_quad(self, i: int, j: int, delta: int) -> None:
-        """Raises `ArithmeticOverflow`, leaving the model unchanged, on overflow."""
+        """Raises `IndexOutOfBounds` unless both indices lie in `[0, size)`, and
+        `ArithmeticOverflow` on overflow; either leaves the model unchanged."""
 
     def linear_items(self) -> list[tuple[int, int]]:
         """The nonzero linear terms as `(index, coefficient)`, by index."""

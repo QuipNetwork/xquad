@@ -124,6 +124,19 @@ pub(crate) fn vm_error(error: &xqvm::Error) -> PyErr {
     with_offset(err, error.byte_pos())
 }
 
+/// `IndexOutOfBounds` for a host call that addressed variable `index` of a
+/// model with `len` variables.
+///
+/// The VM raises the same fault for `GETLINE`, `SETLINE` and the other
+/// coefficient opcodes; a host call has no instruction, so `offset` is
+/// `None`.
+pub(crate) fn index_out_of_bounds(index: i64, len: usize) -> PyErr {
+    with_offset(
+        IndexOutOfBounds::new_err(format!("index {index} out of bounds (len {len})")),
+        None,
+    )
+}
+
 /// Set the `offset` attribute every `XqvmError` carries.
 ///
 /// A failure to set it is returned in place of `err`, so a fault never
