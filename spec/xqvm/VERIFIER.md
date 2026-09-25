@@ -206,6 +206,11 @@ count: `PUSH 1 / SWAP / HALT`, `COPY / HALT` and `PUSH 1 / PUSH 2 / IDXGRID
 depth unchanged, `COPY` raises it, and the running net depth of the third
 never goes negative.
 
+An underflow stands once it has happened. A later `SCLR` resets the depth
+for the instructions after it but does not clear an underflow before it,
+because at run time that instruction has already faulted: `SCLR / POP /
+SCLR / HALT` and `SCLR / PUSH 1 / SWAP / SCLR / HALT` are rejected.
+
 The pop and push counts are the `Pops` and `Pushes` columns of the table
 under [Per-Opcode Stack Effects](#per-opcode-stack-effects).
 

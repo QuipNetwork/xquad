@@ -303,8 +303,10 @@ fn compute_block_effect(
                 if !fixed && depth < 0 {
                     min_input = min_input.max(depth.unsigned_abs() as usize);
                 }
+                // `static_underflow` is deliberately left set: an underflow
+                // after an earlier SCLR has already faulted by the time this
+                // one runs, so resetting the depth cannot undo it.
                 fixed = true;
-                static_underflow = false;
                 depth = 0;
             }
             // The pops are checked before the pushes are applied: an

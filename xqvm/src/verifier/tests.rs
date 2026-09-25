@@ -895,6 +895,33 @@ fn stack_effect_underflow_after_sclr_counts_pops() {
 }
 
 #[test]
+fn a_second_sclr_does_not_erase_an_underflow_after_the_first() {
+    // Both programs fault at run time on the instruction between the two
+    // SCLRs; the second SCLR resets the depth but not that fault.
+    let programs: [&[Instruction]; 2] = [
+        &[
+            Instruction::Sclr {},
+            Instruction::Push1 { val: [1] },
+            Instruction::Swap {},
+            Instruction::Sclr {},
+            Instruction::Halt {},
+        ],
+        &[
+            Instruction::Sclr {},
+            Instruction::Pop {},
+            Instruction::Sclr {},
+            Instruction::Halt {},
+        ],
+    ];
+    for program in programs {
+        let err = StackDepthPhase
+            .run(&Program::new(bytes(program)))
+            .unwrap_err();
+        assert_eq!(err.variant_name(), "StackUnderflow", "{program:?}");
+    }
+}
+
+#[test]
 fn stack_effect_underflow_on_a_path_through_a_join() {
     // Both arms leave depth 1 at the join, where SWAP needs 2.
     let mut b = InstructionBuilder::new();

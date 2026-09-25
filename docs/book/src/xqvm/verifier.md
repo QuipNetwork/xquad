@@ -160,7 +160,9 @@ Checks run in this order:
    depth unchanged.
 
 `SCLR` resets the abstract depth unconditionally to zero, which the analysis
-treats as a reset rather than a delta. If the entry depth was `N > 0` and the
+treats as a reset rather than a delta. A reset does not undo an underflow
+before it: `SCLR / POP / SCLR / HALT` is rejected, because the `POP` faults
+before the second `SCLR` runs. If the entry depth was `N > 0` and the
 exit depth is `0`, that reset is itself the imbalance: inside a loop it is
 reported directly as `LoopStackImbalance` by check 1, ahead of everything
 else in that loop. Outside a loop, the same reset is only a problem if it
