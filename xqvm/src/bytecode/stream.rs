@@ -344,8 +344,10 @@ impl Iterator for InstructionStream<'_> {
 
 /// Map a [`codec::DecodeError`] at `offset` to the stream's [`Error`].
 ///
-/// `byte` is the opcode byte at `offset`. Shared with the verifier's scan so
-/// a decode failure is reported identically on both paths.
+/// `byte` is the opcode byte at `offset`. Shared with [`Cursor`] so a decode
+/// failure is reported identically by both readers.
+///
+/// [`Cursor`]: super::Cursor
 pub(crate) fn map_decode_error(err: codec::DecodeError, offset: usize, byte: u8) -> Error {
     match err {
         codec::DecodeError::UnknownOpcode { byte } => Error::UnknownOpcode { offset, byte },

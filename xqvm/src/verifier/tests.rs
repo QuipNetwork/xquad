@@ -979,9 +979,8 @@ fn stack_effect_on_all_variants_does_not_panic() {
 
 // --- scan ---
 
-/// The walk `scan` made over an [`InstructionStream`] before it called the
-/// codec directly, kept verbatim as the oracle for
-/// `scan_matches_the_stream_walk`.
+/// `scan` as a walk over an [`InstructionStream`], kept verbatim as the
+/// oracle for `scan_matches_the_stream_walk`.
 fn scan_via_stream(code: &[u8]) -> (JumpTable, (u8, u8), Option<VerifierError>) {
     let mut targets: Vec<usize> = Vec::new();
     let mut loop_offsets: Vec<usize> = Vec::new();
