@@ -29,7 +29,7 @@ from typing import Any
 
 from dwave.samplers import SimulatedAnnealingSampler
 
-from xqvm_py.xqmx import XQMX
+from xqffi.vm import XqmxModel
 
 from .solver import Solver, SolverResult
 
@@ -51,7 +51,7 @@ class SolverDWaveCPU(Solver):
         self.beta_range = beta_range
         self.seed = seed
 
-    def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
+    def solve(self, model: XqmxModel, **kwargs: Any) -> SolverResult:
         """Solve using simulated annealing via dwave-samplers."""
         self._validate_model(model)
 

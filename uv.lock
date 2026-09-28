@@ -1588,7 +1588,7 @@ version = "0.5.0.dev0"
 source = { editable = "xqsa" }
 dependencies = [
     { name = "dwave-samplers" },
-    { name = "xqvm-py" },
+    { name = "xqffi" },
 ]
 
 [package.optional-dependencies]
@@ -1620,7 +1620,7 @@ requires-dist = [
     { name = "pyobjc-framework-metal", marker = "sys_platform == 'darwin' and extra == 'metal'", specifier = ">=11.0" },
     { name = "quip-signer", marker = "extra == 'quip'", specifier = ">=0.3.0,<0.4" },
     { name = "substrate-interface", marker = "extra == 'quip'", specifier = ">=1.7.4,<2" },
-    { name = "xqvm-py", editable = "xqvm_py" },
+    { name = "xqffi", editable = "xqffi" },
 ]
 provides-extras = ["cuda", "dwave", "metal", "quip"]
 

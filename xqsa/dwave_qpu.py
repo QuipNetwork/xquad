@@ -36,7 +36,7 @@ import os
 import time
 from typing import Any
 
-from xqvm_py.xqmx import XQMX
+from xqffi.vm import XqmxModel
 
 from .solver import Solver, SolverResult
 
@@ -54,11 +54,11 @@ class SolverDWaveQPU(Solver):
     os.environ["DWAVE_API_TOKEN"] = "your-leap-token"
 
     from xqsa import SolverDWaveQPU
-    from xqvm_py.xqmx import XQMX
+    from xquad.types import XqmxModel
 
-    model = XQMX.binary_model(4)
-    model.set_linear(0, -1.0)
-    model.set_quadratic(0, 1, 2.0)
+    model = XqmxModel.binary(4)
+    model.set_linear(0, -1)
+    model.set_quad(0, 1, 2)
 
     solver = SolverDWaveQPU()
     result = solver.solve(model)
@@ -105,7 +105,7 @@ class SolverDWaveQPU(Solver):
         self._sampler = _dwave_system.EmbeddingComposite(raw)
         self._solver_name: str = raw.solver.id
 
-    def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
+    def solve(self, model: XqmxModel, **kwargs: Any) -> SolverResult:
         """Solve using D-Wave Advantage QPU via EmbeddingComposite.
 
         Raises:

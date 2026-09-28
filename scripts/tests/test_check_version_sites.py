@@ -149,7 +149,7 @@ def write_tree(root: Path, cargo: str = CARGO_DEV, pep: str = PEP_DEV) -> Path:
     write(
         "xqsa/pyproject.toml",
         f'[project]\nname = "xqsa"\nversion = "{pep}"\n'
-        f'dependencies = [\n    "xqvm_py=={pep}",\n    "dwave-samplers>=1.0",\n]\n'
+        f'dependencies = [\n    "xqffi=={pep}",\n    "dwave-samplers>=1.0",\n]\n'
         "\n[project.optional-dependencies]\n"
         'quip = [ "substrate-interface>=1.7.4,<2", "quip-signer>=0.2.2" ]\n',
     )
@@ -403,7 +403,7 @@ def test_in_tree_dependency_caches_are_not_swept(tree: Path, cache_dir: str, man
 
 def test_new_peer_pin_must_be_declared(tree: Path) -> None:
     """A pin on a workspace distribution is a version site by definition."""
-    patch(tree, "xqsa/pyproject.toml", f'"xqvm_py=={PEP_DEV}",', f'"xqvm_py=={PEP_DEV}",\n    "xqcp=={PEP_DEV}",')
+    patch(tree, "xqsa/pyproject.toml", f'"xqffi=={PEP_DEV}",', f'"xqffi=={PEP_DEV}",\n    "xqcp=={PEP_DEV}",')
     result = run_guard(tree)
     assert result.returncode == 2
     assert "is not declared in SITES" in result.stderr

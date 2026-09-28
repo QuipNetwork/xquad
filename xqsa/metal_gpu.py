@@ -50,7 +50,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from xqvm_py.xqmx import XQMX, XQMXDomain
+from xqffi.vm import Domain, XqmxModel
 
 from .solver import Solver, SolverResult
 
@@ -280,11 +280,11 @@ class SolverMetalGPU(Solver):
 
     ```python
     from xqsa import SolverMetalGPU
-    from xqvm_py.xqmx import XQMX
+    from xquad.types import XqmxModel
 
-    model = XQMX.binary_model(4)
-    model.set_linear(0, -1.0)
-    model.set_quadratic(0, 1, 2.0)
+    model = XqmxModel.binary(4)
+    model.set_linear(0, -1)
+    model.set_quad(0, 1, 2)
 
     solver = SolverMetalGPU(strategy="sa")
     result = solver.solve(model)
@@ -360,7 +360,7 @@ class SolverMetalGPU(Solver):
 
     # -- public API -------------------------------------------------------
 
-    def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
+    def solve(self, model: XqmxModel, **kwargs: Any) -> SolverResult:
         """Solve using parallel-replica SA or Gibbs sampling on the GPU.
 
         Raises:
@@ -404,7 +404,7 @@ class SolverMetalGPU(Solver):
         beta_schedule = np.repeat(betas, num_sweeps_per_beta)
 
         base_seed = self._resolve_base_seed(seed)
-        is_spin = model.domain == XQMXDomain.SPIN
+        is_spin = model.domain == Domain.SPIN
         rng = np.random.default_rng(seed)
         samples = self._init_samples(rng, num_reads, model.size, is_spin)
 
@@ -442,22 +442,22 @@ class SolverMetalGPU(Solver):
 
     # -- model conversion / schedule --------------------------------------
 
-    def _to_dense_arrays(self, model: XQMX) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+    def _to_dense_arrays(self, model: XqmxModel) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
         """Convert a sparse XQMX model to dense float32 arrays.
 
         Returns:
             (h, J) where h is shape (n,) and J is a symmetric (n, n) matrix,
-            both float32. XQMX coefficients are float64; downcasting to
+            both float32. XQMX coefficients are 64-bit integers; downcasting to
             float32 trades a little precision for Metal throughput.
         """
         n = model.size
         h_np = np.zeros(n, dtype=np.float32)
         j_np = np.zeros((n, n), dtype=np.float32)
 
-        for idx, coeff in model.linear.items():
+        for idx, coeff in model.linear_items():
             h_np[idx] = coeff
 
-        for (i, j), coeff in model.quadratic.items():
+        for (i, j), coeff in model.quadratic_items():
             j_np[i, j] = coeff
             j_np[j, i] = coeff
 
@@ -501,7 +501,7 @@ class SolverMetalGPU(Solver):
         return schedule.astype(np.float32)
 
     def _compute_graph_coloring(
-        self, model: XQMX
+        self, model: XqmxModel
     ) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.int32], npt.NDArray[np.int32], int]:
         """Greedy graph colouring of the XQMX coupling graph.
 
@@ -512,7 +512,7 @@ class SolverMetalGPU(Solver):
         """
         n = model.size
         adjacency: list[set[int]] = [set() for _ in range(n)]
-        for i, j in model.quadratic:
+        for (i, j), _ in model.quadratic_items():
             adjacency[i].add(j)
             adjacency[j].add(i)
 
@@ -604,7 +604,7 @@ class SolverMetalGPU(Solver):
 
     def _run_sa(
         self,
-        model: XQMX,
+        model: XqmxModel,
         h: npt.NDArray[np.float32],
         j_matrix: npt.NDArray[np.float32],
         beta_schedule: npt.NDArray[np.float32],
@@ -644,7 +644,7 @@ class SolverMetalGPU(Solver):
 
     def _run_gibbs(
         self,
-        model: XQMX,
+        model: XqmxModel,
         h: npt.NDArray[np.float32],
         j_matrix: npt.NDArray[np.float32],
         beta_schedule: npt.NDArray[np.float32],

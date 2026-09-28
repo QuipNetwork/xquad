@@ -350,7 +350,7 @@ SITES: tuple[Site, ...] = (
     # Exact peer pins. The five distributions share one workspace version and
     # are uploaded as a set, so a mixed-version install is never supported.
     Site("xqcp/pyproject.toml", Eco.PYTHON, Role.PEER_PIN, dist="xqvm_py", table=("project", "dependencies")),
-    Site("xqsa/pyproject.toml", Eco.PYTHON, Role.PEER_PIN, dist="xqvm_py", table=("project", "dependencies")),
+    Site("xqsa/pyproject.toml", Eco.PYTHON, Role.PEER_PIN, dist="xqffi", table=("project", "dependencies")),
     Site("xqvm_py/pyproject.toml", Eco.PYTHON, Role.PEER_PIN, dist="xqffi", table=("project", "dependencies")),
     *(
         Site("xquad/pyproject.toml", Eco.PYTHON, Role.PEER_PIN, dist=dist, table=("project", "dependencies"))
