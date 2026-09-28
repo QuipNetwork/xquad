@@ -25,11 +25,11 @@ import os
 os.environ["DWAVE_API_TOKEN"] = "your-leap-token"
 
 from xqsa import SolverDWaveQPU
-from xqvm_py.xqmx import XQMX
+from xquad.types import XqmxModel
 
-model = XQMX.binary_model(4)
+model = XqmxModel.binary(4)
 model.set_linear(0, -1)
-model.set_quadratic(0, 1, 2)
+model.set_quad(0, 1, 2)
 
 solver = SolverDWaveQPU()              # auto-selects a Pegasus-topology Advantage system
 result = solver.solve(model)

@@ -19,11 +19,11 @@ It ships in the base package -- `pip install xqsa` is enough.
 
 ```python
 from xqsa import SolverDWaveCPU
-from xqvm_py.xqmx import XQMX
+from xquad.types import XqmxModel
 
-model = XQMX.binary_model(size=4)
+model = XqmxModel.binary(size=4)
 model.set_linear(0, -1)
-model.set_quadratic(0, 1, 2)
+model.set_quad(0, 1, 2)
 
 solver = SolverDWaveCPU(seed=42)
 result = solver.solve(model)
@@ -60,11 +60,11 @@ pip install xqsa[metal]    # Apple Silicon Mac with a Metal device
 
 ```python
 from xqsa import SolverMetalGPU
-from xqvm_py.xqmx import XQMX
+from xquad.types import XqmxModel
 
-model = XQMX.binary_model(size=4)
+model = XqmxModel.binary(size=4)
 model.set_linear(0, -1)
-model.set_quadratic(0, 1, 2)
+model.set_quad(0, 1, 2)
 
 solver = SolverMetalGPU(strategy="sa", num_reads=200, num_sweeps=2000, seed=42)
 result = solver.solve(model)

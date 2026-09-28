@@ -36,7 +36,7 @@ Decoder (.xqasm)
 Output vectors
 ```
 
-The solver receives an XQMX in MODEL mode and returns an XQMX in SAMPLE mode. The verifier independently validates the sample and recomputes energy via the XQVM `ENERGY` opcode. The decoder extracts human-readable output from valid samples.
+The solver receives an `XqmxModel` and returns an `XqmxSample` (both `xqffi.vm` types). The verifier independently validates the sample and recomputes energy via the XQVM `ENERGY` opcode. The decoder extracts human-readable output from valid samples.
 
 ## Plugin Architecture
 

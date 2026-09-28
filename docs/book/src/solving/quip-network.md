@@ -293,7 +293,7 @@ from an observed job, see [Your First Quip Job](quip-first-job.md#what-the-figur
 ## Metadata
 
 `SolverResult.metadata` for `quip` carries six keys, populated from the
-winning submission (`xqsa/quip.py:807-816`):
+winning submission (`xqsa/quip.py:1143-1152`):
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -307,7 +307,7 @@ winning submission (`xqsa/quip.py:807-816`):
 `best_energy_milli` is milli-scale (see
 [Coefficient Encoding](#coefficient-encoding)) and is not directly
 comparable to `result.energy`, the authoritative natural-scale integer
-`_recompute_energy()` computes (`quip.py:795`); diffing the two without
+`_recompute_energy()` computes (`quip.py:1131`); diffing the two without
 converting scale first will make a correct result look wrong.
 
 `metadata["solver"]` here names the miner that solved the job, not a
@@ -330,7 +330,7 @@ network-dependent lifecycle failures:
 | Exception | Raised when |
 |---|---|
 | `QuipError` | Base class for every error below |
-| `EncodingError` | The model is not `MODEL`-mode, its domain is unsupported, or both its `linear` and `quadratic` dicts are empty. Also covers a coefficient that fails milli-scale conversion (see [Coefficient Encoding](#coefficient-encoding)), and a native order over the mempool's `MaxNodes` or `MaxEdges` |
+| `EncodingError` | The model is not an `XqmxModel`, its domain is unsupported, or it has no nonzero linear or quadratic term. Also covers a coefficient that fails milli-scale conversion (see [Coefficient Encoding](#coefficient-encoding)), and a native order over the mempool's `MaxNodes` or `MaxEdges` |
 | `PlacementError` | The model's coupling graph is not a subgraph of the target topology. Raised in default mode only; see [Native topology mode](#native-topology-mode) |
 | `QuipSigningError` | Extrinsic assembly, keystore handling, or submission fails |
 | `QuipConnectionError` | The node is unreachable, or a configured Ising spec is not registered on-chain |
@@ -342,15 +342,12 @@ network-dependent lifecycle failures:
 | `QuipTimeoutError` | An order does not reach finality before the configured timeout; carries `order_id` so the caller can recover the result later with `query()` |
 | `QuipJobFailedError` | A final order has no usable solution; carries `order_id` |
 
-The `EncodingError` emptiness check tests the dicts themselves, not the
-values inside them (`quip_codec.py:643-644`) -- but `XQMX.set_linear()`
-/ `set_quadratic()` pop a key the moment its value reaches `0`
-(`xqvm_py/xqmx.py:175-226`), so for any model built through the normal
-API, "has no terms" and "carries only zero terms" are the same
-condition in practice. A model constructed directly as a dataclass,
-bypassing those setters, can hold explicit zero entries that leave the
-dicts non-empty; that model passes the `EncodingError` check and
-submits all-zero coefficient arrays.
+The `EncodingError` emptiness check tests whether `linear_items()` and
+`quadratic_items()` are both empty (`quip_codec.py:685`). Both list
+nonzero terms only -- an `XqmxModel` drops a term the moment its
+coefficient returns to `0` -- so "has no terms" and "carries only zero
+terms" are the same condition, and an all-zero model never reaches the
+chain.
 
 `EncodingError` and `PlacementError` can be raised entirely locally,
 before anything touches the network -- they come from
