@@ -2913,11 +2913,12 @@ fn a_host_supplied_grid_wider_than_the_model_is_rejected_before_it_is_written() 
     //
     // `RESIZE` bounds `rows * cols <= size`, so no bytecode can build this
     // model, and `xqffi` refuses to (QUI-1164); a Rust embedder installing
-    // one directly still can. ONEHOTR then *writes*, and `XqmxModel::add_linear`/`add_quad` grow a sparse map with
-    // no bound of their own, so without the `size` half of the check the VM
-    // would mint `linear[4]`, `linear[5]` and the pairs among them out of
-    // nothing and halt successfully -- a model that solves cleanly and
-    // answers wrongly, which is the failure QUI-1107 exists to remove.
+    // one directly still can. ONEHOTR then *writes*, and
+    // `XqmxModel::add_linear`/`add_quad` grow a sparse map with no bound of
+    // their own, so without the `size` half of the check the VM would mint
+    // `linear[4]`, `linear[5]` and the pairs among them out of nothing and
+    // halt successfully -- a model that solves cleanly and answers wrongly,
+    // which is the failure QUI-1107 exists to remove.
     let mut model = xqvm::XqmxModel::new(Domain::Binary, 4);
     model.rows = 2;
     model.cols = 3;

@@ -95,24 +95,24 @@ impl PyXqmxModel {
 
     /// Set the linear coefficient of variable `i`.
     ///
-    /// Raises `IndexError` unless `i < size`, as `SETLINE` does.
-    fn set_linear(&mut self, i: usize, value: i64) -> PyResult<()> {
+    /// Raises `IndexError` unless `0 <= i < size`, as `SETLINE` does.
+    fn set_linear(&mut self, i: i64, value: i64) -> PyResult<()> {
         self.inner.set_linear(self.variable(i)?, value);
         Ok(())
     }
 
     /// The linear coefficient of variable `i`.
     ///
-    /// Raises `IndexError` unless `i < size`, as `GETLINE` does.
-    fn get_linear(&self, i: usize) -> PyResult<i64> {
+    /// Raises `IndexError` unless `0 <= i < size`, as `GETLINE` does.
+    fn get_linear(&self, i: i64) -> PyResult<i64> {
         Ok(self.inner.get_linear(self.variable(i)?))
     }
 
     /// Set the quadratic coefficient of the pair `(i, j)`.
     ///
-    /// Raises `IndexError` unless both indices are below `size`, as
+    /// Raises `IndexError` unless both indices are in `0..size`, as
     /// `SETQUAD` does.
-    fn set_quad(&mut self, i: usize, j: usize, value: i64) -> PyResult<()> {
+    fn set_quad(&mut self, i: i64, j: i64, value: i64) -> PyResult<()> {
         let (i, j) = (self.variable(i)?, self.variable(j)?);
         self.inner.set_quad(i, j, value);
         Ok(())
@@ -120,9 +120,9 @@ impl PyXqmxModel {
 
     /// The quadratic coefficient of the pair `(i, j)`.
     ///
-    /// Raises `IndexError` unless both indices are below `size`, as
+    /// Raises `IndexError` unless both indices are in `0..size`, as
     /// `GETQUAD` does.
-    fn get_quad(&self, i: usize, j: usize) -> PyResult<i64> {
+    fn get_quad(&self, i: i64, j: i64) -> PyResult<i64> {
         Ok(self.inner.get_quad(self.variable(i)?, self.variable(j)?))
     }
 
@@ -155,15 +155,16 @@ impl PyXqmxModel {
     /// The underlying model stores coefficients sparsely and accepts any
     /// index, so the bound is checked here, at the host boundary, the way
     /// the coefficient opcodes check it inside the VM.
-    fn variable(&self, i: usize) -> PyResult<usize> {
-        if i < self.inner.size {
-            Ok(i)
-        } else {
-            Err(PyIndexError::new_err(format!(
-                "variable index {i} is out of range for a model of size {}",
-                self.inner.size
-            )))
-        }
+    fn variable(&self, i: i64) -> PyResult<usize> {
+        usize::try_from(i)
+            .ok()
+            .filter(|&index| index < self.inner.size)
+            .ok_or_else(|| {
+                PyIndexError::new_err(format!(
+                    "variable index {i} is out of range for a model of size {}",
+                    self.inner.size
+                ))
+            })
     }
 }
 
@@ -188,6 +189,8 @@ impl PyXqmxSample {
         let dom = domain_from_str(domain, k)?;
         // Independent guards rather than one fused condition: the extent
         // checks name the grid or the length, the domain check a value.
+        // Unreachable short of a 32 GiB list, which PyO3 has already
+        // extracted by now; kept so both types state the same size rule.
         check_size(values.len())?;
         check_grid(rows, cols, values.len())?;
         // The VM's own domain check is on SETLINE and ADDLINE, which a

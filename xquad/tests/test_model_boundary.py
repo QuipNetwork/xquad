@@ -90,10 +90,20 @@ def test_model_accepts_the_allocation_ceiling():
         lambda m: m.set_quad(0, 4, 1),
         lambda m: m.set_quad(4, 0, 1),
         lambda m: m.get_quad(0, 4),
+        lambda m: m.set_linear(-1, 1),
+        lambda m: m.get_quad(-1, 0),
     ],
-    ids=["set_linear", "get_linear", "set_quad_j", "set_quad_i", "get_quad"],
+    ids=[
+        "set_linear",
+        "get_linear",
+        "set_quad_j",
+        "set_quad_i",
+        "get_quad",
+        "set_linear_negative",
+        "get_quad_negative",
+    ],
 )
-def test_coefficient_index_at_size_raises(access):
+def test_coefficient_index_outside_the_model_raises(access):
     model = XqmxModel("binary", size=4)
     with pytest.raises(IndexError, match="out of range for a model of size 4"):
         access(model)
