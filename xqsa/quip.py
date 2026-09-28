@@ -118,8 +118,8 @@ from xqsa.solver import Solver, SolverResult
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from xqffi.vm import XqmxModel, XqmxSample
     from xqsa.quip_codec import IsingJob
-    from xqvm_py.xqmx import XQMX
 
 logger = logging.getLogger(__name__)
 
@@ -1124,7 +1124,7 @@ class SolverQuip(Solver):
 
         chosen = min(submissions, key=lambda submission: int(_require(submission, "best_energy_milli", order_id)))
         chosen_solutions = _require(chosen, "solutions", order_id)
-        best: tuple[int, XQMX, list[int]] | None = None
+        best: tuple[int, XqmxSample, list[int]] | None = None
         for vector in chosen_solutions:
             spin_vector = [int(spin) for spin in vector]
             sample = decode_solution(job, spin_vector, model)
@@ -1210,7 +1210,7 @@ class SolverQuip(Solver):
                     f"native order has {count} {noun}, over the mempool's {MEMPOOL_PALLET}.{name} of {int(limit)}"
                 )
 
-    def _job_for(self, model: XQMX, topology: str | None, mapping: Mapping[int, int] | None) -> IsingJob:
+    def _job_for(self, model: XqmxModel, topology: str | None, mapping: Mapping[int, int] | None) -> IsingJob:
         """Encode ``model`` for the effective topology: ``topology``, else the resolved one.
 
         In native mode the topology is the model's own coupling graph, so there
@@ -1229,7 +1229,7 @@ class SolverQuip(Solver):
             return model_to_ising(model, native_topology, mapping=native_mapping)
         return model_to_ising(model, self._fetch_topology(topology), mapping=mapping)
 
-    def _prepare(self, model: XQMX, kwargs: Mapping[str, Any]) -> tuple[IsingJob, bytes, str, JobQuote]:
+    def _prepare(self, model: XqmxModel, kwargs: Mapping[str, Any]) -> tuple[IsingJob, bytes, str, JobQuote]:
         """Place ``model``, build its ``propose_job`` extrinsic once, and quote it.
 
         Returns the placed job, the signed wire bytes and their hash, and the
@@ -1321,7 +1321,7 @@ class SolverQuip(Solver):
                 raise self._insufficient_error(replace(quote, balance_planck=balance))
             time.sleep(self._poll_interval)
 
-    def quote(self, model: XQMX, **kwargs: Any) -> JobQuote:
+    def quote(self, model: XqmxModel, **kwargs: Any) -> JobQuote:
         """Price ``model`` as a job without proposing it.
 
         Places the model, builds and signs the ``propose_job`` extrinsic that
@@ -1342,7 +1342,7 @@ class SolverQuip(Solver):
         """
         return self._prepare(model, kwargs)[3]
 
-    def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
+    def solve(self, model: XqmxModel, **kwargs: Any) -> SolverResult:
         """Propose ``model`` as a job, await a solution, and decode the best one.
 
         Encodes the model onto the hardware topology, warns once about any
@@ -1412,7 +1412,7 @@ class SolverQuip(Solver):
     def query(
         self,
         order_id: int,
-        model: XQMX,
+        model: XqmxModel,
         *,
         mapping: Mapping[int, int] | None = None,
         topology: str | None = None,

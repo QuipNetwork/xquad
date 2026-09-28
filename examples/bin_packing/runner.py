@@ -24,7 +24,7 @@ goes into exactly one bin; SLACK + EQUALITY enforces capacity per bin.
 
 Usage:
     uv run python examples/bin_packing/runner.py --seed 42
-    uv run python examples/bin_packing/runner.py --n 4 --bins 3 --interpreter rust
+    uv run python examples/bin_packing/runner.py --n 4 --bins 3
 """
 
 from __future__ import annotations
@@ -38,8 +38,8 @@ from typing import Any
 
 from xquad.cp import Domain, Problem, Types, xq_bitlen
 from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
-from xquad.types import XQMX, Vec
-from xquad.vm import VM, VMBackend
+from xquad.types import XqmxModel
+from xquad.vm import VM
 
 # Energy charged per bin the packing opens. Small next to the constraint
 # penalties, so it only ever breaks ties between feasible packings.
@@ -135,16 +135,15 @@ def run(
     sizes: list[int],
     capacity: int,
     seed: int,
-    backend: VMBackend,
     solver_name: str,
 ) -> tuple[int, int, list[int]]:
-    """Full pipeline on the selected VM backend."""
-    vm = VM(backend=backend)
+    """Full pipeline on the XQVM."""
+    vm = VM()
     vm.set_calldata([n, num_bins, sizes, capacity])
     vm.set_output_slots(1)
     vm.run(programs.encoder)
     model = vm.outputs()[0]
-    assert isinstance(model, XQMX)
+    assert isinstance(model, XqmxModel)
 
     try:
         solver = build_solver(solver_name, seed=seed)
@@ -153,23 +152,19 @@ def run(
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([n, num_bins, sizes, capacity, model, sample])
     vm.set_output_slots(2)
     vm.run(programs.verifier)
     outs = vm.outputs()
     energy, valid = outs[0], outs[1]
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([sample, n * num_bins])
     vm.set_output_slots(1)
     vm.run(programs.decoder)
     assign_out = vm.outputs()[0]
-    total = n * num_bins
-    if isinstance(assign_out, Vec):
-        flat = [assign_out.get(i) for i in range(total)]
-    else:
-        flat = list(assign_out)
+    flat = list(assign_out)
 
     return energy, valid, flat
 
@@ -179,12 +174,6 @@ def main() -> int:
     parser.add_argument("--n", type=int, default=4, help="Number of items (default: 4)")
     parser.add_argument("--bins", type=int, default=3, help="Number of bins (default: 3)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
-    parser.add_argument(
-        "--interpreter",
-        choices=("python", "rust"),
-        default="python",
-        help="XQVM interpreter to run the compiled programs on",
-    )
     parser.add_argument(
         "--solver",
         choices=sorted(SOLVERS),
@@ -207,8 +196,7 @@ def main() -> int:
     problem = build_problem(args.n, args.bins, sizes, capacity)
     programs = problem.compile()
 
-    backend = VMBackend.PYTHON if args.interpreter == "python" else VMBackend.RUST
-    energy, valid, flat = run(programs, args.n, args.bins, sizes, capacity, args.seed, backend, args.solver)
+    energy, valid, flat = run(programs, args.n, args.bins, sizes, capacity, args.seed, args.solver)
     bin_for_item = decode_assignment(flat, args.n, args.bins)
 
     result = {

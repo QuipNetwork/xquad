@@ -19,9 +19,10 @@
 
 The VM checks `SETLINE` and `ADDLINE`, which a host-supplied sample never
 passes through: `Vm::set_calldata` is infallible by design and stays the
-trusted-embedder path. These tests cover the two places that close that
-gap instead -- the `XqmxSample` constructor, and `VM.set_calldata` -- and
-neither is reachable by a conformance vector, so this file is their only
+trusted-embedder path. `XqmxSample` closes that gap instead: its
+constructor and its one setter both raise `ValueError` for an
+out-of-domain value, so no out-of-domain sample can exist to reach the VM.
+Neither is reachable by a conformance vector, so this file is their only
 coverage.
 """
 
@@ -29,13 +30,13 @@ from __future__ import annotations
 
 import pytest
 
-from xqffi.vm import Domain, XqmxModel, XqmxSample
-from xquad.vm import VM, VMBackend
-from xqvm_py.errors import SampleOutOfDomain
-from xqvm_py.limits import I64_MAX, I64_MIN
-from xqvm_py.xqmx import XQMX, XQMXDomain, XQMXMode
+from xqffi.vm import Domain, SampleOutOfDomain, XqmxModel, XqmxSample
+from xquad.vm import VM
 
-BACKENDS = [VMBackend.RUST, VMBackend.PYTHON]
+I64_MAX = 2**63 - 1
+I64_MIN = -(2**63)
+
+_READ_SLOT_0 = "PUSH 0\nINPUT r0\nPUSH 0\nGETLINE r0\nSTOW r1\nPUSH 0\nOUTPUT r1\nHALT"
 
 
 @pytest.mark.parametrize(
@@ -68,8 +69,7 @@ def test_constructor_accepts_in_domain_values(domain, values):
 
 
 def test_model_coefficients_stay_unbounded():
-    # A bias is not an assignment. Only the sample constructor gained a
-    # value check.
+    # A bias is not an assignment. Only the sample checks its values.
     model = XqmxModel.binary(2)
     model.set_linear(0, I64_MIN)
     model.set_linear(1, I64_MAX)
@@ -77,137 +77,77 @@ def test_model_coefficients_stay_unbounded():
     assert model.get_linear(1) == I64_MAX
 
 
-def test_sample_exposes_no_value_setter():
-    # This is what makes xquad/program.py safe without a second scan: once
-    # the constructor validates, no out-of-domain instance can exist.
+def test_the_setter_is_the_only_write_and_it_checks_the_domain():
+    # This is what makes xquad/program.py and xquad.vm safe without a
+    # second scan: every way to put a value in a sample checks it.
     sample = XqmxSample.binary([0, 1])
-    for attr in ("set_linear", "set_value", "__setitem__"):
+    for attr in ("set_value", "__setitem__"):
         assert not hasattr(sample, attr), attr
     with pytest.raises((AttributeError, TypeError)):
         sample.values = [5, 5]
+    with pytest.raises(ValueError, match="outside the"):
+        sample.set_linear(0, 5)
+    assert sample.values == [0, 1]
 
 
-@pytest.mark.parametrize("backend", BACKENDS, ids=[b.name for b in BACKENDS])
-def test_set_calldata_rejects_a_mutated_sample(backend):
-    # The one hole the constructor and __post_init__ leave: reaching into
-    # an already-built XQMX. xqcp's own tests use that idiom, so the guard
-    # is at the boundary rather than inferred from where a value came from.
-    sample = XQMX.binary_sample(2)
-    sample.linear[0] = 5
-
-    machine = VM(backend=backend)
-    with pytest.raises(SampleOutOfDomain) as excinfo:
-        machine.set_calldata([sample])
-    assert excinfo.value.value == 5
-
-
-@pytest.mark.parametrize("backend", BACKENDS, ids=[b.name for b in BACKENDS])
-def test_set_calldata_accepts_an_in_domain_sample(backend):
-    sample = XQMX.binary_sample(2)
+def test_an_in_domain_sample_runs():
+    sample = XqmxSample.default(Domain.BINARY, 2)
     sample.set_linear(0, 1)
 
-    machine = VM(backend=backend)
+    machine = VM()
     machine.set_calldata([sample])
     machine.set_output_slots(1)
-    machine.run("PUSH 0\nINPUT r0\nPUSH 0\nGETLINE r0\nSTOW r1\nPUSH 0\nOUTPUT r1\nHALT")
+    machine.run(_READ_SLOT_0)
     assert machine.outputs()[0] == 1
 
 
-@pytest.mark.parametrize("backend", BACKENDS, ids=[b.name for b in BACKENDS])
-def test_setline_out_of_domain_faults_on_both_backends(backend):
-    # The ticket's original reproducer, through the public API. The two
-    # backends word the fault differently -- the Rust one crosses the FFI
-    # as `PyRuntimeError` carrying the error's Debug form, the Python one
-    # raises `SampleOutOfDomain` itself -- so the assertion is on the
-    # offending value and the domain, which both carry.
-    machine = VM(backend=backend)
-    with pytest.raises(Exception) as excinfo:
-        machine.run("PUSH 4\nPUSH 3\nXSMX r0\nPUSH 0\nPUSH 7\nSETLINE r0\nHALT")
-    message = str(excinfo.value)
-    assert "7" in message
-    assert "nteger" in message
+def test_a_sample_written_after_set_calldata_runs_as_written():
+    # `set_calldata` copies the list, not the samples in it, so a later
+    # write reaches the run. It can only be an in-domain write.
+    sample = XqmxSample.default(Domain.BINARY, 1)
 
-
-# A directly-constructed `XQMX` is the third write path: `XQMX(mode=SAMPLE,
-# domain=SPIN, size=n)` is a legal public construction that leaves `linear`
-# empty, and an empty dict has to read back as the domain's default rather
-# than as a bare `0` -- which for spin is a value this ticket's own
-# invariant declares unwritable. No conformance vector reaches these: the
-# construction is a host-side call, not a bytecode path.
-
-_READ_SLOT_0 = "PUSH 0\nINPUT r0\nPUSH 0\nGETLINE r0\nSTOW r1\nPUSH 0\nOUTPUT r1\nHALT"
-
-
-@pytest.mark.parametrize("backend", BACKENDS, ids=[b.name for b in BACKENDS])
-def test_bare_spin_sample_reads_back_as_minus_one(backend):
-    sample = XQMX(mode=XQMXMode.SAMPLE, domain=XQMXDomain.SPIN, size=4)
-    assert sample.linear == {}
-
-    machine = VM(backend=backend)
+    machine = VM()
     machine.set_calldata([sample])
+    machine.set_output_slots(1)
+    sample.set_linear(0, 1)
+    machine.run(_READ_SLOT_0)
+    assert machine.outputs()[0] == 1
+
+
+def test_setline_out_of_domain_faults_in_the_vm():
+    # The ticket's original reproducer, through the public API.
+    machine = VM()
+    with pytest.raises(SampleOutOfDomain):
+        machine.run("PUSH 4\nPUSH 3\nXSMX r0\nPUSH 0\nPUSH 7\nSETLINE r0\nHALT")
+
+
+def test_default_spin_sample_reads_back_as_minus_one():
+    machine = VM()
+    machine.set_calldata([XqmxSample.default(Domain.SPIN, 4)])
     machine.set_output_slots(1)
     machine.run(_READ_SLOT_0)
     assert machine.outputs()[0] == -1
 
 
-@pytest.mark.parametrize("backend", BACKENDS, ids=[b.name for b in BACKENDS])
-def test_bare_spin_sample_energy_uses_the_domain_default(backend):
-    # `compute_energy` reads every variable through `get_linear`, so the
-    # sparse default decides the answer as much as `GETLINE` does. Biases
-    # 3 and 5 over two variables both at -1 give -8.
-    model = XQMX.spin_model(2)
+def test_default_spin_sample_energy_uses_the_domain_default():
+    # Biases 3 and 5 over two variables both at -1 give -8.
+    model = XqmxModel.spin(2)
     model.set_linear(0, 3)
     model.set_linear(1, 5)
-    sample = XQMX(mode=XQMXMode.SAMPLE, domain=XQMXDomain.SPIN, size=2)
+    sample = XqmxSample.default(Domain.SPIN, 2)
 
-    machine = VM(backend=backend)
+    machine = VM()
     machine.set_calldata([model, sample])
     machine.set_output_slots(1)
     machine.run("PUSH 0\nINPUT r0\nPUSH 1\nINPUT r1\nENERGY r0 r1\nSTOW r2\nPUSH 0\nOUTPUT r2\nHALT")
-    assert machine.outputs()[0] == -8
+    assert machine.outputs()[0] == model.energy(sample) == -8
 
 
-@pytest.mark.parametrize("backend", BACKENDS, ids=[b.name for b in BACKENDS])
-def test_bare_spin_sample_addline_accumulates_from_minus_one(backend):
-    # `add_linear`'s `current` reads the same default. From -1, a delta of
-    # +2 lands on +1; reading it as 0 would land on +2 and fault.
-    sample = XQMX(mode=XQMXMode.SAMPLE, domain=XQMXDomain.SPIN, size=1)
-
-    machine = VM(backend=backend)
-    machine.set_calldata([sample])
+def test_default_spin_sample_addline_accumulates_from_minus_one():
+    # From -1, a delta of +2 lands on +1; reading it as 0 would land on +2
+    # and fault.
+    machine = VM()
+    machine.set_calldata([XqmxSample.default(Domain.SPIN, 1)])
     machine.set_output_slots(1)
     machine.run("PUSH 0\nINPUT r0\nPUSH 0\nPUSH 2\nADDLINE r0\nPUSH 0\nGETLINE r0\nSTOW r1\nPUSH 0\nOUTPUT r1\nHALT")
     assert machine.outputs()[0] == 1
-
-
-@pytest.mark.parametrize("backend", BACKENDS, ids=[b.name for b in BACKENDS])
-def test_sample_mutated_after_set_calldata_is_refused(backend):
-    # `set_calldata` copies the list, not the samples in it, so the caller
-    # keeps a live reference. The RUST path already faulted here by
-    # rebuilding the `XqmxSample`; without a matching re-scan the PYTHON
-    # path executed the mutated sample and returned 5.
-    sample = XQMX.binary_sample(1)
-
-    machine = VM(backend=backend)
-    machine.set_calldata([sample])
-    machine.set_output_slots(1)
-    sample.linear[0] = 5
-
-    with pytest.raises(Exception) as excinfo:
-        machine.run(_READ_SLOT_0)
-    message = str(excinfo.value)
-    assert "5" in message
-    assert "inary" in message
-
-
-def test_both_host_guards_are_catchable_as_value_error():
-    # The two guards close the same hole at the same boundary, so a caller
-    # should not need to know which backend refused. `xqffi` raises
-    # `PyValueError`; `SampleOutOfDomain` is one too.
-    with pytest.raises(ValueError):
-        XqmxSample.binary(values=[2])
-
-    sample = XQMX.binary_sample(1)
-    sample.linear[0] = 5
-    with pytest.raises(ValueError):
-        VM(backend=VMBackend.PYTHON).set_calldata([sample])

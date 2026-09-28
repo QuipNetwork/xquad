@@ -5,33 +5,33 @@
 ```python
 class Solver(ABC):
     @abstractmethod
-    def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
+    def solve(self, model: XqmxModel, **kwargs: Any) -> SolverResult:
         """Solve a quadratic model, returning the best solution found."""
         ...
 
-    def _validate_model(self, model: XQMX) -> None:
+    def _validate_model(self, model: XqmxModel) -> None:
         """Validate that the model is solvable."""
         ...
 
-    def _model_to_bqm(self, model: XQMX) -> dimod.BinaryQuadraticModel:
+    def _model_to_bqm(self, model: XqmxModel) -> dimod.BinaryQuadraticModel:
         """Convert an XQMX model to a dimod BQM."""
         ...
 
-    def _sample_to_xqmx(self, model: XQMX, raw_sample: dict[int, int]) -> XQMX:
+    def _sample_to_xqmx(self, model: XqmxModel, raw_sample: dict[int, int]) -> XqmxSample:
         """Convert a dimod sample dict to an XQMX sample."""
         ...
 
-    def _recompute_energy(self, model: XQMX, sample: XQMX) -> int:
+    def _recompute_energy(self, model: XqmxModel, sample: XqmxSample) -> int:
         """Compute authoritative integer energy for a model-sample pair."""
         ...
 ```
 
-All solver implementations inherit from `Solver` and override `solve()`.
+`XqmxModel`, `XqmxSample` and `Domain` are the `xqffi.vm` types, re-exported by `xquad.types`. All solver implementations inherit from `Solver` and override `solve()`.
 
 ## `solve()` Contract
 
 **Input:**
-- `model` -- an XQMX in MODEL mode with a supported domain (see [DOMAINS.md](DOMAINS.md))
+- `model` -- an `XqmxModel` with a supported domain (see [DOMAINS.md](DOMAINS.md))
 - `**kwargs` -- solver-specific parameters that override constructor defaults
 
 **Output:**
@@ -57,9 +57,9 @@ Validates that a model is acceptable for solving:
 
 | Condition | Result |
 |-----------|--------|
-| `model.mode != XQMXMode.MODEL` | `ValueError("Expected MODEL mode, got {mode}")` |
-| `model.domain == XQMXDomain.INTEGER` | `ValueError("Unsupported domain for solving: {domain}")` |
-| `model.domain` is `BINARY` or `SPIN` | Accepted |
+| `model` is not an `XqmxModel` | `ValueError("Expected an XqmxModel, got {type}")` |
+| `model.domain` is an integer domain | `ValueError("Unsupported domain for solving: {domain.name}")`, e.g. `integer` |
+| `model.domain` is `Domain.BINARY` or `Domain.SPIN` | Accepted |
 
 Subclasses may extend validation (e.g. checking problem-size limits) but must preserve these base checks.
 
@@ -68,18 +68,18 @@ Subclasses may extend validation (e.g. checking problem-size limits) but must pr
 ```python
 @dataclass(frozen=True)
 class SolverResult:
-    sample: XQMX               # Solution as XQMX in SAMPLE mode
+    sample: XqmxSample         # Solution, one assignment per variable
     energy: int                 # Authoritative Hamiltonian energy
     timing: float               # Wall-clock seconds spent solving
     metadata: dict[str, Any]    # Solver-specific keys
 ```
 
 **Invariants:**
-- `sample.mode == XQMXMode.SAMPLE`
+- `sample` is an `XqmxSample` holding only in-domain values
 - `sample.size == model.size` (same number of variables)
 - `sample.rows == model.rows` and `sample.cols == model.cols` (grid dimensions preserved)
 - `sample.domain == model.domain`
-- `energy == compute_energy(model, sample)` (see [ENERGY.md](ENERGY.md)); where `compute_energy` raises, no `SolverResult` exists
+- `energy == model.energy(sample)` (see [ENERGY.md](ENERGY.md)); where `model.energy` raises, no `SolverResult` exists
 - `timing >= 0.0`
 - Frozen (immutable after construction)
 
@@ -149,8 +149,8 @@ Future versions may add richer negotiation (supported domains, problem-size limi
 All four parameters are overridable via `solve(**kwargs)`.
 
 **Conversion pipeline (informative, not normative):**
-1. XQMX model -> `dimod.BinaryQuadraticModel` via `_model_to_bqm()`
+1. `XqmxModel` -> `dimod.BinaryQuadraticModel` via `_model_to_bqm()`
 2. `dwave.samplers.SimulatedAnnealingSampler().sample()` with timing measurement
-3. Best result -> XQMX sample via `_sample_to_xqmx()`
+3. Best result -> `XqmxSample` via `_sample_to_xqmx()`
 4. Energy recomputed via `_recompute_energy(model, sample)`
 5. Grid dimensions (rows/cols) preserved from original model

@@ -34,7 +34,7 @@ decode compose. It does not prove anything optimises.
 
 Usage:
     uv run python examples/portfolio_rebalance/runner.py --seed 42
-    uv run python examples/portfolio_rebalance/runner.py --n 6 --interpreter rust
+    uv run python examples/portfolio_rebalance/runner.py --n 6
 """
 
 from __future__ import annotations
@@ -48,8 +48,8 @@ from typing import Any
 
 from xquad.cp import Domain, Problem, Types, xq_grid
 from xquad.sa import DEFAULT_SOLVER, SOLVERS
-from xquad.types import XQMX, Vec
-from xquad.vm import VM, VMBackend
+from xquad.types import XqmxModel, XqmxSample
+from xquad.vm import VM
 
 # The weight domain, as literals: a runtime lo would want the decoder's one
 # calldata scalar, which the output loop bound already spends.
@@ -126,36 +126,30 @@ def run(
     returns: list[int],
     cov: list[int],
     weights: list[int],
-    backend: VMBackend,
 ) -> tuple[int, int, list[int]]:
-    """Full pipeline on the selected VM backend."""
-    vm = VM(backend=backend)
+    """Full pipeline on the XQVM."""
+    vm = VM()
     vm.set_calldata([n, returns, cov])
     vm.set_output_slots(1)
     vm.run(programs.encoder)
     model = vm.outputs()[0]
-    assert isinstance(model, XQMX)
+    assert isinstance(model, XqmxModel)
 
-    sample = XQMX.integer_sample(n, _K)
-    for index, weight in enumerate(weights):
-        sample.linear[index] = weight - _LO
+    sample = XqmxSample.integer([weight - _LO for weight in weights], _K)
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([n, returns, cov, model, sample])
     vm.set_output_slots(2)
     vm.run(programs.verifier)
     outs = vm.outputs()
     energy, valid = outs[0], outs[1]
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([sample, n])
     vm.set_output_slots(1)
     vm.run(programs.decoder)
     weights_out = vm.outputs()[0]
-    if isinstance(weights_out, Vec):
-        decoded = [weights_out.get(i) for i in range(n)]
-    else:
-        decoded = list(weights_out)
+    decoded = list(weights_out)
 
     return energy, valid, decoded
 
@@ -164,12 +158,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Portfolio Rebalance end-to-end XQuad pipeline example")
     parser.add_argument("--n", type=int, default=5, help="Number of assets (default: 5)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
-    parser.add_argument(
-        "--interpreter",
-        choices=("python", "rust"),
-        default="python",
-        help="XQVM interpreter to run the compiled programs on",
-    )
     parser.add_argument(
         "--solver",
         choices=sorted(SOLVERS),
@@ -204,8 +192,7 @@ def main() -> int:
     problem = build_problem()
     programs = problem.compile()
 
-    backend = VMBackend.PYTHON if args.interpreter == "python" else VMBackend.RUST
-    energy, valid, decoded = run(programs, args.n, returns, cov, weights, backend)
+    energy, valid, decoded = run(programs, args.n, returns, cov, weights)
 
     result = {
         "_seed": args.seed,

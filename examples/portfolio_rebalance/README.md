@@ -61,19 +61,18 @@ domain and sums to the budget. Integer lowering is XQSA v0.5.0 work.
 
 ```sh
 uv run python examples/portfolio_rebalance/runner.py --seed 42
-uv run python examples/portfolio_rebalance/runner.py --n 6 --interpreter rust
+uv run python examples/portfolio_rebalance/runner.py --n 6
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--n` | `5` | Number of assets |
 | `--solver` | `dwave-cpu` | Accepted and ignored |
-| `--interpreter` | `python` | XQVM backend: `python` or `rust` |
 | `--seed` | `42` | Random seed |
 | `-o` | stdout | Write JSON result to file |
 
 ## Canonical output
 
-`example-smoke` validates both interpreters produce `valid == 1` with
+`example-smoke` validates that the runner produces `valid == 1` with
 `--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
 it checks validity, not exact output.

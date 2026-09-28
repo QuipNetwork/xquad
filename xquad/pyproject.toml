@@ -19,7 +19,6 @@ dependencies = [
     "xqffi==0.5.0.dev0",
     "xqcp==0.5.0.dev0",
     "xqsa==0.5.0.dev0",
-    "xqvm_py==0.5.0.dev0",
 ]
 
 [project.optional-dependencies]
@@ -29,10 +28,9 @@ metal = [ "xqsa[metal]==0.5.0.dev0" ]
 quip  = [ "xqsa[quip]==0.5.0.dev0" ]
 
 [tool.uv.sources]
-xqffi.workspace   = true
-xqcp.workspace    = true
-xqsa.workspace    = true
-xqvm_py.workspace = true
+xqffi.workspace = true
+xqcp.workspace  = true
+xqsa.workspace  = true
 
 [tool.hatch.build.targets.wheel]
 only-include = [ "." ]

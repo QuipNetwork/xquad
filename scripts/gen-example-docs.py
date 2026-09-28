@@ -380,9 +380,8 @@ def render_repo_index(groups: list[ExampleGroup]) -> str:
         "uv run python examples/maxcut/runner.py --seed 42",
         "```",
         "",
-        "Every runner accepts `--seed`, `--interpreter` (`python` or `rust`),",
-        "`--solver`, and `-o`/`--output`. Problem size flags vary; each directory's",
-        "`README.md` carries the exact table.",
+        "Every runner accepts `--seed`, `--solver`, and `-o`/`--output`. Problem",
+        "size flags vary; each directory's `README.md` carries the exact table.",
         "",
     ]
     for group in groups:

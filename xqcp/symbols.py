@@ -27,8 +27,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, NoReturn
 
-from xqvm_py import XQMXDomain
-
 from .expression import (
     ColFindExpr,
     ColSumExpr,
@@ -47,7 +45,7 @@ from .expression import (
 )
 
 if TYPE_CHECKING:
-    from .problem import Problem
+    from .problem import Domain, Problem
 
 
 def _require_2d(is_2d: bool, op: str) -> None:
@@ -278,7 +276,7 @@ class ModelRef:
         self,
         problem: Problem,
         reg: int,
-        domain: XQMXDomain,
+        domain: Domain,
         cols_reg: int | None,
         is_2d: bool,
         lo_expr: Expr | None = None,

@@ -161,7 +161,7 @@ class XqmxModel:
 
 @final
 class XqmxSample:
-    """A candidate solution for a model. Values are checked on construction."""
+    """A candidate solution for a model. Values are checked on construction and on write."""
 
     def __new__(cls, domain: Domain, values: list[int], rows: int = 0, cols: int = 0) -> Self:
         """Raises `ValueError` if any value lies outside `domain`."""
@@ -173,6 +173,20 @@ class XqmxSample:
     @staticmethod
     def integer(values: list[int], k: int, rows: int = 0, cols: int = 0) -> XqmxSample:
         """Raises `ValueError` for `k < 2` or a value outside the domain."""
+
+    @staticmethod
+    def default(domain: Domain, size: int, rows: int = 0, cols: int = 0) -> XqmxSample:
+        """`size` variables at the domain default: binary 0, spin -1, integer 0.
+
+        Raises `InvalidAllocation` for `size > MAX_ALLOCATION_SIZE`, and
+        `MemoryError` when the values cannot be reserved."""
+
+    def set_linear(self, i: int, value: int) -> None:
+        """Raises `IndexOutOfBounds` unless `0 <= i < size`, and `ValueError`
+        for a value outside the domain; either leaves the sample unchanged."""
+
+    def get_linear(self, i: int) -> int:
+        """Raises `IndexOutOfBounds` unless `0 <= i < size`."""
 
     @property
     def domain(self) -> Domain: ...

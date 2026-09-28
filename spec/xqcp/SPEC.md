@@ -63,9 +63,9 @@ Declare a runtime input. `type` is `Types.Int` (scalar) or `Types.Vec` (vector).
 
 ### `problem.define_model(size, domain, rows=None, cols=None, *, k=None, lo=None, hi=None, penalty=None)`
 
-Allocate the XQMX model. `size` is the total number of variables. `domain` is a `Domain` member, or the `XQMXDomain` it wraps, which is normalised on entry. For 2D grid models, provide both `rows` and `cols` -- providing exactly one raises `ValueError`. After this call, `problem.model` and `problem.sample` become available.
+Allocate the XQMX model. `size` is the total number of variables. `domain` is an `xqcp.Domain` member; anything else, including the `xqffi.vm.Domain` that `xquad.types` re-exports under the same name, raises `TypeError`. For 2D grid models, provide both `rows` and `cols` -- providing exactly one raises `ValueError`. After this call, `problem.model` and `problem.sample` become available.
 
-`Domain` is xqcp's own enum. `BINARY`, `SPIN` and `INTEGER` wrap their `XQMXDomain` counterpart; `CATEGORICAL` has none, because the VM cannot allocate one. The forms:
+`Domain` is xqcp's own enum, and each member's value is the domain's name. `BINARY`, `SPIN` and `INTEGER` match the `Domain.name` of the model the encoder allocates; `CATEGORICAL` has no VM counterpart, because the VM cannot allocate one. The forms:
 
 | Form | Allocates | Read back with |
 |------|-----------|----------------|
@@ -85,7 +85,7 @@ The constant that substitution also produces is dropped, because XQMX has no off
 
 A runtime `lo` and a decoder loop bound compete for the decoder's single calldata scalar, and `compile()` raises naming both. Literal bounds avoid it.
 
-**The categorical form is a recording-time macro.** It calls `define_model(size * k, Domain.BINARY, rows=size, cols=k)` and applies `ONEHOTR` to each row, through the record paths a hand-written version would use. `model.domain` reads `XQMXDomain.BINARY` afterwards and no categorical marker is kept, so coefficient access is `(variable, case)` as on any 2D model.
+**The categorical form is a recording-time macro.** It calls `define_model(size * k, Domain.BINARY, rows=size, cols=k)` and applies `ONEHOTR` to each row, through the record paths a hand-written version would use. `model.domain` reads `Domain.BINARY` afterwards and no categorical marker is kept, so coefficient access is `(variable, case)` as on any 2D model.
 
 **Constraints are binary-only.** Every constraint kind is refused on a spin or integer model; only coefficient writes are supported. Each expansion in [../xqvm/HLF.md](../xqvm/HLF.md) is derived under `x^2 = x`, which holds for 0/1 variables alone, so off a binary model the encoder would build a penalty that does not encode the constraint written. Whether a correct per-domain expansion exists is an open VM-side question.
 
@@ -157,6 +157,7 @@ For every well-formed XQCP program:
 | `ValueError` | `rowfind()` on a flat (non-2D) model | `SampleRef.rowfind()` |
 | `ValueError` | `rowsum()` on a flat (non-2D) model | `SampleRef.rowsum()` |
 | `ValueError` | `colsum()` on a flat (non-2D) model | `SampleRef.colsum()` |
+| `TypeError` | `define_model()` with a `domain` that is not an `xqcp.Domain` member | `Problem.define_model()` |
 | `TypeError` | Non-`Expr`, non-`int` value in expression position | `coerce()` |
 | `TypeError` | `bool` value in expression position | `coerce()` |
 | `TypeError` | `.get()` on non-Vec `InputRef` | `InputRef.get()` |

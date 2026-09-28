@@ -17,10 +17,10 @@ Every backend defines the same single method:
 ```python
 class Solver(ABC):
     @abstractmethod
-    def solve(self, model: XQMX, **kwargs: Any) -> SolverResult: ...
+    def solve(self, model: XqmxModel, **kwargs: Any) -> SolverResult: ...
 ```
 
-`model` is an XQMX in MODEL mode, binary or spin domain. `**kwargs`
+`model` is an `XqmxModel` over the binary or spin domain. `**kwargs`
 override that solver's constructor defaults for this call only --
 `solver = SolverDWaveCPU(num_reads=100)` then `solver.solve(model,
 num_reads=500)` runs 500 reads without building a new solver. `solve()`
@@ -32,13 +32,13 @@ The return value is a frozen dataclass:
 ```python
 @dataclass(frozen=True)
 class SolverResult:
-    sample: XQMX
+    sample: XqmxSample
     energy: int
     timing: float
     metadata: dict[str, Any] = field(default_factory=dict)
 ```
 
-`sample` is the solution, an XQMX in SAMPLE mode. `energy` is the
+`sample` is the solution, an `XqmxSample` with one value per variable. `energy` is the
 authoritative Hamiltonian energy. `timing` is wall-clock seconds spent
 solving. `metadata` defaults to an empty dict; its actual shape is
 per-backend, covered below.
@@ -122,11 +122,11 @@ XQVM has three domains: binary, spin, and integer. Every current
 
 ```python
 from xqsa import SolverDWaveCPU
-from xqvm_py.xqmx import XQMX
+from xquad.types import XqmxModel
 
-model = XQMX.integer_model(size=3, k=4)
+model = XqmxModel.integer(size=3, k=4)
 SolverDWaveCPU().solve(model)
-# ValueError: Unsupported domain for solving: INTEGER
+# ValueError: Unsupported domain for solving: integer
 ```
 
 An integer `XqmxModel` is a real thing you can build in XQVM bytecode

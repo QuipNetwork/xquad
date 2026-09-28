@@ -13,11 +13,11 @@ dependencies = [
     # Pinned exact. The five published distributions share one workspace
     # version and are uploaded as a set, so a mixed-version install is never
     # a supported combination; see RELEASING.md for the bump touchpoints.
-    "xqvm_py==0.5.0.dev0",
+    "xqffi==0.5.0.dev0",
 ]
 
 [tool.uv.sources]
-xqvm_py.workspace = true
+xqffi.workspace = true
 
 [tool.hatch.build.targets.wheel]
 only-include = [ "." ]

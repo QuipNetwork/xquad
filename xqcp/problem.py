@@ -31,8 +31,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from xqvm_py import XQMXDomain
-
 from .expression import Expr, Literal, RegLoad, Types, coerce
 from .symbols import InputRef, LoopVar, ModelRef, OutputRef, SampleRef, VecRef
 
@@ -44,27 +42,27 @@ from .symbols import InputRef, LoopVar, ModelRef, OutputRef, SampleRef, VecRef
 class Domain(Enum):
     """The variable domain a model is declared over.
 
-    Three members wrap the ``XQMXDomain`` the VM allocates.  ``CATEGORICAL``
+    Each value is the name of the domain.  ``BINARY``, ``SPIN`` and
+    ``INTEGER`` match the ``Domain.name`` of the model the encoder
+    allocates; an integer model's ``k`` is given to ``define_model()`` and
+    may be an expression, so it is not part of the member.  ``CATEGORICAL``
     has no VM counterpart: it records a binary ``size x k`` grid with a
     one-hot constraint per row, so the model a solver receives is binary.
-
-    ``define_model()`` accepts either enum and normalises an ``XQMXDomain``
-    by value, so ``Domain(XQMXDomain.BINARY) is Domain.BINARY``.
 
     # Examples
 
     ```python
     from xqcp import Domain
 
-    assert Domain.INTEGER.value.name == "INTEGER"
-    assert Domain.CATEGORICAL.value is None
+    assert Domain.INTEGER.value == "integer"
+    assert Domain("spin") is Domain.SPIN
     ```
     """
 
-    BINARY = XQMXDomain.BINARY
-    SPIN = XQMXDomain.SPIN
-    INTEGER = XQMXDomain.INTEGER
-    CATEGORICAL = None
+    BINARY = "binary"
+    SPIN = "spin"
+    INTEGER = "integer"
+    CATEGORICAL = "categorical"
 
 
 def _check_k_literal(k: Any) -> None:
@@ -104,10 +102,19 @@ def _check_domain_args(
 
     # Errors
 
-    Raises ``ValueError`` for a domain argument the domain does not take, a
-    required one left out, ``k=`` given together with ``lo=``/``hi=``, half
-    a range, or a literal domain narrower than two values.
+    Raises ``TypeError`` when ``domain`` is not an ``xqcp.Domain`` member,
+    such as the ``xqffi.vm.Domain`` that ``xquad.types`` re-exports under
+    the same name.  Raises ``ValueError`` for a domain argument the domain
+    does not take, a required one left out, ``k=`` given together with
+    ``lo=``/``hi=``, half a range, or a literal domain narrower than two
+    values.
     """
+    if not isinstance(domain, Domain):
+        kind = type(domain)
+        raise TypeError(
+            f"define_model() takes an xqcp.Domain member such as xqcp.Domain.BINARY; "
+            f"got {domain!r} of type {kind.__module__}.{kind.__qualname__}"
+        )
     if domain in (Domain.BINARY, Domain.SPIN):
         extra = _named(("k", k), ("lo", lo), ("hi", hi), ("penalty", penalty))
         if extra:
@@ -270,7 +277,7 @@ class Problem:
     def define_model(
         self,
         size: Expr | int,
-        domain: Domain | XQMXDomain,
+        domain: Domain,
         rows: Expr | int | None = None,
         cols: Expr | int | None = None,
         *,
@@ -305,12 +312,11 @@ class Problem:
 
         # Errors
 
-        Raises ``ValueError`` for a domain argument the domain does not
-        take, a required one left out, or a 2D model given only one of
-        ``rows=`` / ``cols=``.
+        Raises ``TypeError`` when ``domain`` is not an ``xqcp.Domain``
+        member.  Raises ``ValueError`` for a domain argument the domain
+        does not take, a required one left out, or a 2D model given only
+        one of ``rows=`` / ``cols=``.
         """
-        if isinstance(domain, XQMXDomain):
-            domain = Domain(domain)
         _check_domain_args(domain, rows, cols, k, lo, hi, penalty)
 
         if domain is Domain.CATEGORICAL:
@@ -352,7 +358,7 @@ class Problem:
                     lo_expr = RegLoad(lo_reg)
 
         model_reg = self._alloc.alloc()
-        self._model = ModelRef(self, model_reg, domain.value, cols_reg, is_2d, lo_expr)
+        self._model = ModelRef(self, model_reg, domain, cols_reg, is_2d, lo_expr)
         self._sample = SampleRef(model_reg + 100, is_2d, lo_expr)
 
         self._actions.append(
@@ -360,7 +366,7 @@ class Problem:
                 "define_model",
                 {
                     "model_reg": model_reg,
-                    "domain": domain.value,
+                    "domain": domain,
                     "size_expr": size_expr,
                     "is_2d": is_2d,
                     "cols_reg": cols_reg,

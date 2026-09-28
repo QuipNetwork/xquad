@@ -35,7 +35,7 @@ grows by 2*M variables beyond the original N.
 
 ```sh
 uv run python examples/quartic_opt/runner.py --seed 42
-uv run python examples/quartic_opt/runner.py --n 6 --m 3 --interpreter rust
+uv run python examples/quartic_opt/runner.py --n 6 --m 3
 ```
 
 | Flag | Default | Description |
@@ -43,7 +43,6 @@ uv run python examples/quartic_opt/runner.py --n 6 --m 3 --interpreter rust
 | `--n` | `5` | Number of variables |
 | `--m` | `2` | Number of quartic terms |
 | `--solver` | `dwave-cpu` | Solver backend (see Choosing a solver) |
-| `--interpreter` | `python` | XQVM backend: `python` or `rust` |
 | `--seed` | `42` | Random seed |
 | `-o` | stdout | Write JSON result to file |
 
@@ -66,6 +65,6 @@ RNG/hardware). `example-smoke` always runs `dwave-cpu`.
 
 ## Canonical output
 
-`example-smoke` validates both interpreters produce `valid == 1` with
+`example-smoke` validates that the runner produces `valid == 1` with
 `--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
 it checks validity, not exact output.

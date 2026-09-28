@@ -14,7 +14,7 @@ with a fixed capacity C.
 
 ## QUBO formulation
 
-- **Input**: N item sizes (Vec), number of bins B, bin capacity C
+- **Input**: N item sizes (list), number of bins B, bin capacity C
 - **Model**: `(N + 1) * B` binary variables in an `(N + 1) x B` grid. Rows `0..N-1` are the assignment cells: `x[i,b] = 1` if item i is placed in bin b. Row N holds one indicator per bin: `y[b] = 1` if bin b is open.
 - **Objective**: `+BIN_COST` on each indicator `y[b]`, so the energy counts the bins the packing opens. A bias spread over the assignment cells instead would be identically N on every feasible packing, because each item lands in exactly one bin, and could not tell a one-bin packing from a three-bin one.
 - **Constraints**:
@@ -52,7 +52,7 @@ under-constrained.
 
 ```sh
 uv run python examples/bin_packing/runner.py --seed 42
-uv run python examples/bin_packing/runner.py --n 5 --bins 4 --interpreter rust
+uv run python examples/bin_packing/runner.py --n 5 --bins 4
 ```
 
 | Flag | Default | Description |
@@ -60,7 +60,6 @@ uv run python examples/bin_packing/runner.py --n 5 --bins 4 --interpreter rust
 | `--n` | `4` | Number of items |
 | `--bins` | `3` | Number of bins |
 | `--solver` | `dwave-cpu` | Solver backend (see Choosing a solver) |
-| `--interpreter` | `python` | XQVM backend: `python` or `rust` |
 | `--seed` | `42` | Random seed |
 | `-o` | stdout | Write JSON result to file |
 
@@ -73,6 +72,6 @@ non-default solver will not reproduce the canonical result.
 
 ## Canonical output
 
-`example-smoke` validates both interpreters produce `valid == 1` with
+`example-smoke` validates that the runner produces `valid == 1` with
 `--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
 it checks validity, not exact output.

@@ -100,8 +100,9 @@ problem.define_model(size=num_items, domain=Domain.BINARY)
 [Quadratic Models](../concepts/quadratic-models.md#three-domains) for what
 each domain means and how to choose between them, since that choice does
 not belong to this page. Binary is the domain the running examples in this
-book use. `Domain` also accepts the `XQMXDomain` it wraps, so code written
-against the VM enum keeps working.
+book use. It must be `xqcp.Domain`, which `xquad.cp` re-exports:
+`xquad.types.Domain` is the VM's own domain type under the same name,
+and `define_model()` raises `TypeError` if handed it.
 
 ### Integer Variables
 

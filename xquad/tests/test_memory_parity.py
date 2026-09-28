@@ -15,23 +15,20 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Allocation-budget parity across the Rust and Python VM backends.
+"""The allocation budget, seen through `xquad.vm`.
 
-The budget is only useful if both interpreters agree on it: a program that
-the chain's Rust VM rejects must also be rejected by the reference VM, at the
-same instruction, having charged the same number of bytes. The charge
-schedule is therefore defined over program-visible quantities and the rate
-constants are duplicated verbatim between `xqvm/src/vm.rs` and
-`xqvm_py/executor.py`; these tests pin the two together.
+Every allocating opcode is charged before it allocates, and a program that
+cannot pay raises `MemoryLimitExceeded`. These tests pin that the umbrella
+VM forwards the budget and reports the charge; the exact byte counts are
+pinned by the specification vectors.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from xquad.vm import VM, VMBackend
-
-BACKENDS = [VMBackend.RUST, VMBackend.PYTHON]
+from xqffi.vm import MemoryLimitExceeded
+from xquad.vm import VM
 
 # -- programs whose allocation the budget has to see -------------------------
 
@@ -98,8 +95,8 @@ REJECTED = [
 ]
 
 
-def _run(backend: VMBackend, source: str, memory_limit: int) -> VM:
-    vm = VM(backend=backend)
+def _run(source: str, memory_limit: int) -> VM:
+    vm = VM()
     vm.set_output_slots(16)
     vm.set_memory_limit(memory_limit)
     vm.run(source)
@@ -107,17 +104,9 @@ def _run(backend: VMBackend, source: str, memory_limit: int) -> VM:
 
 
 @pytest.mark.parametrize("source,memory_limit", REJECTED)
-def test_both_backends_reject_the_same_programs(source: str, memory_limit: int) -> None:
-    for backend in BACKENDS:
-        with pytest.raises(Exception) as excinfo:  # noqa: B017 - backends raise different types
-            _run(backend, source, memory_limit)
-        # The Python backend raises `xqvm_py.errors.MemoryLimitExceeded`; the
-        # Rust backend surfaces its own variant through a `RuntimeError` whose
-        # message carries the variant name.
-        raised = f"{type(excinfo.value).__name__} {excinfo.value}".lower()
-        assert "memory limit" in raised or "memorylimit" in raised, (
-            f"{backend} raised {excinfo.value!r}, expected a memory-limit error"
-        )
+def test_the_budget_rejects_oversized_programs(source: str, memory_limit: int) -> None:
+    with pytest.raises(MemoryLimitExceeded):
+        _run(source, memory_limit)
 
 
 @pytest.mark.parametrize(
@@ -144,7 +133,7 @@ def test_both_backends_reject_the_same_programs(source: str, memory_limit: int) 
         # reachable from bytecode -- VECX makes only an empty vec and
         # VECPUSH pops from the integer stack -- and xqffi's calldata
         # accepts a single model but not a list of them, so the vec<int>
-        # half is what a cross-backend test can pin. The model half is
+        # half is what a host-level test can pin. The model half is
         # pinned crate-locally by xqvm's
         # iterating_a_model_vec_costs_what_outputting_the_same_model_costs.
         pytest.param(
@@ -153,22 +142,15 @@ def test_both_backends_reject_the_same_programs(source: str, memory_limit: int) 
         ),
     ],
 )
-def test_both_backends_charge_the_same_bytes(source: str) -> None:
-    charged = {}
-    for backend in BACKENDS:
-        vm = _run(backend, source, 1 << 30)
-        charged[backend] = vm.memory_used()
-    assert charged[VMBackend.RUST] > 0, "the program should have been charged something"
-    assert charged[VMBackend.RUST] == charged[VMBackend.PYTHON], (
-        f"charge mismatch -- Rust={charged[VMBackend.RUST]}, Python={charged[VMBackend.PYTHON]}"
-    )
+def test_an_allocating_program_is_charged(source: str) -> None:
+    assert _run(source, 1 << 30).memory_used() > 0, "the program should have been charged something"
 
 
-# RANGE is the one loop header that allocates nothing: both backends keep the
+# RANGE is the one loop header that allocates nothing: the VM keeps the
 # iteration bounds and nothing else, so a count no host could materialise is
 # admitted under a budget of a single kilobyte. The loop is left immediately
 # rather than run, because what is under test is the header's allocation and
-# not the iteration. A backend that built the iteration space eagerly would
+# not the iteration. A VM that built the iteration space eagerly would
 # either blow the budget or -- worse -- exhaust host memory while reporting
 # zero bytes charged.
 LARGE_RANGE = """
@@ -179,15 +161,8 @@ HALT
 """
 
 
-def test_both_backends_charge_nothing_for_a_range_header() -> None:
-    charged = {}
-    for backend in BACKENDS:
-        vm = _run(backend, LARGE_RANGE, 1 << 10)
-        charged[backend] = vm.memory_used()
-    assert charged[VMBackend.RUST] == 0, "RANGE must not allocate the iteration space"
-    assert charged[VMBackend.RUST] == charged[VMBackend.PYTHON], (
-        f"charge mismatch -- Rust={charged[VMBackend.RUST]}, Python={charged[VMBackend.PYTHON]}"
-    )
+def test_a_range_header_is_charged_nothing() -> None:
+    assert _run(LARGE_RANGE, 1 << 10).memory_used() == 0, "RANGE must not allocate the iteration space"
 
 
 @pytest.mark.parametrize("source,_memory_limit", REJECTED)
@@ -199,5 +174,4 @@ def test_a_generous_budget_admits_the_same_programs(source: str, _memory_limit: 
     """
     if "ONEHOTR" in source or "1073741824" in source or "134217728" in source:
         pytest.skip("allocation is too large to run even with an unlimited budget")
-    for backend in BACKENDS:
-        _run(backend, source, 1 << 30)
+    _run(source, 1 << 30)

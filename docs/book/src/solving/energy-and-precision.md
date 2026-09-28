@@ -21,18 +21,18 @@ formula two independent ways.
 
 ## The Precision Contract
 
-`SolverResult.energy` must equal `compute_energy(model, sample)`
+`SolverResult.energy` must equal `model.energy(sample)`
 exactly, an integer-to-integer comparison with zero tolerance for
 drift. Every XQMX
 coefficient and every variable assignment is an integer, so the energy
 formula is a sum of integer products, not a float that merely rounds to
 the right answer. It is an exact integer whenever it is representable at
-all, and representable is a real condition: `compute_energy` checks every
+all, and representable is a real condition: `XqmxModel.energy` checks every
 term product and every partial sum against the `i64` range and raises
 `ArithmeticOverflow` rather than returning a wrapped number, so a model
 whose energy leaves that range has no energy this contract can report.
 `Solver._recompute_energy()`
-calls `compute_energy()` and casts to `int`; every backend in this
+returns `model.energy(sample)`; every backend in this
 chapter uses it instead of trusting whatever float its underlying
 library reports. That raw float, where one exists, survives only as
 `metadata["params"]["raw_energy"]`, for diagnostics -- never as the
@@ -44,9 +44,9 @@ three outcomes, not two: the comparison holds, the comparison fails, or
 `ENERGY` raises `ArithmeticOverflow` and the verifier produces no verdict
 at all. The third is not a solver disagreement and must not be read as
 one -- it says the model's energy left the `i64` range on the way to
-being computed. Both `ENERGY` and `compute_energy` accumulate in the same
-sorted key order and check the same intermediates, so the two agree on
-which models fall into it.
+being computed. `XqmxModel.energy` is the function `ENERGY` itself
+calls, so the two accumulate in the same sorted key order, check the
+same intermediates, and agree on which models fall into it.
 
 ## A Large Penalty Does Not Corrupt the Model
 
@@ -55,7 +55,7 @@ argues that a large \\(P\\) cannot corrupt a model, because energy
 differences between feasible assignments survive exactly however large
 \\(P\\) gets. Take that page's three-node Max-Cut model with a one-hot
 penalty \\(P \cdot (x_0 + x_2 - 1)^2\\) added on top, and score two
-feasible assignments and one infeasible one through `compute_energy()`
+feasible assignments and one infeasible one through `XqmxModel.energy()`
 at three wildly different weights:
 
 ```text
@@ -111,7 +111,7 @@ np.float32(-1006) == np.float32(-1004)                 # False -- still resolved
 
 At `P = 2000000000` the two feasible assignments above are
 computationally indistinguishable to `metal-gpu`'s float32 search even
-though `compute_energy()` still tells them apart exactly; at
+though `XqmxModel.energy()` still tells them apart exactly; at
 `P = 1000` they are not. `cuda-gpu`'s float64 search keeps this pair
 distinguishable at this scale, though a large enough \\(P\\) would
 eventually exhaust its wider but still finite mantissa too. Neither

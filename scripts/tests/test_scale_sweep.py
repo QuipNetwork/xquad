@@ -57,21 +57,16 @@ def test_model_shape_formulas():
 def test_build_matrix_cpu_only():
     adapters = scale_sweep.make_adapters()
     lanes = scale_sweep.build_matrix(adapters, solvers=["dwave-cpu"], smoke=False)
-    keys = {(lane.problem, lane.backend, lane.solver) for lane in lanes}
-    assert keys == {
-        ("maxcut", "python", "dwave-cpu"),
-        ("maxcut", "rust", "dwave-cpu"),
-        ("tsp", "python", "dwave-cpu"),
-        ("tsp", "rust", "dwave-cpu"),
-    }
+    keys = {(lane.problem, lane.solver) for lane in lanes}
+    assert keys == {("maxcut", "dwave-cpu"), ("tsp", "dwave-cpu")}
     assert all(lane.ladder == adapters[lane.problem].ladder for lane in lanes)
 
 
-def test_build_matrix_gpu_lanes_rust_only_with_extended_ladder():
+def test_build_matrix_gpu_lanes_use_the_extended_ladder():
     adapters = scale_sweep.make_adapters()
     lanes = scale_sweep.build_matrix(adapters, solvers=["dwave-cpu", "cuda-gpu"], smoke=False)
     gpu = [lane for lane in lanes if lane.solver == "cuda-gpu"]
-    assert {(lane.problem, lane.backend) for lane in gpu} == {("maxcut", "rust"), ("tsp", "rust")}
+    assert {lane.problem for lane in gpu} == {"maxcut", "tsp"}
     assert all(lane.ladder == adapters[lane.problem].gpu_ladder for lane in gpu)
 
 
@@ -84,7 +79,6 @@ def test_build_matrix_smoke_truncates_ladders():
 
 def _rec(
     problem="maxcut",
-    backend="rust",
     solver="dwave-cpu",
     n=8,
     seed=42,
@@ -96,7 +90,6 @@ def _rec(
     rec = {
         "schema": 1,
         "problem": problem,
-        "backend": backend,
         "solver": solver,
         "n": n,
         "seed": seed,
@@ -119,7 +112,7 @@ def _rec(
 def test_lane_ceilings_report_max_ok_n():
     records = [_rec(n=8), _rec(n=16), _rec(n=32, status="timeout")]
     ceilings = scale_sweep.lane_ceilings(records)
-    assert ceilings[("maxcut", "rust", "dwave-cpu")] == 16
+    assert ceilings[("maxcut", "dwave-cpu")] == 16
 
 
 def test_lane_ceilings_excludes_partially_completed_rung():
@@ -129,18 +122,7 @@ def test_lane_ceilings_excludes_partially_completed_rung():
         _rec(n=16, seed=43, status="timeout"),
     ]
     ceilings = scale_sweep.lane_ceilings(records)
-    assert ceilings[("maxcut", "rust", "dwave-cpu")] == 8
-
-
-def test_solution_divergences_detect_cross_vm_difference():
-    match = [_rec(backend="python"), _rec(backend="rust")]
-    assert scale_sweep.solution_divergences(match) == []
-    diverged = [
-        _rec(backend="python", solution=[0, 0, 0, 0, 1, 1, 1, 1]),
-        _rec(backend="rust", solution=[0, 1, 0, 1, 0, 1, 0, 1]),
-    ]
-    divergences = scale_sweep.solution_divergences(diverged)
-    assert len(divergences) == 1 and divergences[0]["n"] == 8 and divergences[0]["seed"] == 42
+    assert ceilings[("maxcut", "dwave-cpu")] == 8
 
 
 def test_parse_point_stdout_takes_last_nonempty_line():

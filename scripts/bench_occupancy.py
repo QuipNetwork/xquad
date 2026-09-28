@@ -10,9 +10,14 @@ verified against the shipped behaviour:
   local-field sums are integer-valued, hence exact in float64 in ANY
   summation order, so a reduction-order change must reproduce these results
   bit-for-bit. Run with ``num_reads=1`` so the best read IS the trajectory.
-* ``parity`` -- gaussian-coefficient instances, where summation order may
-  legitimately flip Metropolis decisions at the float boundary. Compared
-  distributionally (mean/std of best energies across seeds).
+* ``parity`` -- gaussian-magnitude instances, compared distributionally
+  (mean/std of best energies across seeds). ``XqmxModel`` holds 64-bit
+  integers, so h and J are ``round(N(0, 1) * 1000)`` rather than raw
+  normal draws. That makes their local-field sums integer-valued too, so
+  this mode no longer exercises decisions that flip at the float boundary.
+  The instances changed with the move to integer coefficients: gaussian
+  ``parity`` and ``timing`` baselines recorded before it are invalid and
+  must be re-recorded. The maxcut instances are unchanged.
 * ``timing`` -- wall-clock of representative solves (n=512 MaxCut-style,
   n=4096 gaussian), for the before/after speedup measurement.
 
@@ -37,7 +42,7 @@ from typing import Any
 import numpy as np
 
 from _scriptio import SetupError, format_setup_error, read_json, require_key, require_mapping
-from xqvm_py.xqmx import XQMX
+from xqffi.vm import XqmxModel, XqmxSample
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -54,35 +59,43 @@ TIMING_CASES = (
 )
 
 
-def build_maxcut(n: int, seed: int, domain: str) -> XQMX:
-    """Integer-coefficient instance: h=0, J[i,j] in {0.0, 1.0} at density 0.5."""
+def build_maxcut(n: int, seed: int, domain: str) -> XqmxModel:
+    """Integer-coefficient instance: h=0, J[i,j] in {0, 1} at density 0.5."""
     rng = np.random.default_rng(seed)
-    model = XQMX.spin_model(n) if domain == "spin" else XQMX.binary_model(n)
+    model = XqmxModel.spin(n) if domain == "spin" else XqmxModel.binary(n)
     for i in range(n):
         for j in range(i + 1, n):
             if rng.random() < 0.5:
-                model.set_quadratic(i, j, 1.0)
+                model.set_quad(i, j, 1)
     return model
 
 
-def build_gaussian(n: int, seed: int) -> XQMX:
-    """Float-coefficient spin instance: h, J ~ N(0, 1) at density 0.25."""
+#: Gaussian draws are scaled by this and rounded, since the model holds integers.
+GAUSSIAN_SCALE = 1000
+
+
+def _scaled_normal(rng: np.random.Generator) -> int:
+    return round(float(rng.normal()) * GAUSSIAN_SCALE)
+
+
+def build_gaussian(n: int, seed: int) -> XqmxModel:
+    """Spin instance: h, J ~ round(N(0, 1) * GAUSSIAN_SCALE) at density 0.25."""
     rng = np.random.default_rng(seed)
-    model = XQMX.spin_model(n)
+    model = XqmxModel.spin(n)
     for i in range(n):
-        model.set_linear(i, float(rng.normal()))
+        model.set_linear(i, _scaled_normal(rng))
         for j in range(i + 1, n):
             if rng.random() < 0.25:
-                model.set_quadratic(i, j, float(rng.normal()))
+                model.set_quad(i, j, _scaled_normal(rng))
     return model
 
 
-def _sample_hash(sample: XQMX, n: int) -> str:
-    bits = ",".join(str(sample.get_linear(i)) for i in range(n))
+def _sample_hash(sample: XqmxSample, n: int) -> str:
+    bits = ",".join(str(value) for value in sample.values[:n])
     return hashlib.sha256(bits.encode()).hexdigest()
 
 
-def _solve(model: XQMX, num_reads: int, num_sweeps: int, seed: int) -> tuple[dict, float]:
+def _solve(model: XqmxModel, num_reads: int, num_sweeps: int, seed: int) -> tuple[dict, float]:
     from xqsa.cuda_gpu import SolverCudaGPU
 
     solver = SolverCudaGPU(num_reads=num_reads, num_sweeps=num_sweeps, seed=seed)

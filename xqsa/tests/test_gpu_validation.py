@@ -32,8 +32,8 @@ import pytest
 
 pytest.importorskip("dimod", reason="dwave-samplers / dimod not installed")
 
+from xqffi.vm import XqmxModel
 from xqsa import SolverDWaveCPU
-from xqvm_py.xqmx import XQMX
 
 # True in CI (GitLab/GitHub set CI). Hardware tests must run and hard-fail on
 # a misconfigured CI environment rather than skip silently; locally they skip
@@ -68,19 +68,19 @@ GPU_PARAMS = {"num_reads": 64, "num_sweeps": 2000, "seed": 42}
 GLASS_TOLERANCE = 0.02
 
 
-def ferro_chain(n: int = 64) -> tuple[XQMX, int]:
+def ferro_chain(n: int = 64) -> tuple[XqmxModel, int]:
     """Ferromagnetic Ising chain: J=-1 on consecutive pairs.
 
     Ground state is all spins aligned; every coupling contributes -1, so
     the exact ground energy is -(n-1).
     """
-    model = XQMX.spin_model(n)
+    model = XqmxModel.spin(n)
     for i in range(n - 1):
-        model.set_quadratic(i, i + 1, -1.0)
+        model.set_quad(i, i + 1, -1)
     return model, -(n - 1)
 
 
-def frustrated_triangles(n: int = 51) -> tuple[XQMX, int]:
+def frustrated_triangles(n: int = 51) -> tuple[XqmxModel, int]:
     """Disjoint antiferromagnetic triangles: n//3 independent J=+1 3-cliques.
 
     Each triangle is frustrated — at best two of its three edges are
@@ -92,16 +92,16 @@ def frustrated_triangles(n: int = 51) -> tuple[XQMX, int]:
     n >= 25 — domain-wall critical slowing — so it cannot serve as a
     reference model.)
     """
-    model = XQMX.spin_model(n)
+    model = XqmxModel.spin(n)
     for t in range(n // 3):
         a, b, c = 3 * t, 3 * t + 1, 3 * t + 2
-        model.set_quadratic(a, b, 1.0)
-        model.set_quadratic(a, c, 1.0)
-        model.set_quadratic(b, c, 1.0)
+        model.set_quad(a, b, 1)
+        model.set_quad(a, c, 1)
+        model.set_quad(b, c, 1)
     return model, -(n // 3)
 
 
-def bipartite_maxcut(n: int = 20) -> tuple[XQMX, int]:
+def bipartite_maxcut(n: int = 20) -> tuple[XqmxModel, int]:
     """MaxCut QUBO on the complete bipartite graph K(n/2, n/2), unit weights.
 
     Cut edges contribute -1 (-x_i - x_j + 2 x_i x_j with x_i != x_j),
@@ -109,31 +109,31 @@ def bipartite_maxcut(n: int = 20) -> tuple[XQMX, int]:
     ground energy is -(n/2)^2 = -cut size.
     """
     half = n // 2
-    model = XQMX.binary_model(n)
+    model = XqmxModel.binary(n)
     for i in range(half):
         for j in range(half, n):
-            model.add_linear(i, -1.0)
-            model.add_linear(j, -1.0)
-            model.add_quadratic(i, j, 2.0)
+            model.add_linear(i, -1)
+            model.add_linear(j, -1)
+            model.add_quad(i, j, 2)
     return model, -(half * half)
 
 
-def random_spin_glass(n: int = 100, seed: int = 7) -> tuple[XQMX, None]:
+def random_spin_glass(n: int = 100, seed: int = 7) -> tuple[XqmxModel, None]:
     """Seeded random +/-1 spin glass on ~6%-density pairs; no known optimum.
 
     Ground energy is unknown (returned as None): tests compare the GPU
     best-energy against the SolverDWaveCPU reference on the same model.
     """
     rng = random.Random(seed)
-    model = XQMX.spin_model(n)
+    model = XqmxModel.spin(n)
     for i in range(n):
         for j in range(i + 1, n):
             if rng.random() < 0.06:
-                model.set_quadratic(i, j, rng.choice((-1.0, 1.0)))
+                model.set_quad(i, j, rng.choice((-1, 1)))
     return model, None
 
 
-def cpu_reference(model: XQMX) -> int:
+def cpu_reference(model: XqmxModel) -> int:
     """Best energy SolverDWaveCPU finds on ``model`` with the GPU budget.
 
     Uses GPU_PARAMS so the glass cross-check compares equally-budgeted

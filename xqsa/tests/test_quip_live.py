@@ -59,6 +59,7 @@ pytest.importorskip(
     reason="quip_signer extension not installed (run `uv sync --extra quip`)",
 )
 
+from xqffi.vm import XqmxModel, XqmxSample
 from xqsa.quip import (
     MEMPOOL_PALLET,
     PROPOSE_JOB_CALL,
@@ -75,7 +76,6 @@ from xqsa.quip_codec import DEFAULT_ISING_SPEC_ID, PlacementError
 from xqsa.quip_faucet import fund_from_faucet
 from xqsa.quip_metadata import connect as connect_shimmed
 from xqsa.quip_signing import SIGNED_EXTENSIONS, _extension_fields, load_or_generate_keystore
-from xqvm_py.xqmx import XQMX
 
 RPC_URL = os.environ.get("QUIP_RPC_URL")
 FAUCET_URL = os.environ.get("QUIP_FAUCET_URL")
@@ -241,31 +241,31 @@ def solving_miner(_miner_solves) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _feasible(sample: XQMX, size: int, domain_values: set[int]) -> bool:
+def _feasible(sample: XqmxSample, size: int, domain_values: set[int]) -> bool:
     """Return whether each sample value belongs to the model's domain."""
     return all(sample.get_linear(index) in domain_values for index in range(size))
 
 
-def _asymmetric_spin_model() -> XQMX:
+def _asymmetric_spin_model() -> XqmxModel:
     """A 3-var SPIN model with asymmetric fields (exercises index ordering)."""
-    model = XQMX.spin_model(3)
+    model = XqmxModel.spin(3)
     model.set_linear(0, 1)
     model.set_linear(1, -2)
     model.set_linear(2, 3)
-    model.set_quadratic(0, 1, 1)
-    model.set_quadratic(1, 2, -1)
+    model.set_quad(0, 1, 1)
+    model.set_quad(1, 2, -1)
     return model
 
 
-def _dense_spin_model() -> XQMX:
+def _dense_spin_model() -> XqmxModel:
     """A K6 SPIN model: every pair of its 6 variables is coupled."""
     size = 6
-    model = XQMX.spin_model(size)
+    model = XqmxModel.spin(size)
     for i in range(size):
         model.set_linear(i, 1 if i % 2 == 0 else -1)
     for i in range(size):
         for j in range(i + 1, size):
-            model.set_quadratic(i, j, 1 if (i + j) % 2 == 0 else -1)
+            model.set_quad(i, j, 1 if (i + j) % 2 == 0 else -1)
     return model
 
 
@@ -525,11 +525,11 @@ class TestEndToEnd:
         This test covers propose, fleet solve, chain record, and decode without
         requiring the probabilistic live fleet to reach the global optimum.
         """
-        model = XQMX.binary_model(3)
+        model = XqmxModel.binary(3)
         model.set_linear(0, -1)
         model.set_linear(1, 2)
-        model.set_quadratic(0, 1, -3)
-        model.set_quadratic(1, 2, 1)
+        model.set_quad(0, 1, -3)
+        model.set_quad(1, 2, 1)
         solver = make_solver()
         result = solver.solve(model)
         assert result.metadata["energy_matches_chain"] is True

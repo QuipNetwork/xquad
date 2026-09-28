@@ -30,20 +30,20 @@ backend-agnostic across all five:
 
 ```python
 from xqsa import SOLVERS, build_solver
-from xqvm_py import XQMX
+from xqffi.vm import XqmxModel
 
-model = XQMX.binary_model(size=4)
+model = XqmxModel.binary(4)
 model.set_linear(0, -1)
-model.set_quadratic(0, 1, 2)
+model.set_quad(0, 1, 2)
 
 print(sorted(SOLVERS))
 # ['cuda-gpu', 'dwave-cpu', 'dwave-qpu', 'metal-gpu', 'quip']
 
 solver = build_solver("dwave-cpu", seed=42)
 result = solver.solve(model)
-print(result.sample)
+print(result.sample.values)
 print(result.energy)
-# XQMX(mode=SAMPLE, domain=BINARY, size=4, linear_terms=1, quadratic_terms=0)
+# [1, 0, 0, 0]
 # -1
 ```
 
@@ -68,8 +68,7 @@ this package follows it, and any divergence here is a bug.
 
 ## Also see
 
-- [`xqvm_py`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm_py) -- pure-Python reference VM.
-- [`xqffi`](https://gitlab.com/quip.network/xquad/-/tree/main/xqffi) -- pyo3 FFI bindings to the Rust runtime.
+- [`xqffi`](https://gitlab.com/quip.network/xquad/-/tree/main/xqffi) -- pyo3 FFI bindings to the Rust runtime, including the `XqmxModel` and `XqmxSample` types the solvers take and return.
 - [`xqcp`](https://gitlab.com/quip.network/xquad/-/tree/main/xqcp) -- constraint-programming DSL that compiles to models this package can sample.
 - [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) -- umbrella meta-package.
 - [Running Programs](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/running/README.md) -- end-to-end tour.

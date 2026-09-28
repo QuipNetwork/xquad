@@ -44,7 +44,7 @@ weighted threshold.
 
 ```sh
 uv run python examples/weighted_set_cover/runner.py --seed 42
-uv run python examples/weighted_set_cover/runner.py --num-sets 6 --interpreter rust
+uv run python examples/weighted_set_cover/runner.py --num-sets 6
 ```
 
 | Flag | Default | Description |
@@ -52,7 +52,6 @@ uv run python examples/weighted_set_cover/runner.py --num-sets 6 --interpreter r
 | `--num-elements` | `4` | Number of elements in the universe |
 | `--num-sets` | `5` | Number of sets |
 | `--solver` | `dwave-cpu` | Solver backend (see Choosing a solver) |
-| `--interpreter` | `python` | XQVM backend: `python` or `rust` |
 | `--seed` | `42` | Random seed |
 | `-o` | stdout | Write JSON result to file |
 
@@ -65,6 +64,6 @@ non-default solver will not reproduce the canonical result.
 
 ## Canonical output
 
-`example-smoke` validates both interpreters produce `valid == 1` with
+`example-smoke` validates that the runner produces `valid == 1` with
 `--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
 it checks validity, not exact output.

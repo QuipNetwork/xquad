@@ -30,14 +30,14 @@ from typing import Any
 
 import dimod
 
-from xqvm_py.xqmx import XQMX, XQMXDomain, XQMXMode, compute_energy
+from xqffi.vm import Domain, XqmxModel, XqmxSample
 
 
 @dataclass(frozen=True)
 class SolverResult:
     """Result from a solver."""
 
-    sample: XQMX
+    sample: XqmxSample
     energy: int
     timing: float
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -47,39 +47,38 @@ class Solver(ABC):
     """Abstract solver base class for XQMX quadratic models."""
 
     @abstractmethod
-    def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
+    def solve(self, model: XqmxModel, **kwargs: Any) -> SolverResult:
         """Solve a quadratic model, returning the best solution found."""
         ...
 
-    def _validate_model(self, model: XQMX) -> None:
+    def _validate_model(self, model: XqmxModel) -> None:
         """Validate that the model is solvable."""
-        if model.mode != XQMXMode.MODEL:
-            raise ValueError(f"Expected MODEL mode, got {model.mode.name}")
-        if model.domain not in (XQMXDomain.BINARY, XQMXDomain.SPIN):
+        if not isinstance(model, XqmxModel):
+            raise ValueError(f"Expected an XqmxModel, got {type(model).__name__}")
+        if model.domain not in (Domain.BINARY, Domain.SPIN):
             raise ValueError(f"Unsupported domain for solving: {model.domain.name}")
 
-    def _model_to_bqm(self, model: XQMX) -> dimod.BinaryQuadraticModel:
+    def _model_to_bqm(self, model: XqmxModel) -> dimod.BinaryQuadraticModel:
         """Convert an XQMX model to a dimod BQM."""
-        vartype = dimod.BINARY if model.domain == XQMXDomain.BINARY else dimod.SPIN
+        vartype = dimod.BINARY if model.domain == Domain.BINARY else dimod.SPIN
         return dimod.BinaryQuadraticModel(
-            model.linear,
-            model.quadratic,
+            dict(model.linear_items()),
+            dict(model.quadratic_items()),
             0.0,
             vartype,
         )
 
-    def _sample_to_xqmx(self, model: XQMX, raw_sample: dict[int, int]) -> XQMX:
-        """Convert a dimod sample dict to an XQMX sample."""
-        if model.domain == XQMXDomain.BINARY:
-            sample = XQMX.binary_sample(model.size, model.rows, model.cols)
-        else:
-            sample = XQMX.spin_sample(model.size, model.rows, model.cols)
+    def _sample_to_xqmx(self, model: XqmxModel, raw_sample: dict[int, int]) -> XqmxSample:
+        """Convert a dimod sample dict to an XQMX sample.
 
+        dimod omits variables with no terms; those keep the domain default.
+        """
+        sample = XqmxSample.default(model.domain, model.size, model.rows, model.cols)
         for var_idx, value in raw_sample.items():
-            sample.set_linear(var_idx, int(value))
+            sample.set_linear(int(var_idx), int(value))
 
         return sample
 
-    def _recompute_energy(self, model: XQMX, sample: XQMX) -> int:
+    def _recompute_energy(self, model: XqmxModel, sample: XqmxSample) -> int:
         """Compute authoritative integer energy for a model-sample pair."""
-        return int(compute_energy(model, sample))
+        return model.energy(sample)

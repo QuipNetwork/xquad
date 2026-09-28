@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import numpy.typing as npt
 
-from xqvm_py.xqmx import XQMX, XQMXDomain
+from xqffi.vm import Domain, XqmxModel
 
 from .solver import Solver, SolverResult
 
@@ -269,11 +269,11 @@ class SolverCudaGPU(Solver):
 
     ```python
     from xqsa import SolverCudaGPU
-    from xqvm_py.xqmx import XQMX
+    from xquad.types import XqmxModel
 
-    model = XQMX.binary_model(4)
-    model.set_linear(0, -1.0)
-    model.set_quadratic(0, 1, 2.0)
+    model = XqmxModel.binary(4)
+    model.set_linear(0, -1)
+    model.set_quad(0, 1, 2)
 
     solver = SolverCudaGPU()
     result = solver.solve(model)
@@ -331,7 +331,7 @@ class SolverCudaGPU(Solver):
         """Compile the spin-domain SA kernel on first use."""
         return self._cp.RawKernel(_SA_SPIN_KERNEL, "sa_spin")
 
-    def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
+    def solve(self, model: XqmxModel, **kwargs: Any) -> SolverResult:
         """Solve using parallel-replica simulated annealing on GPU.
 
         Raises:
@@ -406,7 +406,7 @@ class SolverCudaGPU(Solver):
             },
         )
 
-    def _to_dense_arrays(self, model: XQMX) -> tuple[cp.ndarray, cp.ndarray]:
+    def _to_dense_arrays(self, model: XqmxModel) -> tuple[cp.ndarray, cp.ndarray]:
         """Convert sparse XQMX model to dense GPU arrays.
 
         Returns:
@@ -417,10 +417,10 @@ class SolverCudaGPU(Solver):
         h_np = np.zeros(n, dtype=np.float64)
         j_np = np.zeros((n, n), dtype=np.float64)
 
-        for idx, coeff in model.linear.items():
+        for idx, coeff in model.linear_items():
             h_np[idx] = coeff
 
-        for (i, j), coeff in model.quadratic.items():
+        for (i, j), coeff in model.quadratic_items():
             j_np[i, j] = coeff
             j_np[j, i] = coeff
 
@@ -483,7 +483,7 @@ class SolverCudaGPU(Solver):
 
     def _run_sa(
         self,
-        model: XQMX,
+        model: XqmxModel,
         *,
         h: cp.ndarray,
         j_matrix: cp.ndarray,
@@ -516,7 +516,7 @@ class SolverCudaGPU(Solver):
         rng = cupy.random.default_rng(seed)
 
         # Initialise replica samples
-        is_binary = model.domain == XQMXDomain.BINARY
+        is_binary = model.domain == Domain.BINARY
         if is_binary:
             samples = rng.integers(0, 2, size=(num_reads, n), dtype=cupy.int32)
         else:

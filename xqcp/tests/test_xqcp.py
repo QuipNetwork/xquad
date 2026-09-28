@@ -25,7 +25,10 @@ from typing import Any
 import pytest
 
 from xqcp import CompiledPrograms, Domain, InputRef, OutputRef, Problem, Types, xq_triu
-from xqvm_py import XQMXDomain
+from xqffi.asm import assemble_source
+from xqffi.vm import Domain as VmDomain
+from xqffi.vm import SizeMismatch, XqmxModel, XqmxSample
+from xquad.vm import VM
 
 # ---------------------------------------------------------------------------
 # Helper: build the TSP problem
@@ -208,28 +211,19 @@ class TestTSPCompilation:
         assert isinstance(programs.decoder, str)
 
     def test_encoder_assembles(self) -> None:
-        from xqvm_py import program_from_xqasm
-
         problem = build_tsp_problem()
         programs = problem.compile()
-        prog = program_from_xqasm(programs.encoder)
-        assert prog is not None
+        assert assemble_source(programs.encoder)
 
     def test_verifier_assembles(self) -> None:
-        from xqvm_py import program_from_xqasm
-
         problem = build_tsp_problem()
         programs = problem.compile()
-        prog = program_from_xqasm(programs.verifier)
-        assert prog is not None
+        assert assemble_source(programs.verifier)
 
     def test_decoder_assembles(self) -> None:
-        from xqvm_py import program_from_xqasm
-
         problem = build_tsp_problem()
         programs = problem.compile()
-        prog = program_from_xqasm(programs.decoder)
-        assert prog is not None
+        assert assemble_source(programs.decoder)
 
     def test_encoder_has_sections(self) -> None:
         problem = build_tsp_problem()
@@ -268,96 +262,57 @@ class TestTSPPipeline:
     """End-to-end pipeline test: compile, assemble, execute."""
 
     def test_full_pipeline_n3(self) -> None:
-        from xqvm_py import (
-            XQMX,
-            Executor,
-            Vec,
-            XQMXMode,
-            program_from_xqasm,
-        )
-        from xqvm_py import (
-            XQMXDomain as D,
-        )
-
         problem = build_tsp_problem()
         programs = problem.compile()
 
         n = 3
         # Distance matrix (upper triangle): d(0,1)=10, d(0,2)=20, d(1,2)=30
         distances = [10, 20, 30]
-        dist_vec = Vec.from_list(distances)
 
         # --- Run encoder ---
-        enc_prog = program_from_xqasm(programs.encoder)
-        enc_ex = Executor()
-        enc_ex.execute(enc_prog, {0: n, 1: dist_vec}, output_slots=16)
-        model = enc_ex.state.output[0]
+        model = _run_program(programs.encoder, {0: n, 1: distances}).output[0]
 
-        assert isinstance(model, XQMX)
+        assert isinstance(model, XqmxModel)
         assert model.size == 9
         assert model.rows == 3
         assert model.cols == 3
 
         # --- Build a known-good sample: identity permutation ---
         # city 0 at position 0, city 1 at position 1, city 2 at position 2
-        sample = XQMX(
-            mode=XQMXMode.SAMPLE,
-            domain=D.BINARY,
-            size=9,
-            rows=3,
-            cols=3,
-        )
+        sample = XqmxSample.default(VmDomain.BINARY, 9, rows=3, cols=3)
         for i in range(n):
-            sample.linear[i * n + i] = 1
+            sample.set_linear(i * n + i, 1)
 
         # --- Run verifier ---
-        ver_prog = program_from_xqasm(programs.verifier)
-        ver_ex = Executor()
-        ver_ex.execute(ver_prog, {0: n, 1: dist_vec, 2: model, 3: sample}, output_slots=16)
-        energy = ver_ex.state.output[0]
-        valid = ver_ex.state.output[1]
+        ver = _run_program(programs.verifier, {0: n, 1: distances, 2: model, 3: sample})
+        energy = ver.output[0]
+        valid = ver.output[1]
 
         assert valid == 1, f"Expected valid=1, got {valid}"
         assert isinstance(energy, int)
 
         # --- Run decoder ---
-        dec_prog = program_from_xqasm(programs.decoder)
-        dec_ex = Executor()
-        dec_ex.execute(dec_prog, {0: sample, 1: n}, output_slots=16)
-        tour = dec_ex.state.output[0]
+        tour = _run_program(programs.decoder, {0: sample, 1: n}).output[0]
 
-        assert isinstance(tour, Vec)
-        tour_list = [tour.get(i) for i in range(n)]
-        assert tour_list == [0, 1, 2], f"Expected [0, 1, 2], got {tour_list}"
+        assert tour == [0, 1, 2], f"Expected [0, 1, 2], got {tour}"
 
     def test_matches_handwritten_tsp(self) -> None:
         """Verify CP-generated programs produce identical results to hand-written."""
         import pathlib
 
-        from xqvm_py import (
-            XQMX,
-            Executor,
-            Vec,
-            XQMXMode,
-            program_from_xqasm,
-        )
-        from xqvm_py import (
-            XQMXDomain as D,
-        )
-
         tsp_dir = pathlib.Path(__file__).parent / "fixtures" / "tsp"
 
         # Load hand-written programs
-        hw_enc = program_from_xqasm((tsp_dir / "encoder.xqasm").read_text())
-        hw_ver = program_from_xqasm((tsp_dir / "verifier.xqasm").read_text())
-        hw_dec = program_from_xqasm((tsp_dir / "decoder.xqasm").read_text())
+        hw_enc = (tsp_dir / "encoder.xqasm").read_text()
+        hw_ver = (tsp_dir / "verifier.xqasm").read_text()
+        hw_dec = (tsp_dir / "decoder.xqasm").read_text()
 
         # Load CP-generated programs
         problem = build_tsp_problem()
         programs = problem.compile()
-        cp_enc = program_from_xqasm(programs.encoder)
-        cp_ver = program_from_xqasm(programs.verifier)
-        cp_dec = program_from_xqasm(programs.decoder)
+        cp_enc = programs.encoder
+        cp_ver = programs.verifier
+        cp_dec = programs.decoder
 
         n = 4
         # Generate distance matrix for 4 cities
@@ -365,23 +320,14 @@ class TestTSPPipeline:
         for j in range(n):
             for i in range(j):
                 distances.append((i + 1) * (j + 1) * 3)
-        dist_vec = Vec.from_list(distances)
+        dist_vec = distances
 
         # Identity sample
-        sample = XQMX(
-            mode=XQMXMode.SAMPLE,
-            domain=D.BINARY,
-            size=n * n,
-            rows=n,
-            cols=n,
-        )
+        sample = XqmxSample.default(VmDomain.BINARY, n * n, rows=n, cols=n)
         for i in range(n):
-            sample.linear[i * n + i] = 1
+            sample.set_linear(i * n + i, 1)
 
-        def run(prog, inputs):
-            ex = Executor()
-            ex.execute(prog, inputs, output_slots=16)
-            return ex.state
+        run = _run_program
 
         # --- Run both encoders ---
         hw_s = run(hw_enc, {0: n, 1: dist_vec})
@@ -393,8 +339,8 @@ class TestTSPPipeline:
         assert hw_model.size == cp_model.size
         assert hw_model.rows == cp_model.rows
         assert hw_model.cols == cp_model.cols
-        assert hw_model.linear == cp_model.linear
-        assert hw_model.quadratic == cp_model.quadratic
+        assert hw_model.linear_items() == cp_model.linear_items()
+        assert hw_model.quadratic_items() == cp_model.quadratic_items()
 
         # --- Run both verifiers ---
         # The hand-written verifier keeps the old three-slot contract; the
@@ -407,9 +353,7 @@ class TestTSPPipeline:
         # --- Run both decoders ---
         hw_s = run(hw_dec, {0: sample, 1: n})
         cp_s = run(cp_dec, {0: sample, 1: n})
-        hw_tour = hw_s.output[0]
-        cp_tour = cp_s.output[0]
-        assert [hw_tour.get(i) for i in range(n)] == [cp_tour.get(i) for i in range(n)]
+        assert hw_s.output[0] == cp_s.output[0]
 
 
 # ---------------------------------------------------------------------------
@@ -463,30 +407,21 @@ class TestMaxCutCompilation:
 
     def test_encoder_assembles(self) -> None:
         """Generated encoder assembles without error."""
-        from xqvm_py import program_from_xqasm
-
         problem = build_maxcut_problem()
         programs = problem.compile()
-        prog = program_from_xqasm(programs.encoder)
-        assert prog.instructions
+        assert assemble_source(programs.encoder)
 
     def test_verifier_assembles(self) -> None:
         """Generated verifier assembles without error."""
-        from xqvm_py import program_from_xqasm
-
         problem = build_maxcut_problem()
         programs = problem.compile()
-        prog = program_from_xqasm(programs.verifier)
-        assert prog.instructions
+        assert assemble_source(programs.verifier)
 
     def test_decoder_assembles(self) -> None:
         """Generated decoder assembles without error."""
-        from xqvm_py import program_from_xqasm
-
         problem = build_maxcut_problem()
         programs = problem.compile()
-        prog = program_from_xqasm(programs.decoder)
-        assert prog.instructions
+        assert assemble_source(programs.decoder)
 
     def test_encoder_has_veclen(self) -> None:
         """Encoder uses VECLEN for edge count computation."""
@@ -520,37 +455,28 @@ class TestMaxCutPipeline:
 
     def test_full_pipeline_n4(self) -> None:
         """Full Max-Cut pipeline for N=4 with bisection sample."""
-        from xqvm_py import XQMX, Executor, Vec, XQMXMode, program_from_xqasm
-        from xqvm_py import XQMXDomain as D
-
         problem = build_maxcut_problem()
         programs = problem.compile()
-        enc = program_from_xqasm(programs.encoder)
-        ver = program_from_xqasm(programs.verifier)
-        dec = program_from_xqasm(programs.decoder)
+        enc = programs.encoder
+        ver = programs.verifier
+        dec = programs.decoder
 
         n = 4
         # Triangle: edges (0,1,10), (0,2,20), (0,3,30), (1,2,15), (1,3,25), (2,3,35)
         edge_data = [0, 1, 10, 0, 2, 20, 0, 3, 30, 1, 2, 15, 1, 3, 25, 2, 3, 35]
-        edge_vec = Vec.from_list(edge_data)
-
-        def run(prog, inputs):
-            ex = Executor()
-            ex.execute(prog, inputs, output_slots=16)
-            return ex.state
+        edge_vec = edge_data
+        run = _run_program
 
         # Encoder
         enc_s = run(enc, {0: n, 1: edge_vec})
         model = enc_s.output[0]
-        assert isinstance(model, XQMX)
+        assert isinstance(model, XqmxModel)
         assert model.size == n
-        assert len(model.linear) > 0
-        assert len(model.quadratic) > 0
+        assert len(model.linear_items()) > 0
+        assert len(model.quadratic_items()) > 0
 
         # Bisection sample: nodes 0,1 in set 0; nodes 2,3 in set 1
-        sample = XQMX(mode=XQMXMode.SAMPLE, domain=D.BINARY, size=n)
-        sample.linear[2] = 1
-        sample.linear[3] = 1
+        sample = XqmxSample.binary([0, 0, 1, 1])
 
         # Verifier
         ver_s = run(ver, {0: n, 1: edge_vec, 2: model, 3: sample})
@@ -560,45 +486,33 @@ class TestMaxCutPipeline:
 
         # Decoder
         dec_s = run(dec, {0: sample, 1: n})
-        part = dec_s.output[0]
-        assert isinstance(part, Vec)
-        partition = [part.get(i) for i in range(n)]
-        assert partition == [0, 0, 1, 1]
+        assert dec_s.output[0] == [0, 0, 1, 1]
 
     def test_matches_handwritten_maxcut(self) -> None:
         """Verify CP-generated programs produce identical results to hand-written."""
         import pathlib
 
-        from xqvm_py import XQMX, Executor, Vec, XQMXMode, program_from_xqasm
-        from xqvm_py import XQMXDomain as D
-
         maxcut_dir = pathlib.Path(__file__).parent / "fixtures" / "maxcut"
 
         # Load hand-written programs
-        hw_enc = program_from_xqasm((maxcut_dir / "encoder.xqasm").read_text())
-        hw_ver = program_from_xqasm((maxcut_dir / "verifier.xqasm").read_text())
-        hw_dec = program_from_xqasm((maxcut_dir / "decoder.xqasm").read_text())
+        hw_enc = (maxcut_dir / "encoder.xqasm").read_text()
+        hw_ver = (maxcut_dir / "verifier.xqasm").read_text()
+        hw_dec = (maxcut_dir / "decoder.xqasm").read_text()
 
         # Load CP-generated programs
         problem = build_maxcut_problem()
         programs = problem.compile()
-        cp_enc = program_from_xqasm(programs.encoder)
-        cp_ver = program_from_xqasm(programs.verifier)
-        cp_dec = program_from_xqasm(programs.decoder)
+        cp_enc = programs.encoder
+        cp_ver = programs.verifier
+        cp_dec = programs.decoder
 
         n = 4
-        edge_data = [0, 1, 10, 0, 2, 20, 0, 3, 30, 1, 2, 15, 1, 3, 25, 2, 3, 35]
-        edge_vec = Vec.from_list(edge_data)
+        edge_vec = [0, 1, 10, 0, 2, 20, 0, 3, 30, 1, 2, 15, 1, 3, 25, 2, 3, 35]
 
         # Bisection sample
-        sample = XQMX(mode=XQMXMode.SAMPLE, domain=D.BINARY, size=n)
-        sample.linear[2] = 1
-        sample.linear[3] = 1
+        sample = XqmxSample.binary([0, 0, 1, 1])
 
-        def run(prog, inputs):
-            ex = Executor()
-            ex.execute(prog, inputs, output_slots=16)
-            return ex.state
+        run = _run_program
 
         # --- Compare encoders ---
         hw_s = run(hw_enc, {0: n, 1: edge_vec})
@@ -607,8 +521,8 @@ class TestMaxCutPipeline:
         cp_model = cp_s.output[0]
 
         assert hw_model.size == cp_model.size
-        assert hw_model.linear == cp_model.linear
-        assert hw_model.quadratic == cp_model.quadratic
+        assert hw_model.linear_items() == cp_model.linear_items()
+        assert hw_model.quadratic_items() == cp_model.quadratic_items()
 
         # --- Compare verifiers ---
         # The hand-written verifier keeps the old three-slot contract; the
@@ -621,9 +535,7 @@ class TestMaxCutPipeline:
         # --- Compare decoders ---
         hw_s = run(hw_dec, {0: sample, 1: n})
         cp_s = run(cp_dec, {0: sample, 1: n})
-        hw_part = hw_s.output[0]
-        cp_part = cp_s.output[0]
-        assert [hw_part.get(i) for i in range(n)] == [cp_part.get(i) for i in range(n)]
+        assert hw_s.output[0] == cp_s.output[0]
 
 
 # ---------------------------------------------------------------------------
@@ -692,13 +604,20 @@ class TestPostCompilationVerification:
 # ---------------------------------------------------------------------------
 
 
-def _run_program(source: str, inputs: dict[int, object]) -> object:
-    """Execute an .xqasm program on the Python reference VM."""
-    from xqvm_py import Executor, program_from_xqasm
+class _Run:
+    """One run's outputs, indexed by slot."""
 
-    executor = Executor()
-    executor.execute(program_from_xqasm(source), inputs, output_slots=16)
-    return executor.state
+    def __init__(self, output: list[object]) -> None:
+        self.output = output
+
+
+def _run_program(source: str, inputs: dict[int, object]) -> _Run:
+    """Execute an .xqasm program on the VM, calldata keyed by slot."""
+    vm = VM()
+    vm.set_calldata([inputs.get(slot) for slot in range(max(inputs, default=-1) + 1)])
+    vm.set_output_slots(16)
+    vm.run(source)
+    return _Run(vm.outputs())
 
 
 def _encode(programs: CompiledPrograms, calldata: list[object]) -> object:
@@ -721,15 +640,13 @@ def _verify(
     ``integer_k`` declares the sample's own domain width, which is the
     solver's word and need not match the model's.
     """
-    from xqvm_py import XQMX
-
     if integer_k is not None:
-        sample = XQMX.integer_sample(model.size, integer_k, rows=model.rows, cols=model.cols)
+        domain = VmDomain.integer(integer_k)
     else:
-        build = XQMX.spin_sample if spin else XQMX.binary_sample
-        sample = build(model.size, rows=model.rows, cols=model.cols)
+        domain = VmDomain.SPIN if spin else VmDomain.BINARY
+    sample = XqmxSample.default(domain, model.size, rows=model.rows, cols=model.cols)
     for index, value in values.items():
-        sample.linear[index] = value
+        sample.set_linear(index, value)
 
     inputs = dict(enumerate([*calldata, model, sample]))
     return _run_program(programs.verifier, inputs).output[1]
@@ -990,12 +907,15 @@ class TestVerifierChecksEveryConstraint:
             problem.model.apply_onehot_row(i, 100)
 
         programs = problem.compile()
-        calldata = [2]
+        calldata = [3]
         model = _encode(programs, calldata)
 
-        assert _verify(programs, calldata, model, {0: 1, 3: 1}) == 1
-        # Row sums still come to 1 each, but the entries are not 0/1.
-        assert _verify(programs, calldata, model, {0: 2, 1: -1, 3: 1}) == 0
+        assert _verify(programs, calldata, model, {0: 1, 4: 1, 8: 1}) == 1
+        # A spin sample whose rows read [1, 1, -1]: every row sums to 1, but
+        # the entries are not 0/1. An XqmxSample holds only values of its own
+        # domain, so a spin sample is how a non-binary value reaches the
+        # verifier.
+        assert _verify(programs, calldata, model, _ones(0, 1, 3, 4, 6, 7), spin=True) == 0
 
     def test_spin_domain_admits_plus_and_minus_one(self) -> None:
         """A spin model is checked against -1/+1, not 0/1."""
@@ -1009,7 +929,8 @@ class TestVerifierChecksEveryConstraint:
         model = _encode(programs, calldata)
 
         assert _verify(programs, calldata, model, {0: 1, 1: -1}, spin=True) == 1
-        assert _verify(programs, calldata, model, {0: 0}, spin=True) == 0
+        # A binary sample is all zeros by default, and 0 is not a spin.
+        assert _verify(programs, calldata, model, {}) == 0
 
     def test_check_lands_inside_the_loop_that_declared_it(self) -> None:
         """A constraint declared in a loop is checked once per iteration."""
@@ -1699,13 +1620,11 @@ class TestDecoderRegisterFileIsTotal:
 # ---------------------------------------------------------------------------
 
 
-def _integer_sample(size: int, k: int, values: dict[int, int]) -> object:
+def _integer_sample(size: int, k: int, values: dict[int, int]) -> XqmxSample:
     """An integer sample over {0, ..., k-1} with the given values set."""
-    from xqvm_py import XQMX
-
-    sample = XQMX.integer_sample(size, k)
+    sample = XqmxSample.default(VmDomain.integer(k), size)
     for index, value in values.items():
-        sample.linear[index] = value
+        sample.set_linear(index, value)
     return sample
 
 
@@ -1719,9 +1638,9 @@ class TestIntegerDomainKForm:
         programs = problem.compile()
 
         model = _encode(programs, [3])
-        assert model.domain is XQMXDomain.INTEGER
+        assert model.domain == VmDomain.integer(4)
         assert model.size == 3
-        assert model.integer_k == 4
+        assert model.k == 4
 
     def test_the_width_is_pushed_after_the_size(self) -> None:
         # XQMX pops k, then size, so the width is the last thing pushed.
@@ -1736,7 +1655,7 @@ class TestIntegerDomainKForm:
         n = problem.input("n", type=Types.Int)
         problem.define_model(size=4, domain=Domain.INTEGER, k=n)
 
-        assert _encode(problem.compile(), [5]).integer_k == 5
+        assert _encode(problem.compile(), [5]).k == 5
 
     def test_the_verifier_accepts_a_sample_inside_the_domain(self) -> None:
         problem = Problem("IntOk")
@@ -1760,16 +1679,17 @@ class TestIntegerDomainKForm:
 
         assert _verify(programs, [3], model, {0: 4}, integer_k=5) == 0
 
-    def test_only_the_declared_size_is_domain_checked(self) -> None:
+    def test_a_sample_longer_than_the_model_is_refused(self) -> None:
+        # The Python reference VM once read only the declared size and let a
+        # longer sample through; `ENERGY` requires the sizes to match.
         problem = Problem("IntTail")
         problem.define_model(size=2, domain=Domain.INTEGER, k=3)
         programs = problem.compile()
         model = _encode(programs, [])
 
-        # Index 2 is past the model's declared size, so its value is the
-        # solver's business and not the domain check's.
-        sample_values = {0: 2, 1: 0, 2: 9}
-        assert _verify(programs, [], model, sample_values, integer_k=10) == 1
+        sample = XqmxSample.integer([2, 0, 9], 10)
+        with pytest.raises(SizeMismatch):
+            _run_program(programs.verifier, {0: model, 1: sample})
 
 
 class TestIntegerDomainRangedForm:
@@ -1779,7 +1699,7 @@ class TestIntegerDomainRangedForm:
         problem = Problem("Ranged")
         problem.define_model(size=4, domain=Domain.INTEGER, lo=-5, hi=5)
 
-        assert _encode(problem.compile(), []).integer_k == 11
+        assert _encode(problem.compile(), []).k == 11
 
     def test_a_quadratic_write_records_two_linear_corrections(self) -> None:
         problem = Problem("Shift")
@@ -1798,9 +1718,9 @@ class TestIntegerDomainRangedForm:
         problem.model.quadratic[0, 1].add(7)
         model = _encode(problem.compile(), [])
 
-        assert model.quadratic[(0, 1)] == 7
-        assert model.linear[0] == 7 * -5
-        assert model.linear[1] == 7 * -5
+        assert model.get_quad(0, 1) == 7
+        assert model.get_linear(0) == 7 * -5
+        assert model.get_linear(1) == 7 * -5
 
     def test_a_diagonal_write_corrects_twice_on_the_one_index(self) -> None:
         # Squaring y + lo asks for 2*w*lo, which the two corrections give
@@ -1810,7 +1730,7 @@ class TestIntegerDomainRangedForm:
         problem.model.quadratic[2, 2].add(3)
         model = _encode(problem.compile(), [])
 
-        assert model.linear[2] == 2 * 3 * -5
+        assert model.get_linear(2) == 2 * 3 * -5
 
     def test_a_linear_write_is_not_corrected(self) -> None:
         problem = Problem("ShiftLinear")
@@ -1819,7 +1739,7 @@ class TestIntegerDomainRangedForm:
 
         kinds = [action.kind for action in problem._actions]
         assert kinds == ["define_model", "add_linear"]
-        assert _encode(problem.compile(), []).linear[0] == 7
+        assert _encode(problem.compile(), []).get_linear(0) == 7
 
     def test_an_unshifted_model_emits_no_correction(self) -> None:
         problem = Problem("NoShift")
@@ -1872,7 +1792,7 @@ class TestIntegerDomainRangedForm:
             problem.model.linear[0] = 7
 
         problem.model.linear[0].add(7)
-        assert _encode(problem.compile(), []).linear[0] == 7 + 3 * -5
+        assert _encode(problem.compile(), []).get_linear(0) == 7 + 3 * -5
 
     def test_a_runtime_lo_collides_with_a_decoder_loop_bound(self) -> None:
         # The decoder is handed the sample and exactly one scalar, and every
@@ -1899,7 +1819,7 @@ class TestCategoricalDomain:
 
         kinds = [action.kind for action in problem._actions]
         assert kinds == ["input", "define_model", "range_start", "onehot_row", "range_end"]
-        assert problem.model.domain is XQMXDomain.BINARY
+        assert problem.model.domain is Domain.BINARY
         assert problem.model.is_2d
 
         model = _encode(problem.compile(), [4])
@@ -1915,12 +1835,10 @@ class TestCategoricalDomain:
             out.append(problem.sample.case(v))
         programs = problem.compile()
 
-        from xqvm_py import XQMX
-
-        sample = XQMX.binary_sample(9, rows=3, cols=3)
+        sample = XqmxSample.default(VmDomain.BINARY, 9, rows=3, cols=3)
         # Variable 0 takes case 2, variable 1 takes case 0, variable 2 none.
-        sample.linear[2] = 1
-        sample.linear[3] = 1
+        sample.set_linear(2, 1)
+        sample.set_linear(3, 1)
         state = _run_program(programs.decoder, {0: sample, 1: 3})
 
         assert list(state.output[0]) == [2, 0, -1]
@@ -2012,20 +1930,31 @@ class TestDomainArgumentRejections:
 
 
 class TestDomainEnum:
-    """Domain wraps XQMXDomain, and define_model takes either."""
+    """Domain members are the domain names, matching the VM's Domain.name."""
 
-    @pytest.mark.parametrize("member", list(XQMXDomain))
-    def test_lookup_by_value_normalises(self, member: XQMXDomain) -> None:
-        assert Domain(member).value is member
+    @pytest.mark.parametrize(
+        ("member", "vm_domain"),
+        [(Domain.BINARY, VmDomain.BINARY), (Domain.SPIN, VmDomain.SPIN), (Domain.INTEGER, VmDomain.integer(4))],
+    )
+    def test_values_match_the_vm_domain_names(self, member: Domain, vm_domain: VmDomain) -> None:
+        assert member.value == vm_domain.name
+        assert Domain(vm_domain.name) is member
 
-    def test_define_model_accepts_the_vm_enum(self) -> None:
-        problem = Problem("Either")
-        problem.define_model(size=4, domain=XQMXDomain.BINARY)
+    @pytest.mark.parametrize("kwargs", [{}, {"k": 4}], ids=["no-k", "with-k"])
+    @pytest.mark.parametrize("vm_domain", [VmDomain.BINARY, VmDomain.integer(4)], ids=["binary", "integer"])
+    def test_define_model_rejects_the_vm_domain(self, vm_domain: VmDomain, kwargs: dict) -> None:
+        # xquad.types re-exports this class as `Domain` too; it matches no
+        # xqcp.Domain member, so any form of it is refused before recording.
+        with pytest.raises(TypeError, match=r"takes an xqcp\.Domain member.*of type xqffi\.vm\.Domain"):
+            Problem("Vm").define_model(size=4, domain=vm_domain, **kwargs)
 
-        assert problem.model.domain is XQMXDomain.BINARY
+    @pytest.mark.parametrize("value", ["binary", None])
+    def test_define_model_rejects_a_domain_value(self, value: object) -> None:
+        with pytest.raises(TypeError, match=r"takes an xqcp\.Domain member"):
+            Problem("Value").define_model(size=4, domain=value)
 
     def test_categorical_has_no_vm_counterpart(self) -> None:
-        assert Domain.CATEGORICAL.value is None
+        assert Domain.CATEGORICAL.value == "categorical"
 
 
 class TestConstraintsAreBinaryOnly:

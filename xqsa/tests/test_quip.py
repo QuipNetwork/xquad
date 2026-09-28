@@ -36,6 +36,7 @@ import pytest
 
 dimod = pytest.importorskip("dimod", reason="dwave-samplers / dimod not installed")
 
+from xqffi.vm import Domain, XqmxModel, XqmxSample
 from xqsa.quip_codec import (
     DEFAULT_ISING_SPEC_ID,
     I32_MAX,
@@ -58,7 +59,6 @@ from xqsa.quip_codec import (
     native_placement,
 )
 from xqsa.solver import SolverResult
-from xqvm_py.xqmx import XQMX, XQMXDomain, compute_energy
 
 # ---------------------------------------------------------------------------
 # Shared fixtures: small, hand-checkable topologies
@@ -155,7 +155,7 @@ class TestIsingJobGuards:
                 h_values=(0,),
                 j_values=tuple([0] * PATH5.num_edges),
                 mapping={},
-                domain=XQMXDomain.SPIN,
+                domain=Domain.SPIN,
             )
 
     def test_rejects_j_values_length_mismatch(self) -> None:
@@ -165,7 +165,7 @@ class TestIsingJobGuards:
                 h_values=tuple([0] * PATH5.num_nodes),
                 j_values=(0,),
                 mapping={},
-                domain=XQMXDomain.SPIN,
+                domain=Domain.SPIN,
             )
 
     def test_mapping_is_immutable(self) -> None:
@@ -175,7 +175,7 @@ class TestIsingJobGuards:
             h_values=tuple([0] * PATH5.num_nodes),
             j_values=tuple([0] * PATH5.num_edges),
             mapping={0: 0},
-            domain=XQMXDomain.SPIN,
+            domain=Domain.SPIN,
         )
         assert job.mapping == {0: 0}
         with pytest.raises(TypeError):
@@ -301,10 +301,10 @@ class TestModelToIsing:
     def test_spin_positions_and_scaling(self) -> None:
         """SPIN coefficients scatter to mapped positions, scaled by MILLI_SCALE."""
         topo = Topology.of([10, 20, 30], [(10, 20), (20, 30)])
-        model = XQMX.spin_model(2)
+        model = XqmxModel.spin(2)
         model.set_linear(0, 3)
         model.set_linear(1, -2)
-        model.set_quadratic(0, 1, 5)
+        model.set_quad(0, 1, 5)
 
         job = model_to_ising(model, topo, mapping={0: 10, 1: 20})
 
@@ -312,7 +312,7 @@ class TestModelToIsing:
         # Node 30 and edge (20,30) host nothing, so they are not part of the order.
         assert job.h_values == (3 * MILLI_SCALE, -2 * MILLI_SCALE)
         assert job.j_values == (5 * MILLI_SCALE,)
-        assert job.domain == XQMXDomain.SPIN
+        assert job.domain == Domain.SPIN
         assert job.nodes == (10, 20)
         assert job.edges == ((10, 20),)
 
@@ -323,8 +323,8 @@ class TestModelToIsing:
         permanent chain storage. The submitted graph is still drawn from the
         hardware graph, so every node and edge in it is real.
         """
-        model = XQMX.spin_model(2)
-        model.set_quadratic(0, 1, 1)
+        model = XqmxModel.spin(2)
+        model.set_quad(0, 1, 1)
         job = model_to_ising(model, PATH5)
 
         assert len(job.h_values) == job.topology.num_nodes == 2
@@ -335,7 +335,7 @@ class TestModelToIsing:
 
     def test_linear_only_model_submits_no_edges(self) -> None:
         """A model with no couplings yields nodes and an empty edge array."""
-        model = XQMX.spin_model(2)
+        model = XqmxModel.spin(2)
         model.set_linear(0, 1)
         model.set_linear(1, -1)
         job = model_to_ising(model, PATH5)
@@ -346,11 +346,11 @@ class TestModelToIsing:
     def test_empty_model_rejected(self) -> None:
         """A model with no terms has nothing to solve."""
         with pytest.raises(EncodingError, match="no linear or quadratic"):
-            model_to_ising(XQMX.spin_model(3), PATH5)
+            model_to_ising(XqmxModel.spin(3), PATH5)
 
     def test_single_variable_model(self) -> None:
         """A lone linear term places onto the smallest free node."""
-        model = XQMX.spin_model(1)
+        model = XqmxModel.spin(1)
         model.set_linear(0, 7)
         job = model_to_ising(model, PATH5)
         assert job.mapping == {0: 0}
@@ -359,42 +359,35 @@ class TestModelToIsing:
 
     def test_i32_overflow_at_boundary(self) -> None:
         """The largest in-range coefficient encodes; one above overflows."""
-        ok = XQMX.spin_model(1)
+        ok = XqmxModel.spin(1)
         ok.set_linear(0, MAX_NATURAL_COEFFICIENT)
         job = model_to_ising(ok, PATH5)
         assert job.h_values[0] == MAX_NATURAL_COEFFICIENT * MILLI_SCALE <= I32_MAX
 
-        over = XQMX.spin_model(1)
+        over = XqmxModel.spin(1)
         over.set_linear(0, MAX_NATURAL_COEFFICIENT + 1)
         with pytest.raises(EncodingError, match="overflows"):
             model_to_ising(over, PATH5)
 
     def test_i32_overflow_at_negative_boundary(self) -> None:
         """The most-negative in-range coefficient encodes; one below overflows."""
-        ok = XQMX.spin_model(1)
+        ok = XqmxModel.spin(1)
         ok.set_linear(0, -MAX_NATURAL_COEFFICIENT)
         job = model_to_ising(ok, PATH5)
         assert job.h_values[0] == -MAX_NATURAL_COEFFICIENT * MILLI_SCALE >= I32_MIN
 
-        over = XQMX.spin_model(1)
+        over = XqmxModel.spin(1)
         over.set_linear(0, -(MAX_NATURAL_COEFFICIENT + 1))
         with pytest.raises(EncodingError, match="overflows"):
             model_to_ising(over, PATH5)
 
-    def test_non_milli_coefficient_rejected(self) -> None:
-        """A float coefficient finer than milli precision is rejected, not rounded."""
-        model = XQMX.spin_model(1)
-        model.set_linear(0, 0.0001)  # 0.1 milli -- finer than the 1/1000 grid
-        with pytest.raises(EncodingError, match="milli precision"):
-            model_to_ising(model, PATH5)
-
     def test_binary_path_is_milli_exact(self) -> None:
         """The BINARY->spin transform yields milli-exact i32 coefficients."""
-        model = XQMX.binary_model(3)
+        model = XqmxModel.binary(3)
         model.set_linear(0, -1)
         model.set_linear(1, 2)
-        model.set_quadratic(0, 1, -2)
-        model.set_quadratic(1, 2, 3)
+        model.set_quad(0, 1, -2)
+        model.set_quad(1, 2, 3)
         job = model_to_ising(model, PATH5)
         # Quarter-valued spin coefficients land exactly on multiples of 250.
         assert all(isinstance(v, int) for v in job.h_values)
@@ -403,8 +396,8 @@ class TestModelToIsing:
 
     def test_explicit_mapping_threaded_through(self) -> None:
         """A caller mapping reaches placement and drives the scatter positions."""
-        model = XQMX.spin_model(2)
-        model.set_quadratic(0, 1, 1)
+        model = XqmxModel.spin(2)
+        model.set_quad(0, 1, 1)
         job = model_to_ising(model, PATH5, mapping={0: 3, 1: 4})
         assert job.mapping == {0: 3, 1: 4}
         assert job.nodes == (3, 4)
@@ -422,11 +415,11 @@ class TestNativePlacement:
     def test_full_graph_identity_mapping(self) -> None:
         """A model already labelled 0..n-1, fully coupled, relabels to itself."""
         n = 28
-        model = XQMX.spin_model(n)
+        model = XqmxModel.spin(n)
         for i in range(n):
             model.set_linear(i, 1 if i % 2 == 0 else -1)
         for u, v in itertools.combinations(range(n), 2):
-            model.set_quadratic(u, v, 1.0)
+            model.set_quad(u, v, 1)
 
         topo, mapping = native_placement(model)
         assert mapping == {i: i for i in range(n)}
@@ -437,9 +430,9 @@ class TestNativePlacement:
 
     def test_sparse_variables_relabel_by_rank(self) -> None:
         """Non-contiguous participating variables relabel to dense ranks."""
-        model = XQMX.spin_model(10)
-        model.set_quadratic(0, 5, 1.0)
-        model.set_quadratic(5, 9, -1.0)
+        model = XqmxModel.spin(10)
+        model.set_quad(0, 5, 1)
+        model.set_quad(5, 9, -1)
 
         topo, mapping = native_placement(model)
         assert topo.nodes == (0, 1, 2)
@@ -456,12 +449,12 @@ class TestNativePlacement:
     def test_binary_matches_model_to_ising_on_a_permissive_topology(self) -> None:
         """The native placement covers the same variables and coefficients as
         model_to_ising against a topology permissive enough to admit any mapping."""
-        model = XQMX.binary_model(6)
+        model = XqmxModel.binary(6)
         model.set_linear(0, 1)
         model.set_linear(2, -1)
-        model.set_quadratic(0, 2, 2)
-        model.set_quadratic(2, 4, -3)
-        model.set_quadratic(0, 4, 1)
+        model.set_quad(0, 2, 2)
+        model.set_quad(2, 4, -3)
+        model.set_quad(0, 4, 1)
 
         native_topo, native_mapping = native_placement(model)
         native_job = model_to_ising(model, native_topo, mapping=native_mapping)
@@ -484,8 +477,8 @@ class TestNativePlacement:
 
     def test_binary_decode_on_sparse_ids(self) -> None:
         """A BINARY model over sparse ids decodes spins back as x = (s + 1) / 2."""
-        model = XQMX.binary_model(4)
-        model.set_quadratic(1, 3, 1)
+        model = XqmxModel.binary(4)
+        model.set_quad(1, 3, 1)
 
         topo, mapping = native_placement(model)
         assert mapping == {1: 0, 3: 1}
@@ -497,8 +490,8 @@ class TestNativePlacement:
 
     def test_no_allowed_value_sets(self) -> None:
         """A native topology carries no allowed-value sets."""
-        model = XQMX.spin_model(2)
-        model.set_quadratic(0, 1, 1)
+        model = XqmxModel.spin(2)
+        model.set_quad(0, 1, 1)
         topo, _mapping = native_placement(model)
         assert topo.allowed_h is None
         assert topo.allowed_j is None
@@ -513,7 +506,7 @@ class TestNativePlacement:
 class TestDecodeSolution:
     """Reading a returned spin vector back into an XQMX sample."""
 
-    def _job(self, topo: Topology, mapping: dict[int, int], domain: XQMXDomain) -> IsingJob:
+    def _job(self, topo: Topology, mapping: dict[int, int], domain: Domain) -> IsingJob:
         return IsingJob(
             topology=topo,
             h_values=tuple([0] * topo.num_nodes),
@@ -524,8 +517,8 @@ class TestDecodeSolution:
 
     def test_spin_roundtrip_positions(self) -> None:
         """Each mapped variable reads the spin at its assigned node position."""
-        job = self._job(PATH5, {0: 1, 1: 3}, XQMXDomain.SPIN)
-        model = XQMX.spin_model(2)
+        job = self._job(PATH5, {0: 1, 1: 3}, Domain.SPIN)
+        model = XqmxModel.spin(2)
         # spins by node: node0=-1 node1=+1 node2=-1 node3=-1 node4=+1
         spins = [-1, 1, -1, -1, 1]
         sample = decode_solution(job, spins, model)
@@ -534,36 +527,36 @@ class TestDecodeSolution:
 
     def test_binary_reverse_transform(self) -> None:
         """BINARY decode maps spins back via x = (s + 1) / 2."""
-        job = self._job(PATH5, {0: 0, 1: 1}, XQMXDomain.BINARY)
-        model = XQMX.binary_model(2)
+        job = self._job(PATH5, {0: 0, 1: 1}, Domain.BINARY)
+        model = XqmxModel.binary(2)
         sample = decode_solution(job, [1, -1, -1, -1, -1], model)
         assert sample.get_linear(0) == 1  # spin +1 -> 1
         assert sample.get_linear(1) == 0  # spin -1 -> 0
 
     def test_unmapped_variables_keep_defaults(self) -> None:
         """Unplaced variables stay at the sample default (-1 spin / 0 binary)."""
-        spin_job = self._job(PATH5, {0: 0}, XQMXDomain.SPIN)
-        spin_sample = decode_solution(spin_job, [1, 1, 1, 1, 1], XQMX.spin_model(3))
+        spin_job = self._job(PATH5, {0: 0}, Domain.SPIN)
+        spin_sample = decode_solution(spin_job, [1, 1, 1, 1, 1], XqmxModel.spin(3))
         assert spin_sample.get_linear(0) == 1
         assert spin_sample.get_linear(1) == -1
         assert spin_sample.get_linear(2) == -1
 
-        bin_job = self._job(PATH5, {0: 0}, XQMXDomain.BINARY)
-        bin_sample = decode_solution(bin_job, [1, 1, 1, 1, 1], XQMX.binary_model(3))
+        bin_job = self._job(PATH5, {0: 0}, Domain.BINARY)
+        bin_sample = decode_solution(bin_job, [1, 1, 1, 1, 1], XqmxModel.binary(3))
         assert bin_sample.get_linear(1) == 0
         assert bin_sample.get_linear(2) == 0
 
     def test_wrong_length_rejected(self) -> None:
         """A spin vector that does not span the topology is rejected."""
-        job = self._job(PATH5, {0: 0}, XQMXDomain.SPIN)
+        job = self._job(PATH5, {0: 0}, Domain.SPIN)
         with pytest.raises(EncodingError, match="length"):
-            decode_solution(job, [1, 1, 1], XQMX.spin_model(1))
+            decode_solution(job, [1, 1, 1], XqmxModel.spin(1))
 
     def test_invalid_spin_rejected(self) -> None:
         """A non-spin entry is rejected (the chain returns only -1/+1)."""
-        job = self._job(PATH5, {0: 0}, XQMXDomain.SPIN)
+        job = self._job(PATH5, {0: 0}, Domain.SPIN)
         with pytest.raises(EncodingError, match="invalid spin"):
-            decode_solution(job, [1, 0, 1, -1, 1], XQMX.spin_model(1))
+            decode_solution(job, [1, 0, 1, -1, 1], XqmxModel.spin(1))
 
 
 # ---------------------------------------------------------------------------
@@ -571,17 +564,16 @@ class TestDecodeSolution:
 # ---------------------------------------------------------------------------
 
 
-def _brute_force_optimum(model: XQMX) -> tuple[dict[int, int], int]:
+def _brute_force_optimum(model: XqmxModel) -> tuple[dict[int, int], int]:
     """Return the lowest-energy assignment and energy by exhaustive search."""
-    lo, hi = (0, 1) if model.domain == XQMXDomain.BINARY else (-1, 1)
-    sample_ctor = XQMX.binary_sample if model.domain == XQMXDomain.BINARY else XQMX.spin_sample
+    lo, hi = (0, 1) if model.domain == Domain.BINARY else (-1, 1)
     best_assignment: dict[int, int] = {}
     best_energy: int | None = None
     for combo in itertools.product((lo, hi), repeat=model.size):
-        sample = sample_ctor(model.size)
+        sample = XqmxSample.default(model.domain, model.size)
         for var, value in enumerate(combo):
             sample.set_linear(var, value)
-        energy = compute_energy(model, sample)
+        energy = model.energy(sample)
         if best_energy is None or energy < best_energy:
             best_energy = energy
             best_assignment = dict(enumerate(combo))
@@ -589,8 +581,8 @@ def _brute_force_optimum(model: XQMX) -> tuple[dict[int, int], int]:
     return best_assignment, best_energy
 
 
-@pytest.mark.parametrize("domain", [XQMXDomain.SPIN, XQMXDomain.BINARY])
-def test_encode_decode_roundtrip_matches_brute_force(domain: XQMXDomain) -> None:
+@pytest.mark.parametrize("domain", [Domain.SPIN, Domain.BINARY])
+def test_encode_decode_roundtrip_matches_brute_force(domain: Domain) -> None:
     """Encoding then decoding the optimal spin vector reproduces the optimum.
 
     Builds a small model, encodes it onto a path topology, then constructs the
@@ -599,12 +591,12 @@ def test_encode_decode_roundtrip_matches_brute_force(domain: XQMXDomain) -> None
     The decoded sample must equal the optimum and recompute the same energy --
     proving encode/decode index alignment is self-consistent.
     """
-    model = XQMX.spin_model(3) if domain == XQMXDomain.SPIN else XQMX.binary_model(3)
+    model = XqmxModel.spin(3) if domain == Domain.SPIN else XqmxModel.binary(3)
     model.set_linear(0, -1)
     model.set_linear(1, 2)
     model.set_linear(2, -1)
-    model.set_quadratic(0, 1, -2)
-    model.set_quadratic(1, 2, 3)
+    model.set_quad(0, 1, -2)
+    model.set_quad(1, 2, 3)
 
     job = model_to_ising(model, PATH5)
     optimum, optimum_energy = _brute_force_optimum(model)
@@ -613,34 +605,34 @@ def test_encode_decode_roundtrip_matches_brute_force(domain: XQMXDomain) -> None
     spin_vector = [-1] * job.topology.num_nodes
     for var, node in job.mapping.items():
         value = optimum[var]
-        spin = value if domain == XQMXDomain.SPIN else (2 * value - 1)
+        spin = value if domain == Domain.SPIN else (2 * value - 1)
         spin_vector[job.topology.index_of(node)] = spin
 
     decoded = decode_solution(job, spin_vector, model)
     assert {var: decoded.get_linear(var) for var in range(model.size)} == optimum
-    assert compute_energy(model, decoded) == optimum_energy
+    assert model.energy(decoded) == optimum_energy
 
 
-@pytest.mark.parametrize("domain", [XQMXDomain.SPIN, XQMXDomain.BINARY])
-def test_encoded_problem_argmin_decodes_to_optimum(domain: XQMXDomain) -> None:
+@pytest.mark.parametrize("domain", [Domain.SPIN, Domain.BINARY])
+def test_encoded_problem_argmin_decodes_to_optimum(domain: Domain) -> None:
     """The encoded problem's argmin decodes to the original model's optimum.
 
     This exercises the production placement, milli-quantized encoding, and
     decoding paths. The binary model is the QUI-848 TestNet ``-1`` regression:
     its true optimum is ``-2`` despite a live heuristic fleet returning ``-1``.
     """
-    model = XQMX.spin_model(3) if domain == XQMXDomain.SPIN else XQMX.binary_model(3)
-    if domain == XQMXDomain.SPIN:
+    model = XqmxModel.spin(3) if domain == Domain.SPIN else XqmxModel.binary(3)
+    if domain == Domain.SPIN:
         model.set_linear(0, 1)
         model.set_linear(1, -2)
         model.set_linear(2, 3)
-        model.set_quadratic(0, 1, 1)
-        model.set_quadratic(1, 2, -1)
+        model.set_quad(0, 1, 1)
+        model.set_quad(1, 2, -1)
     else:
         model.set_linear(0, -1)
         model.set_linear(1, 2)
-        model.set_quadratic(0, 1, -3)
-        model.set_quadratic(1, 2, 1)
+        model.set_quad(0, 1, -3)
+        model.set_quad(1, 2, 1)
 
     job = model_to_ising(model, PATH5)
     argmin_vector: list[int] | None = None
@@ -656,7 +648,7 @@ def test_encoded_problem_argmin_decodes_to_optimum(domain: XQMXDomain) -> None:
 
     assert argmin_vector is not None
     decoded = decode_solution(job, argmin_vector, model)
-    assert compute_energy(model, decoded) == _brute_force_optimum(model)[1]
+    assert model.energy(decoded) == _brute_force_optimum(model)[1]
 
 
 # ---------------------------------------------------------------------------
@@ -705,23 +697,23 @@ class TestIsingEnergyMilli:
     """The chain-energy canary helper matches the authoritative energy for SPIN."""
 
     def test_matches_compute_energy_times_milli(self) -> None:
-        """For a SPIN model, ising_energy_milli == compute_energy * MILLI_SCALE."""
-        model = XQMX.spin_model(2)
+        """For a SPIN model, ising_energy_milli == model.energy * MILLI_SCALE."""
+        model = XqmxModel.spin(2)
         model.set_linear(0, 1)
         model.set_linear(1, -2)
-        model.set_quadratic(0, 1, 1)
+        model.set_quad(0, 1, 1)
         job = model_to_ising(model, PATH5)
         for var0, var1 in itertools.product((-1, 1), repeat=2):
             vector = [1] * job.topology.num_nodes
             vector[job.topology.index_of(job.mapping[0])] = var0
             vector[job.topology.index_of(job.mapping[1])] = var1
             sample = decode_solution(job, vector, model)
-            assert ising_energy_milli(job, vector) == int(compute_energy(model, sample)) * MILLI_SCALE
+            assert ising_energy_milli(job, vector) == int(model.energy(sample)) * MILLI_SCALE
 
     def test_rejects_wrong_length_vector(self) -> None:
         """A vector that does not span the topology is rejected."""
-        model = XQMX.spin_model(2)
-        model.set_quadratic(0, 1, 1)
+        model = XqmxModel.spin(2)
+        model.set_quad(0, 1, 1)
         job = model_to_ising(model, PATH5)
         with pytest.raises(EncodingError, match="does not match topology"):
             ising_energy_milli(job, [1] * (job.topology.num_nodes + 1))
@@ -775,16 +767,16 @@ class TestCheckAllowedValues:
     @staticmethod
     def _job_with_h2_and_coupling() -> IsingJob:
         # h[0]=1 (in {-1,0,1}), h[1]=2 (OUT), coupling (0,1)=1 (in {-1,1}).
-        model = XQMX.spin_model(2)
+        model = XqmxModel.spin(2)
         model.set_linear(0, 1)
         model.set_linear(1, 2)
-        model.set_quadratic(0, 1, 1)
+        model.set_quad(0, 1, 1)
         return model_to_ising(model, PATH5)
 
     def test_no_offenders_when_all_in_set(self) -> None:
-        model = XQMX.spin_model(2)
+        model = XqmxModel.spin(2)
         model.set_linear(0, 1)
-        model.set_quadratic(0, 1, 1)
+        model.set_quad(0, 1, 1)
         job = model_to_ising(model, PATH5)
         offenders = check_allowed_values(
             job,
@@ -821,7 +813,7 @@ class TestCheckAllowedValues:
 
 def test_i32_overflow_error_carries_doc_link() -> None:
     """The i32-overflow EncodingError embeds the coefficient-encoding doc URL."""
-    over = XQMX.spin_model(1)
+    over = XqmxModel.spin(1)
     over.set_linear(0, MAX_NATURAL_COEFFICIENT + 1)
     with pytest.raises(EncodingError) as excinfo:
         model_to_ising(over, PATH5)
@@ -1648,10 +1640,10 @@ class TestSolverQuipAllowedValueWarning:
 
     @staticmethod
     def _out_of_spec_job() -> IsingJob:
-        model = XQMX.spin_model(2)
+        model = XqmxModel.spin(2)
         model.set_linear(0, 1)
         model.set_linear(1, 2)  # milli 2000, outside {-1000, 0, 1000}
-        model.set_quadratic(0, 1, 1)
+        model.set_quad(0, 1, 1)
         return model_to_ising(model, TOPO_WITH_SETS)
 
     def test_warns_once(self, monkeypatch) -> None:
@@ -1682,17 +1674,17 @@ class TestSolverQuipAllowedValueWarning:
         solver = _make_solver(monkeypatch, iface=iface, topology=topo_hash)
         topo = solver._fetch_topology()
         assert topo.allowed_h is not None
-        model = XQMX.spin_model(2)
+        model = XqmxModel.spin(2)
         model.set_linear(0, 2)  # milli 2000, outside {-1000, 0, 1000}
-        model.set_quadratic(0, 1, 1)
+        model.set_quad(0, 1, 1)
         with pytest.warns(UserWarning, match="allowed"):
             solver._maybe_warn_allowed_values(model_to_ising(model, topo))
 
     def test_no_warning_when_in_spec(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)
-        model = XQMX.spin_model(2)
+        model = XqmxModel.spin(2)
         model.set_linear(0, 1)
-        model.set_quadratic(0, 1, 1)
+        model.set_quad(0, 1, 1)
         job = model_to_ising(model, TOPO_WITH_SETS)
         with warnings.catch_warnings():
             warnings.simplefilter("error")  # any warning would raise
@@ -1747,10 +1739,10 @@ class TestSolverQuipSubmission:
 
     @staticmethod
     def _simple_job() -> IsingJob:
-        model = XQMX.spin_model(2)
+        model = XqmxModel.spin(2)
         model.set_linear(0, 1)
         model.set_linear(1, -2)
-        model.set_quadratic(0, 1, 1)
+        model.set_quad(0, 1, 1)
         return model_to_ising(model, PATH5)
 
     def test_wrap_bounded_is_one_tuple(self, monkeypatch) -> None:
@@ -1876,12 +1868,12 @@ TOPO_EDGES = [(0, 1), (1, 2), (2, 3), (3, 4)]
 TOPO_HASH = "0x" + "ab" * 32
 
 
-def _model() -> XQMX:
+def _model() -> XqmxModel:
     """A small asymmetric-field SPIN model that places onto the path topology."""
-    model = XQMX.spin_model(2)
+    model = XqmxModel.spin(2)
     model.set_linear(0, 1)  # h0 = +1 (milli 1000)
     model.set_linear(1, -2)  # h1 = -2 (milli -2000)
-    model.set_quadratic(0, 1, 1)  # j01 = +1 (milli 1000)
+    model.set_quad(0, 1, 1)  # j01 = +1 (milli 1000)
     return model
 
 
@@ -1890,11 +1882,11 @@ def _job(solver) -> IsingJob:
     return model_to_ising(_model(), solver._fetch_topology())
 
 
-def _k5_model() -> XQMX:
+def _k5_model() -> XqmxModel:
     """A 5-variable complete-graph SPIN model no path topology (e.g. TOPO_HASH) can place."""
-    model = XQMX.spin_model(5)
+    model = XqmxModel.spin(5)
     for u, v in itertools.combinations(range(5), 2):
-        model.set_quadratic(u, v, 1.0)
+        model.set_quad(u, v, 1)
     return model
 
 

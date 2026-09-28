@@ -144,19 +144,19 @@ def write_tree(root: Path, cargo: str = CARGO_DEV, pep: str = PEP_DEV) -> Path:
     write("xqvm_py/__init__.py", f'__version__ = "{pep}"\n')
     write(
         "xqcp/pyproject.toml",
-        f'[project]\nname = "xqcp"\nversion = "{pep}"\ndependencies = [\n    "xqvm_py=={pep}",\n]\n',
+        f'[project]\nname = "xqcp"\nversion = "{pep}"\ndependencies = [\n    "xqffi=={pep}",\n]\n',
     )
     write(
         "xqsa/pyproject.toml",
         f'[project]\nname = "xqsa"\nversion = "{pep}"\n'
-        f'dependencies = [\n    "xqvm_py=={pep}",\n    "dwave-samplers>=1.0",\n]\n'
+        f'dependencies = [\n    "xqffi=={pep}",\n    "dwave-samplers>=1.0",\n]\n'
         "\n[project.optional-dependencies]\n"
         'quip = [ "substrate-interface>=1.7.4,<2", "quip-signer>=0.2.2" ]\n',
     )
     write(
         "xquad/pyproject.toml",
         f'[project]\nname = "xquad"\nversion = "{pep}"\n'
-        f'dependencies = [\n    "xqffi=={pep}",\n    "xqcp=={pep}",\n    "xqsa=={pep}",\n    "xqvm_py=={pep}",\n]\n'
+        f'dependencies = [\n    "xqffi=={pep}",\n    "xqcp=={pep}",\n    "xqsa=={pep}",\n]\n'
         "\n[project.optional-dependencies]\n"
         f'cuda  = [ "xqsa[cuda]=={pep}" ]\n'
         f'dwave = [ "xqsa[dwave]=={pep}" ]\n'
@@ -218,7 +218,7 @@ def test_release_candidate_passes_against_its_own_spellings(bumped: Path) -> Non
     """v0.4.0-rc1 against 0.4.0-rc1 / 0.4.0rc1 is the release candidate flow."""
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 0, result.stderr
-    assert "22 sites at 0.4.0-rc1 / 0.4.0rc1" in result.stdout
+    assert "21 sites at 0.4.0-rc1 / 0.4.0rc1" in result.stdout
 
 
 def test_python_site_in_cargo_spelling_fails(bumped: Path) -> None:
@@ -226,7 +226,7 @@ def test_python_site_in_cargo_spelling_fails(bumped: Path) -> None:
     patch(bumped, "xqcp/pyproject.toml", f'version = "{PEP_RC}"', f'version = "{CARGO_RC}"')
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert "disagrees with 1 of 22" in result.stderr
+    assert "disagrees with 1 of 21" in result.stderr
     assert f"xqcp/pyproject.toml:3: project version: found {CARGO_RC}, expected {PEP_RC}" in result.stderr
 
 
@@ -234,12 +234,12 @@ def test_release_tag_against_dev_tree_fails(tree: Path) -> None:
     """The live gap: tagging v0.4.0 against a -dev main would publish 0.4.0-dev."""
     result = run_guard(tree, tag="v0.4.0")
     assert result.returncode == 1
-    assert "disagrees with 22 of 22" in result.stderr
+    assert "disagrees with 21 of 21" in result.stderr
     for expected in (
         "Cargo.toml:6: workspace dependency xqvm",
         "xqffi/Cargo.toml:3: package version",
         "xqvm_py/__init__.py:1: __version__",
-        "xquad/pyproject.toml:12: peer pin xqsa[cuda]",
+        "xquad/pyproject.toml:11: peer pin xqsa[cuda]",
         "fixtures/pallet-xqvm/Cargo.lock:3: locked version xqvm",
     ):
         assert expected in result.stderr
@@ -268,11 +268,11 @@ def test_partial_bump_reports_exactly_the_stale_site(
     patch(bumped, rel, old, new)
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert f"disagrees with {count} of 22" in result.stderr
+    assert f"disagrees with {count} of 21" in result.stderr
     assert site in result.stderr
 
 
-def test_every_xquad_pin_missed_reports_four_sites(bumped: Path) -> None:
+def test_every_xquad_pin_missed_reports_three_sites(bumped: Path) -> None:
     """The pins are one edit a bump can miss wholesale, separately from [project] version."""
     patch(
         bumped,
@@ -280,11 +280,11 @@ def test_every_xquad_pin_missed_reports_four_sites(bumped: Path) -> None:
         f'dependencies = [\n    "xqffi=={PEP_RC}"',
         f'dependencies = [\n    "xqffi=={PEP_DEV}"',
     )
-    for dist in ("xqcp", "xqsa", "xqvm_py"):
+    for dist in ("xqcp", "xqsa"):
         patch(bumped, "xquad/pyproject.toml", f'"{dist}=={PEP_RC}"', f'"{dist}=={PEP_DEV}"')
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert "disagrees with 4 of 22" in result.stderr
+    assert "disagrees with 3 of 21" in result.stderr
     assert "project version" not in result.stderr
 
 
@@ -294,7 +294,7 @@ def test_unrelated_stale_sites_are_all_reported(bumped: Path) -> None:
     patch(bumped, "xqvm_py/__init__.py", PEP_RC, PEP_DEV)
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert "disagrees with 2 of 22" in result.stderr
+    assert "disagrees with 2 of 21" in result.stderr
 
 
 def test_environment_tag_is_used_when_no_argument_is_given(bumped: Path) -> None:
@@ -403,7 +403,7 @@ def test_in_tree_dependency_caches_are_not_swept(tree: Path, cache_dir: str, man
 
 def test_new_peer_pin_must_be_declared(tree: Path) -> None:
     """A pin on a workspace distribution is a version site by definition."""
-    patch(tree, "xqsa/pyproject.toml", f'"xqvm_py=={PEP_DEV}",', f'"xqvm_py=={PEP_DEV}",\n    "xqcp=={PEP_DEV}",')
+    patch(tree, "xqsa/pyproject.toml", f'"xqffi=={PEP_DEV}",', f'"xqffi=={PEP_DEV}",\n    "xqcp=={PEP_DEV}",')
     result = run_guard(tree)
     assert result.returncode == 2
     assert "is not declared in SITES" in result.stderr
@@ -456,7 +456,7 @@ def test_lock_version_for_a_dynamic_package_is_a_setup_error(tree: Path) -> None
 def test_list_prints_every_site(tree: Path) -> None:
     result = run_guard(tree, "--list")
     assert result.returncode == 0
-    assert result.stdout.rstrip().endswith("22 version sites")
+    assert result.stdout.rstrip().endswith("21 version sites")
 
 
 def test_print_version_reports_the_canonical_spelling(tree: Path) -> None:

@@ -13,7 +13,7 @@ dependencies = [
     # Pinned exact. The five published distributions share one workspace
     # version and are uploaded as a set, so a mixed-version install is never
     # a supported combination; see RELEASING.md for the bump touchpoints.
-    "xqvm_py==0.5.0.dev0",
+    "xqffi==0.5.0.dev0",
     "dwave-samplers>=1.0",
 ]
 
@@ -37,7 +37,7 @@ metal = [ "pyobjc-framework-Metal>=11.0; sys_platform == 'darwin'" ]
 quip = [ "substrate-interface>=1.7.4,<2", "quip-signer>=0.3.0,<0.4", "certifi>=2019.3.9" ]
 
 [tool.uv.sources]
-xqvm_py.workspace = true
+xqffi.workspace = true
 
 [tool.hatch.build.targets.wheel]
 only-include = [ "." ]

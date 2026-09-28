@@ -76,10 +76,10 @@ pytest.importorskip(
     reason="dwave-system not installed (run `uv sync --extra dwave`)",
 )
 
+from xqffi.vm import XqmxModel
 from xqsa import SolverDWaveQPU, SolverResult
-from xquad.cp import Problem, Types, xq_triu
-from xquad.types import XQMXDomain
-from xquad.vm import VM, VMBackend
+from xquad.cp import Domain, Problem, Types, xq_triu
+from xquad.vm import VM
 
 # -- helpers (extracted from examples/maxcut/runner.py) --------------------
 
@@ -92,7 +92,7 @@ def _build_maxcut(n: int, seed: int) -> tuple:
     problem = Problem("MaxCut")
     num_nodes = problem.input("num_nodes", type=Types.Int)
     edges_in = problem.input("edges", type=Types.Vec)
-    problem.define_model(size=num_nodes, domain=XQMXDomain.BINARY)
+    problem.define_model(size=num_nodes, domain=Domain.BINARY)
 
     edge_count = problem.stow("edge_count", edges_in.veclen() // 3)
     with problem.range(0, edge_count) as e:
@@ -117,7 +117,7 @@ def _run_maxcut(programs, n: int, edges, solver) -> tuple[int, int]:
     for i, j, w in edges:
         flat.extend((i, j, w))
 
-    vm = VM(backend=VMBackend.PYTHON)
+    vm = VM()
     vm.set_calldata([n, flat])
     vm.set_output_slots(1)
     vm.run(programs.encoder)
@@ -125,7 +125,7 @@ def _run_maxcut(programs, n: int, edges, solver) -> tuple[int, int]:
 
     result = solver.solve(model)
 
-    vm = VM(backend=VMBackend.PYTHON)
+    vm = VM()
     vm.set_calldata([n, flat, model, result.sample])
     vm.set_output_slots(2)
     vm.run(programs.verifier)
@@ -146,7 +146,7 @@ def _build_tsp(n: int, seed: int) -> tuple:
     distance_matrix = problem.input("distance_matrix", type=Types.Vec)
     problem.define_model(
         size=num_cities * num_cities,
-        domain=XQMXDomain.BINARY,
+        domain=Domain.BINARY,
         rows=num_cities,
         cols=num_cities,
     )
@@ -173,7 +173,7 @@ def _build_tsp(n: int, seed: int) -> tuple:
 
 def _run_tsp(programs, n: int, distances, solver) -> tuple[int, int]:
     """Run the full TSP pipeline and return (energy, valid)."""
-    vm = VM(backend=VMBackend.PYTHON)
+    vm = VM()
     vm.set_calldata([n, distances])
     vm.set_output_slots(1)
     vm.run(programs.encoder)
@@ -181,7 +181,7 @@ def _run_tsp(programs, n: int, distances, solver) -> tuple[int, int]:
 
     result = solver.solve(model)
 
-    vm = VM(backend=VMBackend.PYTHON)
+    vm = VM()
     vm.set_calldata([n, distances, model, result.sample])
     vm.set_output_slots(2)
     vm.run(programs.verifier)
@@ -209,12 +209,10 @@ class TestQPUBareQUBO:
 
     def test_antiferromagnetic_2var(self) -> None:
         """Anti-ferromagnetic 2-variable QUBO returns correct ground state."""
-        from xqvm_py.xqmx import XQMX
-
-        model = XQMX.binary_model(2)
-        model.set_linear(0, -1.0)
-        model.set_linear(1, -1.0)
-        model.set_quadratic(0, 1, 2.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, -1)
+        model.set_linear(1, -1)
+        model.set_quad(0, 1, 2)
 
         solver = SolverDWaveQPU(num_reads=1, annealing_time=1)
         result = solver.solve(model)
@@ -259,10 +257,8 @@ class TestQPUMetadata:
 
     def test_qpu_timing_populated(self) -> None:
         """result.metadata['qpu_timing'] is a non-empty dict, result.timing > 0."""
-        from xqvm_py.xqmx import XQMX
-
-        model = XQMX.binary_model(2)
-        model.set_linear(0, -1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, -1)
 
         solver = SolverDWaveQPU(num_reads=1, annealing_time=1)
         result = solver.solve(model)

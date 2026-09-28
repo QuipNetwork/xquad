@@ -15,10 +15,10 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""QUI-167 scale sweep: MaxCut & TSP at growing sizes across VMs and solvers.
+"""QUI-167 scale sweep: MaxCut & TSP at growing sizes across solvers.
 
-Orchestrator mode (default) fans out over (problem, backend, solver, n,
-seed), running each point as a child process of this same script
+Orchestrator mode (default) fans out over (problem, solver, n, seed),
+running each point as a child process of this same script
 (``--point``) for peak-RSS accounting and crash isolation. Point mode
 re-runs the shipped example encoding through the full
 compile -> encode -> solve -> verify -> decode pipeline with per-stage
@@ -143,22 +143,14 @@ def make_adapters() -> dict[str, Adapter]:
 STAGES = ("compile", "encode", "solve", "verify", "decode")
 
 
-def _run_vm(backend: Any, calldata: list[Any], slots: int, program: Any) -> list[Any]:
+def _run_vm(calldata: list[Any], slots: int, program: Any) -> list[Any]:
     from xquad.vm import VM
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata(calldata)
     vm.set_output_slots(slots)
     vm.run(program)
     return vm.outputs()
-
-
-def _vec_to_list(value: Any, n: int) -> list[int]:
-    from xquad.types import Vec
-
-    if isinstance(value, Vec):
-        return [value.get(i) for i in range(n)]
-    return list(value)
 
 
 def _peak_rss_kib() -> int:
@@ -168,23 +160,20 @@ def _peak_rss_kib() -> int:
     return maxrss // 1024 if sys.platform == "darwin" else maxrss
 
 
-def measure_point(adapter: Adapter, backend_name: str, solver_name: str, n: int, seed: int) -> dict:
+def measure_point(adapter: Adapter, solver_name: str, n: int, seed: int) -> dict:
     """Run one full pipeline pass, timing each stage. Never raises: stage
     and post-processing failures come back as ``status: error`` records so
     the orchestrator can log them and stop the lane."""
     from xquad.sa import build_solver
-    from xquad.vm import VMBackend
 
     record: dict[str, Any] = {
         "schema": 1,
         "problem": adapter.name,
-        "backend": backend_name,
         "solver": solver_name,
         "n": n,
         "seed": seed,
         "status": "ok",
     }
-    backend = VMBackend.PYTHON if backend_name == "python" else VMBackend.RUST
     runner = adapter.runner()
     stages: dict[str, float] = {}
     stage = "compile"
@@ -197,7 +186,7 @@ def measure_point(adapter: Adapter, backend_name: str, solver_name: str, n: int,
         stage = "encode"
         t0 = time.perf_counter()
         calldata = adapter.build_calldata(n, aux)
-        model = _run_vm(backend, calldata, 1, programs.encoder)[0]
+        model = _run_vm(calldata, 1, programs.encoder)[0]
         stages["encode"] = time.perf_counter() - t0
 
         stage = "solve"
@@ -207,16 +196,16 @@ def measure_point(adapter: Adapter, backend_name: str, solver_name: str, n: int,
 
         stage = "verify"
         t0 = time.perf_counter()
-        energy, valid = _run_vm(backend, [*calldata, model, sample], 2, programs.verifier)
+        energy, valid = _run_vm([*calldata, model, sample], 2, programs.verifier)
         stages["verify"] = time.perf_counter() - t0
 
         stage = "decode"
         t0 = time.perf_counter()
-        decoded = _run_vm(backend, [sample, n], 1, programs.decoder)[0]
+        decoded = _run_vm([sample, n], 1, programs.decoder)[0]
         stages["decode"] = time.perf_counter() - t0
 
         stage = "postprocess"
-        solution = getattr(runner, adapter.canonicalize_attr)(_vec_to_list(decoded, n))
+        solution = getattr(runner, adapter.canonicalize_attr)(list(decoded))
         record.update(
             stages=stages,
             model={"vars": adapter.model_vars(n), "approx_quad_terms": adapter.approx_quad_terms(n)},
@@ -234,7 +223,7 @@ def measure_point(adapter: Adapter, backend_name: str, solver_name: str, n: int,
 
 def _point_main(args: argparse.Namespace) -> int:
     adapter = make_adapters()[args.problem]
-    record = measure_point(adapter, args.backend, args.solver, args.n, args.seed)
+    record = measure_point(adapter, args.solver, args.n, args.seed)
     json.dump(record, sys.stdout)
     sys.stdout.write("\n")
     return 0 if record["status"] == "ok" else 1
@@ -244,7 +233,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="QUI-167 MaxCut/TSP scale sweep")
     parser.add_argument("--point", action="store_true", help="run a single measurement (internal)")
     parser.add_argument("--problem", choices=sorted(make_adapters()))
-    parser.add_argument("--backend", choices=("python", "rust"))
     parser.add_argument("--solver", default=CPU_SOLVER)
     parser.add_argument("--n", type=int)
     parser.add_argument("--seed", type=int)
@@ -266,10 +254,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 @dataclass(frozen=True)
 class Lane:
-    """One escalation lane: fixed (problem, backend, solver), growing n."""
+    """One escalation lane: fixed (problem, solver), growing n."""
 
     problem: str
-    backend: str
     solver: str
     ladder: tuple[int, ...]
 
@@ -286,18 +273,14 @@ def cuda_available() -> bool:
 
 
 def build_matrix(adapters: dict[str, Adapter], solvers: list[str], smoke: bool) -> list[Lane]:
-    """CPU lanes on both VMs; GPU lanes on the Rust VM only (solver choice
-    affects only the solve stage — cross-VM comparison is covered by the
-    CPU lanes)."""
+    """One lane per (problem, solver); GPU lanes climb the extended ladder."""
     lanes: list[Lane] = []
     for adapter in adapters.values():
         for solver in solvers:
-            backends = ("python", "rust") if solver == CPU_SOLVER else ("rust",)
             ladder = adapter.ladder if solver == CPU_SOLVER else adapter.gpu_ladder
             if smoke:
                 ladder = ladder[:1]
-            for backend in backends:
-                lanes.append(Lane(adapter.name, backend, solver, ladder))
+            lanes.append(Lane(adapter.name, solver, ladder))
     return lanes
 
 
@@ -327,8 +310,6 @@ def run_point_child(lane: Lane, n: int, seed: int, timeout: float) -> dict:
         "--point",
         "--problem",
         lane.problem,
-        "--backend",
-        lane.backend,
         "--solver",
         lane.solver,
         "--n",
@@ -339,7 +320,6 @@ def run_point_child(lane: Lane, n: int, seed: int, timeout: float) -> dict:
     base = {
         "schema": 1,
         "problem": lane.problem,
-        "backend": lane.backend,
         "solver": lane.solver,
         "n": n,
         "seed": seed,
@@ -373,14 +353,14 @@ def _sweep_lane(lane: Lane, seeds: tuple[int, ...], timeout: float, sink: Any) -
             sink.flush()
             if record["status"] != "ok":
                 rung_ok = False
-                print(f"  {lane.problem}/{lane.backend}/{lane.solver} n={n}: {record['status']}")
+                print(f"  {lane.problem}/{lane.solver} n={n}: {record['status']}")
                 break
         if not rung_ok:
             break
         median_solve = sorted(r["stages"]["solve"] for r in records if r["n"] == n and r["status"] == "ok")[
             len(seeds) // 2
         ]
-        lane_id = f"{lane.problem}/{lane.backend}/{lane.solver}"
+        lane_id = f"{lane.problem}/{lane.solver}"
         print(f"  {lane_id} n={n}: ok (solve {median_solve:.2f}s)")
     return records
 
@@ -389,18 +369,18 @@ def _ok(records: list[dict]) -> list[dict]:
     return [r for r in records if r["status"] == "ok"]
 
 
-def lane_ceilings(records: list[dict]) -> dict[tuple[str, str, str], int]:
-    """Max n per (problem, backend, solver) lane where every record at that
+def lane_ceilings(records: list[dict]) -> dict[tuple[str, str], int]:
+    """Max n per (problem, solver) lane where every record at that
     n is ok. An n with a partially-completed rung (some seeds ok, others
     not) is excluded, so the ceiling never claims an n that didn't fully
     pass."""
-    ok_ns: dict[tuple[str, str, str], set[int]] = {}
-    bad_ns: dict[tuple[str, str, str], set[int]] = {}
+    ok_ns: dict[tuple[str, str], set[int]] = {}
+    bad_ns: dict[tuple[str, str], set[int]] = {}
     for r in records:
-        key = (r["problem"], r["backend"], r["solver"])
+        key = (r["problem"], r["solver"])
         target = ok_ns if r["status"] == "ok" else bad_ns
         target.setdefault(key, set()).add(r["n"])
-    ceilings: dict[tuple[str, str, str], int] = {}
+    ceilings: dict[tuple[str, str], int] = {}
     for key, ns in ok_ns.items():
         clean_ns = ns - bad_ns.get(key, set())
         if clean_ns:
@@ -408,32 +388,11 @@ def lane_ceilings(records: list[dict]) -> dict[tuple[str, str, str], int]:
     return ceilings
 
 
-def solution_divergences(records: list[dict]) -> list[dict]:
-    """Python-VM vs Rust-VM canonical-solution differences on the CPU solver.
-
-    A divergence is not necessarily a VM defect: model term-ordering can
-    differ between VMs and feed the seeded annealer differently, yielding
-    distinct valid solutions (see the QUI-167 findings doc). It is a lead
-    to investigate, not a parity verdict."""
-    by_point: dict[tuple[str, int, int], dict[str, list[int]]] = {}
-    for r in _ok(records):
-        if r["solver"] != CPU_SOLVER:
-            continue
-        by_point.setdefault((r["problem"], r["n"], r["seed"]), {})[r["backend"]] = r["solution"]
-    return [
-        {"problem": problem, "n": n, "seed": seed, "python": sols["python"], "rust": sols["rust"]}
-        for (problem, n, seed), sols in sorted(by_point.items())
-        if len(sols) == 2 and sols["python"] != sols["rust"]
-    ]
-
-
 def solver_deltas(records: list[dict]) -> list[dict]:
-    """GPU-minus-CPU energy per (problem, n, seed) on the Rust VM.
+    """GPU-minus-CPU energy per (problem, n, seed).
     Negative delta means the GPU found a lower (better) energy."""
     by_point: dict[tuple[str, int, int], dict[str, int]] = {}
     for r in _ok(records):
-        if r["backend"] != "rust":
-            continue
         by_point.setdefault((r["problem"], r["n"], r["seed"]), {})[r["solver"]] = r["energy"]
     return [
         {"problem": problem, "n": n, "seed": seed, "energy_delta": es[GPU_SOLVER] - es[CPU_SOLVER]}
@@ -451,30 +410,30 @@ def _median(values: list[float]) -> float:
 
 
 def render_report(records: list[dict]) -> str:
-    """Markdown summary: ceilings, per-rung stage medians, divergences,
-    deltas, failures. Pure function of the record list so it is
+    """Markdown summary: ceilings, per-rung stage medians, solver deltas,
+    failures. Pure function of the record list so it is
     unit-testable and re-runnable on any results.jsonl."""
     lines = ["# QUI-167 scale sweep report", ""]
 
-    lines += ["## Lane ceilings (max n completed)", "", "| problem | backend | solver | max n |", "|---|---|---|---|"]
-    for (problem, backend, solver), n in sorted(lane_ceilings(records).items()):
-        lines.append(f"| {problem} | {backend} | {solver} | {n} |")
+    lines += ["## Lane ceilings (max n completed)", "", "| problem | solver | max n |", "|---|---|---|"]
+    for (problem, solver), n in sorted(lane_ceilings(records).items()):
+        lines.append(f"| {problem} | {solver} | {n} |")
 
     lines += [
         "",
         "## Median stage seconds by rung",
         "",
-        "| problem | backend | solver | n | vars | compile | encode | solve | verify | decode | peak MiB |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| problem | solver | n | vars | compile | encode | solve | verify | decode | peak MiB |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
-    rungs: dict[tuple[str, str, str, int], list[dict]] = {}
+    rungs: dict[tuple[str, str, int], list[dict]] = {}
     for r in _ok(records):
-        rungs.setdefault((r["problem"], r["backend"], r["solver"], r["n"]), []).append(r)
-    for (problem, backend, solver, n), rs in sorted(rungs.items()):
+        rungs.setdefault((r["problem"], r["solver"], r["n"]), []).append(r)
+    for (problem, solver, n), rs in sorted(rungs.items()):
         med = {s: _median([r["stages"][s] for r in rs]) for s in STAGES}
         rss = _median([r["peak_rss_kib"] for r in rs]) / 1024
         cells = " | ".join(f"{med[s]:.3f}" for s in STAGES)
-        lines.append(f"| {problem} | {backend} | {solver} | {n} | {rs[0]['model']['vars']} | {cells} | {rss:.0f} |")
+        lines.append(f"| {problem} | {solver} | {n} | {rs[0]['model']['vars']} | {cells} | {rss:.0f} |")
 
     failures = [r for r in records if r["status"] != "ok"]
     lines += ["", f"## Failures ({len(failures)})", ""]
@@ -486,21 +445,7 @@ def render_report(records: list[dict]) -> str:
         else:  # crash
             stderr_tail = r.get("stderr_tail", "")
             detail = stderr_tail[-120:] if stderr_tail else f"exit code {r.get('exit_code')}, no stderr"
-        lines.append(
-            f"- {r['problem']}/{r['backend']}/{r['solver']} n={r['n']} seed={r['seed']}: **{r['status']}** {detail}"
-        )
-
-    diverged = solution_divergences(records)
-    lines += [
-        "",
-        f"## Cross-VM solution divergence (python vs rust, {CPU_SOLVER}): "
-        f"{'NONE' if not diverged else f'{len(diverged)} points'}",
-        "",
-        "_Divergence can be solver-stochastic (term-ordering feeding a seeded annealer), not necessarily a VM defect._",
-        "",
-    ]
-    for p in diverged:
-        lines.append(f"- {p['problem']} n={p['n']} seed={p['seed']}: python={p['python']} rust={p['rust']}")
+        lines.append(f"- {r['problem']}/{r['solver']} n={r['n']} seed={r['seed']}: **{r['status']}** {detail}")
 
     deltas = solver_deltas(records)
     if deltas:
@@ -537,7 +482,7 @@ def _orchestrate(args: argparse.Namespace) -> int:
     records: list[dict] = []
     with args.out.open("w") as sink:
         for lane in lanes:
-            print(f"lane {lane.problem}/{lane.backend}/{lane.solver} ladder={list(lane.ladder)}")
+            print(f"lane {lane.problem}/{lane.solver} ladder={list(lane.ladder)}")
             records.extend(_sweep_lane(lane, seeds, args.timeout, sink))
 
     report_path = args.report or args.out.with_name("report.md")
@@ -549,7 +494,7 @@ def _orchestrate(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.point:
-        required = ("problem", "backend", "n", "seed")
+        required = ("problem", "n", "seed")
         missing = [name for name in required if getattr(args, name) is None]
         if missing:
             build_parser().error(f"--point requires --{', --'.join(missing)}")
