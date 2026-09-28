@@ -31,6 +31,8 @@ import pytest
 
 from xqffi.asm import assemble_source
 from xqffi.vm import MAX_ALLOCATION_SIZE, Vm, XqmxModel, XqmxSample
+from xquad.vm import VM, VMBackend
+from xqvm_py.xqmx import XQMX, XQMXDomain, XQMXMode
 
 UNFIT_GRIDS = [
     # QUI-1164's reproducer: a 2^62 x 8 grid on a four-variable model.
@@ -122,3 +124,55 @@ def test_a_bytecode_built_model_round_trips_through_the_boundary():
     read.set_calldata([rebuilt])
     read.run(assemble_source("PUSH 0\nINPUT r0\nPUSH 1\nROWSUM r0\nHALT"))
     assert read.stack() == [0]
+
+
+# `xquad.vm` converts an `XQMX` through the constructors and setters above on
+# the RUST backend only, so the PYTHON backend applies the same rules itself.
+# Both must refuse the same calldata, with the same error, at `set_calldata`.
+BAD_CALLDATA = [
+    (
+        "grid",
+        lambda: XQMX.binary_model(4, 2, 3),
+        ValueError,
+        "grid does not fit 4 variables",
+    ),
+    (
+        "linear",
+        lambda: XQMX(XQMXMode.MODEL, XQMXDomain.BINARY, 4, linear={7: 5}),
+        IndexError,
+        "variable index 7",
+    ),
+    (
+        "quad",
+        lambda: XQMX(XQMXMode.MODEL, XQMXDomain.BINARY, 4, quadratic={(0, 4): 1}),
+        IndexError,
+        "variable index 4",
+    ),
+    (
+        "sample",
+        lambda: XQMX(XQMXMode.SAMPLE, XQMXDomain.BINARY, 4, linear={4: 1}),
+        IndexError,
+        "variable index 4",
+    ),
+]
+
+
+@pytest.mark.parametrize("backend", list(VMBackend))
+@pytest.mark.parametrize(
+    ("build", "exc", "match"),
+    [case[1:] for case in BAD_CALLDATA],
+    ids=[case[0] for case in BAD_CALLDATA],
+)
+def test_both_backends_refuse_calldata_bytecode_could_not_build(backend, build, exc, match):
+    with pytest.raises(exc, match=match):
+        VM(backend=backend).set_calldata([build()])
+
+
+@pytest.mark.parametrize("backend", list(VMBackend))
+def test_a_grid_widened_after_set_calldata_is_refused_at_run(backend):
+    model = XQMX.binary_model(4, 2, 2)
+    vm = VM(backend=backend)
+    vm.set_calldata([model])
+    model.cols = 3
+    with pytest.raises(ValueError, match="grid does not fit"):
+        vm.run("PUSH 0\nINPUT r0\nHALT")
