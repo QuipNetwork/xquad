@@ -3125,8 +3125,8 @@ impl GridShape {
     /// unchecked address would otherwise panic under `ci-test` and wrap under
     /// `release`; for the two ONEHOT handlers, which write, an index past
     /// `size` would create coefficients on variables the model never
-    /// declared, because `XqmxModel::add_linear` and `add_quad` grow a sparse
-    /// map with no bound of their own.
+    /// declared, because `XqmxModel::checked_add_linear` and
+    /// `checked_add_quad` grow a sparse map with no bound of their own.
     fn line_index(self, pos: usize, index: i64, count: usize) -> Result<usize, Error> {
         if !grid_fits(self.rows, self.cols, self.size) {
             return Err(Error::InvalidGridDimensions {

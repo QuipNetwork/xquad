@@ -2296,7 +2296,7 @@ fn one_hot_r_row_at_grid_extent_raises() {
     // column count, so this pins the extent that is actually addressed rather
     // than merely rejecting a large number: checking row 2 against the column
     // count would accept it, and against a square grid, or a row larger than
-    // both extents, the two are indistinguishable. `grid_row_index` is what
+    // both extents, the two are indistinguishable. `GridShape::row` is what
     // picks the axis, so this is the case that fails if it picks the wrong one.
     let err = run_err(|b| {
         b.emit_push(4).emit_bqmx(Register(0));
@@ -2314,7 +2314,7 @@ fn one_hot_r_row_at_grid_extent_raises() {
 fn one_hot_c_col_at_grid_extent_raises() {
     // The mirror: a 4x1 grid whose only valid column is 0, with column 2
     // inside the row count, so checking against the row count would accept it.
-    // `grid_col_index` picks the axis; this is the case that fails if it picks
+    // `GridShape::column` picks the axis; this is the case that fails if it picks
     // the wrong one.
     //
     // A column cannot wrap the way a row can -- nothing multiplies by it --
@@ -2951,8 +2951,8 @@ fn a_host_supplied_grid_with_an_unaddressable_extent_is_rejected() {
     // `RESIZE` cannot produce `rows * cols` overflow any more, and `xqffi`
     // rejects it at construction (QUI-1164), but `rows` and `cols` are public
     // fields, so a Rust embedder can still install one directly. That keeps
-    // `grid_axis_index`'s addressability arm the guard that stops
-    // `usize_row * cols` in the read-only grid handlers from overflowing.
+    // the addressability check in `GridShape::line_index` the guard that stops
+    // `GridLine::cells` in the read-only grid handlers from overflowing.
     // Deleting it turns this case into a `ci-test` panic and a `release` wrap.
     let mut model = xqvm::XqmxModel::new(Domain::Binary, 4);
     model.rows = usize::MAX / 2;
@@ -2982,11 +2982,11 @@ fn a_host_supplied_grid_wider_than_the_model_is_rejected_before_it_is_written() 
     // `RESIZE` bounds `rows * cols <= size`, so no bytecode can build this
     // model, and `xqffi` refuses to (QUI-1164); a Rust embedder installing
     // one directly still can. ONEHOTR then *writes*, and
-    // `XqmxModel::add_linear`/`add_quad` grow a sparse map with no bound of
-    // their own, so without the `size` half of the check the VM would mint
-    // `linear[4]`, `linear[5]` and the pairs among them out of nothing and
-    // halt successfully -- a model that solves cleanly and answers wrongly,
-    // which is the failure QUI-1107 exists to remove.
+    // `XqmxModel::checked_add_linear`/`checked_add_quad` grow a sparse map with
+    // no bound of their own, so without the `size` half of the check the VM
+    // would mint `linear[4]`, `linear[5]` and the pairs among them out of
+    // nothing and halt successfully -- a model that solves cleanly and answers
+    // wrongly, which is the failure QUI-1107 exists to remove.
     let mut model = xqvm::XqmxModel::new(Domain::Binary, 4);
     model.rows = 2;
     model.cols = 3;
