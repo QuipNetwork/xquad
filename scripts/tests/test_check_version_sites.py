@@ -144,7 +144,7 @@ def write_tree(root: Path, cargo: str = CARGO_DEV, pep: str = PEP_DEV) -> Path:
     write("xqvm_py/__init__.py", f'__version__ = "{pep}"\n')
     write(
         "xqcp/pyproject.toml",
-        f'[project]\nname = "xqcp"\nversion = "{pep}"\ndependencies = [\n    "xqvm_py=={pep}",\n]\n',
+        f'[project]\nname = "xqcp"\nversion = "{pep}"\ndependencies = [\n    "xqffi=={pep}",\n]\n',
     )
     write(
         "xqsa/pyproject.toml",

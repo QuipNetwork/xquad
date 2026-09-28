@@ -1572,11 +1572,11 @@ name = "xqcp"
 version = "0.5.0.dev0"
 source = { editable = "xqcp" }
 dependencies = [
-    { name = "xqvm-py" },
+    { name = "xqffi" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "xqvm-py", editable = "xqvm_py" }]
+requires-dist = [{ name = "xqffi", editable = "xqffi" }]
 
 [[package]]
 name = "xqffi"
