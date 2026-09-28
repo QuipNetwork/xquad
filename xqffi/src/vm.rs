@@ -26,7 +26,8 @@
 //!   `Domain.integer(k)`.
 //! - `XqmxModel` -- a quadratic (QUBO/Ising/integer) optimisation model,
 //!   with `energy(sample)` evaluated by the VM's own energy function.
-//! - `XqmxSample` -- a candidate solution for a model.
+//! - `XqmxSample` -- a candidate solution for a model; `default(domain, size)`
+//!   starts every variable at the domain default, `set_linear` writes one.
 //! - `triu(i, j)` -- the index `IDXTRIU` computes.
 //! - `XqvmError` and one subclass per fault (see `fault.rs`).
 //! - `DEFAULT_STEP_LIMIT`, `DEFAULT_MEMORY_LIMIT`, `MAX_ALLOCATION_SIZE`.
@@ -344,6 +345,50 @@ impl PyXqmxSample {
         Self::build(integer_domain(k)?, values, rows, cols)
     }
 
+    /// A sample of `size` variables, each at the domain's default value:
+    /// binary 0, spin -1, integer 0.
+    ///
+    /// The value the `BSMX`, `SSMX` and `XSMX` allocators write, so a
+    /// sample built here matches one the VM allocates.
+    #[staticmethod]
+    #[pyo3(signature = (domain, size, rows = 0, cols = 0))]
+    fn default(domain: &Bound<'_, PyDomain>, size: usize, rows: usize, cols: usize) -> Self {
+        let domain = domain.get().inner;
+        let mut inner = XqmxSample::new(domain, vec![domain.default_value(); size]);
+        inner.rows = rows;
+        inner.cols = cols;
+        Self { inner }
+    }
+
+    /// Set the value of variable `i`.
+    ///
+    /// Raises `IndexOutOfBounds` unless `0 <= i < size`, and `ValueError`
+    /// when `value` lies outside the domain; either way the sample is left
+    /// unchanged.
+    fn set_linear(&mut self, i: i64, value: i64) -> PyResult<()> {
+        let index = self.variable(i)?;
+        let domain = self.inner.domain;
+        if !domain.contains(value) {
+            return Err(out_of_domain(value, index, domain));
+        }
+        if let Some(slot) = self.inner.values.get_mut(index) {
+            *slot = value;
+        }
+        Ok(())
+    }
+
+    /// The value of variable `i`.
+    ///
+    /// Raises `IndexOutOfBounds` unless `0 <= i < size`.
+    fn get_linear(&self, i: i64) -> PyResult<i64> {
+        let index = self.variable(i)?;
+        self.inner
+            .values
+            .get(index)
+            .copied()
+            .ok_or_else(|| fault::index_out_of_bounds(i, self.inner.values.len()))
+    }
+
     #[getter]
     const fn domain(&self) -> PyDomain {
         PyDomain {
@@ -398,23 +443,38 @@ impl PyXqmxSample {
         // The VM's own check is on SETLINE and ADDLINE, which a host-supplied
         // sample never passes through: `Vm::set_calldata` is infallible by
         // design and stays the trusted-embedder path. Closing that gap is
-        // this constructor's job -- and because the type exposes only
-        // getters, a sample that constructs cannot afterwards be mutated out
-        // of domain, so nothing downstream has to re-scan it.
-        if let Some((index, value)) = values
+        // this constructor's job -- and because `default` fills with an
+        // in-domain value and `set_linear`, the one setter, checks the domain
+        // as this does, a sample that constructs cannot afterwards be mutated
+        // out of domain, so nothing downstream has to re-scan it.
+        if let Some((index, &value)) = values
             .iter()
             .enumerate()
             .find(|(_, v)| !domain.contains(**v))
         {
-            return Err(PyValueError::new_err(format!(
-                "sample value {value} at variable {index} is outside the {domain} domain"
-            )));
+            return Err(out_of_domain(value, index, domain));
         }
         let mut inner = XqmxSample::new(domain, values);
         inner.rows = rows;
         inner.cols = cols;
         Ok(Self { inner })
     }
+
+    /// `i` as a variable index of this sample, or `IndexOutOfBounds`.
+    fn variable(&self, i: i64) -> PyResult<usize> {
+        let len = self.inner.values.len();
+        usize::try_from(i)
+            .ok()
+            .filter(|&index| index < len)
+            .ok_or_else(|| fault::index_out_of_bounds(i, len))
+    }
+}
+
+/// The `ValueError` for a sample value outside its domain.
+fn out_of_domain(value: i64, index: usize, domain: Domain) -> PyErr {
+    PyValueError::new_err(format!(
+        "sample value {value} at variable {index} is outside the {domain} domain"
+    ))
 }
 
 /// Python wrapper around [`xqvm::Vm`].
@@ -439,8 +499,8 @@ impl PyVm {
     /// - [`XqmxSample`](PyXqmxSample) → [`RegVal::Sample`]
     ///
     /// An [`XqmxSample`](PyXqmxSample) reaching here holds only in-domain
-    /// values: its constructor rejects the rest, and the type exposes no
-    /// setter. `xqvm::Vm::set_calldata` underneath stays infallible and is
+    /// values: its constructor rejects the rest, and its one setter checks
+    /// the domain too. `xqvm::Vm::set_calldata` underneath stays infallible and is
     /// the trusted-embedder path, so this boundary is where a host's values
     /// are checked, not the VM.
     ///

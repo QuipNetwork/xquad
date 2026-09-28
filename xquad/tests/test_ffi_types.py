@@ -150,6 +150,68 @@ def test_a_domain_string_is_no_longer_accepted() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Sample defaults and writes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("domain", "fill"),
+    [(Domain.BINARY, 0), (Domain.SPIN, -1), (Domain.integer(3), 0)],
+    ids=["binary", "spin", "integer"],
+)
+def test_default_fills_every_variable_with_the_domain_default(domain: Domain, fill: int) -> None:
+    sample = XqmxSample.default(domain, 3, rows=1, cols=3)
+    assert sample.domain == domain
+    assert sample.values == [fill] * 3
+    assert (sample.rows, sample.cols) == (1, 3)
+
+
+def test_default_matches_what_the_vm_allocates() -> None:
+    vm = ffi.Vm()
+    vm.set_output_slots(1)
+    vm.run(assemble_source("PUSH 3\nSSMX r0\nPUSH 0\nOUTPUT r0\nHALT"))
+    assert vm.outputs()[0].values == XqmxSample.default(Domain.SPIN, 3).values
+
+
+def test_set_linear_and_get_linear_round_trip() -> None:
+    sample = XqmxSample.default(Domain.integer(4), 2)
+    sample.set_linear(1, 3)
+    assert sample.get_linear(1) == 3
+    assert sample.values == [0, 3]
+
+
+@pytest.mark.parametrize("bad", [2, 99, -1])
+@pytest.mark.parametrize("name", ["set_linear", "get_linear"])
+def test_a_sample_index_outside_the_sample_raises_index_out_of_bounds(name: str, bad: int) -> None:
+    sample = XqmxSample.binary([0, 1])
+    args = [bad] if name == "get_linear" else [bad, 1]
+    with pytest.raises(ffi.IndexOutOfBounds) as excinfo:
+        getattr(sample, name)(*args)
+    assert str(excinfo.value) == f"index {bad} out of bounds (len 2)"
+    assert sample.values == [0, 1]
+
+
+@pytest.mark.parametrize(
+    ("sample", "bad"),
+    [(XqmxSample.binary([0, 1]), 2), (XqmxSample.spin([-1, 1]), 0), (XqmxSample.integer([0, 1], 3), 3)],
+    ids=["binary", "spin", "integer"],
+)
+def test_set_linear_rejects_a_value_outside_the_domain(sample: XqmxSample, bad: int) -> None:
+    before = sample.values
+    with pytest.raises(ValueError, match="outside the"):
+        sample.set_linear(0, bad)
+    assert sample.values == before
+
+
+def test_the_vm_accepts_a_written_sample_as_calldata() -> None:
+    model = XqmxModel.binary(2)
+    model.set_linear(1, 5)
+    sample = XqmxSample.default(Domain.BINARY, 2)
+    sample.set_linear(1, 1)
+    assert _vm_energy(model, sample) == model.energy(sample) == 5
+
+
+# ---------------------------------------------------------------------------
 # Coefficient accumulation
 # ---------------------------------------------------------------------------
 
