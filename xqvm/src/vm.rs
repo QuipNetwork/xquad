@@ -2411,13 +2411,13 @@ impl Vm {
         Ok(StepResult::Continue)
     }
 
-    /// Validate `reg` as a grid and copy out `(rows, cols, size)`, ending the
+    /// Validate `reg` as a grid and copy out its [`GridShape`], ending the
     /// borrow on `self` so the caller can charge the step budget before it
     /// scans. `ROWSUM`, `COLSUM`, `ROWFIND` and `COLFIND` all walk an extent
     /// the program chose, so the charge has to land between the validation
     /// and the walk (QUI-1056), and the borrow checker will not let a live
     /// `XqmxGridRef` span it.
-    fn grid_dims(&self, reg: Register) -> Result<(usize, usize, usize), Error> {
+    fn grid_shape(&self, reg: Register) -> Result<GridShape, Error> {
         let grid = self
             .reg(reg)
             .as_xqmx_grid()
@@ -2426,197 +2426,84 @@ impl Vm {
                 expected: "model|sample",
                 got: e.actual.kind_name(),
             })?;
-        Ok((grid.rows(), grid.cols(), grid.size()))
+        Ok(GridShape {
+            rows: grid.rows(),
+            cols: grid.cols(),
+            size: grid.size(),
+        })
     }
 
-    /// Re-acquire a grid that [`Vm::grid_dims`] has already validated in this
+    /// Re-acquire a grid that [`Vm::grid_shape`] has already validated in this
     /// same dispatch. Nothing between the two can change the register.
     fn grid_checked(&self, reg: Register) -> crate::value::XqmxGridRef<'_> {
         self.reg(reg)
             .as_xqmx_grid()
-            .unwrap_or_else(|_| unreachable!("register type checked by grid_dims"))
+            .unwrap_or_else(|_| unreachable!("register type checked by grid_shape"))
     }
 
-    /// Validate a grid-addressed opcode's row operand and return it as a
-    /// `usize` line number. See [`Vm::grid_axis_index`] for the checks.
-    fn grid_row_index(
-        pos: usize,
-        rows: usize,
-        cols: usize,
-        size: usize,
-        index: i64,
-    ) -> Result<usize, Error> {
-        Self::grid_axis_index(pos, rows, cols, size, index, rows)
-    }
-
-    /// Validate a grid-addressed opcode's column operand and return it as a
-    /// `usize` line number. See [`Vm::grid_axis_index`] for the checks.
-    fn grid_col_index(
-        pos: usize,
-        rows: usize,
-        cols: usize,
-        size: usize,
-        index: i64,
-    ) -> Result<usize, Error> {
-        Self::grid_axis_index(pos, rows, cols, size, index, cols)
-    }
-
-    /// Validate a grid-addressed opcode's operands and return `index` as a
-    /// `usize` line number along axis `extent`.
-    ///
-    /// Call [`Vm::grid_row_index`] or [`Vm::grid_col_index`] rather than this
-    /// directly. `extent` has to agree with the axis `index` names, and as a
-    /// bare parameter it is a duplicate of `rows` or `cols` that the caller
-    /// restates -- so passing `cols` where `rows` belongs is a mistake this
-    /// signature cannot see and a square grid cannot detect. The two wrappers
-    /// pick it, which makes the swap unrepresentable at the six call sites.
-    ///
-    /// Three things are required. The register must carry non-zero grid
-    /// extents; their product must be addressable *and* within the register's
-    /// declared `size`; and `index` must lie in `[0, extent)`. An ungridded or
-    /// unaddressable grid raises `InvalidGridDimensions` -- the same identity
-    /// ONEHOTR/ONEHOTC raise without a grid -- and an out-of-range index
-    /// raises `IndexOutOfBounds`, so an absent row is an error rather than a
-    /// silent sum of zeroes (`xqvm_py` has always raised here).
-    ///
-    /// The grid check is [`grid_fits`], the rule `RESIZE` enforces, so no
-    /// bytecode path reaches its failure arm. It stays as defence in depth,
-    /// decided under QUI-1164: `xqffi` now rejects an unfit grid when Python
-    /// constructs a model or sample, but `rows` and `cols` are public fields,
-    /// so a Rust embedder can still install one through [`Vm::set_register`]
-    /// or [`Vm::set_calldata`]. The check is what keeps the flat-index
-    /// arithmetic below every caller addressing declared variables. For the
-    /// four read-only handlers an unchecked `usize_row * cols` would
-    /// otherwise panic under `ci-test` and wrap under `release`;
-    /// for the two ONEHOT handlers, which write, an index past `size` would
-    /// create coefficients on variables the model never declared, because
-    /// `XqmxModel::add_linear` and `add_quad` grow a sparse map with no bound
-    /// of their own.
-    fn grid_axis_index(
-        pos: usize,
-        rows: usize,
-        cols: usize,
-        size: usize,
-        index: i64,
-        extent: usize,
-    ) -> Result<usize, Error> {
-        if !grid_fits(rows, cols, size) {
-            return Err(Error::InvalidGridDimensions {
-                pos,
-                rows: i64::try_from(rows).unwrap_or(i64::MAX),
-                cols: i64::try_from(cols).unwrap_or(i64::MAX),
-            });
-        }
-        usize::try_from(index)
-            .ok()
-            .filter(|&i| i < extent)
-            .ok_or(Error::IndexOutOfBounds {
-                pos,
-                index,
-                len: extent,
-            })
-    }
-
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "`grid_row_index` has already proved `rows * cols` fits usize and is within `size`, and `usize_row < rows`, so `row_start + col` addresses a declared variable (`spec/xqvm/ISA.md`'s XQMX Grid precondition)"
-    )]
     fn exec_row_find(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let value = self.pop(pos)?;
         let row = self.pop(pos)?;
-        let (rows, cols, size) = self.grid_dims(reg)?;
-        let usize_row = Self::grid_row_index(pos, rows, cols, size, row)?;
+        let line = self.grid_shape(reg)?.row(pos, row)?;
         // The scan below is O(cols) sparse lookups and `cols` is
         // program-controlled, so charge for the whole row before walking it
         // (QUI-1056). Charged after the index check so an out-of-range row
         // faults for the same reason it did before metering existed.
-        self.charge_steps(pos, widen(cols).saturating_mul(GRID_CELL_STEPS))?;
+        self.charge_steps(pos, widen(line.len).saturating_mul(GRID_CELL_STEPS))?;
         let grid = self.grid_checked(reg);
-        // grid_row_index guarantees rows*cols fits usize and is within size,
-        // and that usize_row is in range, so row addressing cannot overflow.
-        let row_start = usize_row * cols;
-        // cols ≤ i64::MAX (validated via exec_resize); try_from never fails.
-        let result = (0..cols)
-            .find(|&col| grid.linear(row_start + col) == value)
-            .map_or(-1, |c| i64::try_from(c).unwrap_or(-1));
+        // The position along the row is the column. It is below `cols`,
+        // which RESIZE took from an i64, so try_from never fails.
+        let result = line
+            .cells()
+            .position(|cell| grid.linear(cell) == value)
+            .map_or(-1, |col| i64::try_from(col).unwrap_or(-1));
         self.push_stack(result, pos)?;
         Ok(StepResult::Continue)
     }
 
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "`grid_col_index` has already proved `rows * cols` fits usize and is within `size`, and `usize_col < cols`, so `row * cols + usize_col` addresses a declared variable (`spec/xqvm/ISA.md`'s XQMX Grid precondition)"
-    )]
     fn exec_col_find(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let value = self.pop(pos)?;
         let col = self.pop(pos)?;
-        let (rows, cols, size) = self.grid_dims(reg)?;
-        let usize_col = Self::grid_col_index(pos, rows, cols, size, col)?;
+        let line = self.grid_shape(reg)?.column(pos, col)?;
         // O(rows) sparse lookups over a program-controlled extent; charged
         // before the walk, after the index check. See ROWFIND.
-        self.charge_steps(pos, widen(rows).saturating_mul(GRID_CELL_STEPS))?;
+        self.charge_steps(pos, widen(line.len).saturating_mul(GRID_CELL_STEPS))?;
         let grid = self.grid_checked(reg);
-        // rows ≤ i64::MAX (validated via exec_resize); try_from never fails.
-        let result = (0..rows)
-            .find(|&row| grid.linear(row * cols + usize_col) == value)
-            .map_or(-1, |r| i64::try_from(r).unwrap_or(-1));
+        // The position down the column is the row, below `rows`; see ROWFIND.
+        let result = line
+            .cells()
+            .position(|cell| grid.linear(cell) == value)
+            .map_or(-1, |row| i64::try_from(row).unwrap_or(-1));
         self.push_stack(result, pos)?;
         Ok(StepResult::Continue)
     }
 
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "`grid_row_index` has already proved `rows * cols` fits usize and is within `size`, and `usize_row < rows`, so `row_start + c` addresses a declared variable (`spec/xqvm/ISA.md`'s XQMX Grid precondition); the i64 fold over the coefficients is checked"
-    )]
     fn exec_row_sum(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let row = self.pop(pos)?;
-        let (rows, cols, size) = self.grid_dims(reg)?;
-        let usize_row = Self::grid_row_index(pos, rows, cols, size, row)?;
+        let line = self.grid_shape(reg)?.row(pos, row)?;
         // O(cols) sparse lookups over a program-controlled extent; charged
         // before the walk, after the index check. See ROWFIND.
-        self.charge_steps(pos, widen(cols).saturating_mul(GRID_CELL_STEPS))?;
+        self.charge_steps(pos, widen(line.len).saturating_mul(GRID_CELL_STEPS))?;
         let grid = self.grid_checked(reg);
-        // grid_row_index guarantees rows*cols fits usize and is within size,
-        // and that usize_row is in range, so row addressing cannot overflow.
-        let row_start = usize_row * cols;
-        // A reduction over coefficients is checked per partial sum
-        // (spec/xqvm/SPEC.md overflow rule): wrapping here was observable.
-        let sum = (0..cols).try_fold(0i64, |acc, c| {
-            acc.checked_add(grid.linear(row_start + c))
-                .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })
-        })?;
+        let sum = sum_line(&grid, line, pos)?;
         self.push_stack(sum, pos)?;
         Ok(StepResult::Continue)
     }
 
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "`grid_col_index` has already proved `rows * cols` fits usize and is within `size`, and `usize_col < cols`, so `r * cols + usize_col` addresses a declared variable (`spec/xqvm/ISA.md`'s XQMX Grid precondition); the i64 fold over the coefficients is checked"
-    )]
     fn exec_col_sum(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let col = self.pop(pos)?;
-        let (rows, cols, size) = self.grid_dims(reg)?;
-        let usize_col = Self::grid_col_index(pos, rows, cols, size, col)?;
+        let line = self.grid_shape(reg)?.column(pos, col)?;
         // O(rows) sparse lookups over a program-controlled extent; charged
         // before the walk, after the index check. See ROWFIND.
-        self.charge_steps(pos, widen(rows).saturating_mul(GRID_CELL_STEPS))?;
+        self.charge_steps(pos, widen(line.len).saturating_mul(GRID_CELL_STEPS))?;
         let grid = self.grid_checked(reg);
-        // Checked like ROWSUM: partial sums are normative, and
-        // grid_col_index keeps the column addressing in range.
-        let sum = (0..rows).try_fold(0i64, |acc, r| {
-            acc.checked_add(grid.linear(r * cols + usize_col))
-                .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })
-        })?;
+        let sum = sum_line(&grid, line, pos)?;
         self.push_stack(sum, pos)?;
         Ok(StepResult::Continue)
     }
 
     // -- Constraints --
 
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "`grid_row_index` has already proved `rows * cols` fits usize and is within `m.size`, and `usize_row < m.rows`, so `row_start + c` and the pair addressing reach declared variables (`spec/xqvm/ISA.md`'s XQMX Grid precondition). `ci + 1` is bounded by `m.cols`, a live extent RESIZE keeps within `size`"
-    )]
     fn exec_one_hot_r(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let penalty = self.pop(pos)?;
         let row = self.pop(pos)?;
@@ -2640,40 +2527,18 @@ impl Vm {
                 got: e.actual.kind_name(),
             })?;
         // Both halves of `spec/xqvm/ISA.md`'s grid precondition, on the same
-        // helper the read-only grid opcodes use. A model with no grid has no
+        // check the read-only grid opcodes use. A model with no grid has no
         // row to constrain, and a row outside `[0, rows)` names variables the
         // program never declared: writing either one leaves the constraint
         // absent from -- or misplaced in -- a model that then solves cleanly
         // and answers wrongly. `usize::try_from(row)` alone accepted any
         // positive row, and `usize_row * m.cols` was the multiply that turned
         // `row = 2^62` on a 1x4 grid into a one-hot constraint on row 0.
-        let usize_row = Self::grid_row_index(pos, m.rows, m.cols, m.size, row)?;
-        // grid_row_index guarantees rows*cols fits usize and is within size,
-        // and that usize_row is in range, so row addressing cannot overflow
-        // and every index below names a variable the model declared.
-        let row_start = usize_row * m.cols;
-        // H = penalty * (sum(x_i) - 1)^2
-        // Linear: -penalty per variable in row
-        // Quadratic: 2*penalty per pair in row
-        let neg_penalty = checked(penalty.checked_neg(), pos)?;
-        let two_penalty = checked(penalty.checked_mul(2), pos)?;
-        for c in 0..m.cols {
-            m.add_linear(row_start + c, neg_penalty)
-                .map_err(at_pos(pos))?;
-        }
-        for ci in 0..m.cols {
-            for cj in (ci + 1)..m.cols {
-                m.add_quad(row_start + ci, row_start + cj, two_penalty)
-                    .map_err(at_pos(pos))?;
-            }
-        }
+        let line = GridShape::of_model(m).row(pos, row)?;
+        add_one_hot(m, line, penalty, pos)?;
         Ok(StepResult::Continue)
     }
 
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "`grid_col_index` has already proved `rows * cols` fits usize and is within `m.size`, and `col_idx < m.cols`, so `ri * m.cols + col_idx` and the pair addressing reach declared variables (`spec/xqvm/ISA.md`'s XQMX Grid precondition). `ri + 1` is bounded by `m.rows`, a live extent RESIZE keeps within `size`"
-    )]
     fn exec_one_hot_c(&mut self, pos: usize, reg: Register) -> Result<StepResult, Error> {
         let penalty = self.pop(pos)?;
         let col = self.pop(pos)?;
@@ -2694,25 +2559,11 @@ impl Vm {
             })?;
         // The grid precondition, as in `exec_one_hot_r`. A column outside
         // `[0, cols)` cannot wrap the way a row can -- nothing multiplies by
-        // it -- but `ri * m.cols + col_idx` still lands outside the addressed
-        // column, aliasing another column's variables or variables past
-        // `size`, so the same helper rejects it.
-        let col_idx = Self::grid_col_index(pos, m.rows, m.cols, m.size, col)?;
-        // H = penalty * (sum(x_{r,col}) - 1)^2 over all rows.
-        // Linear: -penalty per variable in column.
-        // Quadratic: 2*penalty per pair in column.
-        let neg_penalty = checked(penalty.checked_neg(), pos)?;
-        let two_penalty = checked(penalty.checked_mul(2), pos)?;
-        for ri in 0..m.rows {
-            m.add_linear(ri * m.cols + col_idx, neg_penalty)
-                .map_err(at_pos(pos))?;
-        }
-        for ri in 0..m.rows {
-            for rj in (ri + 1)..m.rows {
-                m.add_quad(ri * m.cols + col_idx, rj * m.cols + col_idx, two_penalty)
-                    .map_err(at_pos(pos))?;
-            }
-        }
+        // it -- but its cells would still land outside the addressed column,
+        // aliasing another column's variables or variables past `size`, so
+        // the same check rejects it.
+        let line = GridShape::of_model(m).column(pos, col)?;
+        add_one_hot(m, line, penalty, pos)?;
         Ok(StepResult::Continue)
     }
 
@@ -3184,6 +3035,168 @@ fn expand_equality(
             )?;
             model
                 .add_quad(idx_k, idx_m, coefficient)
+                .map_err(at_pos(pos))?;
+        }
+    }
+    Ok(())
+}
+
+/// The extents of a grid register, copied out of it.
+///
+/// Named fields rather than a tuple: `rows` and `cols` are both `usize`, and a
+/// positional pair is an argument order a caller can transpose without the
+/// compiler noticing. A grid opcode turns its operand into a [`GridLine`]
+/// through [`GridShape::row`] or [`GridShape::column`] and addresses cells
+/// only through that line.
+#[derive(Clone, Copy)]
+struct GridShape {
+    rows: usize,
+    cols: usize,
+    size: usize,
+}
+
+impl GridShape {
+    fn of_model(m: &XqmxModel) -> Self {
+        Self {
+            rows: m.rows,
+            cols: m.cols,
+            size: m.size,
+        }
+    }
+
+    /// Row `index`: `cols` cells, adjacent in the flat variable order.
+    ///
+    /// # Errors
+    /// See [`GridShape::line_index`].
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "`line_index` proved `rows * cols` fits usize and `row < rows`, so `row * cols < rows * cols`"
+    )]
+    fn row(self, pos: usize, index: i64) -> Result<GridLine, Error> {
+        let row = self.line_index(pos, index, self.rows)?;
+        Ok(GridLine {
+            start: row * self.cols,
+            stride: 1,
+            len: self.cols,
+        })
+    }
+
+    /// Column `index`: `rows` cells, `cols` apart in the flat variable order.
+    ///
+    /// # Errors
+    /// See [`GridShape::line_index`].
+    fn column(self, pos: usize, index: i64) -> Result<GridLine, Error> {
+        let col = self.line_index(pos, index, self.cols)?;
+        Ok(GridLine {
+            start: col,
+            stride: self.cols,
+            len: self.rows,
+        })
+    }
+
+    /// Check the grid, then `index` against the `count` lines on its axis.
+    ///
+    /// Only [`GridShape::row`] and [`GridShape::column`] call this, each with
+    /// its own axis's count directly above the addressing that count
+    /// governs. That pairing is the point: the line count an index is checked
+    /// against and the stride its cells are addressed with are chosen in one
+    /// place, so no handler can check a row and address a column.
+    ///
+    /// Three things are required. The register must carry non-zero grid
+    /// extents; their product must be addressable *and* within the register's
+    /// declared `size`; and `index` must lie in `[0, count)`. An ungridded or
+    /// unaddressable grid raises `InvalidGridDimensions` -- the same identity
+    /// ONEHOTR/ONEHOTC raise without a grid -- and an out-of-range index
+    /// raises `IndexOutOfBounds`, so an absent row is an error rather than a
+    /// silent sum of zeroes (`xqvm_py` has always raised here).
+    ///
+    /// The grid check is [`grid_fits`], the rule `RESIZE` enforces, so no
+    /// bytecode path reaches its failure arm. It stays as defence in depth,
+    /// decided under QUI-1164: `xqffi` now rejects an unfit grid when Python
+    /// constructs a model or sample, but `rows` and `cols` are public fields,
+    /// so a Rust embedder can still install one through [`Vm::set_register`]
+    /// or [`Vm::set_calldata`]. The check is what keeps [`GridLine::cells`]
+    /// addressing declared variables. For the four read-only handlers an
+    /// unchecked address would otherwise panic under `ci-test` and wrap under
+    /// `release`; for the two ONEHOT handlers, which write, an index past
+    /// `size` would create coefficients on variables the model never
+    /// declared, because `XqmxModel::add_linear` and `add_quad` grow a sparse
+    /// map with no bound of their own.
+    fn line_index(self, pos: usize, index: i64, count: usize) -> Result<usize, Error> {
+        if !grid_fits(self.rows, self.cols, self.size) {
+            return Err(Error::InvalidGridDimensions {
+                pos,
+                rows: i64::try_from(self.rows).unwrap_or(i64::MAX),
+                cols: i64::try_from(self.cols).unwrap_or(i64::MAX),
+            });
+        }
+        usize::try_from(index)
+            .ok()
+            .filter(|&i| i < count)
+            .ok_or(Error::IndexOutOfBounds {
+                pos,
+                index,
+                len: count,
+            })
+    }
+}
+
+/// One validated row or column of a grid, as the flat indices of its cells.
+///
+/// Built only by [`GridShape::row`] and [`GridShape::column`], after the grid
+/// and the line index have both been checked, so every cell it yields is a
+/// variable the register declared (`spec/xqvm/ISA.md`'s XQMX Grid
+/// precondition). `len` is the number of cells, which is what a scan charges
+/// for.
+#[derive(Clone, Copy)]
+struct GridLine {
+    start: usize,
+    stride: usize,
+    len: usize,
+}
+
+impl GridLine {
+    /// The line's cells in order: along a row, or down a column.
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "the constructors proved `rows * cols <= size` fits usize; the last cell is `row * cols + (cols - 1)` or `col + (rows - 1) * cols`, both below `rows * cols`"
+    )]
+    fn cells(self) -> impl Iterator<Item = usize> + Clone {
+        let Self { start, stride, len } = self;
+        (0..len).map(move |k| start + k * stride)
+    }
+}
+
+/// Sum a grid line's coefficients for ROWSUM and COLSUM.
+///
+/// A reduction over coefficients is checked per partial sum
+/// (`spec/xqvm/SPEC.md` overflow rule): wrapping here was observable.
+fn sum_line(
+    grid: &crate::value::XqmxGridRef<'_>,
+    line: GridLine,
+    pos: usize,
+) -> Result<i64, Error> {
+    line.cells().try_fold(0i64, |acc, cell| {
+        acc.checked_add(grid.linear(cell))
+            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })
+    })
+}
+
+/// Expand `penalty * (sum(x) - 1)^2` over one grid line for ONEHOTR and
+/// ONEHOTC: `-penalty` on every cell and `2 * penalty` on every pair.
+///
+/// Both scale factors are computed before any term is written, so an
+/// overflowing penalty leaves the model untouched.
+fn add_one_hot(m: &mut XqmxModel, line: GridLine, penalty: i64, pos: usize) -> Result<(), Error> {
+    let neg_penalty = checked(penalty.checked_neg(), pos)?;
+    let two_penalty = checked(penalty.checked_mul(2), pos)?;
+    for cell in line.cells() {
+        m.add_linear(cell, neg_penalty).map_err(at_pos(pos))?;
+    }
+    let mut rest = line.cells();
+    while let Some(first) = rest.next() {
+        for second in rest.clone() {
+            m.add_quad(first, second, two_penalty)
                 .map_err(at_pos(pos))?;
         }
     }
@@ -3784,6 +3797,103 @@ mod tests {
                     ),
                     "{op} at budget {budget}: expected RegisterType model/sample, got {err:?}"
                 );
+            }
+        }
+    }
+
+    mod grid_lines {
+        use super::Vec;
+        use crate::error::Error;
+        use crate::vm::GridShape;
+
+        /// A 2x3 grid, deliberately non-square: an index checked against the
+        /// wrong axis, or cells addressed with the wrong stride, gives a
+        /// different answer here and the same one on a square grid.
+        const SHAPE: GridShape = GridShape {
+            rows: 2,
+            cols: 3,
+            size: 6,
+        };
+
+        #[test]
+        fn a_row_runs_along_adjacent_cells() {
+            let cells: Vec<usize> = SHAPE.row(0, 1).expect("row 1").cells().collect();
+            assert_eq!(cells, [3, 4, 5]);
+        }
+
+        #[test]
+        fn a_column_runs_down_one_cell_per_row() {
+            let cells: Vec<usize> = SHAPE.column(0, 2).expect("column 2").cells().collect();
+            assert_eq!(cells, [2, 5]);
+        }
+
+        #[test]
+        fn a_row_index_is_checked_against_the_row_count() {
+            // Row 2 is inside the column count, so it passes if checked
+            // against the wrong axis.
+            let err = SHAPE.row(7, 2).map(|_| ()).expect_err("row 2 of 2");
+            assert!(
+                matches!(
+                    err,
+                    Error::IndexOutOfBounds {
+                        pos: 7,
+                        index: 2,
+                        len: 2
+                    }
+                ),
+                "got {err:?}"
+            );
+        }
+
+        #[test]
+        fn a_column_index_is_checked_against_the_column_count() {
+            assert!(SHAPE.column(0, 2).is_ok());
+            let err = SHAPE.column(7, 3).map(|_| ()).expect_err("column 3 of 3");
+            assert!(
+                matches!(
+                    err,
+                    Error::IndexOutOfBounds {
+                        pos: 7,
+                        index: 3,
+                        len: 3
+                    }
+                ),
+                "got {err:?}"
+            );
+        }
+
+        #[test]
+        fn a_negative_index_is_out_of_bounds() {
+            let err = SHAPE.row(0, -1).map(|_| ()).expect_err("row -1");
+            assert!(
+                matches!(err, Error::IndexOutOfBounds { index: -1, .. }),
+                "got {err:?}"
+            );
+        }
+
+        #[test]
+        fn an_unfit_grid_is_rejected_before_the_index() {
+            // Ungridded, and a grid larger than the register, both raise the
+            // grid error even for an index that would be in range.
+            for shape in [
+                GridShape {
+                    rows: 0,
+                    cols: 0,
+                    size: 6,
+                },
+                GridShape {
+                    rows: 1 << 62,
+                    cols: 8,
+                    size: 6,
+                },
+            ] {
+                for line in [shape.row(3, 0), shape.column(3, 0)] {
+                    let err = line.map(|_| ()).expect_err("unfit grid");
+                    assert!(
+                        matches!(err, Error::InvalidGridDimensions { pos: 3, .. }),
+                        "got {err:?}"
+                    );
+                }
             }
         }
     }

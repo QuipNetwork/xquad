@@ -2053,6 +2053,74 @@ fn row_find_and_col_find() {
     assert_eq!(vm.stack(), &[1, 1]);
 }
 
+#[test]
+fn row_find_and_col_find_on_a_non_square_grid() {
+    // A 2x3 grid holding 10 + its flat index:
+    //   row 0: 10 11 12
+    //   row 1: 13 14 15
+    // On a square grid a row walked with a column's stride, or the reverse,
+    // can land on the right cell by coincidence; here it cannot.
+    let vm = run(|b| {
+        b.emit_push(6).emit_bqmx(Register(0));
+        b.emit_push(2).emit_push(3).emit_resize(Register(0));
+        for k in 0..6 {
+            b.emit_push(k).emit_push(10 + k).emit_set_line(Register(0));
+        }
+        b.emit_push(1).emit_push(14).emit_row_find(Register(0));
+        b.emit_push(1).emit_push(10).emit_row_find(Register(0));
+        b.emit_push(2).emit_push(15).emit_col_find(Register(0));
+        b.emit_push(1).emit_push(11).emit_col_find(Register(0));
+        b.emit_halt();
+    });
+    assert_eq!(vm.stack(), &[1, -1, 1, 0]);
+}
+
+#[test]
+fn row_find_row_out_of_range_raises() {
+    // Row 2 of a 2x3 grid does not exist but is a valid column, so this is
+    // the case that passes if the row is checked against the wrong axis.
+    // Before QUI-1165 nothing in the repository covered ROWFIND's check.
+    let err = run_err(|b| {
+        b.emit_push(6).emit_bsmx(Register(0));
+        b.emit_push(2).emit_push(3).emit_resize(Register(0));
+        b.emit_push(2).emit_push(1).emit_row_find(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::IndexOutOfBounds {
+                index: 2,
+                len: 2,
+                ..
+            }
+        ),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
+}
+
+#[test]
+fn col_find_col_out_of_range_on_a_non_square_grid_raises() {
+    // The mirror: column 2 of a 3x2 grid does not exist but is a valid row.
+    let err = run_err(|b| {
+        b.emit_push(6).emit_bsmx(Register(0));
+        b.emit_push(3).emit_push(2).emit_resize(Register(0));
+        b.emit_push(2).emit_push(1).emit_col_find(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::IndexOutOfBounds {
+                index: 2,
+                len: 2,
+                ..
+            }
+        ),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // New opcodes added in spec migration
 // ---------------------------------------------------------------------------
