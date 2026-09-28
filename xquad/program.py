@@ -26,8 +26,8 @@ one execution's outputs as a dict keyed by slot index.
 from __future__ import annotations
 
 from xqffi.asm import assemble_source
+from xqffi.vm import DEFAULT_MEMORY_LIMIT as _DEFAULT_MEMORY_LIMIT
 from xqffi.vm import Vm, XqmxModel, XqmxSample
-from xqvm_py.executor import DEFAULT_MEMORY_LIMIT as _DEFAULT_MEMORY_LIMIT
 
 from .vm import DEFAULT_STEP_LIMIT
 
@@ -38,10 +38,10 @@ def _validate_calldata_element(item: object) -> None:
     """Reject a calldata element whose type no slot can hold.
 
     Deliberately type-only: an `XqmxSample` arriving here is already
-    in-domain. Its constructor rejects out-of-domain values and the class
-    exposes only getters, so no instance can exist that would fail a value
-    scan. Re-scanning here would be dead code that reads like a live guard.
-    See `xqffi/src/vm.rs`, `PyXqmxSample::new`.
+    in-domain. Its constructor and its one setter reject out-of-domain
+    values, so no instance can exist that would fail a value scan.
+    Re-scanning here would be dead code that reads like a live guard. See
+    `xqffi/src/vm.rs`, `PyXqmxSample::build` and `set_linear`.
     """
     if item is None or isinstance(item, (int, XqmxModel, XqmxSample)):
         return

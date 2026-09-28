@@ -1632,7 +1632,6 @@ dependencies = [
     { name = "xqcp" },
     { name = "xqffi" },
     { name = "xqsa" },
-    { name = "xqvm-py" },
 ]
 
 [package.optional-dependencies]
@@ -1658,7 +1657,6 @@ requires-dist = [
     { name = "xqsa", extras = ["dwave"], marker = "extra == 'dwave'", editable = "xqsa" },
     { name = "xqsa", extras = ["metal"], marker = "extra == 'metal'", editable = "xqsa" },
     { name = "xqsa", extras = ["quip"], marker = "extra == 'quip'", editable = "xqsa" },
-    { name = "xqvm-py", editable = "xqvm_py" },
 ]
 provides-extras = ["cuda", "dwave", "metal", "quip"]
 

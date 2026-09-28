@@ -27,16 +27,15 @@ Guards three invariants:
    umbrella imports alone, which catches regressions where a peer
    package's public surface changes without the umbrella keeping up.
 
-3. Both VM backends (Rust and Python) produce identical results.
+3. `xquad.vm` has no backend switch: it runs on the Rust VM only.
 """
 
 from __future__ import annotations
 
 import xqcp as _xqcp
+import xqffi.vm as _xqffi_vm
 import xqsa as _xqsa
 import xquad
-import xqvm_py.vector as _xqvm_py_vector
-import xqvm_py.xqmx as _xqvm_py_xqmx
 from xquad import asm, cp, sa, types, vm
 
 
@@ -56,11 +55,8 @@ def test_identity_reexports():
     assert sa.QuipSigningError is _xqsa.QuipSigningError
     assert sa.QuipTopologyError is _xqsa.QuipTopologyError
     assert sa.fund_from_faucet is _xqsa.fund_from_faucet
-    assert types.XQMX is _xqvm_py_xqmx.XQMX
-    assert types.XQMXDomain is _xqvm_py_xqmx.XQMXDomain
-    assert types.XQMXMode is _xqvm_py_xqmx.XQMXMode
-    assert types.Vec is _xqvm_py_vector.Vec
-    assert types.triu is _xqvm_py_xqmx.triu
+    for name in types.__all__:
+        assert getattr(types, name) is getattr(_xqffi_vm, name), name
 
 
 def test_top_level_namespace():
@@ -73,20 +69,16 @@ def test_top_level_namespace():
     assert hasattr(xquad, "program")
 
 
-def test_end_to_end_rust():
-    """assemble → run → read outputs through the Rust backend."""
+def test_end_to_end():
+    """assemble → run → read outputs through the umbrella VM."""
     src = "PUSH 7\nPUSH 5\nADD\nSTOW r0\nPUSH 0\nOUTPUT r0\nHALT\n"
-    v = vm.VM(backend=vm.VMBackend.RUST)
+    v = vm.VM()
     v.set_output_slots(1)
     v.run(src)
     assert v.outputs() == [12]
     assert v.stack() == []
 
 
-def test_end_to_end_python():
-    """parse → run → read outputs through the Python backend."""
-    src = "PUSH 7\nPUSH 5\nADD\nSTOW r0\nPUSH 0\nOUTPUT r0\nHALT\n"
-    v = vm.VM(backend=vm.VMBackend.PYTHON)
-    v.set_output_slots(1)
-    v.run(src)
-    assert v.outputs() == [12]
+def test_vm_has_no_backend_switch():
+    assert not hasattr(vm, "VMBackend")
+    assert not hasattr(vm.VM(), "backend")

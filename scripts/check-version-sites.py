@@ -354,7 +354,7 @@ SITES: tuple[Site, ...] = (
     Site("xqvm_py/pyproject.toml", Eco.PYTHON, Role.PEER_PIN, dist="xqffi", table=("project", "dependencies")),
     *(
         Site("xquad/pyproject.toml", Eco.PYTHON, Role.PEER_PIN, dist=dist, table=("project", "dependencies"))
-        for dist in ("xqffi", "xqcp", "xqsa", "xqvm_py")
+        for dist in ("xqffi", "xqcp", "xqsa")
     ),
     *(
         Site(
