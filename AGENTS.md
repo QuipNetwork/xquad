@@ -70,7 +70,7 @@ make repl             # Python REPL with xqffi + workspace packages
 # Cross-language
 make opcode-parity    # opcode-parity-rs + opcode-parity-py
 make conformance      # the specification vectors: cargo test -p xqvm --test vectors
-make example-smoke    # run examples on both interpreters, check valid == 1
+make example-smoke    # run every example on the XQVM, check valid == 1
 
 # Documentation
 make build-docs            # mdbook build
@@ -348,7 +348,7 @@ There is deliberately no CI guard for this one -- it is a correctness argument a
 
 ### Examples & Smoke Tests
 
-`examples/tsp/` (Travelling Salesman) and `examples/maxcut/` (Max-Cut) each consist of `.xqasm` programs driven by a Python runner (`runner.py`) that exercises both the Rust and Python interpreters via the `--interpreter` flag. These are the canonical references for how host code loads and runs `.xqasm` programs via the toolchain. `make example-smoke` runs both interpreters and checks each produces a valid solution (`valid == 1`); the check is invariant-based, not golden-file diffing.
+`examples/tsp/` (Travelling Salesman) and `examples/maxcut/` (Max-Cut) each consist of `.xqasm` programs driven by a Python runner (`runner.py`) that runs them on the Rust VM through `xquad.vm.VM`. These are the canonical references for how host code loads and runs `.xqasm` programs via the toolchain. `make example-smoke` runs every example once and checks it produces a valid solution (`valid == 1`); the check is invariant-based, not golden-file diffing.
 
 ### CI Pipeline
 

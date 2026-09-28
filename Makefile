@@ -843,11 +843,11 @@ repl: deps-py
 
 # -- Examples ---------------------------------------------------------------
 
-# Run each top-level example on both the Python and the Rust XQVM
-# interpreters with the canonical seed and check each finds a valid
-# solution (valid == 1). The check is invariant-based rather than a
-# golden-file diff: simulated annealing is sensitive to BQM construction
-# order, so the two paths can land on different but equally valid optima.
+# Run each top-level example on the XQVM with the canonical seed and
+# check each finds a valid solution (valid == 1). The check is
+# invariant-based rather than a golden-file diff: simulated annealing is
+# sensitive to BQM construction order, so a change there can land on a
+# different but equally valid optimum.
 example-smoke: deps-py
 	uv run --no-sync python scripts/example-smoke.py
 

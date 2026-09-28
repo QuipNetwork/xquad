@@ -154,21 +154,20 @@ v.run(bytecode)
 assert v.outputs() == [42]
 ```
 
-The `xquad.vm.VM` class offers a middle tier -- a unified wrapper with
-backend dispatch (`VMBackend.RUST` / `VMBackend.PYTHON`) that accepts
-`.xqasm` source and normalises types across the two interpreters.
+The `xquad.vm.VM` class offers a middle tier -- a wrapper around the
+Rust VM that accepts `.xqasm` source, keeps calldata, output slots and
+limits across runs, and hands back the `xqffi` types unchanged.
 
 ### End-to-end worked example
 
 [`examples/tsp/`](examples/tsp/) shows a full Travelling Salesman Problem
-driven from the `xqcp` DSL through the VM and `xqsa` solver, runnable on
-either the Python reference VM or the Rust VM:
+driven from the `xqcp` DSL through the VM and `xqsa` solver:
 
 ```sh
 uv run --no-sync python examples/tsp/runner.py --seed 42
-uv run --no-sync python examples/maxcut/runner.py --seed 42 --interpreter rust
+uv run --no-sync python examples/maxcut/runner.py --seed 42
 
-# Run every example on both interpreters, check each finds a valid solution:
+# Run every example and check each finds a valid solution:
 make example-smoke
 ```
 
