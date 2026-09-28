@@ -372,9 +372,13 @@ SITES: tuple[Site, ...] = (
     # agreeing with its manifest) is now enforced by `uv lock --check`
     # (`make check-uv-lock`, run by `verify:python` and `preflight-py`), so
     # entries here would be redundant duplication of what uv already checks.
-    # The pallet fixture's standalone lock. RELEASING.md's bump step already
-    # says a stale xqvm entry here "drifts silently for releases", because the
-    # fixture is an excluded workspace that no job builds with --locked.
+    # The pallet fixture's standalone lock. Unlike uv.lock above, this row is
+    # not a duplicate check: the fixture is excluded from the root workspace,
+    # so neither `cargo check` nor `uv lock` regenerates its lock, and this row
+    # is what makes `make set-version` write the new xqvm entry into it. Both
+    # fixture targets build with --locked (`make test-substrate-fixture`,
+    # `make lint-deny-fixture`), so a stale entry fails CI rather than
+    # drifting silently.
     Site("fixtures/pallet-xqvm/Cargo.lock", Eco.CARGO, Role.LOCK_ENTRY, dist="xqvm"),
 )
 
