@@ -50,7 +50,7 @@ use crate::metering::{
     COEFF_WRITE_STEPS, ELEMENT_COPY_STEPS, GRID_CELL_STEPS, SAMPLE_COPY_STEPS,
     equality_expansion_steps, model_eval_steps, value_copy_steps, widen,
 };
-use crate::model::{Domain, XqmxModel, XqmxSample};
+use crate::model::{Domain, XqmxModel, XqmxSample, grid_fits};
 use crate::tracer::{NoopTracer, StepState, Tracer};
 use crate::value::{RegVal, XqmxGridRefMut};
 
@@ -2404,10 +2404,7 @@ impl Vm {
         // ATLEASTW and REDUCE append slack and auxiliary variables past the
         // grid. They only ever grow `size` and nothing shrinks it, so a grid
         // that fits when RESIZE runs still fits afterwards.
-        if usize_rows
-            .checked_mul(usize_cols)
-            .is_none_or(|cells| cells > grid.size())
-        {
+        if !grid_fits(usize_rows, usize_cols, grid.size()) {
             return Err(Error::InvalidGridDimensions { pos, rows, cols });
         }
         grid.set_grid(usize_rows, usize_cols);
@@ -2482,15 +2479,15 @@ impl Vm {
     /// raises `IndexOutOfBounds`, so an absent row is an error rather than a
     /// silent sum of zeroes (`xqvm_py` has always raised here).
     ///
-    /// The `rows * cols` arm is unreachable from bytecode once `RESIZE`
-    /// enforces the identical `rows * cols <= size` rule, but it is *not*
-    /// dead: a host can install a register directly through
-    /// [`Vm::set_register`] or [`Vm::set_calldata`], and `xqffi` exposes both
-    /// extents to Python unvalidated (QUI-1164 tracks the boundary itself and
-    /// owns the decision on whether this arm eventually goes). It is what
-    /// keeps the flat-index arithmetic below every caller addressing declared
-    /// variables. For the four read-only handlers an unchecked `usize_row *
-    /// cols` would otherwise panic under `ci-test` and wrap under `release`;
+    /// The grid check is [`grid_fits`], the rule `RESIZE` enforces, so no
+    /// bytecode path reaches its failure arm. It stays as defence in depth,
+    /// decided under QUI-1164: `xqffi` now rejects an unfit grid when Python
+    /// constructs a model or sample, but `rows` and `cols` are public fields,
+    /// so a Rust embedder can still install one through [`Vm::set_register`]
+    /// or [`Vm::set_calldata`]. The check is what keeps the flat-index
+    /// arithmetic below every caller addressing declared variables. For the
+    /// four read-only handlers an unchecked `usize_row * cols` would
+    /// otherwise panic under `ci-test` and wrap under `release`;
     /// for the two ONEHOT handlers, which write, an index past `size` would
     /// create coefficients on variables the model never declared, because
     /// `XqmxModel::add_linear` and `add_quad` grow a sparse map with no bound
@@ -2503,7 +2500,7 @@ impl Vm {
         index: i64,
         extent: usize,
     ) -> Result<usize, Error> {
-        if rows == 0 || cols == 0 || rows.checked_mul(cols).is_none_or(|cells| cells > size) {
+        if !grid_fits(rows, cols, size) {
             return Err(Error::InvalidGridDimensions {
                 pos,
                 rows: i64::try_from(rows).unwrap_or(i64::MAX),
