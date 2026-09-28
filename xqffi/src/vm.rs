@@ -32,7 +32,7 @@
 //! `list[int]` (mapped to `RegVal::VecInt`), an `XqmxModel`, or an
 //! `XqmxSample`. `outputs()` mirrors the inverse dispatch.
 
-use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 
@@ -49,10 +49,16 @@ struct PyXqmxModel {
 impl PyXqmxModel {
     /// Construct a fresh model. `domain` is `"binary"`, `"spin"`, or
     /// `"integer"` (the latter requires `k`).
+    ///
+    /// Raises `ValueError` for a model no bytecode could allocate: a `size`
+    /// past the allocators' ceiling, or a grid other than `0 x 0` that does
+    /// not fit `size` the way `RESIZE` requires.
     #[new]
     #[pyo3(signature = (domain, size, rows = 0, cols = 0, k = None))]
     fn new(domain: &str, size: usize, rows: usize, cols: usize, k: Option<i64>) -> PyResult<Self> {
         let dom = domain_from_str(domain, k)?;
+        check_size(size)?;
+        check_grid(rows, cols, size)?;
         let mut inner = XqmxModel::new(dom, size);
         inner.rows = rows;
         inner.cols = cols;
@@ -87,20 +93,37 @@ impl PyXqmxModel {
         self.inner.cols
     }
 
-    fn set_linear(&mut self, i: usize, value: i64) {
-        self.inner.set_linear(i, value);
+    /// Set the linear coefficient of variable `i`.
+    ///
+    /// Raises `IndexError` unless `0 <= i < size`, as `SETLINE` does.
+    fn set_linear(&mut self, i: i64, value: i64) -> PyResult<()> {
+        self.inner.set_linear(self.variable(i)?, value);
+        Ok(())
     }
 
-    fn get_linear(&self, i: usize) -> i64 {
-        self.inner.get_linear(i)
+    /// The linear coefficient of variable `i`.
+    ///
+    /// Raises `IndexError` unless `0 <= i < size`, as `GETLINE` does.
+    fn get_linear(&self, i: i64) -> PyResult<i64> {
+        Ok(self.inner.get_linear(self.variable(i)?))
     }
 
-    fn set_quad(&mut self, i: usize, j: usize, value: i64) {
+    /// Set the quadratic coefficient of the pair `(i, j)`.
+    ///
+    /// Raises `IndexError` unless both indices are in `0..size`, as
+    /// `SETQUAD` does.
+    fn set_quad(&mut self, i: i64, j: i64, value: i64) -> PyResult<()> {
+        let (i, j) = (self.variable(i)?, self.variable(j)?);
         self.inner.set_quad(i, j, value);
+        Ok(())
     }
 
-    fn get_quad(&self, i: usize, j: usize) -> i64 {
-        self.inner.get_quad(i, j)
+    /// The quadratic coefficient of the pair `(i, j)`.
+    ///
+    /// Raises `IndexError` unless both indices are in `0..size`, as
+    /// `GETQUAD` does.
+    fn get_quad(&self, i: i64, j: i64) -> PyResult<i64> {
+        Ok(self.inner.get_quad(self.variable(i)?, self.variable(j)?))
     }
 
     /// Return the sparse linear terms as `list[(index, coefficient)]`.
@@ -126,6 +149,25 @@ impl PyXqmxModel {
     }
 }
 
+impl PyXqmxModel {
+    /// `i` as a variable index of this model, or `IndexError`.
+    ///
+    /// The underlying model stores coefficients sparsely and accepts any
+    /// index, so the bound is checked here, at the host boundary, the way
+    /// the coefficient opcodes check it inside the VM.
+    fn variable(&self, i: i64) -> PyResult<usize> {
+        usize::try_from(i)
+            .ok()
+            .filter(|&index| index < self.inner.size)
+            .ok_or_else(|| {
+                PyIndexError::new_err(format!(
+                    "variable index {i} is out of range for a model of size {}",
+                    self.inner.size
+                ))
+            })
+    }
+}
+
 /// Python wrapper around [`xqvm::XqmxSample`].
 #[pyclass(name = "XqmxSample", module = "xqffi.vm", skip_from_py_object)]
 #[derive(Clone)]
@@ -145,15 +187,18 @@ impl PyXqmxSample {
         k: Option<i64>,
     ) -> PyResult<Self> {
         let dom = domain_from_str(domain, k)?;
-        // Independent guards rather than one fused condition, so the extent
-        // checks (QUI-1164) drop in beside this one.
-        //
-        // The VM's own check is on SETLINE and ADDLINE, which a host-supplied
-        // sample never passes through: `Vm::set_calldata` is infallible by
-        // design and stays the trusted-embedder path. Closing that gap is
-        // this constructor's job -- and because the type exposes only
-        // getters, a sample that constructs cannot afterwards be mutated out
-        // of domain, so nothing downstream has to re-scan it.
+        // Independent guards rather than one fused condition: the extent
+        // checks name the grid or the length, the domain check a value.
+        // Unreachable short of a 32 GiB list, which PyO3 has already
+        // extracted by now; kept so both types state the same size rule.
+        check_size(values.len())?;
+        check_grid(rows, cols, values.len())?;
+        // The VM's own domain check is on SETLINE and ADDLINE, which a
+        // host-supplied sample never passes through: `Vm::set_calldata` is
+        // infallible by design and stays the trusted-embedder path. Closing
+        // that gap is this constructor's job -- and because the type exposes
+        // only getters, a sample that constructs cannot afterwards be mutated
+        // out of domain, so nothing downstream has to re-scan it.
         if let Some((index, value)) = values.iter().enumerate().find(|(_, v)| !dom.contains(**v)) {
             return Err(PyValueError::new_err(format!(
                 "sample value {value} at variable {index} is outside the {dom} domain"
@@ -361,6 +406,39 @@ fn domain_from_str(domain: &str, k: Option<i64>) -> PyResult<Domain> {
     }
 }
 
+/// Reject a variable count no allocator could produce.
+///
+/// The six allocators refuse a `size` past [`xqvm::MAX_ALLOCATION_SIZE`], so
+/// a larger one reaching the VM from here would be a model or sample that no
+/// program could have built.
+fn check_size(size: usize) -> PyResult<()> {
+    if i64::try_from(size).is_ok_and(|s| s <= xqvm::MAX_ALLOCATION_SIZE) {
+        Ok(())
+    } else {
+        Err(PyValueError::new_err(format!(
+            "size {size} exceeds the largest allocation, {}",
+            xqvm::MAX_ALLOCATION_SIZE
+        )))
+    }
+}
+
+/// Reject a grid `RESIZE` would refuse.
+///
+/// `0 x 0` is the ungridded state every allocator starts from; anything else
+/// has to satisfy [`xqvm::grid_fits`]. Checked at construction so an unfit
+/// grid is rejected where the host builds it, rather than as
+/// `InvalidGridDimensions` from the first grid opcode that reads it.
+fn check_grid(rows: usize, cols: usize, size: usize) -> PyResult<()> {
+    if (rows, cols) == (0, 0) || xqvm::grid_fits(rows, cols, size) {
+        Ok(())
+    } else {
+        Err(PyValueError::new_err(format!(
+            "a {rows} x {cols} grid does not fit {size} variables; rows and cols \
+             must both be 0, or both positive with rows * cols <= size"
+        )))
+    }
+}
+
 fn domain_name(domain: &Domain) -> &'static str {
     match domain {
         Domain::Binary => "binary",
@@ -424,5 +502,7 @@ pub(crate) fn register(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()>
     // carried their own copy with a comment claiming to match these.
     m.add("DEFAULT_STEP_LIMIT", xqvm::DEFAULT_STEP_LIMIT)?;
     m.add("DEFAULT_MEMORY_LIMIT", xqvm::DEFAULT_MEMORY_LIMIT)?;
+    // The ceiling the constructors enforce on `size`, for the same reason.
+    m.add("MAX_ALLOCATION_SIZE", xqvm::MAX_ALLOCATION_SIZE)?;
     Ok(())
 }

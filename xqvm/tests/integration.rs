@@ -2880,12 +2880,12 @@ fn resize_bounds_a_sample_by_its_value_count() {
 
 #[test]
 fn a_host_supplied_grid_with_an_unaddressable_extent_is_rejected() {
-    // `RESIZE` cannot produce `rows * cols` overflow any more, but a host can
-    // install a register directly -- `xqffi` exposes both extents to Python
-    // unvalidated -- so `grid_axis_index`'s addressability arm is still the
-    // guard that keeps `usize_row * cols` in the read-only grid handlers from
-    // overflowing. Deleting it turns this case into a `ci-test` panic and a
-    // `release` wrap. QUI-1164 tracks validating the boundary itself.
+    // `RESIZE` cannot produce `rows * cols` overflow any more, and `xqffi`
+    // rejects it at construction (QUI-1164), but `rows` and `cols` are public
+    // fields, so a Rust embedder can still install one directly. That keeps
+    // `grid_axis_index`'s addressability arm the guard that stops
+    // `usize_row * cols` in the read-only grid handlers from overflowing.
+    // Deleting it turns this case into a `ci-test` panic and a `release` wrap.
     let mut model = xqvm::XqmxModel::new(Domain::Binary, 4);
     model.rows = usize::MAX / 2;
     model.cols = 8;
@@ -2912,12 +2912,13 @@ fn a_host_supplied_grid_wider_than_the_model_is_rejected_before_it_is_written() 
     // index 3 is a variable the model declared.
     //
     // `RESIZE` bounds `rows * cols <= size`, so no bytecode can build this
-    // model; a host installing one directly can (QUI-1164). ONEHOTR then
-    // *writes*, and `XqmxModel::add_linear`/`add_quad` grow a sparse map with
-    // no bound of their own, so without the `size` half of the check the VM
-    // would mint `linear[4]`, `linear[5]` and the pairs among them out of
-    // nothing and halt successfully -- a model that solves cleanly and
-    // answers wrongly, which is the failure QUI-1107 exists to remove.
+    // model, and `xqffi` refuses to (QUI-1164); a Rust embedder installing
+    // one directly still can. ONEHOTR then *writes*, and
+    // `XqmxModel::add_linear`/`add_quad` grow a sparse map with no bound of
+    // their own, so without the `size` half of the check the VM would mint
+    // `linear[4]`, `linear[5]` and the pairs among them out of nothing and
+    // halt successfully -- a model that solves cleanly and answers wrongly,
+    // which is the failure QUI-1107 exists to remove.
     let mut model = xqvm::XqmxModel::new(Domain::Binary, 4);
     model.rows = 2;
     model.cols = 3;

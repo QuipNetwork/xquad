@@ -26,10 +26,12 @@ with the canonical Python types from `xquad.types`.
 from __future__ import annotations
 
 from enum import Enum, auto
+from itertools import chain
 from typing import Any
 
 from xqffi.asm import assemble_source as _assemble_source
 from xqffi.vm import DEFAULT_STEP_LIMIT as _DEFAULT_STEP_LIMIT
+from xqffi.vm import MAX_ALLOCATION_SIZE as _MAX_ALLOCATION_SIZE
 from xqffi.vm import Vm as _RustVm
 from xqffi.vm import XqmxModel as ModelFFI
 from xqffi.vm import XqmxSample as SampleFFI
@@ -149,15 +151,35 @@ def _prepare_calldata_rust(data: list) -> list:
     return out
 
 
-def _check_sample_domains(data: list) -> None:
-    """Raise unless every sample-mode `XQMX` in `data` is wholly in domain.
+def _check_calldata(data: list) -> None:
+    """Raise unless every `XQMX` in `data` is one bytecode could have built.
 
+    The RUST backend converts each `XQMX` through the `xqffi` constructors
+    and coefficient setters, which refuse a size past the allocators'
+    ceiling, a grid `RESIZE` would refuse, and a coefficient index at or past
+    `size` (QUI-1164). This applies the same rules, with the same errors, so
+    the PYTHON backend refuses the same calldata rather than running it.
+
+    Sample values are checked against their domain as well (QUI-1168).
     Absent `linear` entries need no check -- `XQMX._absent_linear` reads
     them as the domain's own default. Only the entries a caller wrote can
     be out of domain.
     """
     for item in data:
-        if isinstance(item, XQMX) and item.is_sample():
+        if not isinstance(item, XQMX):
+            continue
+        size, rows, cols = item.size, item.rows, item.cols
+        if size > _MAX_ALLOCATION_SIZE:
+            raise ValueError(f"size {size} exceeds the largest allocation, {_MAX_ALLOCATION_SIZE}")
+        if (rows, cols) != (0, 0) and not (rows > 0 and cols > 0 and rows * cols <= size):
+            raise ValueError(
+                f"a {rows} x {cols} grid does not fit {size} variables; rows and cols "
+                "must both be 0, or both positive with rows * cols <= size"
+            )
+        for index in chain(item.linear, chain.from_iterable(item.quadratic)):
+            if not 0 <= index < size:
+                raise IndexError(f"variable index {index} is out of range for a model of size {size}")
+        if item.is_sample():
             for index, value in item.linear.items():
                 if not item.domain_contains(value):
                     raise SampleOutOfDomain(
@@ -171,10 +193,10 @@ def _prepare_calldata_python(data: list) -> dict[int, Any]:
     # Re-scanned here, not just in `set_calldata`. `set_calldata` retains the
     # caller's `XQMX` objects rather than copying them, so a mutation between
     # the two calls is visible to the run. The RUST path observes that same
-    # late mutation and faults on it in `PyXqmxSample::new`, so checking only
-    # once would leave Python executing an out-of-domain sample that Rust
-    # rejects -- the exact divergence this ticket closes elsewhere.
-    _check_sample_domains(data)
+    # late mutation and faults on it in the `xqffi` constructors and setters,
+    # so checking only once would leave Python executing an `XQMX` that Rust
+    # rejects -- the divergence QUI-1164 and QUI-1168 close.
+    _check_calldata(data)
     result: dict[int, Any] = {}
     for i, item in enumerate(data):
         if item is None:
@@ -252,16 +274,17 @@ class VM:
     def set_calldata(self, data: list) -> None:
         """Install the calldata slots for the next run.
 
-        Sample-mode `XQMX` entries are checked against their domain here so
-        a bad sample is refused where the caller supplied it rather than
-        several lines later inside `run`. The check is not sufficient on its
-        own: only the outer list is copied, so the caller keeps a live
-        reference to every `XQMX` and can mutate one afterwards. Both
-        backends therefore re-check at run time -- `_prepare_calldata_python`
-        by calling the same scan, the RUST path by rebuilding each
-        `XqmxSample`, whose constructor checks.
+        `XQMX` entries are checked against what bytecode could build (size,
+        grid, coefficient indices, sample domain) here so a bad one is
+        refused where the caller supplied it rather than several lines later
+        inside `run`. The check is not sufficient on its own: only the outer
+        list is copied, so the caller keeps a live reference to every `XQMX`
+        and can mutate one afterwards. Both backends therefore re-check at
+        run time -- `_prepare_calldata_python` by calling the same scan, the
+        RUST path by rebuilding each `XqmxModel` and `XqmxSample`, whose
+        constructors and setters check.
         """
-        _check_sample_domains(data)
+        _check_calldata(data)
         self._calldata = list(data)
 
     def set_output_slots(self, n: int) -> None:

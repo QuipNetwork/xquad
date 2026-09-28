@@ -106,6 +106,33 @@ impl core::fmt::Display for Domain {
     }
 }
 
+/// Whether a `rows x cols` grid fits a register of `size` variables.
+///
+/// This is the rule `RESIZE` enforces, stated once so every place that
+/// accepts a grid applies the same one: both extents are non-zero, their
+/// product is addressable, and it is at most `size`. The bound is `<=`, not
+/// `==`, because `EQUALITY`, `ATLEAST`, `ATLEASTW` and `REDUCE` append slack
+/// variables past the grid and only ever grow `size`.
+///
+/// An ungridded register carries `0 x 0`, which this returns `false` for:
+/// it is not a grid, and a grid opcode on it faults. A host accepting either
+/// state checks for `0 x 0` separately.
+///
+/// # Examples
+///
+/// ```rust
+/// use xqvm::grid_fits;
+///
+/// assert!(grid_fits(2, 3, 6));
+/// assert!(grid_fits(2, 3, 8));
+/// assert!(!grid_fits(2, 3, 5));
+/// assert!(!grid_fits(0, 0, 4));
+/// assert!(!grid_fits(1 << 62, 8, 4));
+/// ```
+pub fn grid_fits(rows: usize, cols: usize, size: usize) -> bool {
+    rows != 0 && cols != 0 && rows.checked_mul(cols).is_some_and(|cells| cells <= size)
+}
+
 /// A quadratic optimization model (QUBO/Ising/integer).
 ///
 /// Encodes H(x) = `sum_i` linear\[i\] * x\[i\] + sum_{i<j} quadratic\[(i,j)\] * x\[i\] * x\[j\].
@@ -346,8 +373,36 @@ impl XqmxSample {
 
 #[cfg(test)]
 mod tests {
-    use super::{Domain, XqmxModel};
+    use super::{Domain, XqmxModel, grid_fits};
     use crate::Error;
+
+    #[test]
+    fn grid_fits_accepts_an_exact_and_an_undersized_grid() {
+        assert!(grid_fits(2, 3, 6));
+        // Slack variables past the grid, as EQUALITY and friends append.
+        assert!(grid_fits(2, 3, 7));
+        assert!(grid_fits(1, 1, 1));
+    }
+
+    #[test]
+    fn grid_fits_rejects_a_zero_extent() {
+        assert!(!grid_fits(0, 0, 4));
+        assert!(!grid_fits(0, 3, 4));
+        assert!(!grid_fits(3, 0, 4));
+    }
+
+    #[test]
+    fn grid_fits_rejects_more_cells_than_variables() {
+        assert!(!grid_fits(2, 3, 5));
+        assert!(!grid_fits(1, 5, 4));
+    }
+
+    #[test]
+    fn grid_fits_rejects_an_unaddressable_product() {
+        // QUI-1164's reproducer: a 2^62 x 8 grid on a four-variable model.
+        assert!(!grid_fits(1 << 62, 8, 4));
+        assert!(!grid_fits(usize::MAX, 2, usize::MAX));
+    }
 
     #[test]
     fn binary_contains_only_zero_and_one() {

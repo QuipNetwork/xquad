@@ -144,6 +144,13 @@ session.set_calldata([model, sample, [1, 2, 3], 42])
 # session.run() now sees four typed input slots.
 
 try:
+    XqmxModel("binary", size=4, rows=2, cols=3)
+except ValueError as e:
+    print(e)
+# a 2 x 3 grid does not fit 4 variables; rows and cols must both be 0,
+# or both positive with rows * cols <= size
+
+try:
     session.set_calldata([object()])
 except TypeError as e:
     print(e)
