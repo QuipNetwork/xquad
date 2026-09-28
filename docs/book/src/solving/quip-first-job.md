@@ -4,8 +4,8 @@ This page submits one job to `aglais`, the public Quip test network,
 from an empty account: define a four-city Travelling Salesman Problem
 in XQCP, run its encoder on the XQVM locally, and hand the resulting
 model to `SolverQuip`. Every output block below was captured from the
-code on this page, run against `aglais` on 2026-09-24 at runtime
-`specVersion 117`. [Quip Network](quip-network.md) is the reference
+code on this page, run against `aglais` on 2026-09-28 at runtime
+`specVersion 118`. [Quip Network](quip-network.md) is the reference
 for the mechanism; this page is the walkthrough.
 
 ## Install
@@ -79,10 +79,10 @@ print(solver.quote(model))
 ```text
 [quip] job quote (network aglais, fee exact)
 [quip]   reward     1.000000000000 AGLS
-[quip]   fee        0.002193037538 AGLS
-[quip]   total      1.002193037538 AGLS
+[quip]   fee        0.001907881410 AGLS
+[quip]   total      1.001907881410 AGLS
 [quip]   balance    0.000000000000 AGLS
-[quip]   shortfall  1.002193037538 AGLS
+[quip]   shortfall  1.001907881410 AGLS
 ```
 
 Two arguments do the work:
@@ -114,8 +114,8 @@ from the chain rather than a fallback estimate.
 
 ### What the figure means
 
-As of 2026-09-24, at `specVersion 117`, a job costs 1 AGLS in reward
-plus about 0.0022 AGLS in fee: about 1.0022 AGLS in total. The reward
+As of 2026-09-28, at `specVersion 118`, a job costs 1 AGLS in reward
+plus about 0.0019 AGLS in fee: about 1.0019 AGLS in total. The reward
 is the chain's `MinReward`, a runtime constant. It is charged to gate
 submissions and maps to no measured compute: the runtime declares
 [`type VM = NoOpVm`](https://gitlab.com/quip.network/quip-validator/-/blob/161667b2ed7e375390ada523a459258f0f576f78/runtime/src/configs/mod.rs#L650), so the chain meters none of the
@@ -134,10 +134,10 @@ result = solver.solve(model)
 ```text
 [quip] job quote (network aglais, fee exact)
 [quip]   reward     1.000000000000 AGLS
-[quip]   fee        0.002193037538 AGLS
-[quip]   total      1.002193037538 AGLS
+[quip]   fee        0.001907881410 AGLS
+[quip]   total      1.001907881410 AGLS
 [quip]   balance    0.000000000000 AGLS
-[quip]   shortfall  1.002193037538 AGLS
+[quip]   shortfall  1.001907881410 AGLS
 ```
 
 `solve()` prints the same quote when stderr is a terminal; in a
@@ -147,7 +147,7 @@ accepts the price. The account
 is short, so `autofund=True` draws one drip of 10 AGLS from the
 faucet. It then proposes the job, reserving the reward, and waits
 until the order is final by block height. This call returned after
-about 94 seconds. Nothing else is printed on the way.
+about 89 seconds. Nothing else is printed on the way.
 
 ## Read the Result
 
@@ -164,12 +164,12 @@ print(list(vm.outputs()[0]))
 
 ```text
 -723
-{'order_id': 85, 'solver': '5F8JSnuLkeqo8tYj1NVAmpJ2aCh6qdd8VVBCB8D4yGKUshWu', 'best_energy_milli': -1817000, 'energy_matches_chain': True, 'num_submissions': 15, 'num_solutions': 1}
-[1, 2, 3, 0]
+{'order_id': 150, 'solver': '5DXr9LokuLE5bs2ZZyhDwbJfR9SqceL7kohQbgMebDcymhfD', 'best_energy_milli': -1817000, 'energy_matches_chain': True, 'num_submissions': 10, 'num_solutions': 1}
+[2, 1, 0, 3]
 ```
 
-- The decoded tour visits cities 1, 2, 3, 0 and returns to 1. Its
-  length is 25 + 22 + 18 + 12 = 77, the shortest of the three distinct
+- The decoded tour visits cities 2, 1, 0, 3 and returns to 2. Its
+  length is 25 + 12 + 18 + 22 = 77, the shortest of the three distinct
   tours on four cities.
 - `result.energy` is that length plus -800, the constant the eight
   one-hot penalties contribute at any valid assignment.
@@ -203,13 +203,13 @@ except QuipCancelledError as exc:
 ```text
 [quip] job quote (network aglais, fee exact)
 [quip]   reward     1.000000000000 AGLS
-[quip]   fee        0.002193037538 AGLS
-[quip]   total      1.002193037538 AGLS
-[quip]   balance    8.997806962462 AGLS
+[quip]   fee        0.001907881410 AGLS
+[quip]   total      1.001907881410 AGLS
+[quip]   balance    8.998092118590 AGLS
 [quip]   shortfall  0.000000000000 AGLS
-[quip] Submit this job for 1.002193037538 AGLS? [y/N] n
+[quip] Submit this job for 1.001907881410 AGLS? [y/N] n
 cancelled: autoconfirm declined: answered 'n' at the prompt
-1002193037538
+1001907881410
 ```
 
 With no terminal to ask on, a notebook included, `autoconfirm=False`
@@ -234,11 +234,11 @@ print(result.metadata["order_id"], result.energy)
 ```text
 [quip] job quote (network aglais, fee exact)
 [quip]   reward     1.000000000000 AGLS
-[quip]   fee        0.002193037538 AGLS
-[quip]   total      1.002193037538 AGLS
-[quip]   balance    8.997806962462 AGLS
+[quip]   fee        0.001907881410 AGLS
+[quip]   total      1.001907881410 AGLS
+[quip]   balance    8.998092118590 AGLS
 [quip]   shortfall  0.000000000000 AGLS
-86 -723
+151 -723
 ```
 
 ## What a Failed Job Costs

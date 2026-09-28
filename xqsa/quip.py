@@ -136,11 +136,12 @@ DEFAULT_TIMEOUT = 600.0
 FUND_WAIT_SECONDS = 30.0
 
 # The ``propose_job`` fee a quote assumes when ``payment_queryInfo`` does not
-# answer; ``JobQuote.fee_exact`` is then false. Measured fees on aglais at spec
-# 117 run about 0.0022 AGLS and top out near 0.0075 AGLS over the benchmarked
-# model range, so this is about 33 percent over that ceiling. It depends on the
-# runtime's weights and fee config, which an upgrade can move silently; it is a
-# bound for today's runtime, not a law.
+# answer; ``JobQuote.fee_exact`` is then false. Measured on aglais on
+# 2026-09-28: typical fees run about 0.0019 AGLS and top out near 0.0072 AGLS
+# over the benchmarked model range (n <= 5000 nodes, e <= 50000 edges), so this
+# is about 38 percent over that ceiling. It depends on the runtime's weights and
+# fee config, which an upgrade can move silently; it is a bound for today's
+# runtime, not a law.
 FEE_HEADROOM_PLANCK = 10_000_000_000  # 0.01 AGLS (12 decimals).
 
 # Keystore used when no seed or keystore is configured; created on first use.
