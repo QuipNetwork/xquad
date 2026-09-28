@@ -38,7 +38,7 @@
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::{PyMemoryError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 
@@ -350,14 +350,33 @@ impl PyXqmxSample {
     ///
     /// The value the `BSMX`, `SSMX` and `XSMX` allocators write, so a
     /// sample built here matches one the VM allocates.
+    ///
+    /// Unlike a model, a sample is dense, so `size` is bounded the way the
+    /// sample allocators bound it: `InvalidAllocation` above
+    /// `MAX_ALLOCATION_SIZE`, and `MemoryError` when the host cannot
+    /// reserve the values, rather than an allocation failure that aborts
+    /// the interpreter.
     #[staticmethod]
     #[pyo3(signature = (domain, size, rows = 0, cols = 0))]
-    fn default(domain: &Bound<'_, PyDomain>, size: usize, rows: usize, cols: usize) -> Self {
+    fn default(
+        domain: &Bound<'_, PyDomain>,
+        size: usize,
+        rows: usize,
+        cols: usize,
+    ) -> PyResult<Self> {
         let domain = domain.get().inner;
-        let mut inner = XqmxSample::new(domain, vec![domain.default_value(); size]);
+        if i64::try_from(size).map_or(true, |size| size > xqvm::MAX_ALLOCATION_SIZE) {
+            return Err(fault::invalid_allocation(size));
+        }
+        let mut values = Vec::new();
+        values.try_reserve_exact(size).map_err(|_| {
+            PyMemoryError::new_err(format!("cannot reserve a sample of {size} variables"))
+        })?;
+        values.resize(size, domain.default_value());
+        let mut inner = XqmxSample::new(domain, values);
         inner.rows = rows;
         inner.cols = cols;
-        Self { inner }
+        Ok(Self { inner })
     }
 
     /// Set the value of variable `i`.

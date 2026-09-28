@@ -176,7 +176,10 @@ class XqmxSample:
 
     @staticmethod
     def default(domain: Domain, size: int, rows: int = 0, cols: int = 0) -> XqmxSample:
-        """`size` variables at the domain default: binary 0, spin -1, integer 0."""
+        """`size` variables at the domain default: binary 0, spin -1, integer 0.
+
+        Raises `InvalidAllocation` for `size > MAX_ALLOCATION_SIZE`, and
+        `MemoryError` when the values cannot be reserved."""
 
     def set_linear(self, i: int, value: int) -> None:
         """Raises `IndexOutOfBounds` unless `0 <= i < size`, and `ValueError`

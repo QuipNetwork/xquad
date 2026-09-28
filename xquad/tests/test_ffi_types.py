@@ -173,6 +173,21 @@ def test_default_matches_what_the_vm_allocates() -> None:
     assert vm.outputs()[0].values == XqmxSample.default(Domain.SPIN, 3).values
 
 
+def test_default_accepts_an_empty_sample() -> None:
+    assert XqmxSample.default(Domain.SPIN, 0).values == []
+
+
+def test_default_rejects_a_size_above_the_allocation_bound() -> None:
+    # A model is sparse and takes this size; the dense sample a solver
+    # builds for it must raise rather than abort the interpreter.
+    size = ffi.MAX_ALLOCATION_SIZE + 1
+    assert XqmxModel.binary(size).size == size
+    with pytest.raises(ffi.InvalidAllocation) as excinfo:
+        XqmxSample.default(Domain.BINARY, size)
+    assert str(excinfo.value) == f"invalid allocation size {size}"
+    assert excinfo.value.offset is None
+
+
 def test_set_linear_and_get_linear_round_trip() -> None:
     sample = XqmxSample.default(Domain.integer(4), 2)
     sample.set_linear(1, 3)

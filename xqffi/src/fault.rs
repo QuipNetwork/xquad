@@ -137,6 +137,18 @@ pub(crate) fn index_out_of_bounds(index: i64, len: usize) -> PyErr {
     )
 }
 
+/// `InvalidAllocation` for a host call that asked for a sample of `size`
+/// variables, more than `MAX_ALLOCATION_SIZE` allows.
+///
+/// The sample allocators raise the same fault inside the VM; a host call
+/// has no instruction, so `offset` is `None`.
+pub(crate) fn invalid_allocation(size: usize) -> PyErr {
+    with_offset(
+        InvalidAllocation::new_err(format!("invalid allocation size {size}")),
+        None,
+    )
+}
+
 /// Set the `offset` attribute every `XqvmError` carries.
 ///
 /// A failure to set it is returned in place of `err`, so a fault never
