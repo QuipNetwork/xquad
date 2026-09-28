@@ -275,10 +275,13 @@
 # subset of what `.rust`'s `make deps` already installs above, and two of
 # `.rust`'s three consumers -- verify:rust and test:rust -- run
 # unconditionally on every pipeline (test:wasm is path-gated; see the writer
-# note on `.rust`). That makes both current consumers of THIS template
-# (verify:policy: taplo,cargo-deny,git-cliff; docs:build:
-# mdbook,mdbook-mermaid) pure readers: whatever they need here is already
-# guaranteed present, or about to be re-pushed, by verify:rust / test:rust.
+# note on `.rust`). That makes all three current consumers of THIS
+# template (verify:policy: taplo,cargo-deny,git-cliff;
+# verify:substrate-deny: taplo,cargo-deny; docs:build:
+# mdbook,mdbook-mermaid) pure readers of this entry: whatever they need
+# here is already guaranteed present, or about to be re-pushed, by
+# verify:rust / test:rust. verify:substrate-deny adds a second cache entry
+# of its own for the fixture's downloads; that entry is not this one.
 # Pulling instead of pushing loses nothing.
 #
 # The policy sits on the template rather than per-job on purpose: "install a
@@ -521,12 +524,14 @@
 # The five phases are a deliberate gating topology, not five stages that
 # merely happen to run one after another:
 #
-#   verify:*, test:*  -- all ten jobs carry `needs: []` and start at t=0.
-#                         verify and test are peers, not a chain -- test
-#                         does NOT wait for verify to pass first. Eight of
-#                         the ten are created on every pipeline; test:wasm
-#                         and test:substrate are path-gated and may be
-#                         absent -- see test.yml's "Path gating" section.
+#   verify:*, test:*  -- all eleven jobs carry `needs: []` and start at
+#                         t=0. verify and test are peers, not a chain --
+#                         test does NOT wait for verify to pass first.
+#                         Eight of the eleven are created on every
+#                         pipeline; test:wasm, test:substrate and
+#                         verify:substrate-deny are path-gated and may be
+#                         absent -- see test.yml's "Path gating" section
+#                         and verify:substrate-deny's comment.
 #   hardware:*        -- each of the three jobs needs every verify:* and
 #                         test:* job. Real hardware -- a GPU, a metered
 #                         D-Wave QPU token, a macOS box -- is scarce and/or
@@ -602,13 +607,14 @@
 # release:crates, release:pypi and release:notes each `needs:` back to
 # release:validate (or to the job before them in that chain) rather than
 # to this gate directly, the tag-only publish chain reaches hardware:*
-# and the two fixture jobs transitively: on a tag, everything upstream of
+# and the three fixture jobs transitively: on a tag, everything upstream of
 # release:validate has to finish -- including test:substrate's cold path
 # -- before the first crate or wheel goes up.
 #
-# The same reasoning covers the two path-gated fixture jobs (test:wasm,
-# test:substrate -- see test.yml's "Path gating" section), and the audit
-# lands differently in each of the two lists below:
+# The same reasoning covers the three path-gated fixture jobs (test:wasm,
+# test:substrate, verify:substrate-deny -- see test.yml's "Path gating"
+# section), and the audit lands differently in each of the two lists
+# below:
 #
 #   * In `verify-test-and-hardware` it is MANDATORY. That list is used by
 #     docs:* and release:validate, both of which run on merge-request
@@ -617,26 +623,26 @@
 #   * In `verify-and-test` it is DEFENSIVE, and it is the entry most likely
 #     to be "simplified" back to a bare string. That list is referenced only
 #     by the three hardware:* jobs, which run only on protected refs, and
-#     the path gate makes both fixture jobs unconditional on every protected
-#     ref -- so the edge cannot dangle today. It stays optional so that a
-#     future edit narrowing the gate's escape hatch (for instance back to a
-#     literal "main") degrades into a skipped job rather than into
-#     "protecting release/* makes pipeline creation fail", four files away
-#     from the checkbox that caused it.
+#     the path gate makes all three fixture jobs unconditional on every
+#     protected ref -- so the edge cannot dangle today. It stays optional
+#     so that a future edit narrowing the gate's escape hatch (for
+#     instance back to a literal "main") degrades into a skipped job
+#     rather than into "protecting release/* makes pipeline creation
+#     fail", four files away from the checkbox that caused it.
 #
 # Coverage is not weakened by either optional edge. On protected refs and
-# tags both fixture jobs always exist, so docs:publish still has a real
-# edge into them, and the tag-only publish chain reaches them
+# tags all three fixture jobs always exist, so docs:publish still has a
+# real edge into them, and the tag-only publish chain reaches them
 # transitively through release:validate's `needs:` edge into this gate,
 # rather than through the stage barrier alone. On MR and pre-MR branch
 # pipelines the dropped edges affect only docs:* and release:validate,
 # neither of which publishes anything.
 #
-# The two lists below -- the ten-entry verify+test gate and the thirteen-
-# entry verify+test+hardware gate -- are shared via `!reference`, not a
-# YAML anchor (anchors don't cross `include:`, see this file's top-of-file
-# comment), so each gate is written once here instead of being retyped
-# across hardware.yml, docs.yml, and release.yml.
+# The two lists below -- the eleven-entry verify+test gate and the
+# fourteen-entry verify+test+hardware gate -- are shared via
+# `!reference`, not a YAML anchor (anchors don't cross `include:`, see
+# this file's top-of-file comment), so each gate is written once here
+# instead of being retyped across hardware.yml, docs.yml, and release.yml.
 .needs-gates:
     verify-and-test:
         - verify:policy
@@ -644,6 +650,8 @@
         - verify:python
         - verify:parity
         - verify:xqffi
+        - job: verify:substrate-deny
+          optional: true
         - test:rust
         - test:python
         - test:quip
@@ -657,6 +665,8 @@
         - verify:python
         - verify:parity
         - verify:xqffi
+        - job: verify:substrate-deny
+          optional: true
         - test:rust
         - test:python
         - test:quip

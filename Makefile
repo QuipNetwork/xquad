@@ -9,7 +9,7 @@
         check-branch-containment check-main-direct-push \
         deps deps-miri deps-py deps-wasm \
         install-hooks \
-        lint lint-clippy lint-doc lint-deny-rs lint-py check-uv-lock \
+        lint lint-clippy lint-doc lint-deny-rs lint-deny-fixture lint-py check-uv-lock \
         fmt fmt-rs fmt-toml fmt-check fmt-check-rs fmt-check-toml fmt-py fmt-check-py \
         test test-unit-rs test-integ-rs test-doc test-miri test-py test-wasm test-substrate-fixture \
         test-quip test-quip-sign test-quip-e2e check-xqffi-fresh \
@@ -79,8 +79,8 @@ lint-python: fmt-check-py lint-py
 # GIT_DEPTH: 0 (see verify.yml), so this line is the only CI-side change
 # it needs.
 #
-# check-branch-containment joins for the reason verify.yml has no
-# `rules:` anywhere: it scopes itself on the ref it is handed and exits
+# check-branch-containment joins for the reason verify:policy has no
+# `rules:`: it scopes itself on the ref it is handed and exits
 # 0 on every ref it does not judge, so it needs no job of its own and
 # stays runnable locally -- a `rules:`-gated job is neither.
 #
@@ -272,13 +272,14 @@ check-release: check-version-sites check-crate-publish check-python-dists
 # preflight-rs is pure-Rust (no uv / maturin prereqs); preflight-py and
 # preflight-parity pull the deps-py maturin rebuild via their leaf
 # prereqs; preflight-docs needs uv for docs generation but not the
-# maturin rebuild. test-wasm and test-substrate-fixture are blocking CI
-# gates with no phase aggregate of their own (each is a single dedicated
-# CI job), so preflight-rs lists them as leaves alongside lint-rust and
-# test-rust -- omitting both here was a prior gap, not a deliberate
-# exclusion. Both CI jobs are path-gated (.gitlab/ci/test.yml's "Path
-# gating" section) while these targets are not: a local preflight runs
-# them unconditionally, so it still covers the case where the MR
+# maturin rebuild. test-wasm, test-substrate-fixture and
+# lint-deny-fixture are blocking CI gates with no phase aggregate of their
+# own (each is a single dedicated CI job), so preflight-rs lists them as
+# leaves alongside lint-rust and test-rust -- omitting the first two here
+# was a prior gap, not a deliberate exclusion. All three CI jobs are
+# path-gated (the "Path gating" sections of .gitlab/ci/test.yml and
+# .gitlab/ci/verify.yml) while these targets are not: a local preflight
+# runs them unconditionally, so it still covers the case where the MR
 # pipeline decided the diff could not reach them. Still excluded on
 # purpose: test-miri (not a CI gate, needs nightly; lives under Optional
 # Checks in the MR template), the hardware / SolverQuip tiers
@@ -287,7 +288,7 @@ check-release: check-version-sites check-crate-publish check-python-dists
 # and preflight-release (below), which needs maturin/twine/uv and builds
 # five distributions into a throwaway venv on top of a full-verify
 # workspace packaging dry-run.
-preflight-rs: lint-rust lint-deny-rs test-rust test-wasm test-substrate-fixture
+preflight-rs: lint-rust lint-deny-rs lint-deny-fixture test-rust test-wasm test-substrate-fixture
 
 # check-uv-lock joins here because it is cheap and read-only (uv lock
 # --check does not sync, it only fails when uv.lock is stale against
@@ -535,6 +536,21 @@ lint-doc:
 
 lint-deny-rs:
 	cargo deny --locked check
+
+# cargo-deny over the standalone pallet fixture (fixtures/pallet-xqvm),
+# which the root invocation above cannot see. The fixture carries its own
+# deny.toml (its header says why); the first recipe line fails when that
+# file's [bans].deny list drifts from the root one, which is the one part
+# of the two policies that must stay identical.
+#
+# Not a lint-policy prerequisite: resolving the fixture graph needs the
+# polkadot-sdk git checkout, a download verify:policy has no cache for.
+# CI runs it in its own path-gated job, verify:substrate-deny.
+lint-deny-fixture:
+	@test "$$(taplo get -f deny.toml -o json bans.deny)" = \
+	      "$$(taplo get -f fixtures/pallet-xqvm/deny.toml -o json bans.deny)" || \
+	    { echo "fixtures/pallet-xqvm/deny.toml [bans].deny differs from deny.toml; edit both together" >&2; exit 1; }
+	cargo deny --locked --manifest-path fixtures/pallet-xqvm/Cargo.toml check --config fixtures/pallet-xqvm/deny.toml
 
 lint-py:
 	uvx ruff@$(RUFF_VERSION) check xqvm_py xqcp xqsa xqffi xquad examples scripts

@@ -113,7 +113,7 @@ single-language MR can run just its half:
 
 ```sh
 make preflight          # everything below, in one shot
-make preflight-rs       # fmt, taplo, clippy, rustdoc, deny, unit/integration/doc tests
+make preflight-rs       # fmt, taplo, clippy, rustdoc, deny (root + pallet fixture), unit/integration/doc tests
 make preflight-py       # taplo, ruff format + lint, pytest, uv.lock freshness
 make preflight-parity   # opcode parity, conformance, example smoke
 make preflight-docs     # generated-doc freshness, docs drift, README length, prose (needs vale)
