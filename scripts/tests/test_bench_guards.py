@@ -51,7 +51,7 @@ def run_script(script: Path, *args: str) -> subprocess.CompletedProcess[str]:
     """Invoke `script` with the running interpreter, capturing output.
 
     `sys.executable` is the interpreter pytest itself runs under, so the
-    subprocess sees the same virtualenv (numpy, xqvm_py, xqsa) without any
+    subprocess sees the same virtualenv (numpy, xqffi, xqsa) without any
     extra environment plumbing.
     """
     return subprocess.run(
