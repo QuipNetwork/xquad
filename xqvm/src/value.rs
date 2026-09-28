@@ -21,7 +21,7 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::model::Domain;
+use crate::model::{Domain, ModelFault};
 pub(crate) use crate::model::{XqmxModel, XqmxSample};
 
 /// Discriminant tag for a [`RegVal`] variant.
@@ -367,16 +367,14 @@ impl XqmxGridRefMut<'_> {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::ArithmeticOverflow`] when the sum would leave
-    /// the signed 64-bit range, leaving the target unchanged.
-    pub(crate) fn linear_add(&mut self, idx: usize, delta: i64) -> Result<(), crate::Error> {
+    /// Returns [`ModelFault::Overflow`] when the sum would leave the signed
+    /// 64-bit range, leaving the target unchanged.
+    pub(crate) fn linear_add(&mut self, idx: usize, delta: i64) -> Result<(), ModelFault> {
         match self {
-            Self::Model(m) => m.add_linear(idx, delta),
+            Self::Model(m) => m.checked_add_linear(idx, delta),
             Self::Sample(s) => {
                 if let Some(slot) = s.values.get_mut(idx) {
-                    let updated = slot
-                        .checked_add(delta)
-                        .ok_or(crate::Error::ArithmeticOverflow { pos: None })?;
+                    let updated = slot.checked_add(delta).ok_or(ModelFault::Overflow)?;
                     debug_assert!(
                         s.domain.contains(updated),
                         "linear_add must not be reached with a result outside the \

@@ -133,6 +133,53 @@ pub fn grid_fits(rows: usize, cols: usize, size: usize) -> bool {
     rows != 0 && cols != 0 && rows.checked_mul(cols).is_some_and(|cells| cells <= size)
 }
 
+/// A fault from the model layer that has not been placed at an instruction.
+///
+/// The model layer has no program counter, so its checked operations return
+/// this rather than [`crate::Error`], and there is deliberately no `From`
+/// conversion between the two. The VM places a fault with
+/// [`ModelFault::at`]; a handler that forgets to, and propagates the fault
+/// with `?`, does not compile, where it used to raise an
+/// `ArithmeticOverflow` with no byte offset and no diagnostic caret
+/// (QUI-1165). The public methods, whose callers have no program to point
+/// into, convert with `pos: None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModelFault {
+    /// A coefficient or a partial sum left the signed 64-bit range.
+    Overflow,
+    /// A sample's length disagrees with the model's size, or the model holds
+    /// a coefficient past it.
+    SizeMismatch {
+        model_size: usize,
+        sample_len: usize,
+    },
+}
+
+impl ModelFault {
+    /// The fault as raised by the instruction at byte offset `pos`.
+    pub(crate) fn at(self, pos: usize) -> crate::Error {
+        self.into_error(Some(pos))
+    }
+
+    /// The fault as raised outside any program, by a public model method.
+    fn unplaced(self) -> crate::Error {
+        self.into_error(None)
+    }
+
+    fn into_error(self, pos: Option<usize>) -> crate::Error {
+        match self {
+            Self::Overflow => crate::Error::ArithmeticOverflow { pos },
+            Self::SizeMismatch {
+                model_size,
+                sample_len,
+            } => crate::Error::SizeMismatch {
+                model_size,
+                sample_len,
+            },
+        }
+    }
+}
+
 /// A quadratic optimization model (QUBO/Ising/integer).
 ///
 /// Encodes H(x) = `sum_i` linear\[i\] * x\[i\] + sum_{i<j} quadratic\[(i,j)\] * x\[i\] * x\[j\].
@@ -199,10 +246,17 @@ impl XqmxModel {
     /// coefficient would leave the signed 64-bit range. The model is left
     /// unchanged, so a rejected mutation cannot half-apply.
     pub fn add_linear(&mut self, i: usize, delta: i64) -> Result<(), crate::Error> {
-        let current = self.get_linear(i);
-        let updated = current
+        self.checked_add_linear(i, delta)
+            .map_err(ModelFault::unplaced)
+    }
+
+    /// [`XqmxModel::add_linear`] for the VM, which places the fault at the
+    /// instruction itself.
+    pub(crate) fn checked_add_linear(&mut self, i: usize, delta: i64) -> Result<(), ModelFault> {
+        let updated = self
+            .get_linear(i)
             .checked_add(delta)
-            .ok_or(crate::Error::ArithmeticOverflow { pos: None })?;
+            .ok_or(ModelFault::Overflow)?;
         self.set_linear(i, updated);
         Ok(())
     }
@@ -232,10 +286,22 @@ impl XqmxModel {
     /// coefficient would leave the signed 64-bit range. The model is left
     /// unchanged.
     pub fn add_quad(&mut self, i: usize, j: usize, delta: i64) -> Result<(), crate::Error> {
-        let current = self.get_quad(i, j);
-        let updated = current
+        self.checked_add_quad(i, j, delta)
+            .map_err(ModelFault::unplaced)
+    }
+
+    /// [`XqmxModel::add_quad`] for the VM, which places the fault at the
+    /// instruction itself.
+    pub(crate) fn checked_add_quad(
+        &mut self,
+        i: usize,
+        j: usize,
+        delta: i64,
+    ) -> Result<(), ModelFault> {
+        let updated = self
+            .get_quad(i, j)
             .checked_add(delta)
-            .ok_or(crate::Error::ArithmeticOverflow { pos: None })?;
+            .ok_or(ModelFault::Overflow)?;
         self.set_quad(i, j, updated);
         Ok(())
     }
@@ -293,8 +359,14 @@ impl XqmxModel {
     /// model contains a coefficient at an index that exceeds its declared size (indicating
     /// the model was mutated with an out-of-range index).
     pub fn energy(&self, sample: &[i64]) -> Result<i64, crate::Error> {
+        self.checked_energy(sample).map_err(ModelFault::unplaced)
+    }
+
+    /// [`XqmxModel::energy`] for the VM, which places the fault at the
+    /// instruction itself.
+    pub(crate) fn checked_energy(&self, sample: &[i64]) -> Result<i64, ModelFault> {
         if sample.len() != self.size {
-            return Err(crate::Error::SizeMismatch {
+            return Err(ModelFault::SizeMismatch {
                 model_size: self.size,
                 sample_len: sample.len(),
             });
@@ -302,30 +374,29 @@ impl XqmxModel {
         // Sorted key order throughout, and every partial sum is checked:
         // once overflow raises, the order in which terms are accumulated
         // decides whether a program errors at all (spec/xqvm/HLF.md).
-        let overflow = || crate::Error::ArithmeticOverflow { pos: None };
         let mut h: i64 = 0;
         for (i, coeff) in self.iter_linear() {
-            let xi = sample.get(i).copied().ok_or(crate::Error::SizeMismatch {
+            let xi = sample.get(i).copied().ok_or(ModelFault::SizeMismatch {
                 model_size: self.size,
                 sample_len: i.saturating_add(1),
             })?;
-            let term = coeff.checked_mul(xi).ok_or_else(overflow)?;
-            h = h.checked_add(term).ok_or_else(overflow)?;
+            let term = coeff.checked_mul(xi).ok_or(ModelFault::Overflow)?;
+            h = h.checked_add(term).ok_or(ModelFault::Overflow)?;
         }
         for (i, j, coeff) in self.iter_quadratic() {
-            let xi = sample.get(i).copied().ok_or(crate::Error::SizeMismatch {
+            let xi = sample.get(i).copied().ok_or(ModelFault::SizeMismatch {
                 model_size: self.size,
                 sample_len: i.saturating_add(1),
             })?;
-            let xj = sample.get(j).copied().ok_or(crate::Error::SizeMismatch {
+            let xj = sample.get(j).copied().ok_or(ModelFault::SizeMismatch {
                 model_size: self.size,
                 sample_len: j.saturating_add(1),
             })?;
             let term = coeff
                 .checked_mul(xi)
                 .and_then(|partial| partial.checked_mul(xj))
-                .ok_or_else(overflow)?;
-            h = h.checked_add(term).ok_or_else(overflow)?;
+                .ok_or(ModelFault::Overflow)?;
+            h = h.checked_add(term).ok_or(ModelFault::Overflow)?;
         }
         Ok(h)
     }
@@ -373,7 +444,7 @@ impl XqmxSample {
 
 #[cfg(test)]
 mod tests {
-    use super::{Domain, XqmxModel, grid_fits};
+    use super::{Domain, ModelFault, XqmxModel, grid_fits};
     use crate::Error;
 
     #[test]
@@ -583,5 +654,58 @@ mod tests {
             matches!(err, Error::ArithmeticOverflow { .. }),
             "got {err:?}"
         );
+    }
+
+    #[test]
+    fn the_public_methods_raise_overflow_with_no_position() {
+        // Outside the VM there is no instruction to point at.
+        let mut m = XqmxModel::new(Domain::Binary, 2);
+        m.set_linear(0, i64::MAX);
+        m.set_quad(0, 1, i64::MAX);
+        let errors = [
+            m.add_linear(0, 1).expect_err("linear overflow"),
+            m.add_quad(0, 1, 1).expect_err("quadratic overflow"),
+            m.energy(&[1, 1]).expect_err("energy overflow"),
+        ];
+        for err in errors {
+            assert!(
+                matches!(err, Error::ArithmeticOverflow { pos: None }),
+                "got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_checked_methods_leave_placing_the_fault_to_the_caller() {
+        let mut m = XqmxModel::new(Domain::Binary, 2);
+        m.set_linear(0, i64::MAX);
+        let fault = m.checked_add_linear(0, 1).expect_err("overflow");
+        assert_eq!(fault, ModelFault::Overflow);
+        let err = fault.at(9);
+        assert!(
+            matches!(err, Error::ArithmeticOverflow { pos: Some(9) }),
+            "got {err:?}"
+        );
+        // The model is untouched by the rejected write.
+        assert_eq!(m.get_linear(0), i64::MAX);
+    }
+
+    #[test]
+    fn a_size_mismatch_carries_no_position_either_way() {
+        let m = XqmxModel::new(Domain::Binary, 2);
+        let placed = m.checked_energy(&[1]).expect_err("short sample").at(9);
+        let unplaced = m.energy(&[1]).expect_err("short sample");
+        for err in [placed, unplaced] {
+            assert!(
+                matches!(
+                    err,
+                    Error::SizeMismatch {
+                        model_size: 2,
+                        sample_len: 1
+                    }
+                ),
+                "got {err:?}"
+            );
+        }
     }
 }

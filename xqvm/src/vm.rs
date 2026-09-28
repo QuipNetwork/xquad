@@ -50,7 +50,7 @@ use crate::metering::{
     COEFF_WRITE_STEPS, ELEMENT_COPY_STEPS, GRID_CELL_STEPS, SAMPLE_COPY_STEPS,
     equality_expansion_steps, model_eval_steps, value_copy_steps, widen,
 };
-use crate::model::{Domain, XqmxModel, XqmxSample, grid_fits};
+use crate::model::{Domain, ModelFault, XqmxModel, XqmxSample, grid_fits};
 use crate::tracer::{NoopTracer, StepState, Tracer};
 use crate::value::{RegVal, XqmxGridRefMut};
 
@@ -2368,7 +2368,8 @@ impl Vm {
             })?;
         let usize_i = bounded_index(pos, i, m.size)?;
         let usize_j = bounded_index(pos, j, m.size)?;
-        m.add_quad(usize_i, usize_j, delta).map_err(at_pos(pos))?;
+        m.checked_add_quad(usize_i, usize_j, delta)
+            .map_err(at_pos(pos))?;
         Ok(StepResult::Continue)
     }
 
@@ -2585,7 +2586,8 @@ impl Vm {
         // Penalise x_i * x_j = 1 (mutual exclusion).
         let i_idx = bounded_index(pos, i, m.size)?;
         let j_idx = bounded_index(pos, j, m.size)?;
-        m.add_quad(i_idx, j_idx, penalty).map_err(at_pos(pos))?;
+        m.checked_add_quad(i_idx, j_idx, penalty)
+            .map_err(at_pos(pos))?;
         Ok(StepResult::Continue)
     }
 
@@ -2608,8 +2610,9 @@ impl Vm {
         let i_idx = bounded_index(pos, i, m.size)?;
         let j_idx = bounded_index(pos, j, m.size)?;
         let neg_penalty = checked(penalty.checked_neg(), pos)?;
-        m.add_linear(i_idx, penalty).map_err(at_pos(pos))?;
-        m.add_quad(i_idx, j_idx, neg_penalty).map_err(at_pos(pos))?;
+        m.checked_add_linear(i_idx, penalty).map_err(at_pos(pos))?;
+        m.checked_add_quad(i_idx, j_idx, neg_penalty)
+            .map_err(at_pos(pos))?;
         Ok(StepResult::Continue)
     }
 
@@ -2984,7 +2987,7 @@ impl Vm {
         let RegVal::Model(m) = self.reg(model) else {
             unreachable!("model register type checked above")
         };
-        let energy = m.energy(&sample_values).map_err(at_pos(pos))?;
+        let energy = m.checked_energy(&sample_values).map_err(at_pos(pos))?;
         self.push_stack(energy, pos)?;
         Ok(StepResult::Continue)
     }
@@ -3018,7 +3021,9 @@ fn expand_equality(
                 .and_then(|scaled| penalty.checked_mul(scaled)),
             pos,
         )?;
-        model.add_linear(idx, coefficient).map_err(at_pos(pos))?;
+        model
+            .checked_add_linear(idx, coefficient)
+            .map_err(at_pos(pos))?;
     }
     let two_p = checked(penalty.checked_mul(2), pos)?;
     #[expect(
@@ -3034,7 +3039,7 @@ fn expand_equality(
                 pos,
             )?;
             model
-                .add_quad(idx_k, idx_m, coefficient)
+                .checked_add_quad(idx_k, idx_m, coefficient)
                 .map_err(at_pos(pos))?;
         }
     }
@@ -3191,12 +3196,13 @@ fn add_one_hot(m: &mut XqmxModel, line: GridLine, penalty: i64, pos: usize) -> R
     let neg_penalty = checked(penalty.checked_neg(), pos)?;
     let two_penalty = checked(penalty.checked_mul(2), pos)?;
     for cell in line.cells() {
-        m.add_linear(cell, neg_penalty).map_err(at_pos(pos))?;
+        m.checked_add_linear(cell, neg_penalty)
+            .map_err(at_pos(pos))?;
     }
     let mut rest = line.cells();
     while let Some(first) = rest.next() {
         for second in rest.clone() {
-            m.add_quad(first, second, two_penalty)
+            m.checked_add_quad(first, second, two_penalty)
                 .map_err(at_pos(pos))?;
         }
     }
@@ -3208,16 +3214,14 @@ fn checked(value: Option<i64>, pos: usize) -> Result<i64, Error> {
     value.ok_or(Error::ArithmeticOverflow { pos: Some(pos) })
 }
 
-/// Attach an instruction position to an overflow raised by the model layer.
+/// Place a model-layer fault at the instruction that raised it.
 ///
 /// Model mutations and reductions carry no program counter of their own, so
-/// they raise with `pos: None`; the handler that called them knows the byte
-/// offset the diagnostic needs to point at.
-fn at_pos(pos: usize) -> impl Fn(Error) -> Error {
-    move |err| match err {
-        Error::ArithmeticOverflow { pos: None } => Error::ArithmeticOverflow { pos: Some(pos) },
-        other => other,
-    }
+/// they return a [`ModelFault`]; the handler that called them knows the byte
+/// offset the diagnostic needs to point at. Because `ModelFault` has no
+/// conversion into [`Error`], a handler that skips this does not compile.
+fn at_pos(pos: usize) -> impl Fn(ModelFault) -> Error {
+    move |fault| fault.at(pos)
 }
 
 /// Range-check a model size against [`MAX_ALLOCATION_SIZE`] and narrow it.
@@ -3302,10 +3306,16 @@ fn expand_reduce(
     let three_p = checked(p_aux.checked_mul(3), pos)?;
     let w = model.size;
     grow_model(model, 1, pos)?;
-    model.add_quad(var_a, var_b, p_aux).map_err(at_pos(pos))?;
-    model.add_quad(var_a, w, minus_two_p).map_err(at_pos(pos))?;
-    model.add_quad(var_b, w, minus_two_p).map_err(at_pos(pos))?;
-    model.add_linear(w, three_p).map_err(at_pos(pos))?;
+    model
+        .checked_add_quad(var_a, var_b, p_aux)
+        .map_err(at_pos(pos))?;
+    model
+        .checked_add_quad(var_a, w, minus_two_p)
+        .map_err(at_pos(pos))?;
+    model
+        .checked_add_quad(var_b, w, minus_two_p)
+        .map_err(at_pos(pos))?;
+    model.checked_add_linear(w, three_p).map_err(at_pos(pos))?;
     Ok(w)
 }
 
