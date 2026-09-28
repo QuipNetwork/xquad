@@ -1940,9 +1940,18 @@ class TestDomainEnum:
         assert member.value == vm_domain.name
         assert Domain(vm_domain.name) is member
 
-    def test_define_model_rejects_the_vm_domain(self) -> None:
-        with pytest.raises(ValueError):
-            Problem("Vm").define_model(size=4, domain=VmDomain.BINARY)
+    @pytest.mark.parametrize("kwargs", [{}, {"k": 4}], ids=["no-k", "with-k"])
+    @pytest.mark.parametrize("vm_domain", [VmDomain.BINARY, VmDomain.integer(4)], ids=["binary", "integer"])
+    def test_define_model_rejects_the_vm_domain(self, vm_domain: VmDomain, kwargs: dict) -> None:
+        # xquad.types re-exports this class as `Domain` too; it matches no
+        # xqcp.Domain member, so any form of it is refused before recording.
+        with pytest.raises(TypeError, match=r"takes an xqcp\.Domain member.*of type xqffi\.vm\.Domain"):
+            Problem("Vm").define_model(size=4, domain=vm_domain, **kwargs)
+
+    @pytest.mark.parametrize("value", ["binary", None])
+    def test_define_model_rejects_a_domain_value(self, value: object) -> None:
+        with pytest.raises(TypeError, match=r"takes an xqcp\.Domain member"):
+            Problem("Value").define_model(size=4, domain=value)
 
     def test_categorical_has_no_vm_counterpart(self) -> None:
         assert Domain.CATEGORICAL.value == "categorical"

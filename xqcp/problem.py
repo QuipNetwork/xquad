@@ -102,10 +102,19 @@ def _check_domain_args(
 
     # Errors
 
-    Raises ``ValueError`` for a domain argument the domain does not take, a
-    required one left out, ``k=`` given together with ``lo=``/``hi=``, half
-    a range, or a literal domain narrower than two values.
+    Raises ``TypeError`` when ``domain`` is not an ``xqcp.Domain`` member,
+    such as the ``xqffi.vm.Domain`` that ``xquad.types`` re-exports under
+    the same name.  Raises ``ValueError`` for a domain argument the domain
+    does not take, a required one left out, ``k=`` given together with
+    ``lo=``/``hi=``, half a range, or a literal domain narrower than two
+    values.
     """
+    if not isinstance(domain, Domain):
+        kind = type(domain)
+        raise TypeError(
+            f"define_model() takes an xqcp.Domain member such as xqcp.Domain.BINARY; "
+            f"got {domain!r} of type {kind.__module__}.{kind.__qualname__}"
+        )
     if domain in (Domain.BINARY, Domain.SPIN):
         extra = _named(("k", k), ("lo", lo), ("hi", hi), ("penalty", penalty))
         if extra:
@@ -303,9 +312,10 @@ class Problem:
 
         # Errors
 
-        Raises ``ValueError`` for a domain argument the domain does not
-        take, a required one left out, or a 2D model given only one of
-        ``rows=`` / ``cols=``.
+        Raises ``TypeError`` when ``domain`` is not an ``xqcp.Domain``
+        member.  Raises ``ValueError`` for a domain argument the domain
+        does not take, a required one left out, or a 2D model given only
+        one of ``rows=`` / ``cols=``.
         """
         _check_domain_args(domain, rows, cols, k, lo, hi, penalty)
 
