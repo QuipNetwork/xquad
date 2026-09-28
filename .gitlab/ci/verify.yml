@@ -10,11 +10,12 @@
 # local workflow stay identical. Changing a lint rule means updating the
 # Makefile once, not here.
 #
-# All five jobs carry `needs: []` and start at t=0 alongside every
+# All six jobs carry `needs: []` and start at t=0 alongside every
 # `test:*` job -- verify and test are peers, not a chain. See setup.yml's
 # "Dependency gating" section for the full topology and why hardware:*
-# waits on all ten of them. All five here are created on every pipeline;
-# two of the five `test:*` jobs are path-gated and may be absent (see
+# waits on all eleven of them. Five of the six here are created on every
+# pipeline; verify:substrate-deny is path-gated (see its own comment at
+# the bottom of this file), as are two of the five `test:*` jobs (see
 # test.yml's "Path gating" section).
 #
 # Templates and shared script fragments (`.rust`, `.rust-tools`,
@@ -373,3 +374,97 @@ verify:xqffi:
     timeout: 30m
     script:
         - make -k check-xqffi-fresh
+
+# cargo-deny over the standalone pallet fixture (`make -k
+# lint-deny-fixture`). The root `cargo deny check` in verify:policy sees
+# only the root workspace, and the fixture is excluded from it, so its
+# graph -- 36 crates from the QuipNetwork/polkadot-sdk git fork among
+# ~386 -- would otherwise build in test:substrate under no policy at all.
+# The fixture keeps its own deny.toml; see that file's header for why.
+#
+# A job of its own rather than a lint-policy prerequisite, because
+# resolving the fixture graph needs the polkadot-sdk git checkout (about
+# 530 MB of git database) and every crate the graph names. verify:policy
+# caches neither, and folding the fetch in there would put it on every
+# pipeline that misses the runner-local cache, which on this fleet is the
+# ordinary case (setup.yml's "Job timeouts" section).
+#
+# Path-gated on the same four clauses as test:wasm and test:substrate --
+# test.yml's "Path gating" section explains each one, and they are not
+# restated here. The anchor is file-local for the reason given there; it
+# lives under its own hidden key, not `.gate-paths`, because hidden keys
+# DO cross `include:` and GitLab would deep-merge the two.
+#
+# What the gate gives up: a new RustSec advisory against an unchanged
+# fixture lock surfaces on the next protected-ref pipeline, not on an
+# unrelated merge request. That is the right place for it. The fixture
+# ships in no published artifact, so an advisory there should not block
+# work that cannot have caused it; verify:policy still checks the root
+# workspace, which does ship, on every pipeline.
+#
+# The list is what can change this job's verdict: the fixture's own
+# manifest, lock and deny.toml; the root deny.toml, which the ban-list
+# drift check reads; the root and xqvm manifests, because the fixture
+# takes xqvm by path and xqvm inherits workspace dependencies from the
+# root, so both feed the fixture graph; the pinned cargo-deny and taplo
+# versions; and the files that define this job.
+.verify-gate-paths:
+    substrate-deny: &substrate-deny-paths
+        - fixtures/pallet-xqvm/Cargo.toml
+        - fixtures/pallet-xqvm/Cargo.lock
+        - fixtures/pallet-xqvm/deny.toml
+        - deny.toml
+        - Cargo.toml
+        - xqvm/Cargo.toml
+        - Makefile
+        - scripts/cargo-tools.lock
+        - scripts/install-cargo-tools.sh
+        - .gitlab-ci.yml
+        - .gitlab/ci/setup.yml
+        - .gitlab/ci/verify.yml
+
+verify:substrate-deny:
+    stage: verify
+    extends: .rust-tools
+    needs: []
+    rules:
+        - if: $CI_COMMIT_TAG
+        - if: $CI_COMMIT_REF_PROTECTED == "true"
+        - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+          changes:
+              paths: *substrate-deny-paths
+        - if: $CI_COMMIT_BRANCH
+          changes:
+              paths: *substrate-deny-paths
+              compare_to: refs/heads/main
+    variables:
+        CARGO_TOOLS: taplo,cargo-deny
+    # 20m: nothing compiles, but a cold run clones the polkadot-sdk fork
+    # and downloads every crate in the fixture graph before cargo-deny can
+    # resolve it. That download is the part of test:substrate's 40m cold
+    # path this job shares; the FRAME compile is the part it does not.
+    # See setup.yml's "Job timeouts" section.
+    timeout: 20m
+    # Replaces `.rust-tools`' cache rather than adding to it (a job's
+    # `cache:` overrides its template's), so the first entry restates the
+    # tools entry verbatim. The second is this job's own: the fixture's
+    # registry and git downloads, keyed on the fixture's lock. Its prefix
+    # keeps it apart from test:substrate's entry on the same lock, which
+    # also carries the fixture's `target/` -- restoring that here would
+    # unpack a full FRAME build this job never reads.
+    cache:
+        - key:
+              files:
+                  - scripts/cargo-tools.lock
+          paths:
+              - .cargo/bin/
+          policy: pull
+        - key:
+              prefix: substrate-deny
+              files:
+                  - fixtures/pallet-xqvm/Cargo.lock
+          paths:
+              - .cargo/registry/
+              - .cargo/git/
+    script:
+        - make -k lint-deny-fixture
