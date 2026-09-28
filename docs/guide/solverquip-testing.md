@@ -151,9 +151,9 @@ the first pull is slow and CPU is higher than native -- expected, not a hang.
 - Blocks + runtime version: read `state_getRuntimeVersion` over the RPC and
   record what it says. Nothing is pinned here on purpose -- localdev tracks the
   newest published image, so its runtime moves whenever one is published, and a
-  figure written down in this guide would be stale within the week. aglais was
-  on `specVersion 117` / `transactionVersion 7` on 2026-09-15; a localdev stack
-  brought up from current images should be at or ahead of that.
+  figure written down in this guide would be stale within the week. Read
+  aglais the same way; a localdev stack brought up from current images should
+  be at or ahead of it.
 - Containers: `docker ps` -- all `*-localdev` Up, `quip-cpu-localdev` not
   Restarting.
 - Miner healthy: `docker logs quip-cpu-localdev | grep -iE "solver guard: registered|topology .from chain.|mempool=on"`
@@ -254,11 +254,14 @@ what the signing layer speaks.
   Spending below the ceiling makes the account eligible again, so there is
   no lifetime quota; a fresh keystore works because it starts empty.
 - **Block time:** ~6s.
-- **Runtime:** advances over time (`specVersion 117` / `transactionVersion 7`,
-  read live on 2026-09-15). ALWAYS re-check with `state_getRuntimeVersion` before
-  assuming a pinned value. The signer reads `transactionVersion` from chain
-  metadata dynamically, so a runtime bump does not by itself break submission --
-  but confirm rather than assume.
+- **Runtime:** advances over time; read it with `state_getRuntimeVersion`
+  rather than assuming a pinned value. The signer reads `transactionVersion`
+  from the chain, so a bump to that number alone does not break submission.
+  The signed-extension list and its order are fixed client-side
+  (`SIGNED_EXTENSIONS` in `xqsa/quip_signing.py`), so a runtime that adds,
+  removes, reorders or reshapes an extension breaks signing. After an upgrade,
+  run `test_quip_live.py::TestConnectivity`, which checks that list against the
+  chain.
 - **Metadata:** the runtime serves Metadata V16, which `scalecodec` cannot
   decode. Build clients through `xqsa.quip_metadata.connect`, which pulls V14
   from the versioned runtime API; a stock `SubstrateInterface` fails with
@@ -331,8 +334,9 @@ once when the fleet is active.
   inspect old orders. (Known miner-side follow-up, not a client bug.)
 - **Runtime can advance under you:** re-read `state_getRuntimeVersion` each
   session; do not hard-code pinned facts. The signer adapts `transactionVersion`
-  from metadata, so submission keeps working across bumps -- but re-validate
-  after a known upgrade.
+  from the chain, but the signed-extension list is fixed client-side, so an
+  upgrade that changes it breaks submission. Run
+  `test_quip_live.py::TestConnectivity` after every known upgrade.
 - **Metadata V16 blocks a stock client:** `substrate-interface` decodes through
   `scalecodec`, whose `MetadataAll` enum ends at V14, so
   `SubstrateInterface.init_runtime()` raises `ValueError: Index '16' not present
