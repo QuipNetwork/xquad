@@ -51,7 +51,11 @@ allow = [
 ]
 
 [bans]
-multiple-versions = "warn"
+# "allow" where the root says "warn": the duplicates here all come from the
+# polkadot-sdk graph, which is not ours to deduplicate, and each warning
+# prints a full inverse tree into the job log. Nothing that can fail the
+# check is loosened, since "warn" never fails it either.
+multiple-versions = "allow"
 # Must match [bans].deny in the root deny.toml exactly;
 # `make lint-deny-fixture` checks it. Edit both together.
 deny = [

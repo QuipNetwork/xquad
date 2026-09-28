@@ -409,16 +409,16 @@ expensive jobs in the pipeline and the least often relevant, so gating
 them is most of the merge-request latency available to save.
 `verify:substrate-deny` runs cargo-deny over the pallet fixture's graph,
 which needs the same polkadot-sdk download, and is gated the same way.
-All three stay unconditional on protected refs and on tags: the gate buys latency, not
-coverage, and a path list is a claim about a build graph that can be
-wrong -- keeping the protected refs unconditional means a wrong list
-costs a late signal on `main` rather than a shipped regression. Because
-any of them can be absent, every `needs:` edge into them is
-`optional: true`; GitLab refuses to create a pipeline whose job needs an
-absent job. The path lists, the per-clause reasoning, and the per-entry
-justification live in `.gitlab/ci/test.yml`'s "Path gating" section and
-beside `verify:substrate-deny` in `.gitlab/ci/verify.yml`. Local
-`make preflight-rs` runs all three targets unconditionally.
+All three stay unconditional on protected refs and on tags: the gate
+buys latency, not coverage, and a path list is a claim about a build
+graph that can be wrong -- keeping the protected refs unconditional
+means a wrong list costs a late signal on `main` rather than a shipped
+regression. Because any of them can be absent, every `needs:` edge into
+them is `optional: true`; GitLab refuses to create a pipeline whose job
+needs an absent job. The path lists, the per-clause reasoning, and the
+per-entry justification live in `.gitlab/ci/test.yml`'s "Path gating"
+section and beside `verify:substrate-deny` in `.gitlab/ci/verify.yml`.
+Local `make preflight-rs` runs all three targets unconditionally.
 
 **CI signals.** Two reds are expected, and each means a step of the release protocol is outstanding rather than that something is broken. Do not "fix" either by anything but the step it names:
 

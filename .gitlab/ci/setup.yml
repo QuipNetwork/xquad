@@ -275,10 +275,13 @@
 # subset of what `.rust`'s `make deps` already installs above, and two of
 # `.rust`'s three consumers -- verify:rust and test:rust -- run
 # unconditionally on every pipeline (test:wasm is path-gated; see the writer
-# note on `.rust`). That makes both current consumers of THIS template
-# (verify:policy: taplo,cargo-deny,git-cliff; docs:build:
-# mdbook,mdbook-mermaid) pure readers: whatever they need here is already
-# guaranteed present, or about to be re-pushed, by verify:rust / test:rust.
+# note on `.rust`). That makes all three current consumers of THIS
+# template (verify:policy: taplo,cargo-deny,git-cliff;
+# verify:substrate-deny: taplo,cargo-deny; docs:build:
+# mdbook,mdbook-mermaid) pure readers of this entry: whatever they need
+# here is already guaranteed present, or about to be re-pushed, by
+# verify:rust / test:rust. verify:substrate-deny adds a second cache entry
+# of its own for the fixture's downloads; that entry is not this one.
 # Pulling instead of pushing loses nothing.
 #
 # The policy sits on the template rather than per-job on purpose: "install a
@@ -621,11 +624,11 @@
 #     to be "simplified" back to a bare string. That list is referenced only
 #     by the three hardware:* jobs, which run only on protected refs, and
 #     the path gate makes all three fixture jobs unconditional on every
-#     protected ref -- so the edge cannot dangle today. It stays optional so that a
-#     future edit narrowing the gate's escape hatch (for instance back to a
-#     literal "main") degrades into a skipped job rather than into
-#     "protecting release/* makes pipeline creation fail", four files away
-#     from the checkbox that caused it.
+#     protected ref -- so the edge cannot dangle today. It stays optional
+#     so that a future edit narrowing the gate's escape hatch (for
+#     instance back to a literal "main") degrades into a skipped job
+#     rather than into "protecting release/* makes pipeline creation
+#     fail", four files away from the checkbox that caused it.
 #
 # Coverage is not weakened by either optional edge. On protected refs and
 # tags all three fixture jobs always exist, so docs:publish still has a
@@ -636,10 +639,10 @@
 # neither of which publishes anything.
 #
 # The two lists below -- the eleven-entry verify+test gate and the
-# fourteen-entry verify+test+hardware gate -- are shared via `!reference`, not a
-# YAML anchor (anchors don't cross `include:`, see this file's top-of-file
-# comment), so each gate is written once here instead of being retyped
-# across hardware.yml, docs.yml, and release.yml.
+# fourteen-entry verify+test+hardware gate -- are shared via
+# `!reference`, not a YAML anchor (anchors don't cross `include:`, see
+# this file's top-of-file comment), so each gate is written once here
+# instead of being retyped across hardware.yml, docs.yml, and release.yml.
 .needs-gates:
     verify-and-test:
         - verify:policy

@@ -25,9 +25,10 @@
 # are path-gated (test.yml's "Path gating" section). That costs nothing
 # here: the path gate makes all three unconditional on every PROTECTED ref,
 # which is exactly where these jobs are created, so on any pipeline that
-# also creates hardware:* all three are present and every edge is real. The optional marking is there so a
-# future narrowing of the gate degrades into a skipped job rather than into
-# a pipeline that cannot be created at all.
+# also creates hardware:* all three are present and every edge is real.
+# The optional marking is there so a future narrowing of the gate degrades
+# into a skipped job rather than into a pipeline that cannot be created
+# at all.
 #
 # To gate a release MR (source release/vX.Y.Z) pre-merge, protect the
 # `release/*` branch pattern; otherwise these verify on main + the v* tag.
