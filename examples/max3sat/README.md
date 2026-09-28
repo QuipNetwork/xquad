@@ -37,7 +37,7 @@ quadratic term `-P*w*x_k`.
 
 ```sh
 uv run python examples/max3sat/runner.py --seed 42
-uv run python examples/max3sat/runner.py --n 8 --m 10 --interpreter rust
+uv run python examples/max3sat/runner.py --n 8 --m 10
 ```
 
 | Flag | Default | Description |
@@ -45,7 +45,6 @@ uv run python examples/max3sat/runner.py --n 8 --m 10 --interpreter rust
 | `--n` | `6` | Number of Boolean variables |
 | `--m` | `8` | Number of clauses |
 | `--solver` | `dwave-cpu` | Solver backend (see Choosing a solver) |
-| `--interpreter` | `python` | XQVM backend: `python` or `rust` |
 | `--seed` | `42` | Random seed |
 | `-o` | stdout | Write JSON result to file |
 
@@ -68,6 +67,6 @@ RNG/hardware). `example-smoke` always runs `dwave-cpu`.
 
 ## Canonical output
 
-`example-smoke` validates both interpreters produce `valid == 1` with
+`example-smoke` validates that the runner produces `valid == 1` with
 `--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
 it checks validity, not exact output.

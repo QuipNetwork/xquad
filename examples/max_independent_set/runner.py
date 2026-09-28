@@ -24,7 +24,7 @@ the pair is penalised whenever both endpoints are selected.
 
 Usage:
     uv run python examples/max_independent_set/runner.py --seed 42
-    uv run python examples/max_independent_set/runner.py --n 6 --interpreter rust
+    uv run python examples/max_independent_set/runner.py --n 6
 """
 
 from __future__ import annotations
@@ -38,8 +38,8 @@ from typing import Any
 
 from xquad.cp import Domain, Problem, Types
 from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
-from xquad.types import XQMX, Vec
-from xquad.vm import VM, VMBackend
+from xquad.types import XqmxModel
+from xquad.vm import VM
 
 
 def build_problem(n: int, edges: list[tuple[int, int]]) -> Problem:
@@ -110,19 +110,18 @@ def run(
     n: int,
     edges: list[tuple[int, int]],
     seed: int,
-    backend: VMBackend,
     solver_name: str,
 ) -> tuple[int, int, list[int]]:
-    """Full pipeline on the selected VM backend."""
+    """Full pipeline on the XQVM."""
     flat = flatten_edges(edges)
     m = len(edges)
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([n, m, flat])
     vm.set_output_slots(1)
     vm.run(programs.encoder)
     model = vm.outputs()[0]
-    assert isinstance(model, XQMX)
+    assert isinstance(model, XqmxModel)
 
     try:
         solver = build_solver(solver_name, seed=seed)
@@ -131,22 +130,19 @@ def run(
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([n, m, flat, model, sample])
     vm.set_output_slots(2)
     vm.run(programs.verifier)
     outs = vm.outputs()
     energy, valid = outs[0], outs[1]
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([sample, n])
     vm.set_output_slots(1)
     vm.run(programs.decoder)
     set_out = vm.outputs()[0]
-    if isinstance(set_out, Vec):
-        selection = [set_out.get(i) for i in range(n)]
-    else:
-        selection = list(set_out)
+    selection = list(set_out)
 
     return energy, valid, selection
 
@@ -155,12 +151,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Max Independent Set end-to-end XQuad pipeline example")
     parser.add_argument("--n", type=int, default=5, help="Number of nodes (default: 5)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
-    parser.add_argument(
-        "--interpreter",
-        choices=("python", "rust"),
-        default="python",
-        help="XQVM interpreter to run the compiled programs on",
-    )
     parser.add_argument(
         "--solver",
         choices=sorted(SOLVERS),
@@ -183,8 +173,7 @@ def main() -> int:
     problem = build_problem(args.n, edges)
     programs = problem.compile()
 
-    backend = VMBackend.PYTHON if args.interpreter == "python" else VMBackend.RUST
-    energy, valid, selection = run(programs, args.n, edges, args.seed, backend, args.solver)
+    energy, valid, selection = run(programs, args.n, edges, args.seed, args.solver)
 
     result = {
         "_seed": args.seed,

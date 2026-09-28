@@ -28,7 +28,7 @@ only covering set indices are pushed into each element's index vector.
 
 Usage:
     uv run python examples/set_cover/runner.py --seed 42
-    uv run python examples/set_cover/runner.py --num-sets 5 --interpreter rust
+    uv run python examples/set_cover/runner.py --num-sets 5
 """
 
 from __future__ import annotations
@@ -42,8 +42,8 @@ from typing import Any
 
 from xquad.cp import Domain, Problem, Types
 from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
-from xquad.types import XQMX, Vec
-from xquad.vm import VM, VMBackend
+from xquad.types import XqmxModel
+from xquad.vm import VM
 
 
 def build_problem(num_elements: int, num_sets: int, covers: list[list[int]]) -> Problem:
@@ -99,18 +99,17 @@ def run(
     num_sets: int,
     covers: list[list[int]],
     seed: int,
-    backend: VMBackend,
     solver_name: str,
 ) -> tuple[int, int, list[int]]:
-    """Full pipeline on the selected VM backend."""
+    """Full pipeline on the XQVM."""
     flat_covers = [covers[e][s] for e in range(num_elements) for s in range(num_sets)]
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([num_elements, num_sets, flat_covers])
     vm.set_output_slots(1)
     vm.run(programs.encoder)
     model = vm.outputs()[0]
-    assert isinstance(model, XQMX)
+    assert isinstance(model, XqmxModel)
 
     try:
         solver = build_solver(solver_name, seed=seed)
@@ -119,22 +118,19 @@ def run(
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([num_elements, num_sets, flat_covers, model, sample])
     vm.set_output_slots(2)
     vm.run(programs.verifier)
     outs = vm.outputs()
     energy, valid = outs[0], outs[1]
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([sample, num_sets])
     vm.set_output_slots(1)
     vm.run(programs.decoder)
     sel_out = vm.outputs()[0]
-    if isinstance(sel_out, Vec):
-        selected = [sel_out.get(i) for i in range(num_sets)]
-    else:
-        selected = list(sel_out)
+    selected = list(sel_out)
 
     return energy, valid, selected
 
@@ -144,12 +140,6 @@ def main() -> int:
     parser.add_argument("--num-elements", type=int, default=4, help="Number of elements (default: 4)")
     parser.add_argument("--num-sets", type=int, default=5, help="Number of sets (default: 5)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
-    parser.add_argument(
-        "--interpreter",
-        choices=("python", "rust"),
-        default="python",
-        help="XQVM interpreter to run the compiled programs on",
-    )
     parser.add_argument(
         "--solver",
         choices=sorted(SOLVERS),
@@ -178,8 +168,7 @@ def main() -> int:
     problem = build_problem(args.num_elements, args.num_sets, covers)
     programs = problem.compile()
 
-    backend = VMBackend.PYTHON if args.interpreter == "python" else VMBackend.RUST
-    energy, valid, selected = run(programs, args.num_elements, args.num_sets, covers, args.seed, backend, args.solver)
+    energy, valid, selected = run(programs, args.num_elements, args.num_sets, covers, args.seed, args.solver)
 
     result = {
         "_seed": args.seed,

@@ -40,14 +40,13 @@ most balanced split when the total is odd.
 
 ```sh
 uv run python examples/number_partition/runner.py --seed 42
-uv run python examples/number_partition/runner.py --n 8 --interpreter rust
+uv run python examples/number_partition/runner.py --n 8
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--n` | `6` | Number of integers |
 | `--solver` | `dwave-cpu` | Solver backend (see Choosing a solver) |
-| `--interpreter` | `python` | XQVM backend: `python` or `rust` |
 | `--seed` | `42` | Random seed |
 | `-o` | stdout | Write JSON result to file |
 
@@ -60,6 +59,6 @@ non-default solver will not reproduce the canonical result.
 
 ## Canonical output
 
-`example-smoke` validates both interpreters produce `valid == 1` with
+`example-smoke` validates that the runner produces `valid == 1` with
 `--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
 it checks validity, not exact output.

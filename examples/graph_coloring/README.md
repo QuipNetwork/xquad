@@ -47,7 +47,7 @@ sentinel this example used to produce in host code.
 
 ```sh
 uv run python examples/graph_coloring/runner.py --seed 42
-uv run python examples/graph_coloring/runner.py --n 6 --colors 4 --interpreter rust
+uv run python examples/graph_coloring/runner.py --n 6 --colors 4
 ```
 
 | Flag | Default | Description |
@@ -55,7 +55,6 @@ uv run python examples/graph_coloring/runner.py --n 6 --colors 4 --interpreter r
 | `--n` | `5` | Number of nodes |
 | `--colors` | `4` | Number of colors |
 | `--solver` | `dwave-cpu` | Solver backend (see Choosing a solver) |
-| `--interpreter` | `python` | XQVM backend: `python` or `rust` |
 | `--seed` | `42` | Random seed |
 | `-o` | stdout | Write JSON result to file |
 
@@ -78,6 +77,6 @@ RNG/hardware). `example-smoke` always runs `dwave-cpu`.
 
 ## Canonical output
 
-`example-smoke` validates both interpreters produce `valid == 1` with
+`example-smoke` validates that the runner produces `valid == 1` with
 `--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
 it checks validity, not exact output.

@@ -26,7 +26,7 @@ Each quartic term c*x_i*x_j*x_k*x_l is reduced in two steps:
 
 Usage:
     uv run python examples/quartic_opt/runner.py --seed 42
-    uv run python examples/quartic_opt/runner.py --n 6 --m 3 --interpreter rust
+    uv run python examples/quartic_opt/runner.py --n 6 --m 3
 """
 
 from __future__ import annotations
@@ -40,8 +40,8 @@ from typing import Any
 
 from xquad.cp import Domain, Problem, Types
 from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
-from xquad.types import XQMX, Vec
-from xquad.vm import VM, VMBackend
+from xquad.types import XqmxModel
+from xquad.vm import VM
 
 # Rosenberg penalty: must exceed the max absolute coefficient of any quartic term.
 _P_AUX = 100
@@ -106,18 +106,17 @@ def run(
     m: int,
     terms: list[tuple[int, int, int, int, int]],
     seed: int,
-    backend: VMBackend,
     solver_name: str,
 ) -> tuple[int, int, list[int]]:
-    """Full pipeline on the selected VM backend."""
+    """Full pipeline on the XQVM."""
     flat = [v for term in terms for v in term]
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([n, m, flat])
     vm.set_output_slots(1)
     vm.run(programs.encoder)
     model = vm.outputs()[0]
-    assert isinstance(model, XQMX)
+    assert isinstance(model, XqmxModel)
 
     try:
         solver = build_solver(solver_name, seed=seed)
@@ -126,22 +125,19 @@ def run(
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([n, m, flat, model, sample])
     vm.set_output_slots(2)
     vm.run(programs.verifier)
     outs = vm.outputs()
     energy, valid = outs[0], outs[1]
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([sample, n])
     vm.set_output_slots(1)
     vm.run(programs.decoder)
     assign_out = vm.outputs()[0]
-    if isinstance(assign_out, Vec):
-        assignment = [assign_out.get(i) for i in range(n)]
-    else:
-        assignment = list(assign_out)
+    assignment = list(assign_out)
 
     return energy, valid, assignment
 
@@ -151,12 +147,6 @@ def main() -> int:
     parser.add_argument("--n", type=int, default=5, help="Number of variables (default: 5)")
     parser.add_argument("--m", type=int, default=2, help="Number of quartic terms (default: 2)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
-    parser.add_argument(
-        "--interpreter",
-        choices=("python", "rust"),
-        default="python",
-        help="XQVM interpreter to run the compiled programs on",
-    )
     parser.add_argument(
         "--solver",
         choices=sorted(SOLVERS),
@@ -182,8 +172,7 @@ def main() -> int:
     problem = build_problem(args.n, args.m, terms)
     programs = problem.compile()
 
-    backend = VMBackend.PYTHON if args.interpreter == "python" else VMBackend.RUST
-    energy, valid, assignment = run(programs, args.n, args.m, terms, args.seed, backend, args.solver)
+    energy, valid, assignment = run(programs, args.n, args.m, terms, args.seed, args.solver)
 
     result = {
         "_seed": args.seed,
