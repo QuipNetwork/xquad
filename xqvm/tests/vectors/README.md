@@ -169,8 +169,10 @@ vectors pin it:
 
 The seven coefficient-write rows used to be pinned by `xqvm_py`'s unit
 tests alone. Only `SETLINE`, `ADDLINE`, `SETQUAD` and `ADDQUAD` skip the
-charge on a register that is not a model, so an int, vec or sample
-register in their place is a `TypeMismatch` at any budget. `EXCLUDE`,
+charge on a register that is not a model, so an int or vec register in
+their place is a `TypeMismatch` at any budget, as is a sample under
+`SETQUAD` or `ADDQUAD`. `SETLINE` and `ADDLINE` accept a sample and
+write its assignment, uncharged. `EXCLUDE`,
 `IMPLIES` and `REDUCE` charge whatever the register holds, so on one of
 those an exhausted budget raises `MemoryLimitExceeded` ahead of the
 `TypeMismatch`, as `VECPUSH` does. For all seven, the observable ordering
