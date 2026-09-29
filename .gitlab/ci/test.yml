@@ -167,12 +167,12 @@
         - .gitlab/ci/test.yml
 
 # Merged into one job running `make -k test-rust` (test-unit-rs
-# test-integ-rs test-doc). Unlike the Rust lint merge, this wins
-# outright rather than trading wall clock for job-seconds: all three
-# targets build with `--profile ci-test` into the same target dir, so
-# the second and third invocations reuse the first's dependency build
-# instead of each starting a `cargo build` from scratch, which is what
-# the old three-job layout paid for on every pipeline.
+# test-integ-rs test-doc, then the conformance-coverage report). Unlike
+# the Rust lint merge, this wins outright rather than trading wall clock
+# for job-seconds: every target builds with `--profile ci-test` into the
+# same target dir, so each later invocation reuses the first's
+# dependency build instead of starting a `cargo build` from scratch,
+# which is what the old three-job layout paid for on every pipeline.
 test:rust:
     stage: test
     extends: .rust

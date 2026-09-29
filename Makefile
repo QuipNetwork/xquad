@@ -801,8 +801,13 @@ conformance:
 # Reports only. The ratchet that stops coverage regressing is a test in
 # the same target and so already runs under `conformance`; this target is
 # for reading the list.
+#
+# Spelled like test-integ-rs (`--workspace --all-features`, the `ci-test`
+# profile) so that under test-rust it reuses that build instead of
+# compiling the workspace again. `-p xqvm` alone would unify features
+# differently and rebuild xqvm and xqasm.
 conformance-coverage:
-	cargo test --locked -q -p xqvm --test vectors -- --ignored --exact coverage::report --nocapture
+	cargo test --locked -q --workspace --all-features --profile ci-test --test vectors -- --ignored --exact coverage::report --nocapture
 
 # -- Dev ergonomics ---------------------------------------------------------
 
