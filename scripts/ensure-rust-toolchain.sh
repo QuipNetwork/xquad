@@ -98,9 +98,11 @@
 #                      rustup's own default. CI points it at
 #                      ${CI_PROJECT_DIR}/.cargo, which is inside the cached
 #                      build directory.
-#   RUST_TOOLCHAIN  -- channel to install; defaults to `stable`, matching
-#                      the pinned default image every other job builds under.
-#                      The repository pins no rust-toolchain.toml.
+#   RUST_TOOLCHAIN  -- channel to install; defaults to `channel` in the
+#                      repository's rust-toolchain.toml, the same toolchain
+#                      the pinned default image ships. Installing anything
+#                      else would only make rustup fetch the pinned one on
+#                      top at the first cargo call.
 #
 # Exit codes:
 #   0  -- rustc and cargo are present and runnable
@@ -108,7 +110,17 @@
 
 set -euo pipefail
 
-toolchain="${RUST_TOOLCHAIN:-stable}"
+# Parsed with bash alone, because the script's own tests run it on a PATH
+# stripped to a handful of tools. A missing or unreadable file is a broken
+# checkout, not a reason to guess a channel.
+toolchain_file="$(dirname "${BASH_SOURCE[0]}")/../rust-toolchain.toml"
+pinned=""
+while IFS= read -r line; do
+    if [[ $line =~ ^channel[[:space:]]*=[[:space:]]*\"([^\"]+)\" ]]; then
+        pinned="${BASH_REMATCH[1]}"
+    fi
+done <"${toolchain_file}"
+toolchain="${RUST_TOOLCHAIN:-${pinned:?no channel in ${toolchain_file}}}"
 : "${CARGO_HOME:="${HOME}/.cargo"}"
 export CARGO_HOME
 

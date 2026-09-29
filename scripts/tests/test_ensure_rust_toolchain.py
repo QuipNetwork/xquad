@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -182,7 +183,8 @@ def test_installs_when_the_host_has_no_toolchain(stub_path: Path, tmp_path: Path
     result = _run(stub_path, cargo_home)
 
     assert result.returncode == 0, result.stderr
-    assert "installing 'stable'" in result.stdout
+    channel = tomllib.loads((SCRIPT.parents[1] / "rust-toolchain.toml").read_text())["toolchain"]["channel"]
+    assert f"installing '{channel}'" in result.stdout
     assert "rustc 1.99.0 (installed)" in result.stdout
     assert "cargo 1.99.0 (installed)" in result.stdout
     assert (cargo_home / "bin" / "rustc").exists()
