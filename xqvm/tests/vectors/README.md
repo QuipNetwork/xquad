@@ -165,25 +165,24 @@ vectors pin it:
 | `ATLEASTW` | `VecLengthMismatch`, unconditional | `constraints/atleastw_length_before_model_type` |
 | `EQUALITY` | `VecLengthMismatch`, unconditional -- the vec lengths are compared before the model register is discriminated, and the charge follows both vec reads | `constraints/equality_length_mismatch_beats_model_type` |
 | `SETLINE`, `ADDLINE`, `SETQUAD`, `ADDQUAD`, `EXCLUDE`, `IMPLIES`, `REDUCE` | `MemoryLimitExceeded` ahead of the index check, on a model register against an exhausted budget | `metering/<opcode>_charge_before_index_check`, one per opcode |
-| `ONEHOTR`, `ONEHOTC` | none -- a sample register is charged nothing, so the type check decides (QUI-1202) | `xqvm_py/tests/test_executor.py` alone (`test_onehot_does_not_charge_for_a_sample`); see below |
+| `ONEHOTR`, `ONEHOTC` | `TypeMismatch` at any budget -- a sample register adds nothing to the charge (QUI-1202, QUI-1500) | `metering/onehotr_sample_charged_nothing`, `metering/onehotc_sample_charged_nothing` |
 
 The seven coefficient-write rows used to be pinned by `xqvm_py`'s unit
-tests alone. Coefficient writes are charged only on a model register, so
-an int or vec register in their place is a `TypeMismatch` at any budget;
-the observable ordering is the charge against the index check, which is
-what their vectors pin.
+tests alone. Only `SETLINE`, `ADDLINE`, `SETQUAD` and `ADDQUAD` skip the
+charge on a register that is not a model, so an int, vec or sample
+register in their place is a `TypeMismatch` at any budget. `EXCLUDE`,
+`IMPLIES` and `REDUCE` charge whatever the register holds, so on one of
+those an exhausted budget raises `MemoryLimitExceeded` ahead of the
+`TypeMismatch`, as `VECPUSH` does. For all seven, the observable ordering
+on a model register is the charge against the index check, which is what
+their vectors pin.
 
-The `ONEHOTR`/`ONEHOTC` row has no vector because the spec does not yet
-say what it pins. Both VMs size the charge from a model-only peek, so a
-sample is charged nothing and the run reaches the type check. The
-charging table in `spec/xqvm/SPEC.md` charges ONEHOT "the expansion over
-the row's or column's variables" with no exception for a sample, and its
-error-precedence rule puts that charge ahead of type validation, which
-read literally gives `MemoryLimitExceeded` against a budget with no
-headroom. A vector written from the spec would contradict both VMs, and
-one written from the VMs would not be a spec vector. The spec has to
-decide first. Until it does, the `xqvm_py` test is the only pin and
-QUI-1481 must replace it before deleting the package.
+`spec/xqvm/SPEC.md` reads a charge sized from the target register only
+from a model ([A charge sized from the register reads it only as a
+model](../../../spec/xqvm/SPEC.md#allocation-budget)), so `ONEHOTR` and
+`ONEHOTC` on a sample are charged nothing and the type check decides. The
+ordering is visible only when the budget has no headroom past the
+sample's own allocation, which is how the two vectors are set up.
 
 ## Authoring a new vector
 
