@@ -108,13 +108,11 @@ register across the host boundary. A model does not get cheaper by being
 duplicated through one opcode rather than another.
 
 The charge schedule is defined over program-visible quantities -- variables
-declared, elements appended, coefficients written -- rather than over either
-interpreter's internal representation. The Python reference interpreter
-charges the same rates via `Executor.execute(..., memory_limit=...)`,
-raising `xqvm_py.errors.MemoryLimitExceeded`, so both implementations reject
-the same programs at the same instruction having charged the same bytes.
-`xquad.vm.VM.set_memory_limit()` sets it on either backend and
-`VM.memory_used()` reads the result back.
+declared, elements appended, coefficients written -- rather than over the
+interpreter's internal representation, so every host rejects the same
+programs at the same instruction having charged the same bytes.
+`xquad.vm.VM.set_memory_limit()` sets the budget and `VM.memory_used()`
+reads the result back.
 
 ## VM runtime errors
 

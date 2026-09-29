@@ -23,8 +23,8 @@ solvers XQuad targets.
 ## The real components
 
 The toolchain is dual-language: a Rust core (VM, assembler, bytecode, CLI)
-with Python interfaces (reference VM, constraint-programming DSL, solver
-adapters, FFI bindings).
+with Python interfaces (constraint-programming DSL, solver adapters, FFI
+bindings).
 
 Three Rust crates, published to crates.io:
 
@@ -38,20 +38,18 @@ A fourth crate, [`xqffi`](https://gitlab.com/quip.network/xquad/-/tree/main/xqff
 is a PyO3 bridge that exposes `xqvm` and `xqasm` to Python. It ships as a
 Python wheel rather than a crates.io library.
 
-Five Python distributions, published to PyPI:
+Four Python distributions, published to PyPI:
 
 | Package | Role |
 |---|---|
-| [`xqvm_py`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm_py) | Pure-Python reference VM, used as the cross-implementation conformance oracle |
 | [`xqcp`](https://gitlab.com/quip.network/xquad/-/tree/main/xqcp) | High-level constraint-programming DSL that compiles to XQVM assembly |
 | [`xqsa`](https://gitlab.com/quip.network/xquad/-/tree/main/xqsa) | Solver adapters for XQMX models: local simulated annealing, D-Wave, and the Quip network |
 | [`xqffi`](https://gitlab.com/quip.network/xquad/-/tree/main/xqffi) | The PyO3 FFI bindings crate above, packaged as a wheel |
 | [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) | Umbrella package re-exporting `xqffi`, `xqcp`, and `xqsa` under one namespace, with an interactive `Program` / `Session` / `RunResult` API |
 
-Parity on every committed conformance vector between the Rust `xqvm`
-interpreter and the Python `xqvm_py` reference VM is enforced mechanically:
-each vector runs on both implementations in CI, and disagreement fails the
-build. See [Conformance](embedding/conformance.md) for what a vector does
+`spec/xqvm/` defines the VM, and the committed conformance vectors hold
+`xqvm` to it: each vector runs in CI against the outcome the spec
+prescribes, and a mismatch fails the build. See [Conformance](embedding/conformance.md) for what a vector does
 and does not cover.
 
 ## Architecture at a glance
@@ -88,7 +86,7 @@ followed by its operands in big-endian byte order. See
 - **[XQVM Reference](xqvm/)** -- the machine model, assembly
   language, instruction set, and bytecode format.
 - **[Embedding](embedding/)** -- using the Rust crates directly,
-  `no_std` support, and cross-implementation conformance.
+  `no_std` support, and conformance to the specification.
 - **[Examples](examples/)** -- worked problems including a
   Travelling Salesman Problem.
 

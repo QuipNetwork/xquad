@@ -109,7 +109,8 @@ opcode has been checked against the spec -- only that every opcode a
 vector currently exercises has been.
 
 Which opcodes those are is now computed rather than guessed. CI prints
-the report on every pipeline, as the last step of `make check-parity`,
+the report on every pipeline, as the last step of `make test-rust` (the
+`test:rust` job),
 and it runs locally with:
 
 ```sh
@@ -141,10 +142,10 @@ holds both numbers as floors that a merge request may raise and may not
 lower without saying why.
 
 `IDXTRIU` is the worked example of what that costs. It had no vector, and
-the two implementations disagreed on it in two separate ways: on operand
-order, and on whether an intermediate that leaves `i64` range faults. Both
-were found by reading the implementations side by side rather than by any
-mechanical check, and both are now closed, with
+its behaviour was wrong in two separate ways: on operand order, and on
+whether an intermediate that leaves `i64` range faults. Both were found by
+reading the code against the spec rather than by any mechanical check, and
+both are now closed, with
 `index-math/idxtriu_intermediate_overflow` and
 `index-math/idxgrid_intermediate_overflow` pinning the second. Neither
 gap was exotic; both were simply in the part of the opcode table nothing

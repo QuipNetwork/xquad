@@ -8,8 +8,7 @@ first violation any phase finds. A program with two independent defects
 reports only the first one encountered.
 
 The Rust implementation is `xqvm::verifier`, exposed to Python via
-`xqffi.verifier` and re-exported as `xquad.verifier`. There is one
-implementation; `xqvm_py`, the pure-Python reference VM, does not verify.
+`xqffi.verifier` and re-exported as `xquad.verifier`.
 
 This page is the reference: what each phase checks and what each error
 means. For why a specific program was rejected and how to change it, see
