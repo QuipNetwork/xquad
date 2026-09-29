@@ -124,7 +124,7 @@
     # A Rust toolchain for a job that cannot get one from `image:`.
     #
     # Only the shell-executor jobs need this. Everything running under the
-    # root `default: image: rust:latest` already has rustc on PATH and
+    # pinned default image in .gitlab-ci.yml already has rustc on PATH and
     # should keep using `cargo-path` above; this entry exists for
     # hardware:metal, whose macOS runner ignores `image:` entirely.
     #
@@ -196,8 +196,8 @@
         - !reference [.fragments, uv]
         - uv sync
     # uv + maturin + twine + cargo-zigbuild for the Python publishing
-    # path (release:validate, release:pypi). Stays on rust:latest (the
-    # workspace default) so cargo is available for maturin's cdylib
+    # path (release:validate, release:pypi). Stays on the pinned default
+    # image so cargo is available for maturin's cdylib
     # build; uv provides the wheel builder for the pure-Python peers.
     python-publish:
         # Must come first: this is what puts ${CARGO_HOME}/bin on PATH,
@@ -390,6 +390,8 @@
 # compile nothing and only run a bash script; downloading the (irrelevant)
 # default cargo cache into an alpine container is pure waste.
 .alpine:
+    # Bounded on purpose (QUI-1266): the major is fixed, and Alpine
+    # security patches keep flowing without anyone bumping a pin.
     image: alpine:3
     cache: []
 
@@ -500,7 +502,7 @@
               #
               # Only hardware:metal ever populates this path. The two
               # Docker jobs sharing this template take rustc from
-              # `rust:latest` and never write `.cargo/bin/`, so their cache
+              # the pinned default image and never write `.cargo/bin/`, so their cache
               # push logs one "no matching files" warning apiece -- the
               # accepted price of one cache block instead of two.
               #

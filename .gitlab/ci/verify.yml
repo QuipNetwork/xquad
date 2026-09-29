@@ -139,9 +139,9 @@ verify:rust:
 # there and mask the gap until a cold cache exposes it.
 #
 # Image changes from lint:atomic-spec-mr's `alpine:3` to the workspace
-# default `rust:latest` (Debian trixie) -- confirmed both
+# default image (the pinned Debian trixie tag) -- confirmed both
 # scripts/check-atomic-spec-mr.sh and scripts/check-commit-messages.sh
-# run correctly there: both are plain bash, and rust:latest ships bash
+# run correctly there: both are plain bash, and that image ships bash
 # 5.2 and git 2.47 at /usr/bin via its buildpack-deps base, so no `apk
 # add` equivalent is needed.
 #
@@ -256,7 +256,7 @@ verify:python:
 # opcode-parity-py and the Python-side conformance/example runs shell
 # out to `uv run python -m xqvm_py …`, so the venv (editable xqvm_py +
 # maturin-built xqffi) has to be active. `.python` gives both: cargo is
-# already on PATH from the base rust:latest image, and `uv sync`
+# already on PATH from the pinned default image, and `uv sync`
 # builds xqffi's cdylib through maturin.
 #
 # Before this merge each of the four jobs paid its own `make deps`
