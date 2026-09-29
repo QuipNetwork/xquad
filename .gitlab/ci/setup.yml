@@ -27,7 +27,7 @@
 # what it is required to match -- a licence against policy, one VM
 # implementation's output against the other's. `test` asks whether
 # something does what it should when actually executed. This is not a
-# static-vs-dynamic split (`verify:parity`, once it exists, runs the VM);
+# static-vs-dynamic split (`verify:xqffi` loads the VM's bindings);
 # it is consistency between artefacts versus correctness of one artefact.
 # The old `lint` stage held four unrelated concerns because nothing forced
 # a new job into naming which question it was answering -- an unwritten
@@ -300,8 +300,8 @@
           policy: pull
 
 # uv plus a full workspace sync. Consumers need the built xqffi extension,
-# not just a linter -- e.g. running the Python test suite or shelling out
-# to `python -m xqvm_py` for cross-implementation parity.
+# not just a linter -- e.g. running the Python test suite or the example
+# smoke run.
 #
 # `uv sync` builds xqffi's cdylib through maturin (xqffi is a uv workspace
 # member), so every consumer here also pays a Rust compile -- the cargo
@@ -318,17 +318,13 @@
 # to share a pattern the root config deliberately omits as non-functional.
 # Dead config plus a misleading comment (audit finding CI-10).
 #
-# CACHE WRITERS: all three current consumers (verify:parity, test:python,
-# test:quip) genuinely write here, so none of them becomes `policy: pull`.
-# verify:parity and test:python both pull in the full `deps-py` sequence
-# (uv sync + an explicit `maturin develop`) via their Makefile
-# prerequisites, which overlaps between the two but is not a
-# no-op for either -- each performs the real resolve/compile independently,
-# and either alone would be a sufficient pusher if the other job were ever
-# removed. test:quip additionally does its own `uv run --extra quip` sync,
-# which pulls in the quip_signer wheel neither of the other two installs --
-# it is the sole writer for that part of the cache's contents. Leave all
-# three at the default pull-push policy.
+# CACHE WRITERS: both current consumers (test:python, test:quip) genuinely
+# write here, so neither becomes `policy: pull`. test:python pulls in the
+# full `deps-py` sequence (uv sync + an explicit `maturin develop`) via its
+# Makefile prerequisites. test:quip does its own `uv run --extra quip`
+# sync, which pulls in the quip_signer wheel test:python does not install
+# -- it is the sole writer for that part of the cache's contents. Leave
+# both at the default pull-push policy.
 .python:
     before_script:
         - !reference [.fragments, uv-sync]
@@ -632,7 +628,7 @@
 # pipelines the dropped edges affect only docs:* and release:validate,
 # neither of which publishes anything.
 #
-# The two lists below -- the ten-entry verify+test gate and the thirteen-
+# The two lists below -- the nine-entry verify+test gate and the twelve-
 # entry verify+test+hardware gate -- are shared via `!reference`, not a
 # YAML anchor (anchors don't cross `include:`, see this file's top-of-file
 # comment), so each gate is written once here instead of being retyped
@@ -642,7 +638,6 @@
         - verify:policy
         - verify:rust
         - verify:python
-        - verify:parity
         - verify:xqffi
         - test:rust
         - test:python
@@ -655,7 +650,6 @@
         - verify:policy
         - verify:rust
         - verify:python
-        - verify:parity
         - verify:xqffi
         - test:rust
         - test:python

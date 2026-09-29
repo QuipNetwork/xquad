@@ -188,12 +188,12 @@ test:python:
     stage: test
     extends: .python
     needs: []
-    # 20m: cold-cache room for the uv resolve and the maturin build of
-    # xqffi's cdylib that `uv sync` performs before pytest starts. See
-    # setup.yml's "Job timeouts" section.
-    timeout: 20m
+    # 25m: cold-cache room for the uv resolve and the maturin build of
+    # xqffi's cdylib that `uv sync` performs before pytest starts, then
+    # the example smoke run on top. See setup.yml's "Job timeouts" section.
+    timeout: 25m
     script:
-        - make -k test-py
+        - make -k test-python
 
 # Quip Network signing-layer tests. These are pure-Python SCALE / keystore /
 # submission-state-machine tests that need only the `quip_signer` wheel from the

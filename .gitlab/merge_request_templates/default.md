@@ -40,9 +40,8 @@ features, so the question is "does this break?" and not "is this a fix?".
 
 ### Preflight Checks
 Run locally what CI enforces. Mark a language N/A if this MR does not touch it.
-- [ ] `make preflight-rs` passes -- fmt, taplo, clippy, rustdoc, deny, unit/integration/doc tests (or N/A)
-- [ ] `make preflight-py` passes -- taplo, ruff format + lint, pytest, uv.lock freshness (or N/A)
-- [ ] `make preflight-parity` passes -- opcode parity, conformance, example smoke (if opcode or VM semantics changed)
+- [ ] `make preflight-rs` passes -- fmt, taplo, clippy (with the opcode-table check), rustdoc, deny, unit/integration/doc tests and the specification vectors (or N/A)
+- [ ] `make preflight-py` passes -- taplo, ruff format + lint, pytest, example smoke, uv.lock freshness (or N/A)
 - [ ] `make preflight-docs` passes -- generated-doc freshness, docs drift, README length guards (if `docs/book/` or a generated doc source changed)
 - [ ] `make preflight-policy` passes -- changelog render, release-notes scoping, containment, branch version, atomic spec-MR and commit-message guards
 - [ ] Lockfiles (`Cargo.lock`, `uv.lock`) are regenerated and committed if a dependency or version changed
