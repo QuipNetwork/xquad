@@ -80,7 +80,7 @@ const REACHED_FLOOR: usize = 58;
 /// The opcode floors only trip when a deleted vector was the last to cover
 /// an opcode, so removing one of several `ADD` vectors passes them. This
 /// one trips on any removal.
-const VECTOR_FLOOR: usize = 181;
+const VECTOR_FLOOR: usize = 182;
 
 /// Build the full `(code, mnemonic)` opcode list from the `opcodes!`
 /// x-macro, so the denominator cannot drift from the opcode table.

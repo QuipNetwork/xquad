@@ -2139,7 +2139,7 @@ impl Vm {
 
     #[expect(
         clippy::arithmetic_side_effects,
-        reason = "NOT COVERED BY THE SPEC: `spec/xqvm/SPEC.md`'s overflow rule reaches the index sequence SLACK appends (which is checked), but nothing normative permits the `power = power.wrapping_mul(2)` that drives these two loops; recorded here pending normative text. The behaviour is correct and verified equivalent to xqvm_py across the whole domain: `power > 0` consumes the wrap to i64::MIN, so Rust runs `i64::BITS - capacity.leading_zeros()` iterations where Python runs `capacity.bit_length()`, equal for every positive i64. `capacity.leading_zeros() <= i64::BITS` bounds the charge, and `i` is bounded by the same 63 iterations"
+        reason = "`spec/xqvm/SPEC.md`'s overflow rule states that SLACK computes its powers of two only up to the largest one not exceeding `capacity`, so none of these operations overflows for a positive i64 `capacity` (pinned by the `slack_max_capacity` vector). `power > 0` consumes the final `wrapping_mul` to i64::MIN, so the loops run `i64::BITS - capacity.leading_zeros()` times, at most 63; that bounds the charge and `i`"
     )]
     fn exec_slack(
         &mut self,
