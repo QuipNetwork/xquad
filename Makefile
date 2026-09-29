@@ -391,7 +391,7 @@ deps-miri:
 # contributor-facing target and the apt path does not exist on macOS:
 #   node on PATH        -> nothing to do, just log the resolved version so
 #                          runner image changes stay visible in job output
-#   no node, apt-get    -> install it (the rust:latest CI image ships none)
+#   no node, apt-get    -> install it (the default CI image ships none)
 #   no node, no apt-get -> stop here naming the platform's install route,
 #                          rather than dying on `apt-get: command not found`
 deps-wasm:
@@ -489,10 +489,8 @@ VALE_VERSION := 3.15.1
 # (https://astral.sh/uv/${UV_VERSION}/install.sh), exactly the way
 # .githooks/pre-commit already greps RUFF_VERSION out of this same file
 # rather than hardcoding a second copy of the pin. There is no
-# TOOLCHAIN_IMAGE-style precedent in this repo for pinning a tool version
-# (the three floating CI image tags -- rust:latest, alpine:3, and the
-# gitlab-org/cli image -- are a separate, out-of-scope finding); this
-# Makefile-as-source-of-truth pattern is the real in-repo precedent.
+# TOOLCHAIN_IMAGE-style precedent in this repo for pinning a tool version;
+# this Makefile-as-source-of-truth pattern is the real in-repo precedent.
 # 0.11.7 is the version the reference developer machine runs today.
 #
 # Unlike RUFF_VERSION, this pin binds CI only. `uvx ruff@$(RUFF_VERSION)`

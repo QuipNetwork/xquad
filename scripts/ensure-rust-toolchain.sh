@@ -20,7 +20,7 @@
 # has none.
 #
 # Every Rust-compiling job in this pipeline except one takes its toolchain
-# from the root `default: image: rust:latest`. The exception is
+# from the pinned root `default: image:`. The exception is
 # hardware:metal, which runs on a macOS SHELL executor -- `image:` is
 # ignored there, nothing is containerised, and the toolchain is whatever
 # the host happens to carry. Since QUI-1191 that job compiles Rust
@@ -99,7 +99,7 @@
 #                      ${CI_PROJECT_DIR}/.cargo, which is inside the cached
 #                      build directory.
 #   RUST_TOOLCHAIN  -- channel to install; defaults to `stable`, matching
-#                      the `rust:latest` image every other job builds under.
+#                      the pinned default image every other job builds under.
 #                      The repository pins no rust-toolchain.toml.
 #
 # Exit codes:

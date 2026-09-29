@@ -150,7 +150,7 @@ hardware:cuda:
     # registry fetch plus a full xqvm + xqasm + pyo3 compile before the
     # first GPU test runs. This was 30m when it covered the warmup alone.
     # The compile is not free headroom: test:python budgets 20m for a cold
-    # uv resolve plus the same maturin build on this same rust:latest
+    # uv resolve plus the same maturin build on this same pinned default
     # image, and that job stops where this one starts.
     #
     # Sized generously on purpose, per setup.yml's rule that a timeout

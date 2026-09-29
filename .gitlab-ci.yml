@@ -55,7 +55,16 @@ workflow:
 #   adding a fourth pull-only consumer of either entry.
 
 default:
-    image: rust:latest
+    # Bounded, readable tag (QUI-1266): it takes patch and security
+    # updates within the 1.98 minor on Debian trixie, and nothing else.
+    # `rust:latest` moved OS from bookworm to trixie on 2026-09-19 with
+    # nothing in the repo recording it; this tag cannot. No digest pin
+    # and no bump automation (QUI-1344 decided against it), so to move to
+    # a new minor, edit this tag by hand after confirming it exists on
+    # Docker Hub. Every other comment calls this "the pinned default
+    # image" rather than repeating the tag, so a bump touches this line
+    # only.
+    image: rust:1.98-trixie
     # Cancel in-flight pipelines on push; saves runner minutes when
     # developers push rapidly on a WIP branch.
     interruptible: true
