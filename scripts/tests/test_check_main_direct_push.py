@@ -50,9 +50,9 @@ def git(repo: Path, *args: str) -> str:
 def write_version(repo: Path, cargo: str, pep440: str, extra: str = "") -> None:
     """Write the workspace version in both spellings, plus a lockfile line that shares it."""
     (repo / "xqvm").mkdir(exist_ok=True)
-    (repo / "xqvm_py").mkdir(exist_ok=True)
+    (repo / "xquad").mkdir(exist_ok=True)
     (repo / "xqvm" / "Cargo.toml").write_text(f'[package]\nname = "xqvm"\nversion = "{cargo}"\n{extra}')
-    (repo / "xqvm_py" / "__init__.py").write_text(f'__version__ = "{pep440}"\n')
+    (repo / "xquad" / "pyproject.toml").write_text(f'[project]\nname = "xquad"\nversion = "{pep440}"\n')
     # An unrelated package pinned at the old release version: masking
     # must treat it the same on both sides.
     (repo / "Cargo.lock").write_text(

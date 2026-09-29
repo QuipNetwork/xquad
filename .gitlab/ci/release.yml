@@ -4,11 +4,11 @@
 # Five jobs, chained by `needs:`:
 #
 #   release:validate  runs on every pipeline (no `rules:` at all), and
-#                      validates crate packaging plus the five Python
+#                      validates crate packaging plus the four Python
 #                      distributions before anything is published.
 #   release:crates     tag only -- publishes xqvm, xqasm, xqcli to
 #                      crates.io in dependency order.
-#   release:pypi       tag only -- publishes the five PyPI
+#   release:pypi       tag only -- publishes the four PyPI
 #                      distributions, umbrella package last.
 #   release:notes      NON-RC tag only -- renders git-cliff notes and
 #                      creates the GitLab Release page. The one job in
@@ -38,8 +38,8 @@
 #                         + publish-update).
 #
 # PyPI publishing uses Trusted Publishing (OIDC) -- no long-lived
-# token in CI. Each of the 5 PyPI projects (xqffi, xqvm_py, xqcp,
-# xqsa, xquad) must have a GitLab Trusted Publisher configured at
+# token in CI. Each of the 4 PyPI projects (xqffi, xqcp, xqsa, xquad)
+# must have a GitLab Trusted Publisher configured at
 # pypi.org/manage/project/<name>/settings/publishing/ pointing at:
 #
 #   namespace = quip.network
@@ -50,7 +50,7 @@
 # The matching `release` environment must exist in
 # Settings -> CI/CD -> Environments, restricted to protected tags `v*`.
 # Only release:pypi carries `environment: release` below -- it is the
-# only job this environment (and its five id_tokens) applies to;
+# only job this environment (and its four id_tokens) applies to;
 # release:validate runs on every ref and must not acquire it.
 #
 # Release MR flow (QUI-580):
@@ -158,7 +158,7 @@ release:validate:
     #
     # Pull-only because this job has nothing worth uploading. Its other
     # leg, check-python-dists (Makefile), drives scripts/python-dists.sh,
-    # which builds the five wheels through maturin straight into the
+    # which builds the four wheels through maturin straight into the
     # shared target/ -- throwaway output, rebuilt from scratch every run
     # regardless of what is cached. And nothing downstream ever consumes
     # what this job produces: `dependencies: []` two lines up already
@@ -265,10 +265,9 @@ release:crates:
 #                         - abi3 wheel for linux-x86_64 (native)
 #                         - abi3 wheel for linux-aarch64 (cargo-zigbuild)
 #                         - sdist (universal source fallback))
-#   2. xqvm_py          (pure-Python reference VM)
-#   3. xqcp             (DSL)
-#   4. xqsa             (solver adapters)
-#   5. xquad            (umbrella -- depends on 1-4)
+#   2. xqcp             (DSL)
+#   3. xqsa             (solver adapters)
+#   4. xquad            (umbrella -- depends on 1-3)
 #
 # macOS and Windows wheels are out of scope; those platforms fall back
 # to building from the sdist with a local Rust toolchain.
@@ -300,8 +299,6 @@ release:pypi:
     # Audience MUST be the literal `pypi` (not `pypi.org`).
     id_tokens:
         PYPI_ID_TOKEN_XQFFI:
-            aud: pypi
-        PYPI_ID_TOKEN_XQVM_PY:
             aud: pypi
         PYPI_ID_TOKEN_XQCP:
             aud: pypi

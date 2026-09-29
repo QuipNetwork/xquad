@@ -248,7 +248,7 @@ check-crate-publish:
 
 # Needs maturin, twine and uv on PATH -- the same kind of prerequisite
 # note the hardware tiers below give for a CUDA device, a D-Wave QPU
-# token or a Metal-capable Mac. Builds the five distributions, runs
+# token or a Metal-capable Mac. Builds the four distributions, runs
 # twine check, and smoke-installs each into a throwaway venv via
 # scripts/smoke-wheels.sh (wired into python-dists.sh's verify phase).
 check-python-dists:
@@ -282,7 +282,7 @@ check-release: check-version-sites check-crate-publish check-python-dists
 # (test-quip*, test-cuda, test-qpu, test-metal), which need a real
 # device, token or devnet and are driven by hand or a dedicated runner,
 # and preflight-release (below), which needs maturin/twine/uv and builds
-# five distributions into a throwaway venv on top of a full-verify
+# four distributions into a throwaway venv on top of a full-verify
 # workspace packaging dry-run.
 preflight-rs: lint-rust lint-deny-rs test-rust test-wasm test-substrate-fixture
 
@@ -321,7 +321,7 @@ preflight-docs: check-docs-generated check-docs-handwritten
 preflight-policy: lint-policy
 
 # Stays OUT of the plain preflight aggregate below, on purpose, matching
-# test-miri and the hardware tiers: check-release builds five
+# test-miri and the hardware tiers: check-release builds four
 # distributions and installs them into a throwaway venv, on top of the
 # workspace-wide cargo publish dry-run, so hanging it off preflight-rs
 # or the default `make preflight` would be an unwelcome surprise for a
@@ -335,7 +335,7 @@ preflight: preflight-rs preflight-py preflight-docs preflight-policy
 
 # Bootstrap everything a contributor needs to use the XQuad toolchain
 # locally:
-#   - Python workspace (xqvm_py, xqcp, xqsa, xqffi) synced into .venv/
+#   - Python workspace (xqcp, xqsa, xqffi, xquad) synced into .venv/
 #     with the maturin-built xqffi extension; each package's editable
 #     install puts the repo root on sys.path, so any script in the
 #     repo can `import xqcp` etc.
@@ -405,7 +405,7 @@ deps-wasm:
 	rustup target add wasm32-unknown-unknown
 	rustup target add wasm32v1-none
 
-# Sync the Python workspace (xqffi, xqvm_py, xqcp, xqsa) into .venv/
+# Sync the Python workspace (xqffi, xqcp, xqsa, xquad) into .venv/
 # via uv. Assumes `uv` is already on $PATH; CI installs it in its
 # before_script.
 #
@@ -505,7 +505,7 @@ fmt-toml:
 	taplo fmt
 
 fmt-py:
-	uvx ruff@$(RUFF_VERSION) format xqvm_py xqcp xqsa xqffi xquad examples scripts
+	uvx ruff@$(RUFF_VERSION) format xqcp xqsa xqffi xquad examples scripts
 
 fmt-check: fmt-check-rs fmt-check-toml fmt-check-py
 
@@ -516,7 +516,7 @@ fmt-check-toml:
 	taplo fmt --check
 
 fmt-check-py:
-	uvx ruff@$(RUFF_VERSION) format --check xqvm_py xqcp xqsa xqffi xquad examples scripts
+	uvx ruff@$(RUFF_VERSION) format --check xqcp xqsa xqffi xquad examples scripts
 
 # -- Lints ------------------------------------------------------------------
 
@@ -535,7 +535,7 @@ lint-deny-rs:
 	cargo deny --locked check
 
 lint-py:
-	uvx ruff@$(RUFF_VERSION) check xqvm_py xqcp xqsa xqffi xquad examples scripts
+	uvx ruff@$(RUFF_VERSION) check xqcp xqsa xqffi xquad examples scripts
 
 # `uv lock --check` is read-only -- it is an alias of `uv sync --locked`
 # with no environment sync at all, and fails when uv.lock is stale
@@ -601,7 +601,7 @@ test-miri: deps-miri
 # `test:quip` job (.gitlab/ci/test.yml). This job runs everywhere, so it must
 # deselect them or they would run unconfigured in CI.
 test-py: deps-py
-	uv run --no-sync pytest xqvm_py/tests xqcp/tests xqsa/tests xquad/tests scripts/tests -m "not cuda and not qpu and not metal and not quip"
+	uv run --no-sync pytest xqcp/tests xqsa/tests xquad/tests scripts/tests -m "not cuda and not qpu and not metal and not quip"
 
 # Run the WASM no_std correctness tests (fixtures/xqvm-wasm).
 # Two gates in sequence:
@@ -807,7 +807,7 @@ conformance-coverage:
 # -- Dev ergonomics ---------------------------------------------------------
 
 # Open a Python REPL with the xqffi extension fresh and the
-# workspace packages (xqvm_py, xqcp, xqsa) importable. Depends on
+# workspace packages (xqcp, xqsa, xquad) importable. Depends on
 # deps-py so the .so and per-package .pth files stay current;
 # `uv run --no-sync` skips the implicit sync that would otherwise
 # revert maturin's fresh extension build to a cached wheel.

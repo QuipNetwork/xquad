@@ -1,7 +1,7 @@
 # xquad repo root pyproject.
 #
 # Declares the uv workspace spanning every Python package in the repo
-# (xqffi, xqvm_py, xqcp, xqsa, xquad) plus the dev tools used to lint
+# (xqffi, xqcp, xqsa, xquad) plus the dev tools used to lint
 # and test them. No buildable project of its own — `uv sync` installs
 # workspace members in editable mode into a shared `.venv/`.
 #
@@ -9,7 +9,7 @@
 # actual project metadata, dependency lists, and build backend.
 
 [tool.uv.workspace]
-members = [ "xqffi", "xqvm_py", "xqcp", "xqsa", "xquad" ]
+members = [ "xqffi", "xqcp", "xqsa", "xquad" ]
 
 [dependency-groups]
 dev = [
@@ -20,8 +20,7 @@ dev = [
 ]
 
 # ---------------------------------------------------------------------------
-# Ruff — hoisted from xqvm-py/ruff.toml (QUI-439 heritage). Applies to
-# every Python package in the workspace.
+# Ruff — applies to every Python package in the workspace.
 # ---------------------------------------------------------------------------
 
 [tool.ruff]
@@ -41,7 +40,6 @@ select = [
 
 [tool.ruff.lint.isort]
 known-first-party = [
-    "xqvm_py",
     "xqcp",
     "xqsa",
     "xqffi",
@@ -58,7 +56,7 @@ known-first-party = [
 # ---------------------------------------------------------------------------
 
 [tool.pytest.ini_options]
-testpaths = [ "xqvm_py/tests", "xqcp/tests", "xqsa/tests", "xquad/tests", "scripts/tests" ]
+testpaths = [ "xqcp/tests", "xqsa/tests", "xquad/tests", "scripts/tests" ]
 markers = [
     "qpu: live D-Wave QPU tests (require DWAVE_API_TOKEN)",
     "cuda: real NVIDIA CUDA GPU tests (require cupy + a CUDA device)",

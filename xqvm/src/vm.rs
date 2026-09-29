@@ -275,8 +275,8 @@ pub const DEFAULT_STEP_LIMIT: u64 = 10_000_000;
 /// smaller budget with [`Vm::set_memory_limit`].
 ///
 /// Public for the same reason [`DEFAULT_STEP_LIMIT`] is: `xqcli run`, the
-/// conformance harness and `xqvm_py` all carry this budget's default, and
-/// each restating the literal is how the two halves of a limit drift apart.
+/// bindings and the vector runner all carry this budget's default, and each
+/// restating the literal is how two halves of a limit drift apart.
 pub const DEFAULT_MEMORY_LIMIT: u64 = 1 << 30;
 
 /// Largest `size` an allocator may be given.
@@ -299,9 +299,9 @@ pub const DEFAULT_MEMORY_LIMIT: u64 = 1 << 30;
 /// `InvalidAllocation` on a chain node and a successful allocation on the
 /// 64-bit machine beside it, which is the divergence this closes.
 ///
-/// It is public because `xqvm_py` carries the same limit and `spec/xqvm`
-/// states it normatively: as with [`DEFAULT_MEMORY_LIMIT`], each restating of
-/// the literal is how the halves of a limit drift apart.
+/// It is public for the embedder and because `spec/xqvm` states it
+/// normatively: as with [`DEFAULT_MEMORY_LIMIT`], each restating of the
+/// literal is how the halves of a limit drift apart.
 pub const MAX_ALLOCATION_SIZE: i64 = u32::MAX as i64;
 
 /// Bytes charged per XQMX variable.
@@ -333,7 +333,7 @@ const VEC_ELEMENT_BYTES: u64 = 2 * size_of::<i64>() as u64;
 /// The charge schedule is normative and target-independent, so it may not be
 /// derived from the executing target's pointer width: the derivation gave 32
 /// on a 64-bit host and 24 on wasm32, which is the runtime the pallet executes
-/// in, while `xqvm_py/executor.py` and the published documentation both state
+/// in, while `spec/xqvm/SPEC.md` and the published documentation both state
 /// 32. That made the deployed VM enforce a schedule nothing in this repository
 /// reproduced.
 const LINEAR_ENTRY_BYTES: u64 = 32;
@@ -984,7 +984,7 @@ impl Vm {
     /// u64::MAX` is affordable -- the budget would stop binding exactly
     /// where the request is largest. The true cost exceeds every `u64`
     /// budget, so the refusal is forced rather than chosen, and it is the
-    /// answer `xqvm_py` already gives from unbounded integers.
+    /// answer an implementation with unbounded integers gives too.
     fn charge_variable_count(&mut self, pos: usize, count: u64) -> Result<(), Error> {
         match count.checked_mul(VARIABLE_BYTES) {
             Some(bytes) => self.charge(pos, bytes),
@@ -1108,11 +1108,10 @@ impl Vm {
     /// discriminate the register kind without also borrowing its contents.
     ///
     /// An unset register raises [`Error::UnsetRegister`] rather than
-    /// [`Error::RegisterType`]. The two are distinct fault identities --
-    /// `UnsetRegister` is what `xqvm_py`'s `RegisterNotFound` maps onto and
-    /// `RegisterType` is what its `TypeMismatch` maps onto -- so folding
-    /// "never written" into the type arm makes an unset register a
-    /// `TypeMismatch` here and an `UnsetRegister` there. `LOAD` and `OUTPUT`
+    /// [`Error::RegisterType`]. The two are distinct fault identities in
+    /// `spec/xqvm/SPEC.md`'s Faults table -- `UnsetRegister` for a register
+    /// never written, `TypeMismatch` for one holding the wrong kind -- so
+    /// folding "never written" into the type arm reports the wrong one. `LOAD` and `OUTPUT`
     /// already discriminate the two; this is the helper that did not.
     fn require_vec(&self, pos: usize, r: Register) -> Result<(), Error> {
         match self.reg(r) {
@@ -2474,7 +2473,7 @@ impl Vm {
     /// unaddressable grid raises `InvalidGridDimensions` -- the same identity
     /// ONEHOTR/ONEHOTC raise without a grid -- and an out-of-range index
     /// raises `IndexOutOfBounds`, so an absent row is an error rather than a
-    /// silent sum of zeroes (`xqvm_py` has always raised here).
+    /// silent sum of zeroes.
     ///
     /// The `rows * cols` arm is unreachable from bytecode once `RESIZE`
     /// enforces the identical `rows * cols <= size` rule, but it is *not*

@@ -189,8 +189,8 @@
         - '[ -n "${VALE_VERSION}" ] || { echo "vale: could not read VALE_VERSION from Makefile" >&2; exit 1; }'
         - curl -fsSL --retry 3 --retry-all-errors -o /tmp/vale.tar.gz "https://github.com/errata-ai/vale/releases/download/v${VALE_VERSION}/vale_${VALE_VERSION}_Linux_64-bit.tar.gz"
         - tar -xzf /tmp/vale.tar.gz -C /usr/local/bin vale
-    # uv on PATH plus a full workspace sync -- installs xqvm_py/xqcp/xqsa/
-    # xqffi/xquad editable into .venv/ and builds xqffi's cdylib through
+    # uv on PATH plus a full workspace sync -- installs xqcp/xqsa/xqffi/
+    # xquad editable into .venv/ and builds xqffi's cdylib through
     # maturin (xqffi is a uv workspace member).
     uv-sync:
         - !reference [.fragments, uv]

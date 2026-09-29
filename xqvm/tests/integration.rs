@@ -756,13 +756,11 @@ fn iter_over_an_unset_register_raises_even_when_the_slice_is_empty() {
     // `Unset` is what a register holds before anything writes it, so this is
     // the shortest program in the class.
     //
-    // The identity is `UnsetRegister`, not `RegisterType`: the two are
-    // distinct faults -- `UnsetRegister` is what `xqvm_py`'s
-    // `RegisterNotFound` maps onto and `RegisterType` is what its
-    // `TypeMismatch` maps onto -- so folding "never written" into the type
-    // arm made this program fault `TYPE_MISMATCH` here and `UNSET_REGISTER`
-    // on the Python VM. Pinned across implementations by the
-    // `iter_unset_register` conformance vector.
+    // The identity is `UnsetRegister`, not `RegisterType`: SPEC.md's Faults
+    // table names them as distinct faults -- `UnsetRegister` for a register
+    // never written, `TypeMismatch` for the wrong kind -- so folding "never
+    // written" into the type arm reported the wrong one. Also pinned by the
+    // `iter_unset_register` vector.
     let err = run_err(|b| {
         b.emit_push(0).emit_push(0).emit_iter(Register(3));
         b.emit_next().emit_halt();
@@ -3385,7 +3383,7 @@ fn input_beyond_the_budget_copies_nothing() {
 //
 // The rates are normative and target-independent. Deriving one from
 // `size_of::<usize>()` or `size_of::<XqmxModel>()` makes the deployed wasm32
-// VM enforce a schedule that `xqvm_py`, the published documentation and this
+// VM enforce a schedule that the spec, the published documentation and this
 // crate's own 64-bit build all disagree with. These tests pin each rate as a
 // number, so a derivation reintroduced on any target fails here rather than
 // on chain.

@@ -27,7 +27,7 @@ CDYLIB=xqffi
 # umbrella last. Publishing walks this list and a package must never be live
 # on PyPI before the packages it requires; the smoke test installs in the
 # same order, for the same reason.
-PEERS=(xqvm_py xqcp xqsa xquad)
+PEERS=(xqcp xqsa xquad)
 
 # Every distribution, cdylib first: the peers all depend on it.
 PACKAGES=("${CDYLIB}" "${PEERS[@]}")

@@ -109,8 +109,8 @@ version_only_violation() {
     SPELLINGS=(
         "$(version_at "${sha}^" xqvm/Cargo.toml version)"
         "$(version_at "${sha}" xqvm/Cargo.toml version)"
-        "$(version_at "${sha}^" xqvm_py/__init__.py __version__)"
-        "$(version_at "${sha}" xqvm_py/__init__.py __version__)"
+        "$(version_at "${sha}^" xquad/pyproject.toml version)"
+        "$(version_at "${sha}" xquad/pyproject.toml version)"
     )
     if [[ "${SPELLINGS[0]}" == "${SPELLINGS[1]}" ]]; then
         echo "it does not change the workspace version (${SPELLINGS[0]})"

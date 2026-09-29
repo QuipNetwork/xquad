@@ -8,7 +8,6 @@ members = [
     "xqffi",
     "xqsa",
     "xquad",
-    "xqvm-py",
 ]
 
 [manifest.dependency-groups]
@@ -1659,16 +1658,6 @@ requires-dist = [
     { name = "xqsa", extras = ["quip"], marker = "extra == 'quip'", editable = "xqsa" },
 ]
 provides-extras = ["cuda", "dwave", "metal", "quip"]
-
-[[package]]
-name = "xqvm-py"
-source = { editable = "xqvm_py" }
-dependencies = [
-    { name = "xqffi" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "xqffi", editable = "xqffi" }]
 
 [[package]]
 name = "xxhash"

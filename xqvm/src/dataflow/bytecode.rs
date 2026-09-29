@@ -53,8 +53,8 @@
 //!
 //! This is recorded here rather than only in `spec/xqvm/VERIFIER.md` because it
 //! is a property of *this* analysis, and the two regression tests in
-//! `verifier::tests` are what actually enforce it. The verifier is Rust-only --
-//! `xqvm_py` has no counterpart -- so no conformance vector can pin it.
+//! `verifier::tests` are what actually enforce it. The vector runner does not
+//! verify, so no conformance vector can pin it.
 
 #[cfg(not(feature = "std"))]
 use alloc::{
