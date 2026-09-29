@@ -10,7 +10,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 XQuad is a hardware-agnostic toolchain for expressing and running quadratic
 optimization problems (QUBO / Ising / integer) across quantum annealers and
-classical solvers. It ships as three Rust crates plus five Python distributions
+classical solvers. It ships as three Rust crates plus four Python distributions
 built around a single virtual-machine specification.
 
 Think of it as **LLVM for quadratic models** -- a common intermediate
@@ -18,9 +18,9 @@ representation that lets you write a problem once and retarget it to any
 supported backend.
 
 - **Spec-first.** Every behaviour is nailed down in [`spec/xqvm/SPEC.md`](spec/xqvm/SPEC.md)
-  and cross-implementation parity is mechanically enforced: every committed
-  conformance vector runs on both the Rust production VM (`xqvm`) and the
-  Python reference VM (`xqvm_py`) in CI; disagreement fails the build.
+  and the VM is mechanically held to it: every committed conformance vector
+  runs `xqvm` in CI against the outcome the spec prescribes, and a mismatch
+  fails the build.
 - **Embeddable.** The Rust core supports `no_std + alloc`, so the same VM
   runs inside WASM runtimes, Substrate pallets, and native binaries.
 - **Interactive.** The Python umbrella (`xquad`) is REPL and Jupyter-friendly:
@@ -73,12 +73,11 @@ Three Rust crates on **crates.io**:
 | [`xqasm`](xqasm/) | none | `.xqasm` text-format assembler |
 | [`xqcli`](xqcli/) | `xquad` | Unified CLI -- `xquad asm` / `dism` / `run` / `verify` |
 
-Five Python distributions on **PyPI**:
+Four Python distributions on **PyPI**:
 
 | Package | Description |
 |---|---|
 | [`xqffi`](xqffi/) | PyO3 FFI bindings for `xqvm` + `xqasm` (`xqffi.vm`, `xqffi.asm`, `xqffi.verifier`) |
-| [`xqvm_py`](xqvm_py/) | Pure-Python reference VM (conformance oracle) |
 | [`xqcp`](xqcp/) | Constraint-programming DSL that compiles to `.xqasm` |
 | [`xqsa`](xqsa/) | Solver adapters -- CPU/GPU annealers, D-Wave QPU, Quip network |
 | [`xquad`](xquad/) | Umbrella meta-package with interactive `Program` / `Session` / `RunResult` API |
@@ -180,9 +179,8 @@ drives `RANGE`/`ITER` iteration.
 
 The opcode table is declared once in `xqvm/src/bytecode/types/table.rs` via
 the `opcodes!` x-macro; `xqvm/opcodes.yaml` is the machine-readable
-mirror that all three representations (YAML, Rust macro, `xqvm_py.opcodes`)
-are checked against at build time and in CI
-(`scripts/check-opcode-parity.py`).
+mirror, compared with the Rust macro at compile time
+(`xqvm/src/bytecode/types/parity.rs`), so the two cannot drift.
 
 The binary format (`.xqb`) opens with a fixed 15-byte XQBC header --
 magic, version, calldata/output-slot counts, code length, and a CRC-32
@@ -208,10 +206,10 @@ make deps                                                          # dev tools
 make xquad
 ```
 
-This syncs the Python workspace (`xqvm_py`, `xqcp`, `xqsa`, `xqffi`,
-`xquad`) into `.venv/`, builds the `xqffi` pyo3 extension via maturin,
+This syncs the Python workspace (`xqcp`, `xqsa`, `xqffi`, `xquad`) into
+`.venv/`, builds the `xqffi` pyo3 extension via maturin,
 puts the repo root on `sys.path` so scripts anywhere in the repo can
-`import xqcp` / `xqsa` / `xqvm_py` / `xqffi` / `xquad` naturally, and
+`import xqcp` / `xqsa` / `xqffi` / `xquad` naturally, and
 installs the `xquad` CLI binary under `~/.cargo/bin/`.
 
 Open a REPL with everything ready:
@@ -223,7 +221,7 @@ make repl
 ### CI-equivalent locally
 
 ```sh
-make preflight    # what CI enforces, split into preflight-rs / -py / -parity / -docs / -policy
+make preflight    # what CI enforces, split into preflight-rs / -py / -docs / -policy
 make conformance  # the specification vectors under xqvm/tests/vectors/
 ```
 

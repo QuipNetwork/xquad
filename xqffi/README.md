@@ -14,7 +14,7 @@ pip install xqffi
 
 ### `xqffi.vm` -- low-level one-shot
 
-What the conformance harness drives. Small wrapper over `xqvm::Vm`:
+A small wrapper over `xqvm::Vm`, and what `xquad.vm.VM` builds on:
 
 ```python
 from xqffi.vm import Vm
@@ -55,7 +55,6 @@ assert dict(result.outputs) == {0: 42}
 
 ## Also see
 
-- [`xqvm_py`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm_py) -- pure-Python reference VM (conformance oracle).
 - [`xqcp`](https://gitlab.com/quip.network/xquad/-/tree/main/xqcp) -- constraint programming DSL that compiles to `.xqasm`.
 - [`xqsa`](https://gitlab.com/quip.network/xquad/-/tree/main/xqsa) -- solver adapters: CPU/GPU annealers, D-Wave QPU, Quip network.
 - [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) -- umbrella meta-package with the interactive API.

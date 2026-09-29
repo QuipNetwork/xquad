@@ -378,14 +378,14 @@ energy-canary path. Set `QUIP_KEYSTORE` and fund the keystore, then:
     export QUIP_KEYSTORE=/tmp/quip-ks.json
     uv run --extra quip python - <<'PY'
     from xqsa.quip import SolverQuip
-    from xqvm_py.xqmx import XQMX
-    m = XQMX.spin_model(2)
-    m.set_linear(0, 1); m.set_quadratic(0, 1, -1)   # brute-force optimum = -2
+    from xquad.types import XqmxModel
+    m = XqmxModel.spin(2)
+    m.set_linear(0, 1); m.set_quad(0, 1, -1)        # brute-force optimum = -2
     r = SolverQuip.for_network("aglais").solve(m)   # or "devnet"
     print("energy:", r.energy, "| matches chain:", r.metadata["energy_matches_chain"])
     PY
 
-Expect `energy_matches_chain: True`; energy is typically `-2.0`, though a
+Expect `energy_matches_chain: True`; energy is typically `-2`, though a
 heuristic fleet may return a valid but suboptimal value. Get the account id to
 fund via
 `load_or_generate_keystore('/tmp/quip-ks.json').account_id.hex()` and POST
