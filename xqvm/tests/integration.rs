@@ -2870,6 +2870,29 @@ fn one_hot_r_over_a_huge_grid_is_rejected() {
     );
 }
 
+#[test]
+fn one_hot_c_over_a_huge_grid_is_rejected() {
+    // The mirror on a 4096 x 1 grid: ONEHOTC expands O(rows^2) terms, and
+    // its charge is sized from `rows` by hand before the grid is checked, so
+    // this is the case that fails if it reads `cols` instead.
+    let (vm, result) = run_with_memory_limit(1 << 20, |b| {
+        b.emit_push(4096).emit_bqmx(Register(0));
+        b.emit_push(4096).emit_push(1).emit_resize(Register(0));
+        b.emit_push(0).emit_push(1).emit_one_hot_c(Register(0));
+        b.emit_halt();
+    });
+    assert!(matches!(
+        result.expect_err("expected the expansion to exceed the budget"),
+        Error::MemoryLimitExceeded { .. }
+    ));
+    assert_eq!(
+        vm.memory_used(),
+        4096 * 8,
+        "the allocation is charged and the expansion is not, so nothing past \
+         the 4096 declared variables was spent"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // RESIZE extent bound
 // ---------------------------------------------------------------------------
@@ -3835,13 +3858,20 @@ fn energy_charges_for_the_model_it_evaluates() {
 #[test]
 fn onehot_charges_for_the_expansion_it_writes() {
     // ONEHOTR writes one linear term per column and one quadratic term per
-    // pair of columns. Doubling the columns roughly quadruples the work, and
-    // the step count has to see it.
-    fn steps_for(cols: i64) -> u64 {
+    // pair of columns, ONEHOTC the same per row. Doubling the line roughly
+    // quadruples the work, and the step count has to see it. Each runs on a
+    // single-line grid (1 x n for a row, n x 1 for a column), so charging
+    // along the wrong axis charges for a line of one and fails here.
+    fn steps_for(n: i64, column: bool) -> u64 {
         let mut b = InstructionBuilder::new();
-        b.emit_push(cols).emit_bqmx(Register(0));
-        b.emit_push(1).emit_push(cols).emit_resize(Register(0));
-        b.emit_push(0).emit_push(5).emit_one_hot_r(Register(0));
+        b.emit_push(n).emit_bqmx(Register(0));
+        if column {
+            b.emit_push(n).emit_push(1).emit_resize(Register(0));
+            b.emit_push(0).emit_push(5).emit_one_hot_c(Register(0));
+        } else {
+            b.emit_push(1).emit_push(n).emit_resize(Register(0));
+            b.emit_push(0).emit_push(5).emit_one_hot_r(Register(0));
+        }
         b.emit_halt();
         let bytecode = b.build().expect("builder build");
 
@@ -3852,13 +3882,15 @@ fn onehot_charges_for_the_expansion_it_writes() {
     }
 
     use xqvm::metering::equality_expansion_steps;
-    let four = steps_for(4);
-    let eight = steps_for(8);
-    assert_eq!(
-        eight - four,
-        equality_expansion_steps(8) - equality_expansion_steps(4),
-        "the whole difference is the expansion: {eight} vs {four}"
-    );
+    for (opcode, column) in [("ONEHOTR", false), ("ONEHOTC", true)] {
+        let four = steps_for(4, column);
+        let eight = steps_for(8, column);
+        assert_eq!(
+            eight - four,
+            equality_expansion_steps(8) - equality_expansion_steps(4),
+            "{opcode}: the whole difference is the expansion: {eight} vs {four}"
+        );
+    }
 }
 
 #[test]
