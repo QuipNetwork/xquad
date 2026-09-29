@@ -27,7 +27,7 @@ with problem.range(0, num_edges) as e:
         problem.model.apply_exclude((u, c), (v, c), 200)
 ```
 
-Running `examples/graph_coloring/runner.py --seed 1 --interpreter rust`
+Running `examples/graph_coloring/runner.py --seed 1`
 (5 nodes, 4 colours, 6 edges) returns `colors: [0, 1, 0, 0, 2]`,
 `is_valid: true`, `energy: -1000` -- every one of the six edges checked by
 hand connects two nodes with different colours.
@@ -91,7 +91,7 @@ demonstration, run rather than assumed, checks the sign directly:
 
 ```python
 from xquad.cp import Domain, Problem, Types
-from xquad.vm import VM, VMBackend
+from xquad.vm import VM
 
 problem = Problem("ImpliesDemo")
 n = problem.input("n", type=Types.Int)
@@ -100,7 +100,7 @@ problem.model.apply_implies(0, 1, 50)   # picking 0 requires picking 1
 problem.model.linear[0].add(-30)        # a reason to pick 0 at all
 
 programs = problem.compile()
-vm = VM(backend=VMBackend.RUST)
+vm = VM()
 vm.set_calldata([2])
 vm.set_output_slots(1)
 vm.run(programs.encoder)

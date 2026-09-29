@@ -56,7 +56,7 @@ because it is the same on both sides of the comparison:
 
 ```python
 from examples.portfolio_opt.runner import build_problem
-from xquad.vm import VM, VMBackend
+from xquad.vm import VM
 from xqsa import build_solver
 
 def run_case(sigma):
@@ -64,7 +64,7 @@ def run_case(sigma):
     problem = build_problem(4, [10, 9, 8, 7], 3, risk_terms)
     programs = problem.compile()
     flat_risk = [v for term in risk_terms for v in term]
-    vm = VM(backend=VMBackend.RUST)
+    vm = VM()
     vm.set_calldata([4, [10, 9, 8, 7], 3, 1, flat_risk])
     vm.set_output_slots(1)
     vm.run(programs.encoder)

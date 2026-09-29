@@ -97,7 +97,7 @@ one. That looser rule is [Assignment](assignment.md). The other failure
 is structural rather than semantic: `ONEHOTR`/`ONEHOTC` read grid
 dimensions from `RESIZE`, so a model with no grid set has no row or
 column for them to constrain. Both raise `InvalidGridDimensions` at the
-instruction that needed the grid, on either interpreter -- see
+instruction that needed the grid -- see
 [High-Level Constraints](../xqvm/instructions/constraints.md). `xquad
 verify` does not catch it, since grid dimensions are runtime values, so
 the failure surfaces when the encoder runs rather than when it compiles.

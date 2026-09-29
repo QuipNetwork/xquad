@@ -70,7 +70,7 @@ extras, and `xquad/pyproject.toml` forwards to the ones it re-exports:
   configured signer; see [Quip Network](../solving/quip-network.md) for
   what that solver does.
 
-`xqcp`, `xqffi`, and `xqvm_py` define no optional dependencies at all.
+`xqcp` and `xqffi` define no optional dependencies at all.
 
 The only extra this page can fully specify is `[dwave]`: it needs a D-Wave
 Leap account and a `DWAVE_API_TOKEN`, and `dwave ping` confirms both. A

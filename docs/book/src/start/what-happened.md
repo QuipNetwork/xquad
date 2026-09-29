@@ -29,11 +29,6 @@ pipeline, if a picture is what you want first.
    [Outputs and Decoding](../modelling/outputs-and-decoding.md) for what
    a decoder can read and what it hands back.
 
-`--interpreter rust` in the previous page swapped which machine ran steps
-2, 4, and 5. [Three Programs](../concepts/three-programs.md#a-concrete-run)
-covers what is and is not guaranteed to match between the two
-interpreters when that swap happens.
-
 ## Where to Go From Here
 
 - **[Toolchain Map](../concepts/)** -- every piece named above,
