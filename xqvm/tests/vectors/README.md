@@ -167,8 +167,7 @@ vectors pin it:
 | `SETLINE`, `ADDLINE`, `SETQUAD`, `ADDQUAD`, `EXCLUDE`, `IMPLIES`, `REDUCE` | `MemoryLimitExceeded` ahead of the index check, on a model register against an exhausted budget | `metering/<opcode>_charge_before_index_check`, one per opcode |
 | `ONEHOTR`, `ONEHOTC` | `TypeMismatch` at any budget -- a sample register adds nothing to the charge (QUI-1202, QUI-1500) | `metering/onehotr_sample_charged_nothing`, `metering/onehotc_sample_charged_nothing` |
 
-The seven coefficient-write rows used to be pinned by `xqvm_py`'s unit
-tests alone. Only `SETLINE`, `ADDLINE`, `SETQUAD` and `ADDQUAD` skip the
+Only `SETLINE`, `ADDLINE`, `SETQUAD` and `ADDQUAD` skip the
 charge on a register that is not a model, so an int or vec register in
 their place is a `TypeMismatch` at any budget, as is a sample under
 `SETQUAD` or `ADDQUAD`. `SETLINE` and `ADDLINE` accept a sample and

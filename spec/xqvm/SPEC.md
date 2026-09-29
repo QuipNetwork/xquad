@@ -247,7 +247,7 @@ A fault aborts the run. Every fault has an **identity** -- a name from the list 
 
 The list is closed for program faults. A host-side failure that is not the program's doing -- a tracer callback that errors, an I/O failure in the embedder -- is outside it and is not compared. Every identity above has a counterpart in both reference implementations.
 
-[ISA.md](ISA.md) names faults by these identities. Where a row records that the two current implementations raise different identities for the same program, that is a recorded divergence and not a licence: the identity is normative, and the divergence is a defect in whichever implementation is wrong.
+[ISA.md](ISA.md) names faults by these identities. Where a row records a known divergence from this specification, that is a recorded defect and not a licence: the identity is normative, and the implementation that diverges is wrong.
 
 ---
 
@@ -277,4 +277,4 @@ Bytecode verification phases, error semantics, composable architecture, and per-
 
 - **[../xqsa/SPEC.md](../xqsa/SPEC.md)** -- solver adapter interface. Defines how external solvers plug into the pipeline between encoder and verifier execution.
 - **[../xqcp/SPEC.md](../xqcp/SPEC.md)** -- constraint-programming DSL. Compiles high-level problem descriptions into the three XQVM programs (encoder, verifier, decoder).
-- **[METERING.md](METERING.md)** -- step metering. Defines the step budget's cost units, the per-opcode charges, and the constants a conforming implementation must share with the Rust and Python VMs.
+- **[METERING.md](METERING.md)** -- step metering. Defines the step budget's cost units, the per-opcode charges, and the constants a conforming implementation must share.
