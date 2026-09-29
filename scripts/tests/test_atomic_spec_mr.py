@@ -502,15 +502,6 @@ def test_any_two_layers_fail_and_name_the_missing_one(repo: Path, missing: str) 
     assert report == {layer: "✗" if layer == missing else "✓" for layer in LAYER_FILES}
 
 
-def test_a_change_under_xqvm_py_is_no_layer(repo: Path) -> None:
-    """The Python reference VM is gone; a stray file there is not a layer."""
-    base = git(repo, "rev-parse", "HEAD")
-    commit_files(repo, "xqvm_py/executor.py")
-    result = run_guard(repo, base, "HEAD")
-    assert result.returncode == 0
-    assert "guard does not apply" in result.stdout
-
-
 def test_no_layer_passes(repo: Path) -> None:
     base = git(repo, "rev-parse", "HEAD")
     commit_files(repo, "README.md")
