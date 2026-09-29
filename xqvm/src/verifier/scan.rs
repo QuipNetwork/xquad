@@ -19,8 +19,7 @@
 use alloc::vec::Vec;
 
 use crate::bytecode::error::StreamError;
-use crate::bytecode::stream::map_decode_error;
-use crate::bytecode::{Instruction, JumpTable, codec};
+use crate::bytecode::{Cursor, Instruction, JumpTable};
 
 use super::error::VerifierError;
 
@@ -46,7 +45,7 @@ pub(super) fn stream_err(e: &StreamError) -> VerifierError {
 /// Build a [`JumpTable`], count slot instructions, and detect the first Phase 1
 /// violation in one pass.
 ///
-/// Walks the instruction bytes exactly once with [`codec::decode`], collecting:
+/// Walks the instruction bytes exactly once with a [`Cursor`], collecting:
 /// - byte positions of `TARGET` opcodes (for the jump table),
 /// - counts of `INPUT` and `OUTPUT` instructions (clamped to `u8::MAX`),
 /// - loop-opener positions (to check nesting balance),
@@ -55,17 +54,7 @@ pub(super) fn stream_err(e: &StreamError) -> VerifierError {
 /// Structural errors (`BadOpcode`, `TruncatedInstruction`) abort the walk
 /// immediately. Loop and jump-target errors are recorded after the walk.
 ///
-/// The walk calls the codec directly rather than iterating an
-/// [`InstructionStream`](crate::InstructionStream): it needs no labels, and
-/// walking through the stream doubled the cost of [`crate::Program::new`]
-/// (measured on QUI-1057). Every [`crate::Program::decode`] pays for this
-/// walk, so the difference is paid on every run an embedder decodes for.
-///
 /// Returns `(jump_table, (input_slots, output_slots), first_error)`.
-#[expect(
-    clippy::arithmetic_side_effects,
-    reason = "`consumed` is the length of one instruction decoded from `code[pos..]`, at most nine bytes (`spec/xqvm/ENCODING.md`), so `pos + consumed <= code.len()` and the cursor cannot overflow usize"
-)]
 pub(crate) fn scan(code: &[u8]) -> (JumpTable, (u8, u8), Option<VerifierError>) {
     let mut targets: Vec<usize> = Vec::new();
     let mut loop_offsets: Vec<usize> = Vec::new();
@@ -74,16 +63,13 @@ pub(crate) fn scan(code: &[u8]) -> (JumpTable, (u8, u8), Option<VerifierError>) 
     let mut input_slots: u8 = 0;
     let mut output_slots: u8 = 0;
 
-    let mut pos: usize = 0;
-    while let Some(rest) = code.get(pos..)
-        && let Some(&byte) = rest.first()
-    {
-        let (instr, consumed) = match codec::decode(rest) {
+    let mut cursor = Cursor::new(code);
+    'scan: while let Some(item) = cursor.next_instruction() {
+        let (pos, instr) = match item {
             Ok(v) => v,
             Err(e) => {
-                let _ =
-                    first_error.get_or_insert_with(|| stream_err(&map_decode_error(e, pos, byte)));
-                break;
+                let _ = first_error.get_or_insert_with(|| stream_err(&e));
+                break 'scan;
             }
         };
 
@@ -106,7 +92,6 @@ pub(crate) fn scan(code: &[u8]) -> (JumpTable, (u8, u8), Option<VerifierError>) 
             }
             _ => {}
         }
-        pos += consumed;
     }
 
     // Unmatched loop openers: report the outermost (first-pushed) one.

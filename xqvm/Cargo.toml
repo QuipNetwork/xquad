@@ -38,9 +38,13 @@ miette = { workspace = true, optional = true }
 xqasm            = { path = "../xqasm" }
 miette.workspace = true
 
-# Std-only timing harness; see the module docs in benches/decode.rs.
+# Std-only timing harnesses; see the module docs in each file.
 [[bench]]
 name    = "decode"
+harness = false
+
+[[bench]]
+name    = "run"
 harness = false
 
 [build-dependencies]

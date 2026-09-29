@@ -26,32 +26,28 @@
 //! - **dense** -- `TARGET RANGE JUMP1 NEXT` repeated, the densest mix of the
 //!   instructions the walk records.
 //!
-//! Each figure is the median of 31 samples of 100 calls, after a warm-up.
-//! Std-only, so it needs no benchmark framework:
-//!
 //! ```text
 //! cargo bench -p xqvm --bench decode
 //! ```
 
+mod support;
+
 use std::error::Error;
 use std::hint::black_box;
-use std::time::{Duration, Instant};
 
 use xqvm::{Instruction, Program, codec};
 
 /// Size every corpus is repeated up to.
 const CORPUS_BYTES: usize = 64 * 1024;
-const WARMUP_CALLS: u32 = 200;
-const SAMPLES: usize = 31;
-const CALLS_PER_SAMPLE: u32 = 100;
 
 fn main() -> Result<(), Box<dyn Error>> {
     for (name, code) in [("realistic", realistic()?), ("dense", dense())] {
         let encoded = Program::new(code.clone()).encode();
-        report(name, "Program::new", code.len(), || {
+        let bytes = u64::try_from(code.len())?;
+        support::report(name, "Program::new", bytes, "B", || {
             Program::new(black_box(code.clone()))
         });
-        report(name, "Program::decode", code.len(), || {
+        support::report(name, "Program::decode", bytes, "B", || {
             Program::decode(black_box(&encoded))
         });
     }
@@ -86,39 +82,4 @@ fn dense() -> Vec<u8> {
     .flat_map(codec::encode)
     .collect();
     repeat(&unit)
-}
-
-/// Median wall time of one call to `f`.
-fn median_call<R>(mut f: impl FnMut() -> R) -> Duration {
-    for _ in 0..WARMUP_CALLS {
-        let _ = black_box(f());
-    }
-    let mut samples: Vec<Duration> = (0..SAMPLES)
-        .map(|_| {
-            let start = Instant::now();
-            for _ in 0..CALLS_PER_SAMPLE {
-                let _ = black_box(f());
-            }
-            start.elapsed() / CALLS_PER_SAMPLE
-        })
-        .collect();
-    samples.sort_unstable();
-    samples.get(SAMPLES / 2).copied().unwrap_or_default()
-}
-
-#[expect(
-    clippy::print_stdout,
-    reason = "a harness = false bench reports on stdout"
-)]
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "a 64 KiB corpus length is exact in f64"
-)]
-fn report<R>(corpus: &str, what: &str, bytes: usize, f: impl FnMut() -> R) {
-    let call = median_call(f);
-    let ns_per_byte = call.as_secs_f64() * 1e9 / bytes as f64;
-    println!(
-        "{corpus:<10} {what:<16} {bytes:>6} B {:>9.1} us {ns_per_byte:>6.2} ns/B",
-        call.as_secs_f64() * 1e6,
-    );
 }

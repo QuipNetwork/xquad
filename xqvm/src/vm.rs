@@ -41,7 +41,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::{format, vec, vec::Vec};
 
-use crate::bytecode::{Instruction, InstructionStream, Program, Register};
+use crate::bytecode::{Cursor, Instruction, Program, Register};
 use crate::opcodes;
 
 use crate::error::Error;
@@ -120,7 +120,7 @@ pub(crate) enum StepResult {
     Seek(usize),
     /// Stop execution.
     Halt,
-    /// Push a new loop frame; the run loop sets `body_start` to `stream.pos()`.
+    /// Push a new loop frame; the run loop sets `body_start` to `cursor.pos()`.
     StartLoop { kind: LoopKind },
     /// Skip the loop body: scan forward to the matching NEXT without pushing a frame.
     SkipLoop,
@@ -708,7 +708,7 @@ impl Vm {
     where
         T::Error: core::fmt::Display,
     {
-        let mut stream = InstructionStream::from_program(program);
+        let mut cursor = Cursor::new(program.code());
         let table = program.jump_table();
         self.steps = 0;
         self.instructions = 0;
@@ -719,10 +719,10 @@ impl Vm {
         // stream -- having executed exactly `step_limit` instructions
         // succeeds, and `steps()` never counts the probe. This is the Python
         // VM's loop shape (`while pc < len`).
-        while let Some(item) = stream.next_instruction() {
+        while let Some(item) = cursor.next_instruction() {
             self.charge_steps_base()?;
             self.instructions += 1;
-            let (pos, _label, instr) = item.map_err(Error::from)?;
+            let (pos, instr) = item.map_err(Error::from)?;
 
             let result = if T::ENABLED {
                 // Snapshot read registers before dispatch.
@@ -780,16 +780,16 @@ impl Vm {
                 StepResult::Halt => break,
                 StepResult::Jump(label) => {
                     let target = table.get(label).ok_or(Error::InvalidLabel { pos, label })?;
-                    stream.seek(target).map_err(Error::from)?;
+                    cursor.seek(target).map_err(Error::from)?;
                 }
                 StepResult::Seek(target) => {
-                    stream.seek(target).map_err(Error::from)?;
+                    cursor.seek(target).map_err(Error::from)?;
                 }
                 StepResult::StartLoop { kind } => {
                     if self.loop_stack.len() >= Self::LOOP_LIMIT {
                         return Err(Error::LoopStackOverflow { pos });
                     }
-                    let body_start = stream.pos();
+                    let body_start = cursor.pos();
                     self.loop_stack.push(LoopFrame { kind, body_start });
                 }
                 #[expect(
@@ -807,11 +807,11 @@ impl Vm {
                     // in `instructions()` (QUI-1056).
                     let mut depth: u32 = 1;
                     loop {
-                        let Some(item) = stream.next_instruction() else {
+                        let Some(item) = cursor.next_instruction() else {
                             return Err(Error::UnmatchedLoop { pos });
                         };
                         self.charge_steps_base()?;
-                        let (_scan_pos, _label, scan_instr) = item.map_err(Error::from)?;
+                        let (_scan_pos, scan_instr) = item.map_err(Error::from)?;
                         match scan_instr {
                             Instruction::Range {} | Instruction::Iter { .. } => depth += 1,
                             Instruction::Next {} => {
