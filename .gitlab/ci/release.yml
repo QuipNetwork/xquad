@@ -79,10 +79,10 @@
 
 # A top-level `variables:` block in a file brought in via `include:` is
 # merged into the pipeline-global config by GitLab, not scoped to this
-# file -- so RELEASE_CLI_URL below is visible to every job in the
-# pipeline, not just release:validate and release:notes. That is
-# exactly what QUI-1092 wants (both jobs read it with no job-level
-# `variables:` of their own), but it means a later reader must not
+# file -- so RELEASE_CLI_URL and GLAB_URL below are visible to every job
+# in the pipeline, not just the release jobs that read them. That is
+# exactly what QUI-1092 wants (release:validate probes both, and neither
+# it nor the fetching jobs carry job-level `variables:`), but it means a later reader must not
 # assume this block is file-private.
 variables:
     # Pinned to v0.24.0 (verified reachable unauthenticated on
@@ -92,6 +92,15 @@ variables:
     # release:validate for where the fetch itself is probed ahead of a
     # tag.
     RELEASE_CLI_URL: "https://gitlab.com/api/v4/projects/gitlab-org%2Frelease-cli/packages/generic/release-cli/v0.24.0/release-cli-linux-amd64"
+    # Pinned to glab v1.119.0 (verified reachable unauthenticated on
+    # 2026-09-29, and the latest published release at that time), in
+    # place of the floating registry.gitlab.com/gitlab-org/cli:latest
+    # image release:auto-tag used to run in (QUI-1266). The tarball holds
+    # the static binary at bin/glab. To bump, replace both version
+    # strings (the `.` is encoded as %2E) with a release from
+    # https://gitlab.com/gitlab-org/cli/-/releases. See release:auto-tag
+    # for where this is fetched, and release:validate for the probe.
+    GLAB_URL: "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/1%2E119%2E0/glab_1%2E119%2E0_linux_amd64%2Etar%2Egz"
 
 # ---------------------------------------------------------------------------
 # Shared rules
@@ -229,6 +238,10 @@ release:validate:
         # one byte; a server that ignores Range answers 200 with the full
         # body, which `-o /dev/null` discards.
         - curl -fsSL --retry 3 --retry-all-errors -r 0-0 -o /dev/null "${RELEASE_CLI_URL}"
+        # Same probe for release:auto-tag's glab download. That job runs
+        # only after a merge to main, so a merge request pipeline is the
+        # only place a dead GLAB_URL can surface before it costs a tag.
+        - curl -fsSL --retry 3 --retry-all-errors -r 0-0 -o /dev/null "${GLAB_URL}"
 
 # Publish the three Rust crates to crates.io in topological dependency
 # order: xqvm (no deps) -> xqasm (depends on xqvm) -> xqcli (depends on
@@ -326,7 +339,7 @@ release:pypi:
 # declarative `release:` keyword below needs the release-cli image,
 # while git-cliff lives elsewhere, so the two jobs existed only to hand
 # release-notes.md between them as an artifact. This job stays on
-# rust:latest (the workspace default) instead, which keeps git-cliff
+# the pinned default image instead, which keeps git-cliff
 # pinned via scripts/cargo-tools.lock rather than floating on whatever
 # Alpine edge ships; release-cli is installed directly instead of
 # switching images.
@@ -453,9 +466,8 @@ release:notes:
 #   GITLAB_API_TOKEN  -- project access token with api scope (write_repository
 #                       minimum). CI_JOB_TOKEN cannot query MR metadata.
 release:auto-tag:
+    extends: .alpine
     stage: release
-    image: registry.gitlab.com/gitlab-org/cli:latest
-    cache: []
     # `needs: []` -- start at t=0, gated by `rules:` alone. This is the
     # only job in this file that does not wait on something, and the
     # two reasons are worth keeping straight because they pull in
@@ -511,14 +523,17 @@ release:auto-tag:
     # would simply never happen, silently.
     interruptible: false
     before_script:
-        # bash too: registry.gitlab.com/gitlab-org/cli:latest is
-        # Alpine/busybox and ships no bash by default, while
+        # bash too: alpine:3 is busybox and ships no bash, while
         # scripts/auto-tag-release.sh carries a `#!/usr/bin/env bash`
         # shebang like every other script in scripts/ and is invoked
-        # below as `bash scripts/auto-tag-release.sh`. Without this, the
+        # below as `bash scripts/auto-tag-release.sh`. Without it, the
         # job exits 127 (bash: not found) on every push to main and no
-        # release tag is ever pushed.
-        - apk add --no-cache jq bash
+        # release tag is ever pushed. curl fetches glab from the pinned
+        # GLAB_URL (see this file's "Variables" section), the same way
+        # release:notes fetches release-cli instead of switching images.
+        - apk add --no-cache bash curl jq
+        - curl -fsSL --retry 3 --retry-all-errors "${GLAB_URL}" | tar -xzf - -C /usr/local/bin --strip-components=1 bin/glab
+        - chmod +x /usr/local/bin/glab
     rules:
         # Only on direct pushes to main -- not on tag pipelines or MR
         # pipelines (MR pipelines run before the merge; we want after).
