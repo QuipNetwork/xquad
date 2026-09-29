@@ -163,12 +163,14 @@ Charging points and counting units:
 | `SLACK` | two entries per slack variable it appends | vec element |
 | `ITER` | the elements copied into the loop frame | see below |
 | `INPUT`, `OUTPUT` | the whole register value copied across the host boundary | see below |
-| `ONEHOTR`, `ONEHOTC` | the expansion over the row's or column's variables | expansion worst case |
-| `EQUALITY`, `ATLEAST`, `ATLEASTW` | the expansion, plus the variables the model grows by | expansion worst case, variable |
+| `ONEHOTR`, `ONEHOTC` | the expansion over the row's or column's variables, sized from a model register (see below) | expansion worst case |
+| `EQUALITY`, `ATLEAST`, `ATLEASTW` | the expansion, plus the variables the model grows by (for `EQUALITY`, sized from a model register; see below) | expansion worst case, variable |
 | `EXCLUDE`, `IMPLIES` | the entries they write | linear entry, quadratic entry |
 | `REDUCE` | its four enforcement entries, plus one new variable | linear entry, quadratic entry, variable |
 
 Coefficient writes are charged only on a model register. A sample's assignments live in the buffer that was charged when the sample was allocated, so writing one costs nothing further. A coefficient write that lands on an entry that already exists is charged too: the alternative is measuring the map before and after every write, and the step budget already bounds how many of these a run can perform.
+
+**A charge sized from the register reads it only as a model.** Most charges above are computed from an instruction's operands -- a count popped from the stack, the length of a vec register -- and are paid whatever the target register holds. Two are computed from the target register itself: `ONEHOTR` and `ONEHOTC` are charged over the row or column extent of its grid, and `EQUALITY` for the growth past its current `size`. Each reads that quantity only when the register holds a model; for any other value -- a sample, an int, a vec, an unset register -- it is zero. The charge is still paid before the register is discriminated, as [error precedence](#allocation-budget) requires. So `ONEHOTR` and `ONEHOTC` on a sample charge nothing, bytes or steps, and raise `TypeMismatch` at any budget, while `EQUALITY` on a sample is charged the growth of a model of size zero and can raise `MemoryLimitExceeded` first. A sample is never expanded, so pricing its extent would bill for work no program can reach; reading only a model keeps the charge free of a type check it must precede.
 
 `ITER` charges for the copy it makes into the loop frame, because a frame is popped only by `NEXT` and a back-edge that re-enters an `ITER` without reaching its `NEXT` piles up one copy per execution. The charge is over the vec's element type, not a flat per-element rate: an element of a `vec<int>` is charged at the variable rate, and an element of a `vec<xqmx>` is charged the whole-model copy rate below.
 
