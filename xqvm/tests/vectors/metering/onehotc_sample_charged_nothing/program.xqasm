@@ -1,0 +1,25 @@
+; onehotc_sample_charged_nothing: ONEHOTC on a sample register is
+; charged nothing, so the type check decides the fault at any budget.
+;
+; spec/xqvm/SPEC.md ("A charge sized from the register reads it only as a
+; model") sizes the ONEHOTC charge from the column extent of a model register
+; and makes it zero for any other value. The sample below is nine binary
+; variables (72 bytes at the variable rate) under a budget of exactly 72,
+; resized to a 3x3 grid, and column 0 is in range. Charging the column's
+; three variables would cost equality_expansion_bytes(3) = 3x32 + 3x48 =
+; 240 bytes and raise MemoryLimitExceeded; charging nothing leaves only
+; the type check, which raises TypeMismatch for a model-only opcode on a
+; sample.
+;
+; QUI-1500: this vector replaces xqvm_py's
+; test_onehot_does_not_charge_for_a_sample as the pin on this behaviour.
+
+PUSH 9
+BSMX r0          ; a 9-variable binary sample: 72 bytes, the whole budget
+PUSH 3
+PUSH 3
+RESIZE r0        ; 3x3 grid; RESIZE accepts model|sample
+PUSH 0           ; column, in range
+PUSH 1           ; penalty
+ONEHOTC r0
+HALT

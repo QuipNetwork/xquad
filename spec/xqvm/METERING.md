@@ -137,8 +137,8 @@ work it prices.
 | `COLSUM` | One `GRID_CELL_STEPS` per cell of the column it scans | `rows * GRID_CELL_STEPS` |
 | `ROWFIND` | One `GRID_CELL_STEPS` per cell of the row it scans | `cols * GRID_CELL_STEPS` |
 | `COLFIND` | One `GRID_CELL_STEPS` per cell of the column it scans | `rows * GRID_CELL_STEPS` |
-| `ONEHOTR` | Worst-case cost of the equality expansion over the row's indices | [`equality_expansion_steps`](#equality_expansion_steps)`(cols)` |
-| `ONEHOTC` | Worst-case cost of the equality expansion over the column's indices | [`equality_expansion_steps`](#equality_expansion_steps)`(rows)` |
+| `ONEHOTR` | Worst-case cost of the equality expansion over the row's indices; `cols` is read from a model register and is 0 otherwise ([SPEC.md](SPEC.md#allocation-budget)) | [`equality_expansion_steps`](#equality_expansion_steps)`(cols)` |
+| `ONEHOTC` | Worst-case cost of the equality expansion over the column's indices; `rows` is read from a model register and is 0 otherwise ([SPEC.md](SPEC.md#allocation-budget)) | [`equality_expansion_steps`](#equality_expansion_steps)`(rows)` |
 | `EQUALITY` | Worst-case cost of the equality expansion | [`equality_expansion_steps`](#equality_expansion_steps)`(len(indices))` |
 | `ATLEAST` | Worst-case cost of the equality expansion over the original and slack indices | [`equality_expansion_steps`](#equality_expansion_steps)`(n + num_slacks)` |
 | `ATLEASTW` | Worst-case cost of the equality expansion over the original and slack indices | [`equality_expansion_steps`](#equality_expansion_steps)`(n + num_slacks)` |
