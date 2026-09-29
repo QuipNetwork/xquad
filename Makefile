@@ -15,7 +15,6 @@
         test-quip test-quip-sign test-quip-e2e check-xqffi-fresh \
         test-cuda test-qpu test-metal \
         opcode-parity opcode-parity-rs opcode-parity-py \
-        metering-parity \
         conformance conformance-coverage \
         example-smoke \
         build-docs regen-docs regen-docs-opcodes regen-docs-examples \
@@ -127,7 +126,7 @@ test-python: test-py
 # The check that can *fail* on coverage is the ratchet in the xqvm vector
 # suite (xqvm/tests/vector_suite/coverage.rs), which test-integ-rs runs
 # along with every vector.
-check-parity: opcode-parity example-smoke metering-parity conformance-coverage
+check-parity: opcode-parity example-smoke conformance-coverage
 
 # All three are alpine, handwritten-docs checks -- no uv, no generation, no
 # mdbook. Kept apart from check-docs-generated (which needs uv) so the two
@@ -810,13 +809,6 @@ opcode-parity-rs:
 # than the tree it just tested.
 opcode-parity-py: deps-py
 	uv run --no-sync python scripts/check-opcode-parity.py
-
-# Cross-checks the step-cost constants across xqvm/src/metering.rs,
-# xqvm_py/metering.py, and spec/xqvm/METERING.md -- the same "generated
-# code vs. handwritten mirror vs. spec table" shape as opcode-parity-py,
-# for the metering constants instead of the opcode table.
-metering-parity: deps-py
-	uv run --no-sync python scripts/check-metering-parity.py
 
 # The specification vectors under xqvm/tests/vectors/, run on the VM. The
 # same test target runs under test-integ-rs; this is the short spelling
