@@ -5,8 +5,7 @@
 ; ⇒ energy = 2*(-1) + 3*(-1) = -5.
 ;
 ; Companion to sqmx_spin (which uses zero coefficients). This vector
-; asserts the canonical SSMX default of [-1, ..., -1] (QUI-453) across
-; both impls.
+; asserts the canonical SSMX default of [-1, ..., -1] (QUI-453).
 
 PUSH 2
 SQMX r0

@@ -2,9 +2,8 @@
 ; NO_ACTIVE_LOOP.
 ;
 ; spec/xqvm/SPEC.md:195 gives the fault to NEXT, LIDX and LVAL alike. It
-; was unassertable until QUI-1289: xqvm_py raised one LoopError class for
-; this and for UNMATCHED_LOOP, so the harness could not resolve the class
-; to either identity and left both unmapped.
+; is distinct from the UNMATCHED_LOOP that an unclosed RANGE raises
+; (QUI-1289).
 
 NEXT
 HALT

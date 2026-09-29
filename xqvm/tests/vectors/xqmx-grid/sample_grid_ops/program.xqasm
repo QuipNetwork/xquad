@@ -4,7 +4,7 @@
 ; Spec reference: SPEC.md §303 "XQMX Grid" — `reg` must hold an XQMX,
 ; with no mode restriction (unlike §317 high-level functions). Both
 ; Model and Sample registers are valid operands. This vector regresses
-; the Rust-side fix for QUI-461 (pre-fix: Rust rejected `Sample` here
+; the fix for QUI-461 (pre-fix: `Sample` was rejected here
 ; with RegisterType { expected: "model" }).
 ;
 ; Test: allocate a binary Sample of size 6, RESIZE to a 2x3 grid, then

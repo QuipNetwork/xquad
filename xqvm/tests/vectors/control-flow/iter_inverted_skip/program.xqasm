@@ -1,6 +1,6 @@
 ; iter_inverted_skip: the skip clause is stated as start_idx >= end_idx,
-; so an inverted range is empty rather than an error. Both implementations
-; skip the body; neither faults.
+; so an inverted range is empty rather than an error. The VM skips the
+; body and does not fault.
 
 VECI r0
 PUSH 1

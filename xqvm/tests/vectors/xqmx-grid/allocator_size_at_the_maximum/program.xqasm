@@ -1,6 +1,6 @@
 ; allocator_size_at_the_maximum: a size exactly at the maximum allocator
-; size succeeds on both implementations, under a budget large enough that
-; the charge is not what decides it.
+; size succeeds, under a budget large enough that the charge is not what
+; decides it.
 ;
 ; Paired with allocator_size_past_the_maximum, which pins the same
 ; boundary's rejecting side; together they pin the boundary itself rather

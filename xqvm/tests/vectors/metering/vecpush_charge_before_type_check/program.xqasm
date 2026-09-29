@@ -7,13 +7,11 @@
 ; MemoryLimitExceeded under one that does not -- the ordering is only
 ; observable at the boundary between the two.
 ;
-; tests/vectors/README.md's fault-ordering table listed this row as pinned by
-; xqvm_py's unit tests alone, because `Inputs` carried no memory budget and
-; no vector could express it (QUI-1289). It now can: VECPUSH charges
-; VEC_ELEMENT_BYTES (16 -- a Vec holds up to two elements' worth of buffer
-; per live element), so the boundary is a budget of 15 against one of 16.
-; This vector sits well below it at 0, so it stays about the ordering rather
-; than about the exact charge.
+; The vector inputs carry a memory budget (QUI-1289), so the ordering is
+; expressible here. VECPUSH charges VEC_ELEMENT_BYTES (16 -- a Vec holds up
+; to two elements' worth of buffer per live element), so the boundary is a
+; budget of 15 against one of 16. This vector sits well below it at 0, so it
+; stays about the ordering rather than about the exact charge.
 
 PUSH 7
 STOW r0          ; r0 holds an int, which VECPUSH would reject on type

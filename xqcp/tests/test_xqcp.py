@@ -1680,8 +1680,8 @@ class TestIntegerDomainKForm:
         assert _verify(programs, [3], model, {0: 4}, integer_k=5) == 0
 
     def test_a_sample_longer_than_the_model_is_refused(self) -> None:
-        # The Python reference VM once read only the declared size and let a
-        # longer sample through; `ENERGY` requires the sizes to match.
+        # A VM that read only the declared size would let a longer sample
+        # through; `ENERGY` requires the sizes to match.
         problem = Problem("IntTail")
         problem.define_model(size=2, domain=Domain.INTEGER, k=3)
         programs = problem.compile()

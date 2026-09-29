@@ -2,11 +2,9 @@
 ; unset-register fault, not the type-mismatch fault, and raises it even when
 ; the slice is empty and the body would not have run.
 ;
-; Two identities are at stake and they are distinct: UNSET_REGISTER is what
-; xqvm_py's RegisterNotFound maps onto and TYPE_MISMATCH is what its
-; TypeMismatch maps onto. Vm::require_vec sent RegVal::Unset into its type
-; arm, so a never-written register faulted TYPE_MISMATCH on the Rust VM and
-; UNSET_REGISTER on the Python one.
+; Two identities are at stake and they are distinct: UNSET_REGISTER for a
+; register never written and TYPE_MISMATCH for one holding the wrong type.
+; Vm::require_vec must not send RegVal::Unset into its type arm.
 ;
 ; The empty slice is the point. Resolving the register above the skip is what
 ; iter_non_vec_register_empty_slice pins for an int register; this vector

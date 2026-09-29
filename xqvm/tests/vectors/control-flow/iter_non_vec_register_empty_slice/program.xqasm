@@ -11,8 +11,8 @@
 ; the shape the verifier admits: xqvm/src/verifier/reg_type.rs gives INPUT
 ; the write type RegType::Any, which satisfies ITER's static requirement, so
 ; this program is verifier-clean and therefore admissible to a chain's
-; store_program. Rust returned SkipLoop before the type arm, so it halted
-; with outputs = [7] where the Python VM -- and 0.3.x -- faulted.
+; store_program. A VM that skips the loop before the type check would halt
+; with outputs = [7] here instead of faulting (as 0.3.x did).
 
 PUSH 0
 INPUT r0         ; r0 = 5, an int

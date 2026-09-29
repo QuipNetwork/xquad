@@ -1,8 +1,8 @@
 ; rowsum_row_out_of_range: a row at the grid extent must raise.
 ;
 ; The grid is 1x3, so the only valid row is 0. Row 1 addresses no line of
-; the grid: the Rust VM used to sum absent coefficients to 0 while
-; xqvm_py raised, so this vector pins IndexOutOfBounds on both.
+; the grid: summing absent coefficients would give 0, so this vector pins
+; IndexOutOfBounds.
 ;
 ; The grid is deliberately not square, and the row is deliberately inside
 ; the column count, so this pins the extent that is actually addressed

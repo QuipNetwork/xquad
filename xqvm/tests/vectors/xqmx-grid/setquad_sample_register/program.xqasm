@@ -1,13 +1,10 @@
 ; setquad_sample_register: the quadratic opcodes require MODEL mode.
 ;
 ; A sample carries no quadratic storage, so SETQUAD on one has nowhere to
-; write. The Rust VM resolved through `as_model_mut()` and rejected; xqvm_py
-; resolved through `_get_register_as_xqmx`, which accepts a sample, and grew
-; a `quadratic` map the sample's own accessors never read back -- the write
-; was accepted and GETQUAD returned 0 (QUI-1160).
+; write. Accepting the write would grow a `quadratic` map the sample's own
+; accessors never read back, and GETQUAD would return 0 (QUI-1160).
 ;
-; The shared identity is TYPE_MISMATCH: `xqvm_py` names it XQMXModeError
-; after the mode, the Rust VM RegisterType, and both map onto this row.
+; The fault is TYPE_MISMATCH (RegisterType).
 ;
 ; The indices are in range and the value is ordinary, so nothing but the
 ; register's mode is at fault.

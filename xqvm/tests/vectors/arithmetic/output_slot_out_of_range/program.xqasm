@@ -1,10 +1,9 @@
 ; output_slot_out_of_range: OUTPUT to a slot beyond the allocated count
-; must raise on both implementations.
+; must raise OutputIndex.
 ;
-; inputs.json allocates 4 slots; this writes slot 8. The Rust VM already
-; raised OutputIndex; xqvm_py stored outputs in an unbounded dict and
-; completed silently, so a program that wrote past its allocation looked
-; fine on the oracle and failed on the VM that matters.
+; inputs.json allocates 4 slots; this writes slot 8. A VM that stored
+; outputs in an unbounded map would complete silently, so a program that
+; wrote past its allocation would look fine.
 
 PUSH 42
 STOW r0

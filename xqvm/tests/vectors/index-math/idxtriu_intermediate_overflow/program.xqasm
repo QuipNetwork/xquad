@@ -3,7 +3,7 @@
 ;
 ; i = 0, j = 2^32. j * (j - 1) = 2^64 - 2^32 is not representable; the
 ; halved result 2^63 - 2^31 is. Range-checking only the pushed value
-; therefore accepts the program, which is what xqvm_py did.
+; would accept the program, so the intermediate must be checked too.
 
 PUSH 0                     ; i
 PUSH 4294967296            ; j

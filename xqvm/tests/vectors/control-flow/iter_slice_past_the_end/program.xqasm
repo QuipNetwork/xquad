@@ -2,12 +2,11 @@
 ; rather than iterating a short slice.
 ;
 ; The neighbouring vectors cover the two empty cases -- iter_empty_skip and
-; iter_inverted_skip both skip the body without faulting -- so nothing
-; distinguished "empty, so skip" from "out of range, so raise". Rust's
+; iter_inverted_skip both skip the body without faulting -- so this one
+; distinguishes "empty, so skip" from "out of range, so raise". The VM's
 ; resolve_iter_slice validates the slice before it charges the copy;
-; xqvm_py charged first and let the element read raise afterwards, which
-; is the same fault under a generous budget and a different one under a
-; tight one.
+; charging first and letting the element read raise afterwards is the same
+; fault under a generous budget and a different one under a tight one.
 ;
 ; The vec holds two elements and the slice asks for three.
 

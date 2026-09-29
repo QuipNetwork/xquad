@@ -1,9 +1,8 @@
 ; getline_index_out_of_range: a linear read at the declared extent must raise.
 ;
-; xqvm_py's get_linear was `self.linear.get(i, 0)` with no range check, so
-; this program halted there with 0 on the stack while the Rust VM raised
-; IndexOutOfBounds: a fault-versus-success divergence on four instructions,
-; and the one case no vector reached.
+; A read with no range check would halt with 0 on the stack instead of
+; raising IndexOutOfBounds: a fault-versus-success difference on four
+; instructions, and the one case no vector reached.
 ;
 ; The index is exactly `size`, not a large number, so this pins the off-by-one
 ; and not merely the rejection of something obviously wrong. Reading index 3

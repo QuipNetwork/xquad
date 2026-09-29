@@ -6,9 +6,9 @@
 ; is the entry's unset-ness: exec_input clones RegVal::Unset into the
 ; register, so LOAD then raises UnsetRegister.
 ;
-; xqvm_py stored None in the register instead, which no opcode accepts, so
-; the same program raised TypeMismatch there -- the same fault-identity
-; divergence in a spot the slot bound alone does not reach.
+; Storing a null in the register instead would give a value no opcode
+; accepts, so the same program would raise TypeMismatch -- a fault-identity
+; error in a spot the slot bound alone does not reach.
 
 PUSH 0
 INPUT r0         ; slot 0 is in range but unset

@@ -7,13 +7,11 @@
 ; then the charge, then type and range validation, and says in as many
 ; words that an instruction may raise MemoryLimitExceeded "for work it
 ; would never have done, because ... the index it was given is out of
-; range". exec_output checked OutputIndex first, so this program raised
-; OUTPUT_INDEX on the Rust VM and MEMORY_LIMIT_EXCEEDED on xqvm_py -- a
-; divergence the release created when it added the charge to both VMs on
-; opposite sides of the bound check.
+; range". A VM that checked OutputIndex first would raise OUTPUT_INDEX
+; here instead of MEMORY_LIMIT_EXCEEDED.
 ;
-; Sizing, against the shared 1 GiB default so no vector-level budget is
-; needed. A binary model of size n charges n * 8 to allocate and the same
+; Sizing, against the 1 GiB default so no vector-level budget is needed.
+; A binary model of size n charges n * 8 to allocate and the same
 ; again for the copy OUTPUT makes, since its coefficient maps are empty.
 ; n = 100000000 charges 800000000 to allocate, which fits, and the copy
 ; would take the total to 1600000000, which does not. Slot 99 is outside

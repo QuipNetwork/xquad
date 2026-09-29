@@ -7,14 +7,14 @@
 ; budget is 68719476736 (64 GiB), above the 34359738360-byte growth
 ; charge, so the charge succeeds and the range check is what decides.
 ;
-; The fault this pins used to be decided by the target. Rust narrowed the
-; index with usize::try_from and swallowed the failure, so on wasm32 --
-; where pallet-xqvm runs -- an index past a 32-bit width collapsed the
-; needed size to zero, charged nothing, and fell through to
-; IndexOutOfBounds, while 64-bit Rust and xqvm_py charged the full growth
-; and raised MemoryLimitExceeded. Unlike the allocator operand's split,
-; that one was reachable at the shipped 1 GiB default budget and not only
-; above 32 GiB.
+; The fault this pins used to be decided by the target. Narrowing the
+; index with usize::try_from and swallowing the failure made wasm32 --
+; where pallet-xqvm runs -- collapse an index past a 32-bit width to a
+; needed size of zero, charge nothing, and fall through to
+; IndexOutOfBounds, while a 64-bit host charged the full growth and raised
+; MemoryLimitExceeded. Unlike the allocator operand's split, that one was
+; reachable at the shipped 1 GiB default budget and not only above
+; 32 GiB.
 ;
 ; EQUALITY pops penalty then target, and reads its indices and coeffs
 ; from the two vec registers named in the operands.

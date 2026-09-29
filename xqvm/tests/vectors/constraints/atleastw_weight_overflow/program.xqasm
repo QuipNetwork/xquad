@@ -5,13 +5,13 @@
 ; sum is 2^63, which is not representable, so ATLEASTW raises
 ; ArithmeticOverflow before it derives a slack count from the total.
 ;
-; The operands are chosen so the vector discriminates against the wrapping
-; implementation instead of merely agreeing with the fixed one. Wrapped,
+; The operands are chosen so the vector discriminates against a wrapping
+; implementation instead of merely agreeing with a checked one. Wrapped,
 ; the sum is -2^62, the excess is negative, no slack variables are
 ; allocated, the penalty of 0 emits nothing, and the program HALTs
 ; successfully with a size-3 all-zero model -- a silently wrong answer
 ; rather than a fault. A weight pair that overflows into a fault on the
-; wrapping build would not have told those two implementations apart.
+; wrapping build would not tell the two apart.
 
 PUSH 3
 BQMX r0
