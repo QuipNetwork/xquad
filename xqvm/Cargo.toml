@@ -38,6 +38,11 @@ miette = { workspace = true, optional = true }
 xqasm            = { path = "../xqasm" }
 miette.workspace = true
 
+# Std-only timing harness; see the module docs in benches/decode.rs.
+[[bench]]
+name    = "decode"
+harness = false
+
 [build-dependencies]
 serde         = { version = "1", features = [ "derive" ] }
 serde_yaml_ng = "0.10"

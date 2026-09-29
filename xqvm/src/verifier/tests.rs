@@ -15,14 +15,18 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+use std::collections::BTreeSet;
+
 use crate::bytecode::codec;
-use crate::{Instruction, InstructionBuilder, Program, Register};
+use crate::{Instruction, InstructionBuilder, InstructionStream, JumpTable, Program, Register};
 
 use super::error::VerifierError;
 use super::jump_target::JumpTargetPhase;
 use super::loop_nesting::LoopNestingPhase;
 use super::phase::{Phase, Verifier};
 use super::register_type::RegisterTypePhase;
+use super::scan;
+use super::scan::stream_err;
 use super::stack_depth::StackDepthPhase;
 use super::structural::StructuralPhase;
 use super::verify;
@@ -971,4 +975,163 @@ fn stack_effect_on_all_variants_does_not_panic() {
     for instr in instrs {
         let _ = instr.stack_effect();
     }
+}
+
+// --- scan ---
+
+/// The walk `scan` made over an [`InstructionStream`] before it called the
+/// codec directly, kept verbatim as the oracle for
+/// `scan_matches_the_stream_walk`.
+fn scan_via_stream(code: &[u8]) -> (JumpTable, (u8, u8), Option<VerifierError>) {
+    let mut targets: Vec<usize> = Vec::new();
+    let mut loop_offsets: Vec<usize> = Vec::new();
+    let mut jump_refs: Vec<(usize, u16)> = Vec::new();
+    let mut first_error: Option<VerifierError> = None;
+    let mut input_slots: u8 = 0;
+    let mut output_slots: u8 = 0;
+
+    let mut stream = InstructionStream::new(code);
+    'scan: while let Some(item) = stream.next_instruction() {
+        let (pos, _label, instr) = match item {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = first_error.get_or_insert_with(|| stream_err(&e));
+                break 'scan;
+            }
+        };
+
+        match instr {
+            Instruction::Target {} => targets.push(pos),
+            Instruction::Input { .. } => input_slots = input_slots.saturating_add(1),
+            Instruction::Output { .. } => output_slots = output_slots.saturating_add(1),
+            Instruction::Range {} | Instruction::Iter { .. } => loop_offsets.push(pos),
+            Instruction::Next {} if first_error.is_none() && loop_offsets.pop().is_none() => {
+                first_error = Some(VerifierError::NoActiveLoop { offset: pos });
+            }
+            Instruction::Lidx { .. } | Instruction::LVal { .. } if loop_offsets.is_empty() => {
+                let _ = first_error.get_or_insert(VerifierError::NoActiveLoop { offset: pos });
+            }
+            Instruction::Jump1 { label } | Instruction::JumpI1 { label } => {
+                jump_refs.push((pos, u16::from(label)));
+            }
+            Instruction::Jump2 { label } | Instruction::JumpI2 { label } => {
+                jump_refs.push((pos, label));
+            }
+            _ => {}
+        }
+    }
+
+    // Unmatched loop openers: report the outermost (first-pushed) one.
+    if first_error.is_none()
+        && let Some(&outermost) = loop_offsets.first()
+    {
+        first_error = Some(VerifierError::UnmatchedLoop {
+            offset: outermost,
+            depth: loop_offsets.len(),
+        });
+    }
+
+    let jump_table = JumpTable::new(targets);
+
+    // Deferred jump-target check: needs the final TARGET count.
+    if first_error.is_none() {
+        let target_count = jump_table.len();
+        for (offset, label) in jump_refs {
+            if usize::from(label) >= target_count {
+                first_error = Some(VerifierError::UndefinedJumpTarget {
+                    offset,
+                    label,
+                    target_count,
+                });
+                break;
+            }
+        }
+    }
+
+    (jump_table, (input_slots, output_slots), first_error)
+}
+
+/// One xorshift64 step: deterministic and dependency-free.
+fn next_rand(state: &mut u64) -> u64 {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    *state
+}
+
+/// Encode one instruction from the set `scan` treats specially, or a byte
+/// the decoder rejects, or a `PUSH2` that truncates when it ends the buffer.
+fn random_instruction(state: &mut u64) -> Vec<u8> {
+    let [reg, label8, label16, pick, ..] = next_rand(state).to_le_bytes();
+    let reg = Register(reg);
+    let label8 = label8 % 8;
+    let label16 = u16::from(label16 % 8);
+    let instr = match pick % 16 {
+        0 | 1 => Instruction::Target {},
+        2 => Instruction::Jump1 { label: label8 },
+        3 => Instruction::JumpI1 { label: label8 },
+        4 => Instruction::Jump2 { label: label16 },
+        5 => Instruction::JumpI2 { label: label16 },
+        6 => Instruction::Range {},
+        7 => Instruction::Iter { reg },
+        8 | 9 => Instruction::Next {},
+        10 => Instruction::Lidx { reg },
+        11 => Instruction::LVal { reg },
+        12 => Instruction::Input { reg },
+        13 => Instruction::Output { reg },
+        14 => return vec![0x0D],
+        _ => return vec![0x12],
+    };
+    codec::encode(&instr)
+}
+
+#[test]
+fn scan_matches_the_stream_walk() {
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut seen: BTreeSet<&'static str> = BTreeSet::new();
+    let mut clean = 0_u32;
+    for _ in 0..20_000 {
+        let len = next_rand(&mut state) % 24;
+        let code: Vec<u8> = (0..len)
+            .flat_map(|_| random_instruction(&mut state))
+            .collect();
+        let (table, slots, err) = scan(&code);
+        let (want_table, want_slots, want_err) = scan_via_stream(&code);
+        assert_eq!((&table, slots), (&want_table, want_slots), "{code:02X?}");
+        assert_eq!(format!("{err:?}"), format!("{want_err:?}"), "{code:02X?}");
+        match err {
+            Some(e) => {
+                let _ = seen.insert(e.variant_name());
+            }
+            None => clean += 1,
+        }
+    }
+    // The generator has to reach every outcome `scan` can report, or the
+    // comparison above proves less than it appears to.
+    assert!(
+        clean > 100,
+        "only {clean} generated programs verified clean"
+    );
+    for variant in [
+        "BadOpcode",
+        "TruncatedInstruction",
+        "NoActiveLoop",
+        "UnmatchedLoop",
+        "UndefinedJumpTarget",
+    ] {
+        assert!(
+            seen.contains(variant),
+            "{variant} never generated; saw {seen:?}"
+        );
+    }
+}
+
+#[test]
+fn scan_reports_a_truncated_last_instruction_at_its_opcode() {
+    // NOP, then PUSH2 (0x12) with one of its two operand bytes.
+    let (_, _, err) = scan(&[0xF0, 0x12, 0x00]);
+    assert!(
+        matches!(err, Some(VerifierError::TruncatedInstruction { offset: 1 })),
+        "got {err:?}"
+    );
 }
