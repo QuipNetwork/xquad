@@ -1,0 +1,8 @@
+; drop_unset_register: DROP of a register that was never written is a
+; no-op.
+;
+; spec/xqvm/ISA.md's DROP row: the register becomes unset, with no error
+; if it already is. Two instructions at BASE_STEPS each.
+
+DROP r0
+HALT

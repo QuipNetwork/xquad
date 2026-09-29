@@ -1,0 +1,22 @@
+; atleastw_k_zero: ATLEASTW with k = 0 raises IndexOutOfBounds.
+;
+; spec/xqvm/ISA.md's ATLEASTW row: IndexOutOfBounds if k <= 0. The model
+; register holds a model and the vec lengths match, so no other fault is
+; live.
+
+PUSH 4
+BQMX r0
+VECI r1
+PUSH 0
+VECPUSH r1
+PUSH 1
+VECPUSH r1       ; indices = [0, 1]
+VECI r2
+PUSH 1
+VECPUSH r2
+PUSH 1
+VECPUSH r2       ; weights = [1, 1]
+PUSH 0           ; k = 0
+PUSH 1           ; penalty
+ATLEASTW r0 r1 r2
+HALT

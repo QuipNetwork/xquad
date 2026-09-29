@@ -1,0 +1,26 @@
+; equality_length_mismatch_beats_the_charge: EQUALITY compares its vec
+; lengths before it charges the expansion, so a mismatch is reported even
+; when the budget could not pay.
+;
+; spec/xqvm/METERING.md ("Known Slack") places the length validation
+; above the point where the expansion is charged: the handler reads its
+; vecs "in order to validate vector lengths and compute the model growth
+; the expansion will require". The model and the three VECPUSHes spend the
+; budget of 64 bytes exactly, so charging first would raise
+; MemoryLimitExceeded. equality_length_mismatch_beats_model_type pins the
+; same comparison against the model register's type.
+
+PUSH 2
+BQMX r0          ; 16 bytes
+VECI r1
+PUSH 0
+VECPUSH r1
+PUSH 1
+VECPUSH r1       ; indices = [0, 1]
+VECI r2
+PUSH 1
+VECPUSH r2       ; coeffs = [1]; 64 bytes: the whole budget
+PUSH 1           ; target
+PUSH 1           ; penalty
+EQUALITY r0 r1 r2
+HALT

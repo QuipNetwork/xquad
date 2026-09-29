@@ -1,0 +1,17 @@
+; atleast_k_above_n: ATLEAST with k greater than the number of indices
+; raises IndexOutOfBounds.
+;
+; spec/xqvm/ISA.md's ATLEAST row: IndexOutOfBounds if k <= 0 or
+; k > len(indices). atleast_k_range_before_model_type pins the k <= 0 half.
+
+PUSH 4
+BQMX r0
+VECI r1
+PUSH 0
+VECPUSH r1
+PUSH 1
+VECPUSH r1       ; indices = [0, 1]
+PUSH 3           ; k = 3 > 2
+PUSH 1           ; penalty
+ATLEAST r0 r1
+HALT

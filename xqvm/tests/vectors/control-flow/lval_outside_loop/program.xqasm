@@ -1,0 +1,8 @@
+; lval_outside_loop: LVAL with no loop frame raises NoActiveLoop.
+;
+; spec/xqvm/ISA.md's LVAL row and spec/xqvm/SPEC.md's Faults table:
+; NoActiveLoop for NEXT, LIDX or LVAL with no frame on the loop stack.
+; next_outside_loop pins NEXT.
+
+LVAL r0
+HALT
