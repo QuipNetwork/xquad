@@ -499,7 +499,6 @@ impl PyXqmxSample {
     }
 }
 
-/// The `ValueError` for a sample value outside its domain.
 /// Reject a model or sample no bytecode could allocate (QUI-1164).
 ///
 /// The allocators refuse a `size` past [`xqvm::MAX_ALLOCATION_SIZE`], and
@@ -517,6 +516,7 @@ fn check_extents(size: usize, rows: usize, cols: usize) -> PyResult<()> {
     Ok(())
 }
 
+/// The `ValueError` for a sample value outside its domain.
 fn out_of_domain(value: i64, index: usize, domain: Domain) -> PyErr {
     PyValueError::new_err(format!(
         "sample value {value} at variable {index} is outside the {domain} domain"
