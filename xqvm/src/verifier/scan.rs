@@ -19,7 +19,7 @@
 use alloc::vec::Vec;
 
 use crate::bytecode::error::StreamError;
-use crate::bytecode::{Instruction, InstructionStream, JumpTable};
+use crate::bytecode::{Cursor, Instruction, JumpTable};
 
 use super::error::VerifierError;
 
@@ -45,7 +45,7 @@ pub(super) fn stream_err(e: &StreamError) -> VerifierError {
 /// Build a [`JumpTable`], count slot instructions, and detect the first Phase 1
 /// violation in one pass.
 ///
-/// Walks the instruction bytes exactly once, collecting:
+/// Walks the instruction bytes exactly once with a [`Cursor`], collecting:
 /// - byte positions of `TARGET` opcodes (for the jump table),
 /// - counts of `INPUT` and `OUTPUT` instructions (clamped to `u8::MAX`),
 /// - loop-opener positions (to check nesting balance),
@@ -63,9 +63,9 @@ pub(crate) fn scan(code: &[u8]) -> (JumpTable, (u8, u8), Option<VerifierError>) 
     let mut input_slots: u8 = 0;
     let mut output_slots: u8 = 0;
 
-    let mut stream = InstructionStream::new(code);
-    'scan: while let Some(item) = stream.next_instruction() {
-        let (pos, _label, instr) = match item {
+    let mut cursor = Cursor::new(code);
+    'scan: while let Some(item) = cursor.next_instruction() {
+        let (pos, instr) = match item {
             Ok(v) => v,
             Err(e) => {
                 let _ = first_error.get_or_insert_with(|| stream_err(&e));

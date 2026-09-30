@@ -32,7 +32,7 @@ make install-hooks    # point git at .githooks/ pre-commit hook
 
 # Preflight (run locally exactly what CI enforces; N/A a language you didn't touch)
 make preflight         # preflight-rs + preflight-py + preflight-parity + preflight-docs + preflight-policy
-make preflight-rs      # fmt, taplo, clippy, rustdoc, deny, unit/integration/doc tests
+make preflight-rs      # fmt, taplo, clippy, rustdoc, deny (root + pallet fixture), unit/integration/doc tests
 make preflight-py      # taplo, ruff format + lint, pytest, uv.lock freshness
 make preflight-parity  # opcode parity, example smoke, vector coverage report
 make preflight-docs    # generated-doc freshness + docs drift + README length + prose (needs vale)
@@ -44,6 +44,7 @@ make lint             # lint-clippy + lint-doc + lint-deny-rs + lint-py + fmt-ch
 make lint-clippy      # cargo clippy --workspace --all-targets --all-features -- -D warnings
 make lint-doc         # RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 make lint-deny-rs     # cargo deny check
+make lint-deny-fixture # cargo deny over fixtures/pallet-xqvm, with its own deny.toml
 make test             # test-unit-rs + test-integ-rs + test-doc + test-py
 make test-unit-rs     # cargo nextest run --workspace --all-features --lib
 make test-integ-rs    # cargo nextest run --workspace --all-features --test '*' (includes the vectors)
@@ -286,7 +287,7 @@ After modifying files, run `make fmt` to format everything, or the per-file equi
 
 **Assembly pipeline** (`xqasm/`) -- `pest` grammar -> `ast::Program` -> `assembler::assemble()` -> `InstructionBuilder` -> `codec::encode`. Rich `miette` diagnostics with source spans are emitted at the assembler stage.
 
-**VM interpreter** (`xqvm/`) -- `Vm` executes a `Program` (raw instruction bytes) via an incremental `InstructionStream` reader. State: 256-slot register file (`RegVal` enum: `Int(i64)`, `VecInt(Vec<i64>)`, `VecXqmx(Vec<XqmxModel>)`, `Model(XqmxModel)`, `Sample(XqmxSample)`), an unbounded integer stack, and a loop stack of `LoopFrame` records (one per `RANGE`/`ITER`). `StepResult` drives control flow: `Continue`, `Jump(offset)`, `Halt`, `StartLoop`. Default step limit is 10,000,000 (configurable via `set_step_limit()`). A second budget bounds memory: every allocating opcode is charged bytes before it allocates, against a 1 GiB default (configurable via `set_memory_limit()`), and raises `MemoryLimitExceeded` when it cannot pay. Calldata and output slots are injected before `run()` via `set_calldata()` / `set_output_slots()`. VM errors carry `into_diagnostic(&program, source_name)` which disassembles the failing offset for miette source annotation. `clippy::result_large_err` is explicitly allowed in the asm crate because `NamedSource<Arc<str>>` on the error path is intentional.
+**VM interpreter** (`xqvm/`) -- `Vm` executes a `Program` (raw instruction bytes) through `bytecode::Cursor`, a crate-internal, label-free reader that decodes exactly as `InstructionStream` does. State: 256-slot register file (`RegVal` enum: `Int(i64)`, `VecInt(Vec<i64>)`, `VecXqmx(Vec<XqmxModel>)`, `Model(XqmxModel)`, `Sample(XqmxSample)`), an unbounded integer stack, and a loop stack of `LoopFrame` records (one per `RANGE`/`ITER`). `StepResult` drives control flow: `Continue`, `Jump(offset)`, `Halt`, `StartLoop`. Default step limit is 10,000,000 (configurable via `set_step_limit()`). A second budget bounds memory: every allocating opcode is charged bytes before it allocates, against a 1 GiB default (configurable via `set_memory_limit()`), and raises `MemoryLimitExceeded` when it cannot pay. Calldata and output slots are injected before `run()` via `set_calldata()` / `set_output_slots()`. VM errors carry `into_diagnostic(&program, source_name)` which disassembles the failing offset for miette source annotation. `clippy::result_large_err` is explicitly allowed in the asm crate because `NamedSource<Arc<str>>` on the error path is intentional.
 
 #### Instruction Set Categories (93 total)
 
@@ -368,7 +369,7 @@ happened to share a stage barrier and nothing else:
 
 | Phase | Question it answers | What it covers |
 | --- | --- | --- |
-| `verify` | Does the workspace match what it's required to match? | clippy, rustdoc, cargo-deny, ruff, `uv.lock` freshness, the fresh-xqffi-cdylib check, opcode parity, vector coverage report, example smoke tests, atomic spec-MR guard, commit-message guard, merge-request-title guard, branch containment guard, changelog render |
+| `verify` | Does the workspace match what it's required to match? | clippy, rustdoc, cargo-deny (root workspace and pallet fixture), ruff, `uv.lock` freshness, the fresh-xqffi-cdylib check, opcode parity, vector coverage report, example smoke tests, atomic spec-MR guard, commit-message guard, merge-request-title guard, branch containment guard, changelog render |
 | `test` | Does the workspace do what it should when executed? | unit, integration, doc tests and the specification vectors (Rust); pytest (Python); Quip signing-layer tests; WASM no_std tests; Substrate pallet fixture |
 | `hardware` | Does it work on real hardware? | CUDA, D-Wave QPU, and Metal solver tests on real hardware (protected refs only) |
 | `docs` | Is the documentation correct and buildable? | generated-docs freshness, docs drift guard, package README length guard, mdbook build, GitLab Pages publish (release tags only) |
@@ -398,22 +399,25 @@ on that path. The exact graph and per-edge reasoning (including why
 `hardware:*` needs are marked `optional: true`) live in
 `.gitlab/ci/setup.yml`'s "Dependency gating" section.
 
-**Path gating.** Two jobs do not run on every pipeline. `test:wasm` and
+**Path gating.** Three jobs do not run on every pipeline. `test:wasm` and
 `test:substrate` are gated on `rules: changes:`, because each builds one
 crate (`xqvm`) into one fixture and so has a narrow, writable input
 footprint, while every other job in the pipeline is a whole-workspace
 check whose verdict a change anywhere can flip. They are the two most
 expensive jobs in the pipeline and the least often relevant, so gating
-them is most of the merge-request latency available to save. Both stay
-unconditional on protected refs and on tags: the gate buys latency, not
-coverage, and a path list is a claim about a build graph that can be
-wrong -- keeping the protected refs unconditional means a wrong list
-costs a late signal on `main` rather than a shipped regression. Because
-either job can be absent, every `needs:` edge into them is
-`optional: true`; GitLab refuses to create a pipeline whose job needs an
-absent job. The path lists, the per-clause reasoning, and the per-entry
-justification live in `.gitlab/ci/test.yml`'s "Path gating" section.
-Local `make preflight-rs` runs both targets unconditionally.
+them is most of the merge-request latency available to save.
+`verify:substrate-deny` runs cargo-deny over the pallet fixture's graph,
+which needs the same polkadot-sdk download, and is gated the same way.
+All three stay unconditional on protected refs and on tags: the gate
+buys latency, not coverage, and a path list is a claim about a build
+graph that can be wrong -- keeping the protected refs unconditional
+means a wrong list costs a late signal on `main` rather than a shipped
+regression. Because any of them can be absent, every `needs:` edge into
+them is `optional: true`; GitLab refuses to create a pipeline whose job
+needs an absent job. The path lists, the per-clause reasoning, and the
+per-entry justification live in `.gitlab/ci/test.yml`'s "Path gating"
+section and beside `verify:substrate-deny` in `.gitlab/ci/verify.yml`.
+Local `make preflight-rs` runs all three targets unconditionally.
 
 **CI signals.** Two reds are expected, and each means a step of the release protocol is outstanding rather than that something is broken. Do not "fix" either by anything but the step it names:
 

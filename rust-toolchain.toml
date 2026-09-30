@@ -1,0 +1,22 @@
+# The Rust toolchain every build of this repository uses: CI, the
+# hardware:metal host, and a contributor's machine alike. rustup reads
+# this file and installs the channel on first use, so `rustup update`
+# no longer moves what this repository compiles with, and a new stable's
+# clippy lints cannot turn `-D warnings` red without a commit here.
+#
+# Exact patch on purpose. rustup treats "1.98" and "1.98.1" as different
+# toolchains, so a minor-only channel would download a second toolchain
+# in every CI job next to the one the image already ships.
+#
+# To bump: change `channel` here AND the `default: image:` tag in
+# .gitlab-ci.yml, in the same commit, to the same version. If they
+# disagree nothing breaks, but every CI job silently downloads this
+# channel because the image carries a different one.
+#
+# Targets are left out deliberately: listing wasm or aarch64 here would
+# make every job download them. The jobs that need one run `rustup
+# target add` themselves.
+[toolchain]
+channel    = "1.98.1"
+components = [ "clippy", "rustfmt" ]
+profile    = "minimal"

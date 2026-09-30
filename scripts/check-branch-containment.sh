@@ -35,7 +35,7 @@
 # Only `dev` and `release/*` are judged. Everything else exits 0 without
 # reading anything, which is what keeps this runnable from the existing
 # `lint-policy` aggregate rather than needing a `rules:`-gated job of its
-# own -- .gitlab/ci/verify.yml deliberately has no `rules:` anywhere.
+# own -- verify:policy in .gitlab/ci/verify.yml deliberately has no `rules:`.
 #
 # Two consequences of that scoping are deliberate:
 #

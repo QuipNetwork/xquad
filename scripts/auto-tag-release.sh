@@ -42,8 +42,9 @@
 #                     project access token with api scope -- CI_JOB_TOKEN
 #                     cannot query MR metadata).
 #
-# Requires `glab` and `jq` on PATH. The calling job's image ships glab;
-# jq is installed in the job's before_script (`apk add --no-cache jq`).
+# Requires `glab` and `jq` on PATH. The calling job's before_script
+# installs jq with apk and fetches a version-pinned glab binary from
+# GLAB_URL (see .gitlab/ci/release.yml).
 
 set -euo pipefail
 

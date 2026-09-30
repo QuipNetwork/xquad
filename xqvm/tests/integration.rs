@@ -2193,6 +2193,74 @@ fn row_find_and_col_find() {
     assert_eq!(vm.stack(), &[1, 1]);
 }
 
+#[test]
+fn row_find_and_col_find_on_a_non_square_grid() {
+    // A 2x3 grid holding 10 + its flat index:
+    //   row 0: 10 11 12
+    //   row 1: 13 14 15
+    // On a square grid a row walked with a column's stride, or the reverse,
+    // can land on the right cell by coincidence; here it cannot.
+    let vm = run(|b| {
+        b.emit_push(6).emit_bqmx(Register(0));
+        b.emit_push(2).emit_push(3).emit_resize(Register(0));
+        for k in 0..6 {
+            b.emit_push(k).emit_push(10 + k).emit_set_line(Register(0));
+        }
+        b.emit_push(1).emit_push(14).emit_row_find(Register(0));
+        b.emit_push(1).emit_push(10).emit_row_find(Register(0));
+        b.emit_push(2).emit_push(15).emit_col_find(Register(0));
+        b.emit_push(1).emit_push(11).emit_col_find(Register(0));
+        b.emit_halt();
+    });
+    assert_eq!(vm.stack(), &[1, -1, 1, 0]);
+}
+
+#[test]
+fn row_find_row_out_of_range_raises() {
+    // Row 2 of a 2x3 grid does not exist but is a valid column, so this is
+    // the case that passes if the row is checked against the wrong axis.
+    // Before QUI-1165 nothing in the repository covered ROWFIND's check.
+    let err = run_err(|b| {
+        b.emit_push(6).emit_bsmx(Register(0));
+        b.emit_push(2).emit_push(3).emit_resize(Register(0));
+        b.emit_push(2).emit_push(1).emit_row_find(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::IndexOutOfBounds {
+                index: 2,
+                len: 2,
+                ..
+            }
+        ),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
+}
+
+#[test]
+fn col_find_col_out_of_range_on_a_non_square_grid_raises() {
+    // The mirror: column 2 of a 3x2 grid does not exist but is a valid row.
+    let err = run_err(|b| {
+        b.emit_push(6).emit_bsmx(Register(0));
+        b.emit_push(3).emit_push(2).emit_resize(Register(0));
+        b.emit_push(2).emit_push(1).emit_col_find(Register(0));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::IndexOutOfBounds {
+                index: 2,
+                len: 2,
+                ..
+            }
+        ),
+        "expected IndexOutOfBounds, got {err:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // New opcodes added in spec migration
 // ---------------------------------------------------------------------------
@@ -2368,7 +2436,7 @@ fn one_hot_r_row_at_grid_extent_raises() {
     // column count, so this pins the extent that is actually addressed rather
     // than merely rejecting a large number: checking row 2 against the column
     // count would accept it, and against a square grid, or a row larger than
-    // both extents, the two are indistinguishable. `grid_row_index` is what
+    // both extents, the two are indistinguishable. `GridShape::row` is what
     // picks the axis, so this is the case that fails if it picks the wrong one.
     let err = run_err(|b| {
         b.emit_push(4).emit_bqmx(Register(0));
@@ -2386,7 +2454,7 @@ fn one_hot_r_row_at_grid_extent_raises() {
 fn one_hot_c_col_at_grid_extent_raises() {
     // The mirror: a 4x1 grid whose only valid column is 0, with column 2
     // inside the row count, so checking against the row count would accept it.
-    // `grid_col_index` picks the axis; this is the case that fails if it picks
+    // `GridShape::column` picks the axis; this is the case that fails if it picks
     // the wrong one.
     //
     // A column cannot wrap the way a row can -- nothing multiplies by it --
@@ -2942,6 +3010,29 @@ fn one_hot_r_over_a_huge_grid_is_rejected() {
     );
 }
 
+#[test]
+fn one_hot_c_over_a_huge_grid_is_rejected() {
+    // The mirror on a 4096 x 1 grid: ONEHOTC expands O(rows^2) terms, and
+    // its charge is sized from `rows` by hand before the grid is checked, so
+    // this is the case that fails if it reads `cols` instead.
+    let (vm, result) = run_with_memory_limit(1 << 20, |b| {
+        b.emit_push(4096).emit_bqmx(Register(0));
+        b.emit_push(4096).emit_push(1).emit_resize(Register(0));
+        b.emit_push(0).emit_push(1).emit_one_hot_c(Register(0));
+        b.emit_halt();
+    });
+    assert!(matches!(
+        result.expect_err("expected the expansion to exceed the budget"),
+        Error::MemoryLimitExceeded { .. }
+    ));
+    assert_eq!(
+        vm.memory_used(),
+        4096 * 8,
+        "the allocation is charged and the expansion is not, so nothing past \
+         the 4096 declared variables was spent"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // RESIZE extent bound
 // ---------------------------------------------------------------------------
@@ -3020,12 +3111,12 @@ fn resize_bounds_a_sample_by_its_value_count() {
 
 #[test]
 fn a_host_supplied_grid_with_an_unaddressable_extent_is_rejected() {
-    // `RESIZE` cannot produce `rows * cols` overflow any more, but a host can
-    // install a register directly -- `xqffi` exposes both extents to Python
-    // unvalidated -- so `grid_axis_index`'s addressability arm is still the
-    // guard that keeps `usize_row * cols` in the read-only grid handlers from
-    // overflowing. Deleting it turns this case into a `ci-test` panic and a
-    // `release` wrap. QUI-1164 tracks validating the boundary itself.
+    // `RESIZE` cannot produce `rows * cols` overflow any more, and `xqffi`
+    // rejects it at construction (QUI-1164), but `rows` and `cols` are public
+    // fields, so a Rust embedder can still install one directly. That keeps
+    // the addressability check in `GridShape::line_index` the guard that stops
+    // `GridLine::cells` in the read-only grid handlers from overflowing.
+    // Deleting it turns this case into a `ci-test` panic and a `release` wrap.
     let mut model = xqvm::XqmxModel::new(Domain::Binary, 4);
     model.rows = usize::MAX / 2;
     model.cols = 8;
@@ -3052,12 +3143,13 @@ fn a_host_supplied_grid_wider_than_the_model_is_rejected_before_it_is_written() 
     // index 3 is a variable the model declared.
     //
     // `RESIZE` bounds `rows * cols <= size`, so no bytecode can build this
-    // model; a host installing one directly can (QUI-1164). ONEHOTR then
-    // *writes*, and `XqmxModel::add_linear`/`add_quad` grow a sparse map with
+    // model, and `xqffi` refuses to (QUI-1164); a Rust embedder installing
+    // one directly still can. ONEHOTR then *writes*, and
+    // `XqmxModel::checked_add_linear`/`checked_add_quad` grow a sparse map with
     // no bound of their own, so without the `size` half of the check the VM
     // would mint `linear[4]`, `linear[5]` and the pairs among them out of
-    // nothing and halt successfully -- a model that solves cleanly and
-    // answers wrongly, which is the failure QUI-1107 exists to remove.
+    // nothing and halt successfully -- a model that solves cleanly and answers
+    // wrongly, which is the failure QUI-1107 exists to remove.
     let mut model = xqvm::XqmxModel::new(Domain::Binary, 4);
     model.rows = 2;
     model.cols = 3;
@@ -3907,13 +3999,20 @@ fn energy_charges_for_the_model_it_evaluates() {
 #[test]
 fn onehot_charges_for_the_expansion_it_writes() {
     // ONEHOTR writes one linear term per column and one quadratic term per
-    // pair of columns. Doubling the columns roughly quadruples the work, and
-    // the step count has to see it.
-    fn steps_for(cols: i64) -> u64 {
+    // pair of columns, ONEHOTC the same per row. Doubling the line roughly
+    // quadruples the work, and the step count has to see it. Each runs on a
+    // single-line grid (1 x n for a row, n x 1 for a column), so charging
+    // along the wrong axis charges for a line of one and fails here.
+    fn steps_for(n: i64, column: bool) -> u64 {
         let mut b = InstructionBuilder::new();
-        b.emit_push(cols).emit_bqmx(Register(0));
-        b.emit_push(1).emit_push(cols).emit_resize(Register(0));
-        b.emit_push(0).emit_push(5).emit_one_hot_r(Register(0));
+        b.emit_push(n).emit_bqmx(Register(0));
+        if column {
+            b.emit_push(n).emit_push(1).emit_resize(Register(0));
+            b.emit_push(0).emit_push(5).emit_one_hot_c(Register(0));
+        } else {
+            b.emit_push(1).emit_push(n).emit_resize(Register(0));
+            b.emit_push(0).emit_push(5).emit_one_hot_r(Register(0));
+        }
         b.emit_halt();
         let bytecode = b.build().expect("builder build");
 
@@ -3924,13 +4023,15 @@ fn onehot_charges_for_the_expansion_it_writes() {
     }
 
     use xqvm::metering::equality_expansion_steps;
-    let four = steps_for(4);
-    let eight = steps_for(8);
-    assert_eq!(
-        eight - four,
-        equality_expansion_steps(8) - equality_expansion_steps(4),
-        "the whole difference is the expansion: {eight} vs {four}"
-    );
+    for (opcode, column) in [("ONEHOTR", false), ("ONEHOTC", true)] {
+        let four = steps_for(4, column);
+        let eight = steps_for(8, column);
+        assert_eq!(
+            eight - four,
+            equality_expansion_steps(8) - equality_expansion_steps(4),
+            "{opcode}: the whole difference is the expansion: {eight} vs {four}"
+        );
+    }
 }
 
 #[test]

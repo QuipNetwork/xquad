@@ -21,13 +21,13 @@ Named Quip Network presets for :meth:`xqsa.quip.SolverQuip.for_network`.
 A preset names the coordinates of one Quip network, so a caller writes
 ``SolverQuip.for_network("aglais")`` instead of carrying an RPC address around.
 
-The values move. The ``aglais`` entry was verified live on 2026-09-22 at runtime
-``specVersion 117``; testnet endpoints change between releases and are corrected
-here in a patch release. Verify before a run: any node can lag the chain tip and
-serve a stale view, and bootnode-2 and bootnode-3 serve the same chain as
-bootnode-1. https://aglais.quip.network publishes the testnet's current
-endpoints; check ``aglais`` against it when a connection fails. ``devnet`` is the
-default localdev stack, fronted by Caddy on port 20049.
+The values move. The ``aglais`` entry was verified live on 2026-09-28; testnet
+endpoints change between releases and are corrected here in a patch release.
+Verify before a run: any node can lag the chain tip and serve a stale view, and
+bootnode-2 and bootnode-3 serve the same chain as bootnode-1.
+https://aglais.quip.network publishes the testnet's current endpoints; check
+``aglais`` against it when a connection fails. ``devnet`` is the default
+localdev stack, fronted by Caddy on port 20049.
 
 There is no mainnet entry because there is no Quip mainnet yet.
 """

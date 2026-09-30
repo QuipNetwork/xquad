@@ -54,6 +54,15 @@ name    = "vectors"
 path    = "tests/vector_suite/main.rs"
 harness = false
 
+# Std-only timing harnesses; see the module docs in each file.
+[[bench]]
+name    = "decode"
+harness = false
+
+[[bench]]
+name    = "run"
+harness = false
+
 [build-dependencies]
 serde         = { version = "1", features = [ "derive" ] }
 serde_yaml_ng = "0.10"
