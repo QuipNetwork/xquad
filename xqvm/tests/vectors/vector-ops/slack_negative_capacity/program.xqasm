@@ -1,0 +1,17 @@
+; slack_negative_capacity: SLACK with a negative capacity appends nothing
+; to either vec.
+;
+; spec/xqvm/ISA.md's SLACK row: "If capacity <= 0, no elements are
+; appended." slack_zero pins capacity 0; this pins the negative half. With
+; no entries appended, SLACK charges only BASE_STEPS
+; (spec/xqvm/METERING.md: entries * 2 * ELEMENT_COPY_STEPS), so the run is
+; eight instructions at one step each.
+
+VECI r0
+VECI r1
+PUSH 0           ; start_index
+PUSH -1          ; capacity
+SLACK r0 r1
+VECLEN r0
+VECLEN r1
+HALT

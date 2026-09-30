@@ -240,7 +240,7 @@ def is_semver(raw: str) -> bool:
 
 
 def normalise_dist(name: str) -> str:
-    """PEP 503 name normalisation. uv.lock writes `xqvm-py` where the manifests write `xqvm_py`."""
+    """PEP 503 name normalisation: `quip_signer` and `quip-signer` name one distribution."""
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
@@ -278,7 +278,6 @@ class Role(StrEnum):
     PROJECT_VERSION = "project version"
     WORKSPACE_DEP = "workspace dependency"
     PEER_PIN = "peer pin"
-    MODULE_DUNDER = "__version__"
     LOCK_ENTRY = "locked version"
 
 
@@ -339,19 +338,15 @@ SITES: tuple[Site, ...] = (
     # Every crate manifest. xqffi is publish = false, but it is what maturin
     # stamps on the PyPI wheel.
     *(Site(f"{crate}/Cargo.toml", Eco.CARGO, Role.PACKAGE_VERSION, dist=crate) for crate in _CRATES),
-    # The three hatchling packages that carry a literal version. xqvm_py and
-    # xqffi are dynamic and appear under ASSERTIONS instead.
+    # The three hatchling packages that carry a literal version. xqffi is
+    # dynamic and appears under ASSERTIONS instead.
     Site("xqcp/pyproject.toml", Eco.PYTHON, Role.PROJECT_VERSION, dist="xqcp"),
     Site("xqsa/pyproject.toml", Eco.PYTHON, Role.PROJECT_VERSION, dist="xqsa"),
     Site("xquad/pyproject.toml", Eco.PYTHON, Role.PROJECT_VERSION, dist="xquad"),
-    # xqvm_py's version lives here, not in its pyproject: it declares
-    # dynamic = ["version"] and hatch reads this file.
-    Site("xqvm_py/__init__.py", Eco.PYTHON, Role.MODULE_DUNDER, dist="xqvm_py"),
-    # Exact peer pins. The five distributions share one workspace version and
+    # Exact peer pins. The four distributions share one workspace version and
     # are uploaded as a set, so a mixed-version install is never supported.
     Site("xqcp/pyproject.toml", Eco.PYTHON, Role.PEER_PIN, dist="xqffi", table=("project", "dependencies")),
     Site("xqsa/pyproject.toml", Eco.PYTHON, Role.PEER_PIN, dist="xqffi", table=("project", "dependencies")),
-    Site("xqvm_py/pyproject.toml", Eco.PYTHON, Role.PEER_PIN, dist="xqffi", table=("project", "dependencies")),
     *(
         Site("xquad/pyproject.toml", Eco.PYTHON, Role.PEER_PIN, dist=dist, table=("project", "dependencies"))
         for dist in ("xqffi", "xqcp", "xqsa")
@@ -403,21 +398,9 @@ ASSERTIONS: tuple[Assertion, ...] = (
         "maturin sources the version from xqffi/Cargo.toml; a literal here is ignored and drifts forever",
     ),
     Assertion(
-        "xqvm_py/pyproject.toml",
-        AssertKind.DYNAMIC_PYPROJECT,
-        "xqvm_py",
-        "hatch sources the version from xqvm_py/__init__.py; a literal here is ignored and drifts forever",
-    ),
-    Assertion(
         "uv.lock",
         AssertKind.LOCK_NO_VERSION,
         "xqffi",
-        "uv records no version for a dynamic package; if that changes this becomes an unguarded site",
-    ),
-    Assertion(
-        "uv.lock",
-        AssertKind.LOCK_NO_VERSION,
-        "xqvm-py",
         "uv records no version for a dynamic package; if that changes this becomes an unguarded site",
     ),
 )
@@ -505,14 +488,6 @@ def read_lock_entry(root: Path, rel: str, dist: str) -> tuple[str | None, int | 
 
 def read_site(root: Path, site: Site) -> Found:
     """Read one site's authored version string."""
-    if site.role is Role.MODULE_DUNDER:
-        text = load_text(root, site.path)
-        match = re.search(r'^__version__\s*=\s*"(?P<value>[^"]+)"', text, re.MULTILINE)
-        if match is None:
-            raise SetupError(f"{site.path}: no __version__ assignment")
-        value = match["value"]
-        return Found(value, find_line(text, f'__version__ = "{value}"'), value)
-
     if site.role is Role.LOCK_ENTRY:
         value, lineno = read_lock_entry(root, site.path, site.dist)
         if value is None:

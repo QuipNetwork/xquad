@@ -45,7 +45,7 @@
 #      from xqffi/Cargo.toml while its peers pin it in the PEP 440 spelling.
 #      With scripts/check-version-sites.py comparing the manifests to the tag
 #      on a tag pipeline, this closes the chain artefact == manifests == tag.
-#   3. Install and import. Install all five distributions into a throwaway
+#   3. Install and import. Install all four distributions into a throwaway
 #      venv, import them from a directory outside the repository so the source
 #      tree cannot satisfy the import, and confirm each module resolves inside
 #      that venv rather than out of the checkout.
@@ -233,7 +233,7 @@ PY
 # nothing else in the pipeline looks at it either. That leaves a gap on the
 # one site that feeds both ecosystems: xqffi/pyproject.toml declares
 # `dynamic = ["version"]` and maturin takes the version from
-# xqffi/Cargo.toml, while xqvm_py and xquad pin `xqffi==<PEP 440 version>`.
+# xqffi/Cargo.toml, while its peers pin `xqffi==<PEP 440 version>`.
 # Cargo spells a prerelease `0.4.0-rc1` and Python spells it `0.4.0rc1`, so
 # the two sites cannot be compared as strings and the mapping has to be
 # checked against what the builder actually stamps.
@@ -241,8 +241,8 @@ PY
 # scripts/check-version-sites.py --print-version is the manifests' side of
 # that comparison, and it refuses a tree whose sites disagree. Together with
 # that guard's tag check on a tag pipeline, this closes the chain: artefact
-# == manifests == tag. It covers all five distributions rather than xqffi
-# alone, so hatchling's rendering of xqvm_py/__init__.py is checked too.
+# == manifests == tag. It covers all four distributions rather than xqffi
+# alone, so hatchling's rendering of the peers' versions is checked too.
 #
 # Sets FAILED rather than exiting, so one run reports every mismatched
 # artefact instead of the first.
@@ -308,7 +308,7 @@ if findings:
     print(
         "error: a built artefact does not carry the version its manifests declare."
         " The builder normalises the Cargo spelling into PEP 440 (0.4.0-rc1 becomes"
-        " 0.4.0rc1), so check xqffi/Cargo.toml and xqvm_py/__init__.py against"
+        " 0.4.0rc1), so check xqffi/Cargo.toml and xquad/pyproject.toml against"
         " `make list-version-sites` before assuming the builder is at fault.",
         file=sys.stderr,
     )

@@ -24,7 +24,7 @@
 )]
 
 use xqvm::bytecode::{InstructionBuilder, Register};
-use xqvm::{Domain, Error, Instruction, RegVal, Vm};
+use xqvm::{Domain, Error, Instruction, RegVal, StackEffect, Vm};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -756,13 +756,11 @@ fn iter_over_an_unset_register_raises_even_when_the_slice_is_empty() {
     // `Unset` is what a register holds before anything writes it, so this is
     // the shortest program in the class.
     //
-    // The identity is `UnsetRegister`, not `RegisterType`: the two are
-    // distinct faults -- `UnsetRegister` is what `xqvm_py`'s
-    // `RegisterNotFound` maps onto and `RegisterType` is what its
-    // `TypeMismatch` maps onto -- so folding "never written" into the type
-    // arm made this program fault `TYPE_MISMATCH` here and `UNSET_REGISTER`
-    // on the Python VM. Pinned across implementations by the
-    // `iter_unset_register` conformance vector.
+    // The identity is `UnsetRegister`, not `RegisterType`: SPEC.md's Faults
+    // table names them as distinct faults -- `UnsetRegister` for a register
+    // never written, `TypeMismatch` for the wrong kind -- so folding "never
+    // written" into the type arm reported the wrong one. Also pinned by the
+    // `iter_unset_register` vector.
     let err = run_err(|b| {
         b.emit_push(0).emit_push(0).emit_iter(Register(3));
         b.emit_next().emit_halt();
@@ -1618,6 +1616,147 @@ fn index_out_of_bounds_vec_get() {
         b.emit_halt();
     });
     assert!(matches!(err, Error::IndexOutOfBounds { .. }));
+}
+
+#[test]
+fn jump_to_an_undefined_label_raises_invalid_label() {
+    // `xqasm` refuses to assemble a jump to a label no `TARGET` defines, so
+    // no vector can reach this; raw bytecode can. SPEC.md's Faults table:
+    // `InvalidLabel` when a jump's label is absent from the jump table.
+    let program = xqvm::Program::new(vec![0x01, 9, 0xFF]); // JUMP1 9; HALT
+    let err = Vm::new().run(&program).expect_err("expected error");
+    assert!(
+        matches!(err, Error::InvalidLabel { label: 9, .. }),
+        "expected InvalidLabel, got {err:?}"
+    );
+}
+
+/// Every opcode that names a register and also pops, with its registers
+/// numbered from r0.
+fn register_and_pop_instructions() -> [Instruction; 22] {
+    let reg = Register(0);
+    let (model, indices, coeffs) = (Register(0), Register(1), Register(2));
+    [
+        Instruction::VecPush { reg },
+        Instruction::VecGet { reg },
+        Instruction::VecSet { reg },
+        Instruction::GetLine { reg },
+        Instruction::SetLine { reg },
+        Instruction::AddLine { reg },
+        Instruction::GetQuad { reg },
+        Instruction::SetQuad { reg },
+        Instruction::AddQuad { reg },
+        Instruction::Resize { reg },
+        Instruction::RowFind { reg },
+        Instruction::ColFind { reg },
+        Instruction::RowSum { reg },
+        Instruction::ColSum { reg },
+        Instruction::OneHotR { reg },
+        Instruction::OneHotC { reg },
+        Instruction::Exclude { reg },
+        Instruction::Implies { reg },
+        Instruction::Equality {
+            model,
+            indices,
+            coeffs,
+        },
+        Instruction::AtLeast { model, indices },
+        Instruction::AtLeastW {
+            model,
+            indices,
+            coeffs,
+        },
+        Instruction::Reduce { model },
+    ]
+}
+
+/// Run `instr` with an int in r0..r2 and `pushes` values on the stack.
+fn run_on_int_registers(instr: Instruction, pushes: u8) -> Error {
+    run_err(|b| {
+        for r in 0..3 {
+            b.emit_push(5).emit_stow(Register(r));
+        }
+        for _ in 0..pushes {
+            b.emit_push(1);
+        }
+        b.emit(instr).emit_halt();
+    })
+}
+
+#[test]
+fn stack_underflow_beats_a_wrong_typed_register() {
+    // SPEC.md's error precedence: operand pops come first, then the
+    // allocation charge, then type and range validation. With one operand
+    // too few, every register-naming opcode that pops raises StackUnderflow,
+    // though its int register would also have been rejected. The vectors
+    // pin one opcode per family (`*_short_stack_int_register`); this covers
+    // all twenty-two.
+    for instr in register_and_pop_instructions() {
+        let StackEffect::Fixed { pops, .. } = instr.stack_effect() else {
+            panic!("{} has no fixed pop count", instr.mnemonic());
+        };
+        let err = run_on_int_registers(instr, pops - 1);
+        assert!(
+            matches!(err, Error::StackUnderflow { .. }),
+            "{}: expected StackUnderflow, got {err:?}",
+            instr.mnemonic()
+        );
+        // With the stack full the same program reaches the type check, or
+        // the charge ahead of it: the pops moved first, the check remains.
+        let err = run_on_int_registers(instr, pops);
+        assert!(
+            matches!(
+                err,
+                Error::RegisterType { .. } | Error::MemoryLimitExceeded { .. }
+            ),
+            "{}: expected RegisterType, got {err:?}",
+            instr.mnemonic()
+        );
+    }
+}
+
+#[test]
+fn energy_reports_its_model_register_before_its_sample_register() {
+    // METERING.md (Conformance): ENERGY validates its model register
+    // completely before it looks at its sample register. With a sample in
+    // r0 and an int in r1 both are ill-typed; the fault belongs to r0.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_bsmx(Register(0));
+        b.emit_push(5).emit_stow(Register(1));
+        b.emit_energy(Register(0), Register(1)).emit_halt();
+    });
+    assert!(
+        matches!(err, Error::RegisterType { reg: 0, .. }),
+        "expected RegisterType on r0, got {err:?}"
+    );
+}
+
+#[test]
+fn equality_family_reports_its_indices_register_before_its_model() {
+    // EQUALITY, ATLEAST and ATLEASTW read their vec operands before they
+    // discriminate the model register. With ints in every register, the
+    // fault names r1 (indices), not r0 (model).
+    let (model, indices, coeffs) = (Register(0), Register(1), Register(2));
+    for instr in [
+        Instruction::Equality {
+            model,
+            indices,
+            coeffs,
+        },
+        Instruction::AtLeast { model, indices },
+        Instruction::AtLeastW {
+            model,
+            indices,
+            coeffs,
+        },
+    ] {
+        let err = run_on_int_registers(instr, 2);
+        assert!(
+            matches!(err, Error::RegisterType { reg: 1, .. }),
+            "{}: expected RegisterType on r1, got {err:?}",
+            instr.mnemonic()
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3244,7 +3383,7 @@ fn input_beyond_the_budget_copies_nothing() {
 //
 // The rates are normative and target-independent. Deriving one from
 // `size_of::<usize>()` or `size_of::<XqmxModel>()` makes the deployed wasm32
-// VM enforce a schedule that `xqvm_py`, the published documentation and this
+// VM enforce a schedule that the spec, the published documentation and this
 // crate's own 64-bit build all disagree with. These tests pin each rate as a
 // number, so a derivation reintroduced on any target fails here rather than
 // on chain.

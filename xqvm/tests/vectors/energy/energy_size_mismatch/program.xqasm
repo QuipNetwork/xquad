@@ -1,0 +1,13 @@
+; energy_size_mismatch: ENERGY over a model and a sample of different sizes
+; raises SizeMismatch.
+;
+; spec/xqvm/ISA.md's ENERGY row requires the sizes to match, and
+; spec/xqvm/SPEC.md's Faults table names the identity: SizeMismatch is
+; raised when ENERGY's model and sample have different sizes.
+
+PUSH 3
+BQMX r0          ; model of size 3
+PUSH 4
+BSMX r1          ; sample of size 4
+ENERGY r0 r1
+HALT

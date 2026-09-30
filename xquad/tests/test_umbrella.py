@@ -77,8 +77,3 @@ def test_end_to_end():
     v.run(src)
     assert v.outputs() == [12]
     assert v.stack() == []
-
-
-def test_vm_has_no_backend_switch():
-    assert not hasattr(vm, "VMBackend")
-    assert not hasattr(vm.VM(), "backend")

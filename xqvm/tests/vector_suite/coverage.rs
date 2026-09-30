@@ -68,19 +68,19 @@ use crate::vector::{self, Vector};
 /// Raising this also dates the prose in
 /// `docs/book/src/embedding/conformance.md`; check what that page still
 /// claims about coverage before you push.
-const PRESENT_FLOOR: usize = 65;
+const PRESENT_FLOOR: usize = 69;
 
 /// Opcodes executed to completion by at least one vector. Lower than
 /// [`PRESENT_FLOOR`] because several opcodes appear only in vectors that
 /// assert the fault they raise.
-const REACHED_FLOOR: usize = 56;
+const REACHED_FLOOR: usize = 58;
 
 /// Vectors in the suite.
 ///
 /// The opcode floors only trip when a deleted vector was the last to cover
 /// an opcode, so removing one of several `ADD` vectors passes them. This
 /// one trips on any removal.
-const VECTOR_FLOOR: usize = 156;
+const VECTOR_FLOOR: usize = 182;
 
 /// Build the full `(code, mnemonic)` opcode list from the `opcodes!`
 /// x-macro, so the denominator cannot drift from the opcode table.

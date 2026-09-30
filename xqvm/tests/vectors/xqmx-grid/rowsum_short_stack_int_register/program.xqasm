@@ -1,0 +1,16 @@
+; rowsum_short_stack_int_register: ROWSUM pops its operands before it reads its register, so a
+; stack one value short raises StackUnderflow even though the register
+; would also have been rejected.
+;
+; spec/xqvm/SPEC.md's error-precedence rule makes operand pops first within
+; every instruction. getline_short_stack_int_register pins the rule for
+; GETLINE; this vector pins it for the grid reads, and
+; stack_underflow_beats_a_wrong_typed_register in xqvm/tests/integration.rs
+; covers all twenty-two opcodes that name a register and pop. The register
+; is filled from calldata rather than left unset, so UnsetRegister cannot
+; stand in for the type fault.
+
+PUSH 0
+INPUT r0         ; r0 = 5, an int
+ROWSUM r0 ; 1 pops, 0 on the stack
+HALT

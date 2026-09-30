@@ -20,7 +20,7 @@
 //! `src/bytecode/types/parity.rs`. Any mismatch becomes a compile error.
 //!
 //! The emitted table carries the wire byte, the mnemonic, the stack effect
-//! and the operand layout as `(name, byte width)` pairs. The stack effect
+//! and the operand layout as `(name, kind, byte width)` triples. The stack effect
 //! is the YAML's `stack_pop`/`stack_push` pair spelled as the same
 //! `StackEffect` the x-macro stores, or `StackEffect::Reset` for an opcode
 //! with `stack_reset`, so pops and pushes are compared separately.
@@ -64,6 +64,9 @@ struct Op {
 #[derive(serde::Deserialize)]
 struct Operand {
     name: String,
+    /// `register`, `label` or `immediate`.
+    #[serde(rename = "type")]
+    kind: String,
     #[serde(default = "default_operand_width")]
     width: u8,
 }
@@ -113,7 +116,7 @@ fn main() {
         "// Do not edit; regenerate by touching opcodes.yaml and re-running `cargo build`.\n\n",
     );
     // Each row is (code, mnemonic, stack effect, operands), where an
-    // operand is (name, byte width). `OpcodeRow` is the alias parity.rs
+    // operand is (name, kind, byte width). `OpcodeRow` is the alias parity.rs
     // declares for that tuple; the shape mirrors what parity.rs derives
     // from the `opcodes!` x-macro so the comparison there stays a
     // field-by-field equality.
@@ -129,8 +132,12 @@ fn main() {
                 op.code,
                 operand.name
             );
-            write!(operands, "(\"{}\", {}), ", operand.name, operand.width)
-                .expect("writing to a String cannot fail");
+            write!(
+                operands,
+                "(\"{}\", \"{}\", {}), ",
+                operand.name, operand.kind, operand.width
+            )
+            .expect("writing to a String cannot fail");
         }
         writeln!(
             code,

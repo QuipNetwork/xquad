@@ -4,20 +4,18 @@
 #
 # Atomic spec-MR guard.
 #
-# Enforces the xquad two-impl development discipline: any MR that
-# touches VM semantics must touch **all four** of
+# Enforces the xquad spec-first development discipline: any MR that
+# touches VM semantics must touch **all three** of
 #
 #   1. spec/xqvm/*.md                -- the normative specification
-#   2. xqvm/src/**/*.rs              -- the Rust production impl
-#   3. xqvm_py/{executor,opcodes,xqmx,state,vector,tracer,errors}.py
-#                                     -- the Python reference impl
-#   4. xqvm/tests/vectors/** or xqvm/opcodes.yaml
+#   2. xqvm/src/**/*.rs              -- the VM
+#   3. xqvm/tests/vectors/** or xqvm/opcodes.yaml
 #                                     -- the specification vectors and table
 #
 # in the same MR. Partial changes silently create drift between the
-# spec and the two implementations; this guard catches them at CI
-# time so the atomic MR convention is enforced rather than just
-# documented.
+# spec, the VM and the vectors that check one against the other; this
+# guard catches them at CI time so the atomic MR convention is enforced
+# rather than just documented.
 #
 # Usage:
 #   scripts/check-atomic-spec-mr.sh [BASE_REF] [HEAD_REF]
@@ -33,7 +31,7 @@
 # the target gained since the merge-base as well as the ones the merge
 # request touched, which fails a docs-only MR the moment main gains an
 # unrelated xqvm/src commit -- a finding whose only remedy is a rebase,
-# which has nothing to do with the four-layer rule. It also widens the
+# which has nothing to do with the three-layer rule. It also widens the
 # exemption scan below, so an Atomic-Spec-Exempt trailer on any main
 # commit would bypass the guard for every open merge request.
 #
@@ -48,13 +46,13 @@
 #   If a commit message in the MR range carries a git-style trailer
 #   `Atomic-Spec-Exempt: QUI-<id> <reason>` at column 0, on one line,
 #   the guard is bypassed. Use this for deliberately one-sided changes
-#   (e.g. a Python-only fix that aligns to existing Rust behaviour). The
+#   (e.g. a spec clarification of behaviour the VM already has). The
 #   format is enforced, not merely suggested: a trailer that wraps or
 #   names no ticket fails the guard instead of bypassing it. See
 #   _validate_exempt_trailers below for why.
 #
 # Exit codes:
-#   0  -- pass (zero layers touched, all four touched, or exempt)
+#   0  -- pass (zero layers touched, all three touched, or exempt)
 #   1  -- fail (partial change with no exemption, or a malformed trailer)
 #   2  -- usage / setup error
 
@@ -281,7 +279,7 @@ _report_bad_exempt() {
     echo "trailer or below the sign-off, but not directly beneath it:" >&2
     echo "" >&2
     echo "    Fixes QUI-453" >&2
-    echo "    Atomic-Spec-Exempt: QUI-453 one-sided Python fix, no semantics change" >&2
+    echo "    Atomic-Spec-Exempt: QUI-453 spec clarification, no semantics change" >&2
     echo "    Signed-off-by: You <you@example.com>" >&2
     echo "" >&2
     echo "See docs/guide/development-workflow.md for the contract." >&2
@@ -334,7 +332,7 @@ if [[ -n "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-}" ]] \
     esac
 fi
 
-# --- Classify changed files into the four layers ---------------------------
+# --- Classify changed files into the three layers --------------------------
 
 # Two-dot A..B (direct diff) rather than three-dot A...B (symmetric
 # difference from merge-base). By this point BASE_REF is already a
@@ -347,12 +345,10 @@ changed_files="$(git diff --name-only "${BASE_REF}..${HEAD_REF}")"
 
 has_spec=0
 has_xqvm=0
-has_xqvm_py=0
 has_conformance=0
 
 touched_spec=()
 touched_xqvm=()
-touched_xqvm_py=()
 touched_conformance=()
 
 while IFS= read -r file; do
@@ -376,24 +372,7 @@ while IFS= read -r file; do
         continue
     fi
 
-    # Layer 3 -- Python reference impl. Restricted to the core modules;
-    # glue (program.py, __init__.py, __main__.py, cli/**) and tests
-    # don't count.
-    case "${file}" in
-        xqvm_py/executor.py \
-        | xqvm_py/opcodes.py \
-        | xqvm_py/xqmx.py \
-        | xqvm_py/state.py \
-        | xqvm_py/vector.py \
-        | xqvm_py/tracer.py \
-        | xqvm_py/errors.py)
-            has_xqvm_py=1
-            touched_xqvm_py+=("${file}")
-            continue
-            ;;
-    esac
-
-    # Layer 4 -- the specification vectors and the opcode table.
+    # Layer 3 -- the specification vectors and the opcode table.
     if [[ "${file}" == xqvm/opcodes.yaml ]] || [[ "${file}" == xqvm/tests/vectors/* ]]; then
         has_conformance=1
         touched_conformance+=("${file}")
@@ -401,7 +380,7 @@ while IFS= read -r file; do
     fi
 done <<< "${changed_files}"
 
-sum=$((has_spec + has_xqvm + has_xqvm_py + has_conformance))
+sum=$((has_spec + has_xqvm + has_conformance))
 
 # --- Verdict ---------------------------------------------------------------
 
@@ -410,28 +389,26 @@ if [[ "${sum}" -eq 0 ]]; then
     exit 0
 fi
 
-if [[ "${sum}" -eq 4 ]]; then
-    echo "guard: all four layers touched ✓"
+if [[ "${sum}" -eq 3 ]]; then
+    echo "guard: all three layers touched ✓"
     echo "       spec        : ${touched_spec[*]}"
     echo "       xqvm        : ${touched_xqvm[*]}"
-    echo "       xqvm_py     : ${touched_xqvm_py[*]}"
     echo "       conformance : ${touched_conformance[*]}"
     exit 0
 fi
 
 # Partial change -- report cleanly and fail.
-echo "error: atomic spec-MR guard failed -- VM-semantics MRs must touch all four layers."
+echo "error: atomic spec-MR guard failed -- VM-semantics MRs must touch all three layers."
 echo ""
 echo "  spec        (spec/xqvm/*.md)                                    : $([[ ${has_spec} -eq 1 ]] && echo '✓' || echo '✗')"
 echo "  xqvm        (xqvm/src/**/*.rs)                                  : $([[ ${has_xqvm} -eq 1 ]] && echo '✓' || echo '✗')"
-echo "  xqvm_py     (xqvm_py/{executor,opcodes,xqmx,state,vector,..}.py): $([[ ${has_xqvm_py} -eq 1 ]] && echo '✓' || echo '✗')"
 echo "  vectors     (xqvm/{tests/vectors/**,opcodes.yaml})              : $([[ ${has_conformance} -eq 1 ]] && echo '✓' || echo '✗')"
 echo ""
-echo "If this MR is deliberately one-sided (e.g. a Python-only fix aligning to"
-echo "existing Rust behaviour), add a commit-message trailer at column 0 in the"
-echo "last paragraph, on one line, naming the ticket the exemption belongs to:"
+echo "If this MR is deliberately one-sided (e.g. a spec clarification of"
+echo "behaviour the VM already has), add a commit-message trailer at column 0"
+echo "in the last paragraph, on one line, naming the ticket it belongs to:"
 echo ""
-echo "    Atomic-Spec-Exempt: QUI-453 one-sided Python fix, no semantics change"
+echo "    Atomic-Spec-Exempt: QUI-453 spec clarification, no semantics change"
 echo "    Signed-off-by: You <you@example.com>"
 echo ""
 echo "See docs/guide/development-workflow.md for the contract."

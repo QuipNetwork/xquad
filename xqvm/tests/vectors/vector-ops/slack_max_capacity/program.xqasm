@@ -1,0 +1,25 @@
+; slack_max_capacity: SLACK at the largest positive capacity appends 63
+; entries and never overflows.
+;
+; spec/xqvm/SPEC.md's overflow rule: SLACK computes the powers of two it
+; appends only up to the largest one not exceeding capacity, so the largest
+; coefficient at capacity = 2^63 - 1 is 2^62. spec/xqvm/ISA.md gives
+; S = floor(log2(2^63 - 1)) + 1 = 63 entries: indices 0..62 and coefficients
+; 1, 2, ..., 2^62.
+;
+; Steps (spec/xqvm/METERING.md): twelve instructions at BASE_STEPS, plus
+; SLACK's 63 entries * 2 * ELEMENT_COPY_STEPS = 126.
+
+VECI r0          ; indices
+VECI r1          ; coeffs
+PUSH 0           ; start_index
+PUSH 9223372036854775807  ; capacity = 2^63 - 1
+SLACK r0 r1
+
+VECLEN r0        ; 63
+VECLEN r1        ; 63
+PUSH 62
+VECGET r1        ; coeffs[62] = 2^62
+PUSH 62
+VECGET r0        ; indices[62] = 62
+HALT

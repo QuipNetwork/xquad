@@ -22,8 +22,8 @@ these cases cannot be reached by calling a function: each builds a
 throwaway repository under `tmp_path`, writes a real commit, and drives
 scripts/check-atomic-spec-mr.sh through `subprocess`.
 
-Every commit here touches `xqvm_py/executor.py` alone, which is one of
-the four layers, so the guard would fail on a partial change and only
+Every commit here touches `xqvm/src/vm.rs` alone, which is one of
+the three layers, so the guard would fail on a partial change and only
 the trailer can save it. That makes the exit code a direct read of what
 the guard made of the trailer.
 """
@@ -69,10 +69,10 @@ def git(repo: Path, *args: str) -> str:
 
 def commit_layer_change(repo: Path, message: str, *, name: str) -> None:
     """Commit a change to one atomic-spec layer with `message` as the body."""
-    target = repo / "xqvm_py"
-    target.mkdir(exist_ok=True)
-    (target / "executor.py").write_text(f"# {name}\n", encoding="utf-8")
-    git(repo, "add", "xqvm_py/executor.py")
+    target = repo / "xqvm" / "src"
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "vm.rs").write_text(f"// {name}\n", encoding="utf-8")
+    git(repo, "add", "xqvm/src/vm.rs")
     git(repo, "commit", "-m", message)
 
 
@@ -113,7 +113,7 @@ def test_single_line_ticketed_trailer_bypasses(repo: Path) -> None:
     base = git(repo, "rev-parse", "HEAD")
     commit_layer_change(
         repo,
-        "fix(xqvm_py): align to existing Rust behaviour\n\n"
+        "fix(xqvm): align to existing Rust behaviour\n\n"
         f"{SIGNOFF}\n"
         "Atomic-Spec-Exempt: QUI-453 one-sided Python fix, no semantics change\n",
         name="aligned",
@@ -130,7 +130,7 @@ def test_trailer_without_a_ticket_fails(repo: Path) -> None:
     base = git(repo, "rev-parse", "HEAD")
     commit_layer_change(
         repo,
-        "fix(xqvm_py): align to existing Rust behaviour\n\n"
+        "fix(xqvm): align to existing Rust behaviour\n\n"
         f"{SIGNOFF}\n"
         "Atomic-Spec-Exempt: one-sided Python fix, no semantics change\n",
         name="unticketed",
@@ -154,7 +154,7 @@ def test_wrapped_trailer_fails(repo: Path) -> None:
     base = git(repo, "rev-parse", "HEAD")
     commit_layer_change(
         repo,
-        "fix(xqvm_py): align to existing Rust behaviour\n\n"
+        "fix(xqvm): align to existing Rust behaviour\n\n"
         f"{SIGNOFF}\n"
         "Atomic-Spec-Exempt: QUI-453 one-sided Python fix bringing impl in line\n"
         "with existing Rust behaviour -- no semantics change.\n",
@@ -204,7 +204,7 @@ def test_indented_trailer_is_not_an_exemption(repo: Path) -> None:
     base = git(repo, "rev-parse", "HEAD")
     commit_layer_change(
         repo,
-        "fix(xqvm_py): align to existing Rust behaviour\n\n"
+        "fix(xqvm): align to existing Rust behaviour\n\n"
         "The trailer to use looks like this:\n\n"
         "    Atomic-Spec-Exempt: QUI-453 one-sided Python fix\n\n"
         f"{SIGNOFF}\n",
@@ -214,7 +214,7 @@ def test_indented_trailer_is_not_an_exemption(repo: Path) -> None:
     result = run_guard(repo, base, "HEAD")
 
     assert result.returncode == 1
-    assert "must touch all four layers" in result.stdout + result.stderr
+    assert "must touch all three layers" in result.stdout + result.stderr
 
 
 def test_one_good_trailer_does_not_excuse_a_malformed_one(repo: Path) -> None:
@@ -222,14 +222,12 @@ def test_one_good_trailer_does_not_excuse_a_malformed_one(repo: Path) -> None:
     base = git(repo, "rev-parse", "HEAD")
     commit_layer_change(
         repo,
-        "fix(xqvm_py): first half\n\n"
-        f"{SIGNOFF}\n"
-        "Atomic-Spec-Exempt: QUI-453 one-sided Python fix, no semantics change\n",
+        f"fix(xqvm): first half\n\n{SIGNOFF}\nAtomic-Spec-Exempt: QUI-453 one-sided Python fix, no semantics change\n",
         name="first",
     )
     commit_layer_change(
         repo,
-        f"fix(xqvm_py): second half\n\n{SIGNOFF}\nAtomic-Spec-Exempt: no ticket here at all\n",
+        f"fix(xqvm): second half\n\n{SIGNOFF}\nAtomic-Spec-Exempt: no ticket here at all\n",
         name="second",
     )
 
@@ -256,7 +254,7 @@ def test_bare_word_footer_above_the_trailer_bypasses(repo: Path) -> None:
     base = git(repo, "rev-parse", "HEAD")
     commit_layer_change(
         repo,
-        "fix(xqvm_py): align to existing Rust behaviour\n\n"
+        "fix(xqvm): align to existing Rust behaviour\n\n"
         "Fixes QUI-453\n"
         "Atomic-Spec-Exempt: QUI-453 one-sided Python fix, no semantics change\n"
         f"{SIGNOFF}\n",
@@ -280,7 +278,7 @@ def test_bare_word_footer_directly_below_the_trailer_is_reported(repo: Path) -> 
     base = git(repo, "rev-parse", "HEAD")
     commit_layer_change(
         repo,
-        "fix(xqvm_py): align to existing Rust behaviour\n\n"
+        "fix(xqvm): align to existing Rust behaviour\n\n"
         "Atomic-Spec-Exempt: QUI-453 one-sided Python fix, no semantics change\n"
         "Fixes QUI-453\n"
         f"{SIGNOFF}\n",
@@ -305,7 +303,7 @@ def test_trailer_in_an_earlier_paragraph_fails(repo: Path) -> None:
     base = git(repo, "rev-parse", "HEAD")
     commit_layer_change(
         repo,
-        "fix(xqvm_py): align to existing Rust behaviour\n\n"
+        "fix(xqvm): align to existing Rust behaviour\n\n"
         "Atomic-Spec-Exempt: QUI-453 one-sided Python fix, no semantics change\n\n"
         "Implements QUI-453\n\n"
         f"{SIGNOFF}\n",
@@ -329,7 +327,7 @@ def test_trailer_without_a_signoff_fails(repo: Path) -> None:
     base = git(repo, "rev-parse", "HEAD")
     commit_layer_change(
         repo,
-        "fix(xqvm_py): align to existing Rust behaviour\n\n"
+        "fix(xqvm): align to existing Rust behaviour\n\n"
         "Atomic-Spec-Exempt: QUI-453 one-sided Python fix, no semantics change\n"
         "Fixes QUI-453\n",
         name="unsigned",
@@ -352,7 +350,7 @@ def test_indented_continuation_fails(repo: Path) -> None:
     base = git(repo, "rev-parse", "HEAD")
     commit_layer_change(
         repo,
-        "fix(xqvm_py): align to existing Rust behaviour\n\n"
+        "fix(xqvm): align to existing Rust behaviour\n\n"
         "Atomic-Spec-Exempt: QUI-453 one-sided Python fix bringing impl in line\n"
         "  with existing Rust behaviour, no semantics change\n"
         f"{SIGNOFF}\n",
@@ -378,7 +376,7 @@ def test_trailer_quoted_in_prose_does_not_anchor_the_check(repo: Path) -> None:
     base = git(repo, "rev-parse", "HEAD")
     commit_layer_change(
         repo,
-        "fix(xqvm_py): align to existing Rust behaviour\n\n"
+        "fix(xqvm): align to existing Rust behaviour\n\n"
         "The trailer we take here reads:\n"
         "Atomic-Spec-Exempt: QUI-453 one-sided fix\n"
         "because the Rust side already behaves this way.\n\n"
@@ -404,7 +402,7 @@ def test_second_trailer_is_checked_for_a_ticket(repo: Path) -> None:
     base = git(repo, "rev-parse", "HEAD")
     commit_layer_change(
         repo,
-        "fix(xqvm_py): align to existing Rust behaviour\n\n"
+        "fix(xqvm): align to existing Rust behaviour\n\n"
         "Atomic-Spec-Exempt: QUI-453 one-sided Python fix, no semantics change\n"
         "Atomic-Spec-Exempt: no ticket at all here\n"
         f"{SIGNOFF}\n",
@@ -428,7 +426,7 @@ def test_second_trailer_gets_the_below_the_line_check(repo: Path) -> None:
     base = git(repo, "rev-parse", "HEAD")
     commit_layer_change(
         repo,
-        "fix(xqvm_py): align to existing Rust behaviour\n\n"
+        "fix(xqvm): align to existing Rust behaviour\n\n"
         "Atomic-Spec-Exempt: QUI-453 one-sided Python fix, no semantics change\n"
         "Atomic-Spec-Exempt: QUI-454 second one-sided fix bringing impl in line\n"
         "with existing Rust behaviour -- no semantics change.\n"
@@ -452,7 +450,7 @@ def test_trailer_ending_the_message_bypasses(repo: Path) -> None:
     base = git(repo, "rev-parse", "HEAD")
     commit_layer_change(
         repo,
-        "fix(xqvm_py): align to existing Rust behaviour\n\n"
+        "fix(xqvm): align to existing Rust behaviour\n\n"
         f"{SIGNOFF}\n"
         "Atomic-Spec-Exempt: QUI-453 one-sided Python fix, no semantics change\n",
         name="lastline",
@@ -462,3 +460,60 @@ def test_trailer_ending_the_message_bypasses(repo: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "bypassed" in result.stdout
+
+
+# --- Layer count -------------------------------------------------------------
+
+
+LAYER_FILES = {
+    "spec": "spec/xqvm/SPEC.md",
+    "xqvm": "xqvm/src/vm.rs",
+    "vectors": "xqvm/tests/vectors/arithmetic/add/program.xqasm",
+}
+
+
+def commit_files(repo: Path, *paths: str) -> None:
+    """Commit a change to each of `paths`, with no trailer."""
+    for rel in paths:
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"changed {rel}\n", encoding="utf-8")
+        git(repo, "add", rel)
+    git(repo, "commit", "-m", f"fix(xqvm): change semantics\n\n{SIGNOFF}\n")
+
+
+def test_all_three_layers_pass(repo: Path) -> None:
+    base = git(repo, "rev-parse", "HEAD")
+    commit_files(repo, *LAYER_FILES.values())
+    result = run_guard(repo, base, "HEAD")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "all three layers touched" in result.stdout
+
+
+@pytest.mark.parametrize("missing", sorted(LAYER_FILES))
+def test_any_two_layers_fail_and_name_the_missing_one(repo: Path, missing: str) -> None:
+    base = git(repo, "rev-parse", "HEAD")
+    commit_files(repo, *(path for layer, path in LAYER_FILES.items() if layer != missing))
+    result = run_guard(repo, base, "HEAD")
+    assert result.returncode == 1
+    # One status row per layer, e.g. "  spec        (spec/xqvm/*.md) ... : ✗".
+    rows = [line.split() for line in result.stdout.splitlines()]
+    report = {row[0]: row[-1] for row in rows if row and row[0] in LAYER_FILES}
+    assert report == {layer: "✗" if layer == missing else "✓" for layer in LAYER_FILES}
+
+
+def test_a_change_under_xqvm_py_is_no_layer(repo: Path) -> None:
+    """The Python reference VM is gone; a stray file there is not a layer."""
+    base = git(repo, "rev-parse", "HEAD")
+    commit_files(repo, "xqvm_py/executor.py")
+    result = run_guard(repo, base, "HEAD")
+    assert result.returncode == 0
+    assert "guard does not apply" in result.stdout
+
+
+def test_no_layer_passes(repo: Path) -> None:
+    base = git(repo, "rev-parse", "HEAD")
+    commit_files(repo, "README.md")
+    result = run_guard(repo, base, "HEAD")
+    assert result.returncode == 0
+    assert "guard does not apply" in result.stdout

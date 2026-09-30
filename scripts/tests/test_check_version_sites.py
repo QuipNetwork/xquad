@@ -135,13 +135,8 @@ def write_tree(root: Path, cargo: str = CARGO_DEV, pep: str = PEP_DEV) -> Path:
     write("fixtures/pallet-xqvm/Cargo.lock", f'[[package]]\nname = "xqvm"\nversion = "{cargo}"\n')
     write("fixtures/xqvm-wasm/Cargo.toml", _CRATE.format(name="xqvm-wasm", cargo="0.0.0"))
 
-    write("pyproject.toml", '[tool.uv.workspace]\nmembers = [ "xqffi", "xqvm_py", "xqcp", "xqsa", "xquad" ]\n')
+    write("pyproject.toml", '[tool.uv.workspace]\nmembers = [ "xqffi", "xqcp", "xqsa", "xquad" ]\n')
     write("xqffi/pyproject.toml", '[project]\nname = "xqffi"\ndynamic = [ "version" ]\n')
-    write(
-        "xqvm_py/pyproject.toml",
-        f'[project]\nname = "xqvm_py"\ndynamic = [ "version" ]\ndependencies = [\n    "xqffi=={pep}",\n]\n',
-    )
-    write("xqvm_py/__init__.py", f'__version__ = "{pep}"\n')
     write(
         "xqcp/pyproject.toml",
         f'[project]\nname = "xqcp"\nversion = "{pep}"\ndependencies = [\n    "xqffi=={pep}",\n]\n',
@@ -164,17 +159,16 @@ def write_tree(root: Path, cargo: str = CARGO_DEV, pep: str = PEP_DEV) -> Path:
         f'quip  = [ "xqsa[quip]=={pep}" ]\n',
     )
 
-    # xqffi and xqvm-py carry no version: uv records none for a dynamic
-    # package, and the guard asserts that absence.
+    # xqffi carries no version: uv records none for a dynamic package, and
+    # the guard asserts that absence.
     write(
         "uv.lock",
         f'[[package]]\nname = "xqcp"\nversion = "{pep}"\nsource = {{ editable = "xqcp" }}\n\n'
         f'[[package]]\nname = "xqsa"\nversion = "{pep}"\nsource = {{ editable = "xqsa" }}\n\n'
         f'[[package]]\nname = "xquad"\nversion = "{pep}"\nsource = {{ editable = "xquad" }}\n\n'
-        '[[package]]\nname = "xqffi"\nsource = { editable = "xqffi" }\n\n'
-        '[[package]]\nname = "xqvm-py"\nsource = { editable = "xqvm_py" }\n',
+        '[[package]]\nname = "xqffi"\nsource = { editable = "xqffi" }\n',
     )
-    write("scripts/python-packages.sh", "CDYLIB=xqffi\nPEERS=(xqvm_py xqcp xqsa xquad)\n")
+    write("scripts/python-packages.sh", "CDYLIB=xqffi\nPEERS=(xqcp xqsa xquad)\n")
     return root
 
 
@@ -210,7 +204,7 @@ def test_no_tag_is_a_no_op(tree: Path) -> None:
 
 def test_no_tag_ignores_a_disagreeing_site(tree: Path) -> None:
     """The version comparison is genuinely tag-gated, not merely quiet."""
-    patch(tree, "xqvm_py/__init__.py", PEP_DEV, "9.9.9")
+    patch(tree, "xquad/pyproject.toml", f'version = "{PEP_DEV}"', 'version = "9.9.9"')
     assert run_guard(tree).returncode == 0
 
 
@@ -218,7 +212,7 @@ def test_release_candidate_passes_against_its_own_spellings(bumped: Path) -> Non
     """v0.4.0-rc1 against 0.4.0-rc1 / 0.4.0rc1 is the release candidate flow."""
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 0, result.stderr
-    assert "21 sites at 0.4.0-rc1 / 0.4.0rc1" in result.stdout
+    assert "19 sites at 0.4.0-rc1 / 0.4.0rc1" in result.stdout
 
 
 def test_python_site_in_cargo_spelling_fails(bumped: Path) -> None:
@@ -226,7 +220,7 @@ def test_python_site_in_cargo_spelling_fails(bumped: Path) -> None:
     patch(bumped, "xqcp/pyproject.toml", f'version = "{PEP_RC}"', f'version = "{CARGO_RC}"')
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert "disagrees with 1 of 21" in result.stderr
+    assert "disagrees with 1 of 19" in result.stderr
     assert f"xqcp/pyproject.toml:3: project version: found {CARGO_RC}, expected {PEP_RC}" in result.stderr
 
 
@@ -234,11 +228,11 @@ def test_release_tag_against_dev_tree_fails(tree: Path) -> None:
     """The live gap: tagging v0.4.0 against a -dev main would publish 0.4.0-dev."""
     result = run_guard(tree, tag="v0.4.0")
     assert result.returncode == 1
-    assert "disagrees with 21 of 21" in result.stderr
+    assert "disagrees with 19 of 19" in result.stderr
     for expected in (
         "Cargo.toml:6: workspace dependency xqvm",
         "xqffi/Cargo.toml:3: package version",
-        "xqvm_py/__init__.py:1: __version__",
+        "xquad/pyproject.toml:3: project version",
         "xquad/pyproject.toml:11: peer pin xqsa[cuda]",
         "fixtures/pallet-xqvm/Cargo.lock:3: locked version xqvm",
     ):
@@ -251,7 +245,13 @@ def test_release_tag_against_dev_tree_fails(tree: Path) -> None:
 @pytest.mark.parametrize(
     ("rel", "old", "new", "count", "site"),
     [
-        ("xqvm_py/__init__.py", PEP_RC, PEP_DEV, 1, "xqvm_py/__init__.py:1: __version__"),
+        (
+            "xquad/pyproject.toml",
+            f'version = "{PEP_RC}"',
+            f'version = "{PEP_DEV}"',
+            1,
+            "xquad/pyproject.toml:3: project version",
+        ),
         ("xquad/pyproject.toml", f'"xqcp=={PEP_RC}"', f'"xqcp=={PEP_DEV}"', 1, "peer pin xqcp"),
         ("xquad/pyproject.toml", f"xqsa[cuda]=={PEP_RC}", f"xqsa[cuda]=={PEP_DEV}", 1, "peer pin xqsa[cuda]"),
         ("fixtures/pallet-xqvm/Cargo.lock", CARGO_RC, CARGO_DEV, 1, "fixtures/pallet-xqvm/Cargo.lock:3"),
@@ -268,7 +268,7 @@ def test_partial_bump_reports_exactly_the_stale_site(
     patch(bumped, rel, old, new)
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert f"disagrees with {count} of 21" in result.stderr
+    assert f"disagrees with {count} of 19" in result.stderr
     assert site in result.stderr
 
 
@@ -284,17 +284,17 @@ def test_every_xquad_pin_missed_reports_three_sites(bumped: Path) -> None:
         patch(bumped, "xquad/pyproject.toml", f'"{dist}=={PEP_RC}"', f'"{dist}=={PEP_DEV}"')
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert "disagrees with 3 of 21" in result.stderr
+    assert "disagrees with 3 of 19" in result.stderr
     assert "project version" not in result.stderr
 
 
 def test_unrelated_stale_sites_are_all_reported(bumped: Path) -> None:
     """Findings accumulate; the guard never stops at the first."""
     patch(bumped, "xqvm/Cargo.toml", f'version = "{CARGO_RC}"', f'version = "{CARGO_DEV}"')
-    patch(bumped, "xqvm_py/__init__.py", PEP_RC, PEP_DEV)
+    patch(bumped, "xquad/pyproject.toml", f'version = "{PEP_RC}"', f'version = "{PEP_DEV}"')
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert "disagrees with 2 of 21" in result.stderr
+    assert "disagrees with 2 of 19" in result.stderr
 
 
 def test_environment_tag_is_used_when_no_argument_is_given(bumped: Path) -> None:
@@ -456,7 +456,7 @@ def test_lock_version_for_a_dynamic_package_is_a_setup_error(tree: Path) -> None
 def test_list_prints_every_site(tree: Path) -> None:
     result = run_guard(tree, "--list")
     assert result.returncode == 0
-    assert result.stdout.rstrip().endswith("21 version sites")
+    assert result.stdout.rstrip().endswith("19 version sites")
 
 
 def test_print_version_reports_the_canonical_spelling(tree: Path) -> None:
@@ -467,7 +467,7 @@ def test_print_version_reports_the_canonical_spelling(tree: Path) -> None:
 
 
 def test_print_version_refuses_a_tree_that_disagrees(tree: Path) -> None:
-    patch(tree, "xqvm_py/__init__.py", PEP_DEV, "9.9.9")
+    patch(tree, "xquad/pyproject.toml", f'version = "{PEP_DEV}"', 'version = "9.9.9"')
     result = run_guard(tree, "--print-version")
     assert result.returncode == 2
     assert "do not agree on one version" in result.stderr
@@ -542,7 +542,7 @@ def test_is_semver(raw: str, valid: bool) -> None:
 @pytest.mark.parametrize(
     ("raw", "name", "extras", "spec"),
     [
-        ("xqvm_py==0.4.0.dev0", "xqvm_py", (), "==0.4.0.dev0"),
+        ("xqffi==0.4.0.dev0", "xqffi", (), "==0.4.0.dev0"),
         ("xqsa[cuda]==0.4.0.dev0", "xqsa", ("cuda",), "==0.4.0.dev0"),
         ("dwave-samplers>=1.0", "dwave-samplers", (), ">=1.0"),
         ("pyobjc-framework-Metal>=11.0; sys_platform == 'darwin'", "pyobjc-framework-Metal", (), ">=11.0"),
@@ -553,5 +553,5 @@ def test_parse_requirement(raw: str, name: str, extras: tuple[str, ...], spec: s
 
 
 def test_distribution_names_are_normalised() -> None:
-    """uv.lock writes xqvm-py where the manifests write xqvm_py."""
-    assert guard.normalise_dist("xqvm_py") == guard.normalise_dist("xqvm-py") == "xqvm-py"
+    """PEP 503: underscores, dots and case fold onto one lowercase hyphenated name."""
+    assert guard.normalise_dist("Quip_Signer") == guard.normalise_dist("quip-signer") == "quip-signer"

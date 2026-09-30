@@ -1,10 +1,8 @@
 # XQVM Opcode Table — machine-readable canonical source
 #
-# This file is the single source of truth for the XQVM opcode set. Both the
-# Rust production implementation (xqvm/src/bytecode/types/table.rs,
-# validated at compile time by xqvm/build.rs) and the Python reference
-# implementation (xqvm_py/opcodes.py, validated by
-# scripts/check-opcode-parity.py) are checked against this table.
+# This file is the single source of truth for the XQVM opcode set. The Rust
+# implementation (xqvm/src/bytecode/types/table.rs) is checked against it at
+# compile time by xqvm/build.rs and xqvm/src/bytecode/types/parity.rs.
 #
 # Schema per entry:
 #   code:      u8 wire encoding (hex).

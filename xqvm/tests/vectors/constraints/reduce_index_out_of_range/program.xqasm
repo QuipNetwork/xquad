@@ -1,0 +1,16 @@
+; reduce_index_out_of_range: REDUCE with var_b outside the model raises
+; IndexOutOfBounds.
+;
+; spec/xqvm/ISA.md's REDUCE row: IndexOutOfBounds if var_a or var_b is out
+; of range [0, model.size) before allocation. The default budget pays the
+; charge, which spec/xqvm/SPEC.md places ahead of the range check, so the
+; range check decides. reduce_charge_before_index_check pins the case where
+; the budget cannot pay.
+
+PUSH 4
+BQMX r0
+PUSH 0           ; var_a
+PUSH 4           ; var_b, out of range [0, 4)
+PUSH 1           ; P_aux
+REDUCE r0
+HALT

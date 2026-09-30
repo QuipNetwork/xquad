@@ -1,0 +1,23 @@
+; onehotc_charge_before_expand: ONEHOTC on a model register is charged its
+; expansion before it expands, so an exhausted budget decides the fault.
+;
+; spec/xqvm/SPEC.md charges ONEHOTR and ONEHOTC "the expansion over the row's
+; or column's variables, sized from a model register", ahead of the work it
+; prices ("Expansions are charged their worst case, before they expand").
+; The model below is nine binary variables (72 bytes at the variable rate)
+; under a budget of exactly 72, gridded 3x3. Column 0 is in range, so the
+; only fault left is the charge: three linear entries and three pairs,
+; 3x32 + 3x48 = 240 bytes, which the budget cannot pay.
+;
+; onehotc_sample_charged_nothing is the twin on a sample register, which is
+; charged nothing and reaches the type check instead.
+
+PUSH 9
+BQMX r0          ; 72 bytes: the whole budget
+PUSH 3
+PUSH 3
+RESIZE r0        ; 3x3 grid
+PUSH 0           ; col, in range
+PUSH 1           ; penalty
+ONEHOTC r0
+HALT

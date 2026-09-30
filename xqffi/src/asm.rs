@@ -19,17 +19,12 @@
 //!
 //! Three entry points:
 //!
-//! - [`parse_xqasm`] — parse `.xqasm` source and return a Python dict
-//!   shaped for direct consumption by `xqvm_py.program.Program`:
+//! - [`parse_xqasm`] — parse `.xqasm` source and return a Python dict:
 //!   `{"instructions": [(opcode_u8, operand_bytes, pc), ...],
 //!     "jump_targets": {target_id: pc, ...}}`.
 //!
 //!   `operand_bytes` is a Python `bytes` object (pyo3's default
-//!   conversion for `Vec<u8>`). `xqvm_py.core.executor` indexes
-//!   `instr.operands[i]` to get a single byte value — both `tuple[int,
-//!   ...]` and `bytes` support that; the helper `program_from_xqasm`
-//!   wraps it into the tuple shape that the `Instruction` dataclass
-//!   expects.
+//!   conversion for `Vec<u8>`), so `operands[i]` is a single byte value.
 //!
 //! - [`assemble_source`] — same as `xqasm::assemble_source` but returns
 //!   the wire-format bytes directly (`bytes` in Python). Useful for
@@ -52,8 +47,8 @@ use xqasm::assemble_source as xqasm_assemble_source;
 use xqvm::Disassembly;
 use xqvm::bytecode::codec;
 
-/// Parse `.xqasm` source and return a dict consumable by
-/// `xqvm_py.program.program_from_xqasm`.
+/// Parse `.xqasm` source and return its instructions and jump targets as a
+/// dict.
 ///
 /// # Errors
 ///
