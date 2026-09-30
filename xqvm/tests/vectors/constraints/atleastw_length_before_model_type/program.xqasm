@@ -4,8 +4,7 @@
 ; r0 holds an int, not a model; indices has two entries and coeffs has one.
 ; exec_at_least_w raises VecLengthMismatch from its `n != coeff_vec.len()`
 ; guard and only reaches reg_mut(model) later, so the length fault is the
-; one both VMs
-; must raise. Verifier-clean via INPUT (QUI-1178 route B).
+; one the VM must raise. Verifier-clean via INPUT (QUI-1178 route B).
 
 PUSH 0
 INPUT r0         ; r0 = calldata[0] = 5, an int -- not a model

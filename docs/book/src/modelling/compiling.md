@@ -316,8 +316,7 @@ and `vm.set_output_slots(2)` before the verifier; `vm.set_calldata([sample, n])`
 and `vm.set_output_slots(1)` before the decoder. The output slot count
 defaults to `0`; running a program that executes `OUTPUT` against a slot
 that was never allocated raises `OutputIndex` (see
-[Limits and Errors](../xqvm/limits-and-errors.md)), on either
-interpreter.
+[Limits and Errors](../xqvm/limits-and-errors.md)).
 
 `Problem.verifier_calldata()` returns that order as a list of names --
 `["num_items", "weights", "values", "capacity", "model", "sample"]` for

@@ -74,7 +74,6 @@ which parts of that boundary the tree does not yet enforce.
 
 ## Checking an Implementation Against the Spec
 
-[Conformance](conformance.md) covers the harness that holds the Rust `xqvm`
-and the Python `xqvm_py` to the same observable behaviour. Read it if you
-are embedding `xqvm` somewhere that needs to trust its output matches the
-reference implementation.
+[Conformance](conformance.md) covers the vector suite that holds `xqvm` to
+the behaviour `spec/xqvm/` prescribes. Read it if you are embedding `xqvm`
+somewhere that needs to trust its output matches the specification.

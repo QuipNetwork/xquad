@@ -221,8 +221,7 @@ pub(crate) fn check_reads(
         // Linear coefficient access and the grid operations accept both Model
         // and Sample. A sample's dense values and a model's sparse biases are
         // the same addressable surface, which is what `spec/xqvm/ISA.md`
-        // states and what both interpreters have done since QUI-454 and
-        // QUI-461. This rule was the lone dissenter until QUI-1168: it
+        // states and what the VM has done since QUI-454 and QUI-461. This rule was the lone dissenter until QUI-1168: it
         // rejected every program that wrote into a sample, which made the
         // sample-domain check unreachable through a verified program.
         Instruction::GetLine { reg }

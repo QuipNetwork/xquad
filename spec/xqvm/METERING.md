@@ -49,12 +49,10 @@ charge is tested, and `1 + (2^64 - 1)` is not representable.
 
 ## The Constants
 
-The six constants below are shared, value for value, between the Rust VM
-(`xqvm/src/metering.rs`) and the Python reference VM (`xqvm_py/metering.py`).
-`scripts/check-metering-parity.py` enforces that the three sources -- the
-Rust constants, the Python constants, and this table -- agree. Changing a
-value here is a breaking change to observable behaviour and must be made in
-all three places at once.
+The six constants below live in `xqvm/src/metering.rs`.
+`xqvm/tests/metering_spec.rs` checks them against this table, name for name
+and value for value. Changing a value here is a breaking change to
+observable behaviour and must be made in both places at once.
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
@@ -309,15 +307,11 @@ operands before checking the other is not conforming: for `ENERGY r0 r1`
 with a sample-mode XQMX in `r0` and an int in `r1`, the fault belongs to
 `r0`.
 
-The *identity* of that fault is not uniform across the two shipped VMs, and
-this specification does not pin it. `xqvm/src/error.rs` has no mode-error
-variant at all: a `RegVal` is either a model or a sample, so the Rust VM
-reports a sample in a model slot as a register-type error, where `xqvm_py`,
-whose `XQMX` carries a mode flag, reports a mode error. That divergence
-spans every mode check rather than `ENERGY` alone and predates step
-metering; it is tracked separately. Normative here are the operand order
-and the placement of the charge after validation, which the two VMs do
-agree on.
+The *identity* of that fault is `TypeMismatch`, which
+[SPEC.md](SPEC.md#faults) fixes for every model-only opcode handed a sample,
+whether an implementation tells the two apart by type or by a mode flag.
+Normative here in addition are the operand order and the placement of the
+charge after validation.
 
 Step counts bound the work a *conforming* execution does, not the work an
 instrumented one does. An implementation that snapshots register values
@@ -327,7 +321,7 @@ observable step count must not depend on whether a tracer is attached. An
 embedder that meters untrusted programs must therefore run them untraced, or
 account for the tracing overhead outside the step budget.
 
-`xqvm_py/tests` and `xqvm/tests/integration.rs` each carry step-count
-assertions cross-checked against this specification; `scripts/check-metering-parity.py`
-checks that the constants agree across `xqvm/src/metering.rs`,
-`xqvm_py/metering.py`, and the constants table above.
+`xqvm/tests/integration.rs` and the `metering/` vectors under
+`xqvm/tests/vectors/` carry step-count assertions written against this
+specification; `xqvm/tests/metering_spec.rs` checks the constants table
+above against `xqvm/src/metering.rs`.

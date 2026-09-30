@@ -53,7 +53,7 @@ routinely carries large negative biases.
 
 The guarantee is about the two opcodes and not about the register. A host
 that installs a whole sample through calldata bypasses them, and `GETLINE`
-will read back whatever it installed; the Python and FFI bindings validate
+will read back whatever it installed; the `xqffi` bindings validate
 at that boundary instead.
 
 ## Every Index Is Bounds-Checked

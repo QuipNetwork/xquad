@@ -4,14 +4,13 @@
 ;
 ; spec/xqvm/ISA.md's ITER row orders the steps "Pop `end_idx`, then
 ; `start_idx`. Read vec from `reg`", and spec/xqvm/SPEC.md's error-precedence
-; rule makes operand pops first within every instruction. xqvm_py resolved
-; the register first, so this program raised TYPE_MISMATCH there and
-; STACK_UNDERFLOW on the Rust VM.
+; rule makes operand pops first within every instruction. Resolving the
+; register first would raise TYPE_MISMATCH here instead of STACK_UNDERFLOW.
 ;
 ; The register is filled from calldata rather than left unset so that the
 ; only fault available to the register arm is a type mismatch: an unset
-; register would raise UNSET_REGISTER on both VMs after
-; iter_unset_register's fix and would not discriminate the pop order.
+; register would raise UNSET_REGISTER (see iter_unset_register) and would
+; not discriminate the pop order.
 ;
 ; One value is pushed where ITER needs two.
 

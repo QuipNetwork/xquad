@@ -4,12 +4,11 @@
 ; The ATLEAST case one directory over, on the other half of the same
 ; ordering: exec_at_least_w resolves both vec operands and compares their
 ; lengths before it reaches the register, so a sample in r0 with mismatched
-; vecs raises VecLengthMismatch. xqvm_py checked the mode first and raised
-; its mode fault, which is a rule that had not fired yet on the other VM.
+; vecs raises VecLengthMismatch rather than a mode fault.
 ;
-; ISA.md's ATLEASTW row says "both implementations raise VecLengthMismatch
-; otherwise". This vector is what holds it to that unconditionally, rather
-; than only when the model register already holds a model.
+; ISA.md's ATLEASTW row says "raise VecLengthMismatch otherwise". This
+; vector holds it to that unconditionally, rather than only when the model
+; register already holds a model.
 
 PUSH 4
 BSMX r0          ; a sample, not a model

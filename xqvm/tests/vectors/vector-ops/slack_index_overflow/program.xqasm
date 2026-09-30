@@ -3,10 +3,10 @@
 ; capacity = 3 gives two slack bits, so SLACK appends start_index and
 ; start_index + 1. At start_index = i64::MAX the second one leaves the
 ; range. The program charges 64 bytes and passes at any default budget, so
-; nothing else stops it: Rust's bare `start_index + i` panicked under a
-; profile with overflow checks and wrapped without them, and xqvm_py stored
-; 2^63 into the vec. No vector was anywhere near this boundary --
-; vector-ops/slack_append uses start_index 0.
+; nothing else stops it: a bare `start_index + i` would panic in a build
+; with overflow checks and wrap without them, or store 2^63 into the vec
+; under unbounded integers. vector-ops/slack_append uses start_index 0 and
+; does not reach this boundary.
 
 VECI r0
 VECI r1

@@ -18,8 +18,8 @@ so they read out as one value rather than breaking apart under the
 problem's own couplings. See [D-Wave QPU](../solving/dwave-qpu.md).
 
 **Conformance vector.** A fixed test case -- program, calldata, and
-expected output -- that the conformance harness runs on both the Rust and
-Python VMs and checks for agreement. See [Conformance](../embedding/conformance.md).
+expected outcome, written from the specification -- that the vector suite
+runs on `xqvm` and checks against its recorded expectation. See [Conformance](../embedding/conformance.md).
 
 **Decoder.** One of the three programs a problem compiles to: takes a
 sample and extracts the answer in the problem's own terms (a tour, a
@@ -134,5 +134,5 @@ Architecture](../xqvm/machine-model.md).
 adapter per solving backend. See [Solving Overview](../solving/).
 
 **XQVM.** X-Quadratic Virtual Machine: the stack machine every XQuad
-problem compiles to, and the layer both the Rust and Python
-implementations implement. See [XQVM Reference](../xqvm/).
+problem compiles to, specified in `spec/xqvm/` and implemented by the
+`xqvm` crate. See [XQVM Reference](../xqvm/).

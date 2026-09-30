@@ -9,8 +9,8 @@ DSL, see
 [Modelling](../modelling/). For what `xquad verify` checks and how
 to fix a rejected program, see [Verification](verification.md).
 
-Every example on this page ran against the Rust backend, the default for
-both `xquad.program` and `xquad.vm.VM`.
+All three surfaces run the same Rust `xqvm` interpreter, and every example
+on this page runs as shown.
 
 ## Program and Session
 
@@ -188,10 +188,8 @@ leaves the signed 64-bit range. A sample's values are checked against its
 domain when it is constructed; `XqmxSample.binary([2])` raises
 `ValueError`.
 
-`__repr__` is intentionally minimal. Convert to `xquad.types.XQMX` (the
-canonical, backend-independent type covered next) if you want a Python
-object you can inspect with normal attribute access, or serialise by
-iterating `linear_items()` / `quadratic_items()` yourself.
+`__repr__` is intentionally minimal. To inspect every coefficient or
+serialise a model, iterate `linear_items()` and `quadratic_items()`.
 
 ## The other two VM surfaces
 
@@ -200,8 +198,7 @@ both worth knowing about directly.
 
 **`xqffi.vm.Vm`** is the thinnest possible wrapper over the Rust
 interpreter: construct it, call `set_calldata` / `set_output_slots`, call
-`.run(bytecode)`, read `.outputs()` as a positional list. It always targets
-the Rust backend. `.reset()` clears the stack, registers, loop stack, and
+`.run(bytecode)`, read `.outputs()` as a positional list. `.reset()` clears the stack, registers, loop stack, and
 step counter, but calldata and output slots are untouched by it -- both
 persist across runs until you call `set_calldata()` or `set_output_slots()`
 again. It is what `Session.run()` builds internally:
@@ -223,29 +220,29 @@ covers when to reach for it directly instead of `Session`.
 
 **`xquad.vm.VM`** is a separate wrapper that every example runner under
 `examples/` actually uses (`examples/maxcut/runner.py`,
-`examples/knapsack/runner.py`). It selects between the Rust interpreter and
-the pure-Python reference VM via `VMBackend`, converts FFI
-objects to and from the canonical `xquad.types.XQMX` at the boundary, and
-runs `.xqasm` source text directly rather than pre-assembled bytecode:
+`examples/knapsack/runner.py`). It wraps `xqffi.vm.Vm` and runs `.xqasm`
+source text directly, assembling it on each `run()`; `run_bytecode()`
+takes pre-assembled bytes instead:
 
 ```python
-from xquad.vm import VM, VMBackend
+from xquad.vm import VM
 
 src = "PUSH 7\nPUSH 5\nADD\nSTOW r0\nPUSH 0\nOUTPUT r0\nHALT\n"
-v = VM(backend=VMBackend.RUST)  # RUST is also the default with no argument
+v = VM()
 v.set_output_slots(1)
 v.run(src)
 assert v.outputs() == [12]
 assert v.stack() == []
 ```
 
-`VM.outputs()` returns `xquad.types.XQMX` instances for model and sample
-outputs, where `xqffi.vm.Vm.outputs()` and `Session.run().outputs` return
-the raw pyo3 `XqmxModel` / `XqmxSample` objects. Pick `VM` when you need
-Python-backend parity checking or when your calldata and outputs are
-already in `xquad.types` terms; pick `Session` for the dict-keyed,
-slot-sparse ergonomics shown above; pick `xqffi.vm.Vm` only if you are
-building your own layer on top of the raw Rust FFI.
+`VM` keeps calldata, output slots, and the step and memory limits across
+runs until `reset()`, but resets the machine before every run, so no stack
+or register state leaks from one run into the next. `VM.outputs()` returns
+the same `XqmxModel` / `XqmxSample` objects as `xqffi.vm.Vm.outputs()` and
+`Session.run().outputs`. Pick `VM` when you run `.xqasm` source from a
+script and want the settings to carry across runs; pick `Session` for the
+dict-keyed, slot-sparse ergonomics shown above; pick `xqffi.vm.Vm` only if
+you are building your own layer on top of the raw Rust FFI.
 
 ## A complete run across three programs
 

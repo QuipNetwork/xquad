@@ -46,7 +46,7 @@ problem.model.apply_implies((0, 1), (1, 0), penalty=50)
 
 `rows` and `cols` on `define_model` are what make the two one-hot forms
 legal. Omit them and every `apply_onehot_row`/`apply_onehot_col` call
-raises `InvalidGridDimensions` at run time, on either interpreter --
+raises `InvalidGridDimensions` at run time --
 `xquad verify` cannot catch it, because grid extents are runtime values.
 The product `rows * cols` must also fit inside `size`; a grid cannot
 describe cells the model never declared. `atleast`, `atleastw` and
@@ -195,7 +195,7 @@ not an approximation of it.
 
 A tie at the boundary is not a tie a sampler breaks the same way every
 seed. Sampling this exact model at `penalty = 1` with `SolverDWaveCPU`
-(200 reads, Rust backend) across eight seeds returns the infeasible
+(200 reads) across eight seeds returns the infeasible
 `{0, 2}` on two of the eight, at the identical energy, `-58`, as every
 feasible seed; the other six split across the two feasible ties. A single
 feasible sample at a borderline weight is not evidence the weight is

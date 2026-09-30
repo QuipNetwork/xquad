@@ -5,9 +5,9 @@
 ; is forced rather than chosen: the domain check reads the sum, and the sum
 ; does not exist.
 ;
-; Both implementations compute the checked add first and raise
-; ArithmeticOverflow from it, so the precedence is a shared property rather
-; than a coincidence of two orderings.
+; The checked add is computed first and raises ArithmeticOverflow from
+; it, so the precedence is a property of the spec rather than a
+; coincidence of two orderings.
 
 PUSH 4
 SSMX r0          ; spin sample, defaults to -1

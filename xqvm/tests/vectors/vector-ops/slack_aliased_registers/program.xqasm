@@ -2,12 +2,12 @@
 ; the whole index sequence before the whole coefficient sequence.
 ;
 ; SLACK writes two vecs, so when `indices` and `coeffs` are the same
-; register the append order becomes observable. Rust fills the indices
-; register in one loop and then the coefficients register in a second;
-; xqvm_py interleaved them in a single loop, producing
-; [100, 1, 101, 2] where Rust produced [100, 101, 1, 2]. The program is
-; verifier-clean and runs on both, and no vector went near the aliased
-; case -- slack_append and slack_basic both use two distinct registers.
+; register the append order becomes observable. SLACK fills the indices
+; register in one loop and then the coefficients register in a second,
+; giving [100, 101, 1, 2]; a single interleaving loop would give
+; [100, 1, 101, 2]. The program is verifier-clean, and slack_append and
+; slack_basic both use two distinct registers, so this is the vector that
+; covers the aliased case.
 ;
 ; spec/xqvm/ISA.md's SLACK derivation pins the two-pass order; this
 ; vector is what enforces it.

@@ -8,7 +8,7 @@ and what each one consumes and produces.
 flowchart LR
     P["DSL (xqcp) or hand-written .xqasm"] --> ASM[Assembler]
     ASM --> B[XQVM bytecode]
-    B --> V["VM: xqvm or xqvm_py"]
+    B --> V["VM: xqvm"]
     H[Host program] -->|calldata| V
     V -->|model-building program| M[XQMX model]
     M --> H
@@ -22,8 +22,8 @@ flowchart LR
 |---|---|---|
 | DSL (`xqcp`) or `.xqasm` source | Describes the problem: a program whose job is to build a model, in Python or in assembly text | `.xqasm` source |
 | Assembler (`xqasm`) | Parses `.xqasm` text and resolves labels | XQVM bytecode (`.xqb`) |
-| Bytecode | The portable artifact: identical bytes run on the Rust `xqvm` interpreter or the Python `xqvm_py` reference VM | Input to the VM |
-| VM (`xqvm` / `xqvm_py`) | Executes bytecode against [calldata](../xqvm/io.md) the host program supplies | An `XqmxModel`, when the program's job is building one; decoded output, when its job is reading a sample back |
+| Bytecode | The portable artifact: the same bytes run on the `xqvm` interpreter, wherever it is embedded | Input to the VM |
+| VM (`xqvm`) | Executes bytecode against [calldata](../xqvm/io.md) the host program supplies | An `XqmxModel`, when the program's job is building one; decoded output, when its job is reading a sample back |
 | Model (`XqmxModel`) | The Hamiltonian a model-building program assembled: the model's energy function, covered in [Quadratic Models](quadratic-models.md) | Input to a solver |
 | Solver (`xqsa`) | Minimises the model's Hamiltonian | An `XqmxSample`: the best assignment found |
 | Host program | The script or CLI session driving every stage above | Reads the model out of the VM and hands it to the solver, then feeds the sample back in as calldata (the numbered input slots a host fills before each VM run) for the next run |

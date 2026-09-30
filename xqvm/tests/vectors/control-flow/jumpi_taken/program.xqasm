@@ -1,7 +1,7 @@
 ; jumpi_taken: when calldata[0] != 0, write 1 to output[0]; otherwise 0.
 ;
 ; Exercises JUMPI + basic block targeting. Integer labels are the
-; portable form shared by the Rust and Python assemblers.
+; portable form accepted by the assembler.
 
 PUSH 0
 INPUT r0

@@ -67,10 +67,9 @@ chain does not need determinism against a single implementation; it needs
 behaviour that a reader of the specification can predict, because a
 divergence between the specification and an implementation is unspecified
 behaviour with a plausible result, and no memory budget makes that safe.
-Today that check is implemented as agreement between the Rust VM and the
-Python reference interpreter, checked by the conformance suite; after
-QUI-1082 removes the Python interpreter, `spec/xqvm/` and the vectors
-derived from it remain the whole of rule 6.
+`spec/xqvm/` and the vectors derived from it are the whole of rule 6: the
+vectors run the VM against outcomes the specification prescribes, and a
+mismatch fails CI.
 
 Because the bar is a property of the instruction set, the denied set is
 empty by construction. A proposed opcode that cannot clear it does not
@@ -83,7 +82,7 @@ and which to gate behind a later runtime upgrade, on the theory that the
 integer core is cheap and the model-building surface is not. That framing
 is no longer the right one: the model-building opcodes are exactly the
 reason to run XQVM on chain at all, and the two properties that made them
-unsafe -- unbounded allocation and Rust-versus-Python divergence -- were
+unsafe -- unbounded allocation and divergence from the specification -- were
 defects with owners rather than inherent properties of the family.
 
 So a runtime should not carry a static allowlist scanned over the decoded
@@ -145,7 +144,7 @@ does.
 | [Allocators](../xqvm/instructions/allocators.md) | 9 | `BQMX`, `SQMX`, `XQMX`: 8 bytes per declared variable. `BSMX`, `SSMX`, `XSMX`: 8 bytes per variable. `VEC`, `VECI`, `VECX`: free | The three charges are not the same kind. A model stores coefficients sparsely, so its charge is a proxy for what every consumer of the model has to materialise; a sample allocates a dense buffer at that rate, so its charge buys real bytes. An empty vec allocates nothing and its storage is charged as it grows |
 | [Vector operations](../xqvm/instructions/vector-ops.md) | 5 | `VECPUSH`: 16 bytes per element. `SLACK`: 16 bytes per element appended, two per entry. `VECGET`, `VECSET`, `VECLEN`: free | `SLACK` appends to two vecs and is charged for both, so an entry costs 32 bytes; the three access forms neither grow nor allocate |
 | [Index math](../xqvm/instructions/index-math.md) | 2 | Free | Pure index arithmetic on the stack |
-| [Coefficient access](../xqvm/instructions/coefficient-access.md) | 6 | `SETLINE`, `ADDLINE`: 32 bytes per linear coefficient. `SETQUAD`, `ADDQUAD`: 48 bytes per quadratic | Reads are free, and so are writes into a sample, whose buffer was charged when it was allocated. Both rates are literals rather than derived from the host's pointer width, so a wasm32 runtime charges what the reference VM and the book state |
+| [Coefficient access](../xqvm/instructions/coefficient-access.md) | 6 | `SETLINE`, `ADDLINE`: 32 bytes per linear coefficient. `SETQUAD`, `ADDQUAD`: 48 bytes per quadratic | Reads are free, and so are writes into a sample, whose buffer was charged when it was allocated. Both rates are literals rather than derived from the host's pointer width, so a wasm32 runtime charges what a native build and the book state |
 | [Grid operations](../xqvm/instructions/grid.md) | 5 | Free | A grid reinterprets variables the program already declared and paid for: `RESIZE` rejects extents whose product exceeds the model's size, which bounds memory. The step budget bounds the work: `ROWSUM`, `COLSUM`, `ROWFIND` and `COLFIND` charge `GRID_CELL_STEPS` per cell of the axis they scan, after validating the operand and before walking it, whether or not the scan short-circuits |
 | [High-level constraints](../xqvm/instructions/constraints.md) | 8 | `EXCLUDE`: one quadratic term. `IMPLIES`: one linear and one quadratic. `REDUCE`: one variable, three quadratic terms and one linear. `ONEHOTR`, `ONEHOTC`, `EQUALITY`, `ATLEAST`, `ATLEASTW`: worst-case expansion, one linear term per variable and one quadratic term per pair | Only the last five expand; see below |
 | [Energy](../xqvm/instructions/energy.md) | 1 | Free | Allocates nothing, and charges the step budget for the sample it copies and every model term it accumulates |
@@ -154,9 +153,9 @@ Ninety-three opcodes across the fourteen categories, all of them
 integer-only by construction: the ISA has no floating-point type, no
 floating-point opcode and no way to produce one. What the conformance
 vectors pin is the stronger property that makes this useful for consensus
--- the checked-arithmetic rule, under which Rust's `i64` and Python's
-unbounded integers agree on every result and fault the same way on every
-overflow.
+-- the checked-arithmetic rule, under which every result is the exact
+integer or a fault, and every overflow faults at the same instruction on
+every host.
 
 ### The expanding constraints deserve a second look
 
@@ -186,8 +185,8 @@ The bar above is what the instruction set is designed to, and most of it is
 now backed by code. The v0.4.0 hardening pass bounded grid extents to the
 allocation a program already paid for, made the coefficient rates
 target-independent literals, charged the `INPUT`/`OUTPUT` copy across the
-host boundary, capped the loop stack, and closed the three
-Rust-versus-Python divergences in the model-building surface. Step
+host boundary, capped the loop stack, and closed three divergences from the
+specification in the model-building surface. Step
 metering then made a step a unit of cost rather than a unit of dispatch:
 every instruction charges a base cost before dispatch, the opcodes whose
 work scales with caller-controlled data charge for that work before doing
@@ -236,28 +235,19 @@ surface at runtime as `ExecutionFailed`. Running the verifier on chain is
 QUI-1055; pricing the budgets into a benchmarked weight rather than the
 fixed placeholder is QUI-1012.
 
-Cross-implementation agreement, meanwhile, is close to where the bar
-wants it.
-`make opcode-parity` holds the two opcode tables to each other,
-`make conformance` runs every vector on the Rust VM, and the metering
-constants are mirrored value for value in `xqvm_py/metering.py` under their
-own parity check. The vectors now cover the model-building surface that the
+Agreement with the specification, meanwhile, is close to where the bar
+wants it. The `xqvm` build checks its opcode table against
+`xqvm/opcodes.yaml`, `make conformance` runs every vector on the VM, and
+`xqvm/tests/metering_spec.rs` checks the metering constants against
+`spec/xqvm/METERING.md` value for value. The vectors now cover the model-building surface that the
 arithmetic-only suite once missed, including failure paths: constraints
 without a grid, invalid grid dimensions, integer allocation, index-math
 operand ordering, and accumulation overflow in energy and grid sums.
 
-Operand validation order is part of that agreement and is now normative:
-`spec/xqvm/METERING.md` fixes it under Conformance, and both VMs validate
-each register completely before looking at the next. What the specification
-has not yet settled is the *identity* of a mode fault. `xqvm::Error` has no
-mode variant -- a `RegVal` is either a model or a sample, so the Rust VM
-reports a sample in a model slot as a register-type error, where `xqvm_py`,
-whose `XQMX` carries a mode flag, reports a mode error. That difference
-spans every mode check rather than one opcode, predates step metering and is
-tracked separately. Unsettled is not the same as permitted: `SPEC.md`'s
-Faults section holds every identity normative and records this row as the
-one still unresolved, so one of the two implementations is wrong and a third
-must not read either spelling as settled. A runtime that surfaces fault
-identity to submitters should know it is not yet uniform. See
+Operand validation order is part of that agreement and is normative:
+`spec/xqvm/METERING.md` fixes it under Conformance, and the VM validates
+each register completely before looking at the next. The *identity* of a
+mode fault is normative too: `spec/xqvm/SPEC.md`'s Faults section fixes a
+sample in a model slot as `TypeMismatch`, and the vectors pin it. See
 [Conformance](conformance.md) for how the suite is structured and what
 adding a vector involves.

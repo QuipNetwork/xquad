@@ -5,9 +5,7 @@ It catches structural and semantic errors without running the program, enabling
 early rejection at load time or at the blockchain submission boundary.
 
 The Rust implementation is `xqvm::verifier` (exposed via `xqffi.verifier` and
-`xquad.verifier` Python bindings). There is no separate Python reference
-verifier -- the Python reference VM (`xqvm_py`) defers to the Rust
-implementation via FFI.
+`xquad.verifier` Python bindings).
 
 ---
 

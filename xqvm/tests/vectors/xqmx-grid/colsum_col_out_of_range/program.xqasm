@@ -1,8 +1,8 @@
 ; colsum_col_out_of_range: a column at the grid extent must raise.
 ;
-; COLSUM had no fault coverage in either implementation's own suite or in
-; the vectors, on either identity. The grid is 3x1, so the only valid
-; column is 0 and column 1 addresses no line of it.
+; COLSUM had no fault coverage in the vectors before this one. The grid
+; is 3x1, so the only valid column is 0 and column 1 addresses no line of
+; it.
 ;
 ; Not square, for the same reason as rowsum_row_out_of_range: this is the
 ; case that catches the axis extent being supplied from the wrong side.

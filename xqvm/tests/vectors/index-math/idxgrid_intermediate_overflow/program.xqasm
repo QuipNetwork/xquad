@@ -3,10 +3,10 @@
 ;
 ; row = 2^62, col = -1, cols = 2. row * cols = 2^63 is not representable;
 ; row * cols + col = 2^63 - 1 = i64::MAX is. A VM that computes in a wider
-; type and range-checks only the pushed result accepts this program, which
-; is what xqvm_py did -- it pushed i64::MAX while Rust raised. Per
-; spec/xqvm/SPEC.md every i64 operation the VM performs on a program's
-; behalf is range-checked, intermediates included.
+; type and range-checks only the pushed result accepts this program and
+; pushes i64::MAX. Per spec/xqvm/SPEC.md every i64 operation the VM
+; performs on a program's behalf is range-checked, intermediates included,
+; so the program must fault.
 ;
 ; Neither IDXGRID nor IDXTRIU had a vector anywhere before this pair.
 

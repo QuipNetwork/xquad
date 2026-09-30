@@ -6,13 +6,12 @@
 ; A column cannot wrap the way ONEHOTR's row can -- nothing multiplies by
 ; it -- but it does not need to. The address is `ri * cols + col`, so an
 ; out-of-extent column still lands outside the column it named: on a 2x2
-; grid, column 3 addressed flat indices 3 and 5. Index 3 is a declared
+; grid, column 3 addresses flat indices 3 and 5. Index 3 is a declared
 ; variable in the wrong column; index 5 is past the four the model
-; declared. The Rust VM wrote both -- coefficients accumulate into a
-; sparse map that grows to fit whatever index it is handed -- so it
-; created `linear[5]` and `quad(3, 5)` out of nothing and halted
-; successfully, while xqvm_py raised. A model that solves cleanly and
-; answers wrongly.
+; declared. A VM that does not check would write both -- coefficients
+; accumulate into a sparse map that grows to fit whatever index it is
+; handed -- so it would create `linear[5]` and `quad(3, 5)` out of nothing
+; and halt successfully. A model that solves cleanly and answers wrongly.
 ;
 ; The grid is deliberately not square, and the column is deliberately
 ; inside the row count, so this pins the extent that is actually

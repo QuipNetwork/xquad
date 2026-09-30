@@ -33,7 +33,7 @@ features, so the question is "does this break?" and not "is this a fix?".
 
 ### If breaking
 
-- [ ] Atomic spec-MR: all four layers, or an `Atomic-Spec-Exempt:` trailer
+- [ ] Atomic spec-MR: all three layers, or an `Atomic-Spec-Exempt:` trailer
 - [ ] Migration guide entry noted for the next breaking release, if this change needs one
 
 ## Checklist

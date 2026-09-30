@@ -1,7 +1,7 @@
 ; step_limit_boundary: three instructions under a budget of two.
 ;
 ; Same program as step_limit_exact, one step short: the third instruction
-; is reached with the budget spent, so both implementations raise.
+; is reached with the budget spent, so the run raises StepLimitExceeded.
 
 PUSH 1
 PUSH 2

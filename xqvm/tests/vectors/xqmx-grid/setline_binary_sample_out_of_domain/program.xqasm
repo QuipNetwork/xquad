@@ -1,10 +1,10 @@
 ; setline_binary_sample_out_of_domain: a binary sample holds {0, 1} and
 ; nothing else.
 ;
-; Until QUI-1168 both implementations accepted any i64 here and GETLINE read
-; it back, so a binary sample could hold 2 and a solver could be handed an
-; assignment that is not an assignment. The domain is a property of the
-; sample's allocator, so the check needs no operand and no annotation: BSMX
+; Until QUI-1168 any i64 was accepted here and GETLINE read it back, so a
+; binary sample could hold 2 and a solver could be handed an assignment
+; that is not an assignment. The domain is a property of the sample's
+; allocator, so the check needs no operand and no annotation: BSMX
 ; declared it.
 ;
 ; 2 is one past the top rather than a wild value, which pins the bound

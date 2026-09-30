@@ -2,10 +2,10 @@
 ; the model register is discriminated.
 ;
 ; exec_equality resolves both vec operands, compares their lengths, and only
-; then charges and reaches `as_model_mut()`. xqvm_py resolved the model
-; register first, so an int in r0 answered TypeMismatch here and
-; VecLengthMismatch there -- one program with two fault identities, which
-; spec/xqvm/SPEC.md's Faults table makes a divergence rather than a
+; then charges and reaches `as_model_mut()`. Resolving the model register
+; first would answer TypeMismatch for an int in r0 where the spec says
+; VecLengthMismatch -- one program with two possible fault identities,
+; which spec/xqvm/SPEC.md's Faults table makes a divergence rather than a
 ; formatting difference.
 ;
 ; r0 deliberately holds an int rather than a sample. Both registers are

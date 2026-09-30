@@ -44,7 +44,7 @@ make deps-py
 ```
 
 This runs `uv sync` plus `maturin develop`, giving you editable installs of
-`xqvm_py`, `xqcp`, `xqsa`, `xqffi`, and `xquad` with the `xqffi` cdylib built
+`xqcp`, `xqsa`, `xqffi`, and `xquad` with the `xqffi` cdylib built
 from the current Rust sources.
 
 `uv sync` resolves the base dependencies only, so the optional solver backends
@@ -113,14 +113,13 @@ single-language MR can run just its half:
 
 ```sh
 make preflight          # everything below, in one shot
-make preflight-rs       # fmt, taplo, clippy, rustdoc, deny (root + pallet fixture), unit/integration/doc tests
-make preflight-py       # taplo, ruff format + lint, pytest, uv.lock freshness
-make preflight-parity   # opcode parity, conformance, example smoke
+make preflight-rs       # fmt, clippy, rustdoc, deny (root + pallet fixture), unit/integration/doc tests + vectors, coverage report, wasm, pallet fixture
+make preflight-py       # taplo, ruff format + lint, pytest, example smoke, uv.lock freshness
 make preflight-docs     # generated-doc freshness, docs drift, README length, prose (needs vale)
 make preflight-policy   # changelog render, release-notes scoping, atomic spec-MR and commit-message guards
 ```
 
-`make preflight-release` (crate packaging dry-run plus the five Python
+`make preflight-release` (crate packaging dry-run plus the four Python
 distributions) needs `maturin`, `twine`, and `uv` on `PATH`, so it is kept out
 of plain `make preflight`; see [RELEASING.md](RELEASING.md).
 
@@ -321,20 +320,19 @@ silently skipped for contributors who do not have one.
 
 ### Atomic Spec-MR Rule
 
-Any MR that changes VM semantics must touch **all four** of these layers in the same MR:
+Any MR that changes VM semantics must touch **all three** of these layers in the same MR:
 
-1. `spec/xqvm/SPEC.md` -- the normative specification
-2. `xqvm/src/**/*.rs` -- the Rust production implementation
-3. `xqvm_py/{executor,opcodes,xqmx,state,vector,tracer,errors}.py` -- the Python reference implementation
-4. `xqvm/tests/vectors/**` or `xqvm/opcodes.yaml` -- the specification vectors and opcode table
+1. `spec/xqvm/*.md` -- the normative specification
+2. `xqvm/src/**/*.rs` -- the implementation
+3. `xqvm/tests/vectors/**` or `xqvm/opcodes.yaml` -- the specification vectors and opcode table
 
-CI enforces this via `verify:policy` (`scripts/check-atomic-spec-mr.sh`). MRs touching 0 or all 4 layers pass; partial changes fail.
+CI enforces this via `verify:policy` (`scripts/check-atomic-spec-mr.sh`). MRs touching 0 or all 3 layers pass; partial changes fail.
 
-**Exemptions:** For deliberately one-sided changes (e.g. aligning one impl to existing behaviour), add an `Atomic-Spec-Exempt:` trailer to a commit message. It goes in the message's last paragraph at column 0, beside the sign-off, with the whole reason and the ticket on that one line. git reads trailers out of the last paragraph only, and a wrapped reason is silently truncated, so the guard rejects either rather than bypassing on a trailer nobody can read:
+**Exemptions:** For deliberately one-sided changes (e.g. a spec clarification of behaviour the VM already has), add an `Atomic-Spec-Exempt:` trailer to a commit message. It goes in the message's last paragraph at column 0, beside the sign-off, with the whole reason and the ticket on that one line. git reads trailers out of the last paragraph only, and a wrapped reason is silently truncated, so the guard rejects either rather than bypassing on a trailer nobody can read:
 
 ```
 Fixes QUI-453
-Atomic-Spec-Exempt: QUI-453 one-sided Python fix, no semantics change
+Atomic-Spec-Exempt: QUI-453 spec clarification, no semantics change
 Signed-off-by: You <you@example.com>
 ```
 

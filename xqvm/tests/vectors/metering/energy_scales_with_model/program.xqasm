@@ -5,8 +5,8 @@
 ; spec/xqvm/METERING.md's COEFF_WRITE_STEPS), a matching 4-element sample
 ; (1 step per element via SAMPLE_COPY_STEPS), and one ENERGY over both
 ; (model_eval_steps = sample_len*SAMPLE_COPY_STEPS + terms*MODEL_TERM_STEPS).
-; This vector asserts both implementations charge the same total for that
-; walk, not just that they agree on the resulting energy.
+; This vector pins the total charged for that walk, not just the resulting
+; energy.
 
 PUSH 4
 BQMX r0

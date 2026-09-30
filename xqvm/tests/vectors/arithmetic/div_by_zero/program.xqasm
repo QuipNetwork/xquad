@@ -1,7 +1,7 @@
-; div_by_zero: DIV with a zero divisor must fault on both implementations.
+; div_by_zero: DIV with a zero divisor must fault with DivisionByZero.
 ;
-; Exercises: DIV's error path. The first error-asserting vector in the
-; suite -- before this, conformance covered only programs that succeed.
+; Exercises: DIV's error path, the first error-asserting vector in the
+; suite.
 
 PUSH 1
 PUSH 0

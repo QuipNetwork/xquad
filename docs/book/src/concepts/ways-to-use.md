@@ -9,7 +9,7 @@ the map.
 | `xqcp` DSL | Python constraint-programming layer; compiles a problem to XQVM assembly | Modelling a new combinatorial problem without hand-writing assembly |
 | `xquad` Program/Session API | `Program` / `Session` / `RunResult`: load a program once, run it repeatedly with fresh [calldata](../xqvm/io.md) | Driving an existing compiled program from Python -- a REPL, a notebook, a script |
 | `xqffi.vm` FFI | `Vm`: a thin wrapper over the Rust interpreter | Python code building its own convenience layer on top of the raw Rust VM |
-| `xquad.vm` VM wrapper | `VM` / `VMBackend`: runs `.xqasm` source text directly against either the Rust interpreter or the pure-Python reference VM, with `xquad.types.XQMX` at the boundary | Backend-parity checking, or working in `xquad.types` terms; the surface every example runner under `examples/` actually uses |
+| `xquad.vm` VM wrapper | `VM`: runs `.xqasm` source text or bytecode on the Rust interpreter, keeping calldata, output slots and limits across runs | Scripts that run several programs in a row with the same settings; the surface every example runner under `examples/` uses |
 | `xquad` CLI | `xquad asm` / `run` / `dism` / `verify` | Assembling, running, inspecting, or verifying one `.xqasm`/`.xqb` file, no Python involved |
 | Rust embedding | `xqvm::InstructionBuilder`, building a `Program` directly, no text assembly step | Embedding XQVM in a Rust host: `no_std` target, WASM runtime, on-chain pallet |
 
@@ -63,19 +63,19 @@ layer on top, or the `Program`/`Session` assumptions do not fit -- most
 Python users want `xquad.program` or `xquad.vm` instead. Full coverage:
 [Running Programs](../running/).
 
-## `xquad.vm` -- Backend Dispatch
+## `xquad.vm` -- The Source-Level VM
 
-`xquad.vm.VM` selects between the Rust interpreter and the pure-Python
-reference VM via `VMBackend`, converting FFI objects to and from the
-canonical `xquad.types.XQMX` at the boundary, and runs `.xqasm` source
-text directly rather than pre-assembled bytecode. `VMBackend.RUST` is
-the default and reaches the Rust interpreter through `xqffi.vm.Vm`
-internally. Every example runner under `examples/` imports `VM` and
-`VMBackend` from here, not `xqffi.vm` directly.
+`xquad.vm.VM` wraps `xqffi.vm.Vm`. `run(source)` assembles `.xqasm` text
+and runs it; `run_bytecode(bytecode)` runs pre-assembled bytes. Calldata,
+output slots, and the step and memory limits persist across runs until
+`reset()`, while every run starts from a fresh stack and register file.
+Outputs come back as the `xqffi` types unchanged: `int`, `list[int]`,
+`XqmxModel`, `XqmxSample`, or `None`. Every example runner under
+`examples/` imports `VM` from here, not `xqffi.vm` directly.
 
-Stop here if you want backend-parity checking or your calldata and
-outputs are already in `xquad.types` terms. Keep reading if you need
-the raw FFI underneath instead. Full coverage: [Running
+Stop here if you run `.xqasm` source from a script and want the settings
+to carry from one run to the next. Keep reading if you need the raw FFI
+underneath instead. Full coverage: [Running
 Programs](../running/#the-other-two-vm-surfaces).
 
 ## `xquad` CLI

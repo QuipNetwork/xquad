@@ -1,8 +1,8 @@
 ; empty_loop_skip_scan (QUI-1056): pins the step cost of skipping an empty
 ; loop body.
 ;
-; A RANGE with count = 0 does not enter its body. Both implementations
-; instead scan forward through the instruction stream, tracking nesting
+; A RANGE with count = 0 does not enter its body. The VM instead scans
+; forward through the instruction stream, tracking nesting
 ; depth, until they reach the matching NEXT -- work that is O(body length)
 ; and that spec/xqvm/METERING.md charges BASE_STEPS per instruction
 ; consumed. The body here nests a second (never-executed) RANGE/NEXT pair

@@ -165,11 +165,11 @@ Where `x_sample[i] = sample.values[i]` (the variable assignment). Error: `SizeMi
 
 ### Term grouping
 
-Each quadratic term is evaluated as `(coeff × x_i) × x_j`, not as `coeff × (x_i × x_j)`. The two group differently under checked arithmetic: on the spin domain with `coeff = -2^63` and `x_i = x_j = -1`, the first raises at `coeff × x_i` and the second never leaves the range. The stated grouping is what both implementations do, and it is normative for the same reason the accumulation order is -- the grouping decides whether the program errors at all.
+Each quadratic term is evaluated as `(coeff × x_i) × x_j`, not as `coeff × (x_i × x_j)`. The two group differently under checked arithmetic: on the spin domain with `coeff = -2^63` and `x_i = x_j = -1`, the first raises at `coeff × x_i` and the second never leaves the range. The stated grouping is normative for the same reason the accumulation order is -- the grouping decides whether the program errors at all.
 
 ### The diagonal
 
-The quadratic table's keys satisfy `i <= j`, not `i < j`: **the diagonal is legal**. `SETQUAD`, `ADDQUAD` and `GETQUAD` normalise a pair by swapping when `i > j` and impose no further restriction, so `PUSH 2 / BQMX r0 / PUSH 1 / PUSH 1 / PUSH 7 / SETQUAD r0` stores `quadratic[(1,1)] = 7`, and `ENERGY` evaluates that entry as `7 × x_1 × x_1` like any other. Both implementations store and evaluate self-couplings.
+The quadratic table's keys satisfy `i <= j`, not `i < j`: **the diagonal is legal**. `SETQUAD`, `ADDQUAD` and `GETQUAD` normalise a pair by swapping when `i > j` and impose no further restriction, so `PUSH 2 / BQMX r0 / PUSH 1 / PUSH 1 / PUSH 7 / SETQUAD r0` stores `quadratic[(1,1)] = 7`, and `ENERGY` evaluates that entry as `7 × x_1 × x_1` like any other. A conforming implementation stores and evaluates self-couplings.
 
 What a self-coupling means is domain-dependent, and the VM does not interpret it. On binary variables `x² = x`, so a diagonal term acts as a linear bias written through the quadratic table; on spin variables `x² = 1`, so it acts as a constant energy offset; on the integer domain it is neither. A program that writes one is doing something the VM permits and gives no meaning to.
 
@@ -189,6 +189,6 @@ The same rule applies to any reduction over a model's sparse tables.
 
 ### Declined: order-free `ENERGY`
 
-An alternative was considered and declined: range-check each term product, accumulate the total in a type wider than the value type (`i128` on Rust, native unbounded integers on Python), and range-check only the final total. It would make the accumulation order unobservable, and `ENERGY` would then return every total that is representable rather than raising on some of them.
+An alternative was considered and declined: range-check each term product, accumulate the total in a type wider than the value type (for example `i128`, or an arbitrary-precision integer), and range-check only the final total. It would make the accumulation order unobservable, and `ENERGY` would then return every total that is representable rather than raising on some of them.
 
 It is declined because per-step checking is the arithmetic-safety paradigm the rest of the VM is built on, and because it keeps the implementation contract to checked 64-bit arithmetic: a third implementation written from this specification needs no intermediate type wider than the value type, and the failure mode of getting a wide accumulator subtly wrong is a silently wrong energy rather than a spurious fault. The cost is stated here rather than left implicit -- the accumulation order above is normative because of this decision, and `ENERGY` raises for some totals that are exactly representable.

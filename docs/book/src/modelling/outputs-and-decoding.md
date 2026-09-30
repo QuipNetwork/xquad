@@ -136,8 +136,8 @@ Python or Rust object model required at the call site.
 
 **Decoding in the host** means reading the sample object directly in
 whatever language is driving the pipeline, without running the decoder
-program at all. In Python, a solved sample is an ordinary `XQMX` object
-with a `linear` dict, so `sample.get_linear(i)` for each item index reads
+program at all. In Python, a solved sample is an `XqmxSample`, so
+`sample.get_linear(i)` for each item index reads
 the same assignments `sample.getline(i)` does inside the decoder, just from
 host code instead of from bytecode:
 
@@ -151,18 +151,16 @@ decoder_selection = list(result)                            # via programs.decod
 host_selection = [sample.get_linear(i) for i in range(n)]   # direct read
 ```
 
-`VM` and `VMBackend` import from `xquad.vm`, alongside the
+`VM` imports from `xquad.vm`, alongside the
 `xquad.cp`/`xquad.types` imports [Inputs and Model Shape](inputs-and-model.md)
 opens this chapter with. `set_output_slots` has to run before `vm.run`,
 since the slot count defaults to `0`. `OUTPUT` against a slot that was
-never allocated raises `OutputIndex` while the decoder runs, on both
-`VMBackend.RUST` and `VMBackend.PYTHON`.
+never allocated raises `OutputIndex` while the decoder runs.
 
-`list(result)` works whether `vm.outputs()[0]` comes back as a plain
-`list`, on the default `VMBackend.RUST`, or as a `Vec`, on
-`VMBackend.PYTHON`. Running both against the same seed-42 knapsack
-sample (`weights = [2, 1, 5, 4, 4]`, `values = [5, 4, 18, 3, 19]`,
-`capacity = 18`) produces identical lists: `[1, 1, 1, 0, 1]`.
+`vm.outputs()[0]` comes back as a plain `list` of `int`. Both reads of the
+seed-42 knapsack sample (`weights = [2, 1, 5, 4, 4]`,
+`values = [5, 4, 18, 3, 19]`, `capacity = 18`) produce the same list:
+`[1, 1, 1, 0, 1]`.
 Host decoding is less code for a one-off script already holding the sample
 in memory. The decoder program is the version worth keeping once decoding
 needs to happen the same way regardless of which language or environment is

@@ -80,8 +80,6 @@ metered cost total, `vm.instructions()` returns the dispatch count.
 the program ends at a `HALT` or by running off the end of the instruction
 stream: the loop probes for the next instruction before it counts anything,
 so the fetch that finds nothing and breaks the loop is never counted.
-`xqvm_py`'s executor has the same loop shape, so the two interpreters report
-the same count for the same program.
 
 One exception is worth knowing: when a loop opener skips an empty body, the
 scan forward to the matching `NEXT` charges `steps` for each instruction it

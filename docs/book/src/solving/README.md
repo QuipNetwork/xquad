@@ -103,8 +103,8 @@ Apple Silicon GPU kernel, a different process on different hardware, and
 and nothing about the model or the encoder changes:
 
 ```sh
-uv run python examples/maxcut/runner.py --n 6 --seed 42 --interpreter rust --solver dwave-cpu
-uv run python examples/maxcut/runner.py --n 6 --seed 42 --interpreter rust --solver metal-gpu
+uv run python examples/maxcut/runner.py --n 6 --seed 42 --solver dwave-cpu
+uv run python examples/maxcut/runner.py --n 6 --seed 42 --solver metal-gpu
 ```
 
 Both print the same result: `"energy": -571`, `"cut_weight": 571`,

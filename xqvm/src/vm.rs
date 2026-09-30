@@ -260,8 +260,8 @@ fn sign_extend_be(bytes: &[u8]) -> i64 {
 ///
 /// Public because it is the number every host that does not choose its own
 /// has to agree on, and there are four such hosts: `xqcli run`'s
-/// `--step-limit` default, `xquad`'s Python VM wrapper, the conformance
-/// harness's per-vector default, and this crate. Each used to restate the
+/// `--step-limit` default, `xquad.vm.VM`, the specification vectors'
+/// per-vector default, and this crate. Each used to restate the
 /// literal with a comment claiming to match this constant, and nothing
 /// enforced the claim.
 pub const DEFAULT_STEP_LIMIT: u64 = 10_000_000;
@@ -640,9 +640,8 @@ impl Vm {
     /// [`set_memory_limit`]) are settings rather than run state and survive.
     ///
     /// Clearing the outputs and the calldata is the point. Leaving them
-    /// standing meant a reused VM answered with the previous run's outputs:
-    /// the Rust backend returned `[42]` where the Python one returned `[]`
-    /// for the same reuse. A host that resets and runs again must call
+    /// standing meant a reused VM answered with the previous run's outputs,
+    /// returning `[42]` where a fresh VM returns `[]`. A host that resets and runs again must call
     /// [`set_calldata`] and [`set_output_slots`] again too, exactly as it
     /// does after [`Vm::new`].
     ///
@@ -722,8 +721,8 @@ impl Vm {
         // Probe for the next instruction before charging: the limit bounds
         // instructions executed, so a program that ends -- HALT or end of
         // stream -- having executed exactly `step_limit` instructions
-        // succeeds, and `steps()` never counts the probe. This is the Python
-        // VM's loop shape (`while pc < len`).
+        // succeeds, and `steps()` never counts the probe: the loop shape is
+        // `while pc < len`.
         while let Some(item) = cursor.next_instruction() {
             self.charge_steps_base()?;
             self.instructions += 1;
@@ -1016,11 +1015,9 @@ impl Vm {
     /// it certain to refuse first, which is every limit below
     /// `2^32 * VARIABLE_BYTES` (32 GiB). Above that a size past a 32-bit
     /// target's address space was charged successfully and then decided by
-    /// the narrowing: `InvalidAllocation` on wasm32, a sparse model on a
-    /// 64-bit host, and a sparse model again in `xqvm_py`, whose integers
-    /// are unbounded and which therefore has no narrowing at all. The
-    /// [`MAX_ALLOCATION_SIZE`] range check closes that at every budget, and
-    /// closes it to `InvalidAllocation` on all three.
+    /// the narrowing: `InvalidAllocation` on wasm32 and a sparse model on a
+    /// 64-bit host. The [`MAX_ALLOCATION_SIZE`] range check closes that at
+    /// every budget, and closes it to `InvalidAllocation` on both.
     ///
     /// It sits after the charge rather than before it so that no program
     /// which runs today changes its fault identity: under any ordinary
@@ -1346,9 +1343,9 @@ impl Vm {
         // overflow rule over every i64 operation the VM performs on a
         // program's behalf, and loop control is not carved out of it. Wrapping
         // made `PUSH 2^63-2 / PUSH 3 / RANGE / LIDX r0 / NEXT / HALT` run one
-        // iteration here and three on xqvm_py, with different register
-        // contents and different step counts -- and step count is metering on
-        // a chain that prices per step.
+        // iteration where exact integer arithmetic runs three, with
+        // different register contents and different step counts -- and step
+        // count is metering on a chain that prices per step.
         let end = start
             .checked_add(count)
             .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
@@ -1630,8 +1627,8 @@ impl Vm {
         // as many words that an instruction may raise `MemoryLimitExceeded`
         // for work it would never have done "because ... the index it was
         // given is out of range". Validating first made a near-exhausted
-        // budget plus an out-of-range slot raise `OutputIndex` here and
-        // `MemoryLimitExceeded` on xqvm_py. `regval_bytes` of an unset
+        // budget plus an out-of-range slot raise `OutputIndex` where the spec
+        // requires `MemoryLimitExceeded`. `regval_bytes` of an unset
         // register is 0, so an unset register still charges nothing and
         // still faults.
         let bytes = regval_bytes(self.reg(reg));
@@ -2156,8 +2153,8 @@ impl Vm {
         // `INPUT r0 / INPUT r1 / PUSH 0 / PUSH 0 / SLACK r0 r1` is
         // verifier-clean and reaches here with two ints. Returning on
         // `capacity <= 0` before touching either register discarded the
-        // effect and halted Ok where xqvm_py faulted. Same rule, and same
-        // reason, as `ITER`'s register-read-before-skip.
+        // effect and halted Ok where the spec requires a fault. Same rule,
+        // and same reason, as `ITER`'s register-read-before-skip.
         //
         // Resolving both up front also fixes the order within the non-empty
         // path: the second register used to be discriminated only after the
@@ -2192,8 +2189,8 @@ impl Vm {
                 // so `start_index + i` leaves the range for any start within
                 // 63 of `i64::MAX`. `VECI r0 / VECI r1 / PUSH 2^63-1 /
                 // PUSH 3 / SLACK r0, r1` charged 64 bytes and passed at any
-                // default while iteration 2 panicked under `ci-test`, wrapped
-                // under `release`, and stored 2^63 on xqvm_py.
+                // default while iteration 2 panicked under `ci-test` and
+                // wrapped under `release`.
                 vec.push(
                     start_index
                         .checked_add(i)
@@ -2661,8 +2658,8 @@ impl Vm {
         // decide the fault: on wasm32 an index past a 32-bit width failed
         // `usize::try_from`, collapsed `needed` to zero and charged
         // nothing, leaving `indices_to_usize` below to raise
-        // `IndexOutOfBounds`, while a 64-bit host and `xqvm_py` charged the
-        // full growth and raised `MemoryLimitExceeded`. That split was
+        // `IndexOutOfBounds`, while a 64-bit host charged the full growth
+        // and raised `MemoryLimitExceeded`. That split was
         // reachable at the default budget, not only above the 32 GiB one
         // `allocation_size` needs, and wasm32 is where the pallet runs.
         //
@@ -2672,13 +2669,13 @@ impl Vm {
         //
         // `max_idx + 1` overflows only at `i64::MAX`, and that one index
         // clamps up rather than down. Clamping it to zero, as this did,
-        // charged nothing and fell through to `IndexOutOfBounds` while
-        // `xqvm_py` computed `2^63` from unbounded integers and raised
-        // `MemoryLimitExceeded` -- the same divergence the narrowing above
-        // caused, on one index value, at the shipped default budget.
-        // `i64::MAX` is one variable short of Python's `2^63`, which the
-        // charge cannot see: both exceed every `u64` budget by more than a
-        // factor of four, so both are refused for the same reason.
+        // charged nothing and fell through to `IndexOutOfBounds` where the
+        // exact growth, `2^63` variables, raises `MemoryLimitExceeded` --
+        // the same divergence the narrowing above caused, on one index
+        // value, at the shipped default budget. `i64::MAX` is one variable
+        // short of the exact `2^63`, which the charge cannot see: both
+        // exceed every `u64` budget by more than a factor of four, so both
+        // are refused for the same reason.
         let needed = idx_vec
             .iter()
             .max()
@@ -2950,8 +2947,7 @@ impl Vm {
         // model walk for one step (QUI-1056).
         // The model register is checked before the sample register, in
         // operand order, so that a program holding the wrong type in both
-        // sees the same error here as it does from the Python VM. The order
-        // is normative -- see `spec/xqvm/METERING.md` (Conformance).
+        // sees the model register's error. The order is normative -- see `spec/xqvm/METERING.md` (Conformance).
         let terms = match self.reg(model) {
             RegVal::Model(m) => m.linear_len().saturating_add(m.quadratic_len()),
             other => {
@@ -3761,14 +3757,13 @@ mod tests {
     }
 
     /// The quadratic trio requires a model: a sample carries no quadratic
-    /// storage. `xqvm_py` accepted the write until QUI-1160 and grew a map
-    /// its own accessors never read back.
+    /// storage (QUI-1160).
     ///
     /// The budget half is the QUI-1178 failure class: if the charge ran
     /// before the register was discriminated *and* were sized from the
     /// sample's real extent, a tight budget would turn this into
-    /// `MemoryLimitExceeded` on one implementation only. `charge_coefficient`
-    /// is model-gated on both, so the identity must survive a budget with no
+    /// `MemoryLimitExceeded` instead of `TypeMismatch`. `charge_coefficient`
+    /// is model-gated, so the identity must survive a budget with no
     /// headroom past the `BSMX` allocation itself.
     #[test]
     fn quadratic_opcodes_reject_a_sample_at_any_budget() {

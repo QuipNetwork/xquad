@@ -5,8 +5,8 @@
 ; densely (`values[i]`); models store biases sparsely (`linear[i]`).
 ; Both surfaces read `0` for uninitialised entries.
 ;
-; This vector regresses the Rust-side fix for QUI-461's §281 linear
-; widening (pre-fix: Rust rejected Sample here with
+; This vector regresses the fix for QUI-461's §281 linear
+; widening (pre-fix: Sample was rejected here with
 ; RegisterType { expected: "model" }). It also regresses the verifier rule
 ; QUI-1168 corrected: reg_type.rs required a Model register for all three
 ; linear opcodes, so this program assembled and ran but could not pass

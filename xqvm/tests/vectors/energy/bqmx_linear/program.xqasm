@@ -4,10 +4,9 @@
 ; linear = [3, 5], quadratic = {}, sample = [0, 0]
 ; ⇒ energy = 3*0 + 5*0 = 0.
 ;
-; This vector exercises BQMX + SETLINE + BSMX + ENERGY on both impls
-; under the shared "no SETLINE on samples" contract (QUI-410). For a
-; non-zero result we use the spin-domain vectors below, whose default
-; sample is [-1, -1].
+; This vector exercises BQMX + SETLINE + BSMX + ENERGY under the "no SETLINE
+; on samples" contract (QUI-410). For a non-zero result we use the
+; spin-domain vectors below, whose default sample is [-1, -1].
 
 PUSH 2
 BQMX r0

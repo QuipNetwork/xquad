@@ -13,8 +13,8 @@ rather than producing a model missing a constraint. A `row` outside
 `[0, rows)`, or a `col` outside `[0, cols)`, raises `IndexOutOfBounds`
 rather than applying the constraint to variables the grid does not
 address -- the same fault the four
-[grid opcodes](grid.md) raise for an out-of-range row or column. Both
-implementations agree on both halves. `xquad verify` cannot catch either,
+[grid opcodes](grid.md) raise for an out-of-range row or column.
+`xquad verify` cannot catch either,
 because the grid dimensions and the index alike are popped stack values
 rather than something the verifier's dataflow passes track. Vec-based
 opcodes (`EQUALITY`, `ATLEAST`, `ATLEASTW`, `REDUCE`) operate on

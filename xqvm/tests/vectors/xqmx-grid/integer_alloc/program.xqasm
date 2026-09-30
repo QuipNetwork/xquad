@@ -3,10 +3,9 @@
 ;
 ; No vector allocated an integer model or sample before this one, which is
 ; why the domain could be documented two different ways -- a signed centred
-; [-k, k-1] in spec/xqvm/ and {0, ..., k-1} in spec/xqsa/DOMAINS.md and the
-; xqvm_py docstrings -- without anything failing. QUI-1150 settled it on the
-; second reading: k is the number of values the domain holds, not a
-; half-width.
+; [-k, k-1] in spec/xqvm/ and {0, ..., k-1} in spec/xqsa/DOMAINS.md --
+; without anything failing. QUI-1150 settled it on the second reading: k is
+; the number of values the domain holds, not a half-width.
 ;
 ; k = 3, so the domain is {0, 1, 2} and the sample defaults to 0. The two
 ; assignments below walk it from the bottom to the top. A write of -3 was

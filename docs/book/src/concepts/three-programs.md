@@ -115,15 +115,12 @@ $ uv run python examples/maxcut/runner.py --n 5 --seed 42
 }
 ```
 
-Adding `--interpreter rust` to the same command prints that block byte for
-byte for this seed. That is not a guarantee: the encoder, verifier, and
-decoder are deterministic per interpreter -- same bytecode in, same
-output out, on either one -- but the solve sitting between them is only
+The encoder, verifier, and decoder are deterministic -- same bytecode and
+calldata in, same output out. The solve sitting between them is only
 pinned to the seed and the `dwave-samplers` version, since SA is
-sensitive to BQM construction order. A different version of that library
-can return a different valid sample for the same seed. See below for
-what `make example-smoke` actually
-checks instead of byte-for-byte parity.
+sensitive to BQM construction order, so a different version of that
+library can return a different valid sample for the same seed. See below
+for what `make example-smoke` checks instead of the exact output.
 
 `_note` and `_seed` are the runner's own bookkeeping, not part of the
 result: `_note`'s value, `"canonical CI golden"`, describes what the
@@ -134,8 +131,9 @@ matching the derivation in
 [Quadratic Models](quadratic-models.md#a-worked-example-max-cut).
 `valid: 1` here only confirms every sample value is in `{0, 1}`, which is
 all this problem's verifier checks. `make example-smoke` is what actually
-guards this example: it runs both interpreters and checks `valid == 1`,
-and does not compare `cut_weight`, `energy`, or `partition` between them.
+guards this example: it runs it once and checks `valid == 1`, and does
+not compare `cut_weight`, `energy`, or `partition` against a stored
+answer.
 These numbers depend on the `dwave-samplers` version behind `dwave-cpu`;
 a different version can return a different valid sample with a different
 cut weight.

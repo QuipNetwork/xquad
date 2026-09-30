@@ -11,8 +11,7 @@
 ; the type check, which raises TypeMismatch for a model-only opcode on a
 ; sample.
 ;
-; QUI-1500: this vector replaces xqvm_py's
-; test_onehot_does_not_charge_for_a_sample as the pin on this behaviour.
+; QUI-1500: this vector is the pin on this behaviour.
 
 PUSH 9
 BSMX r0          ; a 9-variable binary sample: 72 bytes, the whole budget

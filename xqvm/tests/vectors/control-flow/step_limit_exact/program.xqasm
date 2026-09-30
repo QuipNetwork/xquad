@@ -3,7 +3,7 @@
 ; The program has no HALT: it ends by running off the end of the stream
 ; after executing all three instructions. The step limit bounds
 ; instructions executed, so reaching end of stream is not charged and the
-; run succeeds on both implementations.
+; run succeeds.
 
 PUSH 1
 PUSH 2

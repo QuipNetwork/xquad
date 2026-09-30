@@ -1,23 +1,22 @@
 # xquad development workflow
 
 This document describes how changes move from authoring to `main` and
-`dev` in the xquad repository. The central idea -- carried over from the
-xq-rs <-> xq-py merge (QUI-412) -- is that two implementations of the
-same VM must stay in lockstep. Everything else in the workflow is in
-service of that invariant.
+`dev` in the xquad repository. The central idea is that the spec, the
+VM and the vectors that check one against the other must stay in
+lockstep. Everything else in the workflow is in service of that
+invariant.
 
 ## Who maintains what
 
-One repository, two implementations, one spec:
+One repository, one spec, one VM, one vector suite:
 
 | Component | Owner(s) | Role |
 |-----------|----------|------|
 | [`spec/xqvm/SPEC.md`](../../spec/xqvm/SPEC.md) | all | Normative description of VM behaviour. Every conformance vector derives from here. |
-| [`xqvm/`](../../xqvm/) | Rust track | Production interpreter. `no_std + alloc`. Used by the Substrate pallet, the `xquad` CLI, and the `xqffi` pyo3 extension. |
-| [`xqvm_py/`](../../xqvm_py/) | Python track | Reference interpreter. Pure Python. The conformance oracle. |
+| [`xqvm/`](../../xqvm/) | Rust track | The interpreter. `no_std + alloc`. Used by the Substrate pallet, the `xquad` CLI, and the `xqffi` pyo3 extension. |
 | [`xqvm/tests/vectors/`](../../xqvm/tests/vectors/) | shared | Specification vectors. Every committed vector runs on the Rust VM in CI; a mismatch fails the build. |
 | [`xqffi/`](../../xqffi/) | Rust track | PyO3 FFI layer. Rust crate compiled via maturin to a Python wheel -- exposes `xqvm` and `xqasm` to the Python side. Not a pure-Python package. |
-| [`xqcp/`](../../xqcp/), [`xqsa/`](../../xqsa/), [`xquad/`](../../xquad/) | Python track | Python surface: DSL, solver adapters, and umbrella. Consume the VMs (via `xqffi`) rather than define their semantics. |
+| [`xqcp/`](../../xqcp/), [`xqsa/`](../../xqsa/), [`xquad/`](../../xquad/) | Python track | Python surface: DSL, solver adapters, and umbrella. Consume the VM (via `xqffi`) rather than define their semantics. |
 
 ## Branches
 
@@ -51,41 +50,38 @@ follows is only the naming.
 
 ## The atomic spec-MR rule
 
-**Any MR that changes VM semantics must touch all four of the
+**Any MR that changes VM semantics must touch all three of the
 following in the same MR:**
 
 1. `spec/xqvm/*.md` -- any normative spec file: the change documented.
    `SPEC.md`, `ISA.md`, `HLF.md`, `ENCODING.md` and `VERIFIER.md` all
    satisfy this layer; the guard matches the directory, not one file.
-2. `xqvm/src/**/*.rs` -- the Rust production impl updated.
-3. `xqvm_py/{executor,opcodes,xqmx,state,vector,tracer,errors}.py` --
-   the Python reference impl updated.
-4. `xqvm/tests/vectors/**` or `xqvm/opcodes.yaml` -- a new
+2. `xqvm/src/**/*.rs` -- the implementation updated.
+3. `xqvm/tests/vectors/**` or `xqvm/opcodes.yaml` -- a new
    or modified vector that exercises the change.
 
 ### Why
 
-- **No drift-tracking middle ground.** Before the merge, drift
-  between `xq-rs` and `xq-py` was tracked as a running list. Ten
-  drift points accumulated before we stopped accepting it and merged
-  the repos (QUI-412). The atomic rule makes divergence impossible by
-  construction: you can't commit a spec change without updating both
-  impls in the same diff.
+- **No drift-tracking middle ground.** Drift that is tracked as a
+  running list keeps growing: ten drift points accumulated between two
+  VM codebases before QUI-412 stopped accepting it. The atomic rule
+  makes divergence impossible by construction: you can't commit a spec
+  change without updating the VM and its vectors in the same diff.
 - **Reviewable as one story.** A reviewer sees the spec delta next
-  to the two impl deltas next to the test that proves they agree.
-  The mental model is contained in one MR.
-- **CI coverage that scales.** The conformance harness runs every
-  vector against both runtimes. Adding a vector at the same time as
-  the semantics change means the harness is as up-to-date as the
-  spec on the day of the merge.
+  to the VM delta next to the vector that proves the VM does what the
+  spec says. The mental model is contained in one MR.
+- **CI coverage that scales.** The vector suite runs every vector
+  against the VM. Adding a vector at the same time as the semantics
+  change means the suite is as up-to-date as the spec on the day of
+  the merge.
 
 ### Enforcement
 
 A CI guard -- [`scripts/check-atomic-spec-mr.sh`](../../scripts/check-atomic-spec-mr.sh)
 -- runs as part of `verify:policy` on every merge request. It classifies
-changed files into the four layers and fails the pipeline if an MR
-touches **1-3 layers but not all four**. Touching **0 layers** (pure
-docs / CI / tooling MRs) or **all 4** passes.
+changed files into the three layers and fails the pipeline if an MR
+touches **1-2 layers but not all three**. Touching **0 layers** (pure
+docs / CI / tooling MRs) or **all 3** passes.
 
 Run locally the same way CI does:
 
@@ -99,36 +95,30 @@ Some legitimate changes only touch one or two layers -- the guard
 would flag them as drift even though they're alignment fixes. The
 exempt cases:
 
-- **One-sided alignment fix.** One impl already matches the spec;
-  the other impl is brought in line without changing the canonical
-  behaviour. Example: QUI-453 changed only `xqvm_py/xqmx.py` to pre-
-  populate a spin sample with `-1` per position, matching what Rust
-  had always done -- no Rust change, no opcode table change.
+- **Alignment fix.** The spec already states the behaviour and a
+  vector already pins it; the VM is brought in line without changing
+  either. Only `xqvm/src/` moves.
 - **Spec clarification.** The spec text gains precision without
   changing the normative rules. No impl updates needed.
 - **Conformance-only coverage addition.** A new vector exercises
   existing semantics. No spec / impl changes.
-- **Cross-implementation alignment with no normative change.** Both
-  impls move, and sometimes the harness with them, to converge on
-  behaviour the spec already states -- so the spec layer has nothing to
-  add and the guard's four-layer test cannot be satisfied honestly.
-  This is the case the v0.4.0 series used most: QUI-1147's step-budget
-  export touched `xqvm/src/` and `xqvm_py/` together, and QUI-1032's
-  opcode-signature check touched those two plus `conformance/`, neither
-  of them changing what the spec says.
+- **VM and vectors with no normative change.** The VM and its vectors
+  move together to match behaviour the spec already states, so the
+  spec layer has nothing to add and the guard's three-layer test
+  cannot be satisfied honestly.
 
 **To take an exemption, add a commit-message trailer of the form
 `Atomic-Spec-Exempt: QUI-<id> <reason>`.** It goes in the message's last
 paragraph, at column 0, beside the sign-off:
 
 ```
-Align Python SSMX default to Rust's [-1, -1, ...] initialisation.
+docs(xqvm): state the order ENERGY validates its registers in
 
-Python was shipping empty-dict samples where Rust used vec![-1; size];
-this aligns the Python side. No Rust change needed.
+The VM already validates the model register before the sample register
+and a vector pins it; the spec now says so. No VM change.
 
 Fixes QUI-453
-Atomic-Spec-Exempt: QUI-453 one-sided Python fix, no semantics change
+Atomic-Spec-Exempt: QUI-453 spec clarification, no semantics change
 Signed-off-by: You <you@example.com>
 ```
 
@@ -172,12 +162,12 @@ beyond review.
   and the `xquad` / `xqcp` / `xqsa` Python packages. Changes here
   don't need spec or conformance updates.
 - **Build glue and tooling** -- `xqvm/build.rs`, `xqvm/Cargo.toml`,
-  `xqvm_py/pyproject.toml`, `Makefile`, CI config, scripts. Not
+  `Makefile`, CI config, scripts. Not
   semantic.
 - **Docs** -- everything under `docs/`, READMEs, CHANGELOG. Not
   semantic.
 - **Tests** -- `xqvm/src/**/tests.rs`, `xqvm/tests/*.rs`,
-  `xqvm/tests/vector_suite/**`, `xqvm_py/tests/**`. Tests exercise
+  `xqvm/tests/vector_suite/**`. Tests exercise
   semantics but don't define them; the *vectors* (under
   `xqvm/tests/vectors/`) are the authoritative check and that's what
   the guard watches.
