@@ -32,7 +32,7 @@ The Linear epic (QUI-724) groups these tasks into seven work items. The granular
 - All Rust code must pass `cargo clippy --all-features -- -D warnings` with the workspace `clippy.toml`
 - Python must pass `ruff check` and `ruff format --check` at the repo root
 - Google-style docstrings on all public Python APIs
-- Gate opcode bytes live in 0x80–0xC2 (the range the XQVM spec reserves as illegal for `.xqb`)
+- Gate opcode bytes live in 0x80–0xE8 (W1 defines 0x80–0xC2; W5–W6 extend it up to 0xE8), inside the range the XQVM spec reserves as illegal for `.xqb`
 - Gate angles are stored as `u32` binary-angular units (full turn = 2^32); conversion to radians happens only at the simulator/backend boundary, never on-chain -- this eliminates NaN/−0 hazards and halves angle storage cost vs f64
 - No modifications to `xqvm`, `xqasm`, or `xqvm_py` -- gate ISA is purely additive in new crates/packages
 - Add `xqgbc` to root `Cargo.toml` `members`; add `xqgb` to root `pyproject.toml` `[tool.uv.workspace] members`
@@ -47,7 +47,7 @@ The Linear epic (QUI-724) groups these tasks into seven work items. The granular
 |---|---|
 | `xqgbc/Cargo.toml` | Crate manifest with `crc32fast`, `thiserror`, `pastey` deps |
 | `xqgbc/src/lib.rs` | Public facade re-exporting all public types |
-| `xqgbc/src/table.rs` | `gate_opcodes!` X-macro (26 gate instructions) |
+| `xqgbc/src/table.rs` | `gate_opcodes!` X-macro (25 gate instructions) |
 | `xqgbc/src/types/mod.rs` | Re-exports from sub-modules |
 | `xqgbc/src/types/operand.rs` | `Qubit(u8)`, `Cbit(u8)`, `GateAngle(u32)` newtypes (full turn = 2^32 units) |
 | `xqgbc/src/types/opcode.rs` | `GateOpcode` `#[repr(u8)]` enum derived from X-macro |
@@ -206,12 +206,12 @@ impl GateAngle {
 ///
 /// | Attribute position | Type | Description |
 /// |---|---|---|
-/// | `code` | `u8` literal | Wire-encoding byte (0x80–0xC2) |
+/// | `code` | `u8` literal | Wire-encoding byte (0x80–0xE8) |
 /// | `"MNEMONIC"` | `str` literal | Uppercase assembly mnemonic |
 /// | `qubit_arity` | `u8` literal | Number of qubit operands; used by the static verifier |
 ///
 /// `GateAngle` fields are not counted toward `qubit_arity`.
-/// All opcodes live in 0x80–0xC2, the range `.xqb` reserves as illegal.
+/// All opcodes live in 0x80–0xE8, inside the range `.xqb` reserves as illegal.
 ///
 /// Consumer macros match the pattern:
 /// ```rust,ignore
@@ -3530,7 +3530,7 @@ The global `BARRIER` (0x82) remains sufficient.
 **Interfaces:**
 - Consumes: W1 (xqgbc), W2–W3 (xqgb), W4 (conformance)
 - Produces: `RESET`/`CCX`/`CSWAP` in Rust codec and Python decoder; CPU sim `_apply_three()`
-  helper for 8×8 unitaries; parity check updated to 32 opcodes
+  helper for 8×8 unitaries; parity check updated to 28 opcodes (32 if W6 Part 1's four CF opcodes have already landed)
 
 ---
 
@@ -3620,7 +3620,7 @@ if m == "RESET":
 cargo test -p xqgbc
 uv run pytest xqgb/ -v
 uv run python scripts/check-gate-opcode-parity.py
-# Expected: OK -- 32 gate opcodes match
+# Expected: OK -- N gate opcodes match, where N = 25 + 3 (W5) + any of W6 Part 1's 4 CF opcodes already landed
 ```
 
 - [ ] **Step 6: Commit**
@@ -3763,7 +3763,7 @@ reconstructs all jump targets correctly.
 ```bash
 cargo test -p xqgbc && uv run pytest xqgb/ -v
 uv run python scripts/check-gate-opcode-parity.py
-# Expected: OK -- 35 gate opcodes match (32 from W5 + 3 wide-form CF)
+# Expected: OK -- 35 gate opcodes match (32 = W1 + W5 + W6 Part 1, plus 3 wide-form CF; counts assume that landing order)
 ```
 
 - [ ] **Step 8: Commit**
@@ -3798,10 +3798,13 @@ reads `n_params` and then exactly `4 × n_params` bytes before handing the strea
 instruction decoder.
 
 Angle operands that reference a parameter slot use the high bit of their `u32` value as
-a flag: bit 31 = 0 → literal binary-angular value; bit 31 = 1 → parameter-slot reference
-(bits 0–7 = slot index). This is backward-compatible: v1 decoders that encounter a
-bit-31-set angle operand will interpret it as an astronomically large rotation angle --
-incorrect but not a crash. Correct decoding requires version = 2.
+a flag: bit 31 = 0 → literal value; bit 31 = 1 → parameter-slot reference
+(bits 0–7 = slot index). In v2 files a literal angle therefore has 31 bits of precision
+and a full turn is 2^31 units (v1: 2^32). Without this change every literal angle of pi
+or more would set bit 31 and be misread as a slot reference. The two versions are not
+interchangeable: a v1 decoder reading a v2 file misreads every angle, so decoders must
+reject unknown versions rather than guess, and angle-to-radian conversion must key off
+the file version.
 
 **Files:**
 - Modify: `xqgbc/src/program.rs` -- add `params: Vec<GateAngle>` to `GateCircuit`;
@@ -3851,21 +3854,26 @@ loop, add a second pass: every angle operand with `is_param_ref()` set must have
 def bind(self, values: list[float]) -> "GateCircuit":
     """Return a new GateCircuit with all parameter references replaced by concrete angles."""
     _PARAM_FLAG = 0x8000_0000
+    if len(values) != len(self.params):
+        raise ValueError(f"expected {len(self.params)} parameter values, got {len(values)}")
+
     def resolve(op):
         if isinstance(op, int) and op & _PARAM_FLAG:
             slot = op & 0xFF
-            return round(values[slot] % (2 * math.pi) / (2 * math.pi) * 4_294_967_296) & 0xFFFFFFFF
+            # v2 literal angles are 31-bit: full turn = 2^31 units.
+            return round(values[slot] % (2 * math.pi) / (2 * math.pi) * 2_147_483_648) & 0x7FFF_FFFF
         return op
     new_instrs = [
         RawGateInstruction(i.mnemonic, tuple(resolve(o) for o in i.operands))
         for i in self.instructions
     ]
+    # Bound circuits carry no preamble; re-encoding emits a v2 file with n_params = 0.
     return GateCircuit(header=self.header, params=[], instructions=new_instrs)
 ```
 
 - [ ] **Step 5: Write tests** -- a v2 parameterized `RX` circuit with `θ = slot 0`,
 default 0. Encode, round-trip decode, bind `θ = π`, assert same distribution as literal
-`RX(π)`. Also: v1 files still decode identically.
+`RX(π)`. Also: v1 files still decode identically, a v2 literal `RX(3*pi/2)` round-trips as a literal (not a slot reference), and `bind()` with the wrong number of values raises `ValueError`.
 
 - [ ] **Step 6: Commit**
 
