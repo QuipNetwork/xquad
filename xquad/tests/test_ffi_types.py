@@ -178,10 +178,9 @@ def test_default_accepts_an_empty_sample() -> None:
 
 
 def test_default_rejects_a_size_above_the_allocation_bound() -> None:
-    # A model is sparse and takes this size; the dense sample a solver
-    # builds for it must raise rather than abort the interpreter.
+    # The dense sample must raise rather than abort the interpreter. The
+    # model constructors refuse the same size (test_model_boundary.py).
     size = ffi.MAX_ALLOCATION_SIZE + 1
-    assert XqmxModel.binary(size).size == size
     with pytest.raises(ffi.InvalidAllocation) as excinfo:
         XqmxSample.default(Domain.BINARY, size)
     assert str(excinfo.value) == f"invalid allocation size {size}"

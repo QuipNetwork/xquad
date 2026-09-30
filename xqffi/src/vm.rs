@@ -132,23 +132,28 @@ struct PyXqmxModel {
 #[pymethods]
 impl PyXqmxModel {
     /// Construct an empty model of `size` variables over `domain`.
+    ///
+    /// Raises for a model no bytecode could allocate: `InvalidAllocation`
+    /// for a `size` past `MAX_ALLOCATION_SIZE`, and `InvalidGridDimensions`
+    /// for a grid other than `0 x 0` that does not fit `size` the way
+    /// `RESIZE` requires. The other constructors raise the same.
     #[new]
     #[pyo3(signature = (domain, size, rows = 0, cols = 0))]
-    fn new(domain: &Bound<'_, PyDomain>, size: usize, rows: usize, cols: usize) -> Self {
+    fn new(domain: &Bound<'_, PyDomain>, size: usize, rows: usize, cols: usize) -> PyResult<Self> {
         Self::build(domain.get().inner, size, rows, cols)
     }
 
     /// An empty binary model.
     #[staticmethod]
     #[pyo3(signature = (size, rows = 0, cols = 0))]
-    fn binary(size: usize, rows: usize, cols: usize) -> Self {
+    fn binary(size: usize, rows: usize, cols: usize) -> PyResult<Self> {
         Self::build(Domain::Binary, size, rows, cols)
     }
 
     /// An empty spin model.
     #[staticmethod]
     #[pyo3(signature = (size, rows = 0, cols = 0))]
-    fn spin(size: usize, rows: usize, cols: usize) -> Self {
+    fn spin(size: usize, rows: usize, cols: usize) -> PyResult<Self> {
         Self::build(Domain::Spin, size, rows, cols)
     }
 
@@ -157,7 +162,7 @@ impl PyXqmxModel {
     #[staticmethod]
     #[pyo3(signature = (size, k, rows = 0, cols = 0))]
     fn integer(size: usize, k: i64, rows: usize, cols: usize) -> PyResult<Self> {
-        Ok(Self::build(integer_domain(k)?, size, rows, cols))
+        Self::build(integer_domain(k)?, size, rows, cols)
     }
 
     #[getter]
@@ -292,11 +297,12 @@ impl PyXqmxModel {
             .ok_or_else(|| fault::index_out_of_bounds(i, self.inner.size))
     }
 
-    fn build(domain: Domain, size: usize, rows: usize, cols: usize) -> Self {
+    fn build(domain: Domain, size: usize, rows: usize, cols: usize) -> PyResult<Self> {
+        check_extents(size, rows, cols)?;
         let mut inner = XqmxModel::new(domain, size);
         inner.rows = rows;
         inner.cols = cols;
-        Self { inner }
+        Ok(Self { inner })
     }
 }
 
@@ -311,7 +317,10 @@ struct PyXqmxSample {
 impl PyXqmxSample {
     /// Construct a sample over `domain` holding `values`.
     ///
-    /// Raises `ValueError` if any value lies outside `domain`.
+    /// Raises `ValueError` if any value lies outside `domain`, and
+    /// `InvalidGridDimensions` for a grid other than `0 x 0` that does not
+    /// fit `len(values)` the way `RESIZE` requires. The other constructors
+    /// raise the same.
     #[new]
     #[pyo3(signature = (domain, values, rows = 0, cols = 0))]
     fn new(
@@ -365,9 +374,7 @@ impl PyXqmxSample {
         cols: usize,
     ) -> PyResult<Self> {
         let domain = domain.get().inner;
-        if i64::try_from(size).map_or(true, |size| size > xqvm::MAX_ALLOCATION_SIZE) {
-            return Err(fault::invalid_allocation(size));
-        }
+        check_extents(size, rows, cols)?;
         let mut values = Vec::new();
         values.try_reserve_exact(size).map_err(|_| {
             PyMemoryError::new_err(format!("cannot reserve a sample of {size} variables"))
@@ -456,9 +463,12 @@ impl PyXqmxSample {
 
 impl PyXqmxSample {
     fn build(domain: Domain, values: Vec<i64>, rows: usize, cols: usize) -> PyResult<Self> {
-        // Independent guards rather than one fused condition, so the extent
-        // checks (QUI-1164) drop in beside this one.
-        //
+        // Independent guards rather than one fused condition: the extent
+        // checks name the grid or the length, the domain check a value.
+        // The length check is unreachable short of a 32 GiB list, which
+        // PyO3 has already extracted by now; kept so both types state the
+        // same size rule.
+        check_extents(values.len(), rows, cols)?;
         // The VM's own check is on SETLINE and ADDLINE, which a host-supplied
         // sample never passes through: `Vm::set_calldata` is infallible by
         // design and stays the trusted-embedder path. Closing that gap is
@@ -490,6 +500,23 @@ impl PyXqmxSample {
 }
 
 /// The `ValueError` for a sample value outside its domain.
+/// Reject a model or sample no bytecode could allocate (QUI-1164).
+///
+/// The allocators refuse a `size` past [`xqvm::MAX_ALLOCATION_SIZE`], and
+/// `RESIZE` refuses a grid [`xqvm::grid_fits`] rejects. `0 x 0` is the
+/// ungridded state every allocator starts from. Checked at construction so
+/// an unfit state is refused where the host builds it, rather than from the
+/// first grid opcode that reads it.
+fn check_extents(size: usize, rows: usize, cols: usize) -> PyResult<()> {
+    if i64::try_from(size).map_or(true, |size| size > xqvm::MAX_ALLOCATION_SIZE) {
+        return Err(fault::invalid_allocation(size));
+    }
+    if (rows, cols) != (0, 0) && !xqvm::grid_fits(rows, cols, size) {
+        return Err(fault::invalid_grid(rows, cols, size));
+    }
+    Ok(())
+}
+
 fn out_of_domain(value: i64, index: usize, domain: Domain) -> PyErr {
     PyValueError::new_err(format!(
         "sample value {value} at variable {index} is outside the {domain} domain"
@@ -722,6 +749,7 @@ pub(crate) fn register(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()>
     // restating the literals.
     m.add("DEFAULT_STEP_LIMIT", xqvm::DEFAULT_STEP_LIMIT)?;
     m.add("DEFAULT_MEMORY_LIMIT", xqvm::DEFAULT_MEMORY_LIMIT)?;
+    // The ceiling the constructors enforce on `size`, for the same reason.
     m.add("MAX_ALLOCATION_SIZE", xqvm::MAX_ALLOCATION_SIZE)?;
     Ok(())
 }

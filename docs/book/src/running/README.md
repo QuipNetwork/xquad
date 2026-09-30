@@ -139,7 +139,7 @@ A calldata list may mix any of `int`, `list[int]`, `xqffi.vm.XqmxModel`,
 every element's type as soon as you call it, not at run time:
 
 ```python
-from xqffi.vm import Domain, XqmxModel, XqmxSample
+from xqffi.vm import Domain, InvalidGridDimensions, XqmxModel, XqmxSample
 
 model = XqmxModel.binary(size=4)   # or XqmxModel(Domain.BINARY, size=4)
 model.set_linear(0, -1)
@@ -149,6 +149,13 @@ sample = XqmxSample.spin(values=[-1, 1, -1, 1])
 
 session.set_calldata([model, sample, [1, 2, 3], 42])
 # session.run() now sees four typed input slots.
+
+try:
+    XqmxModel.binary(size=4, rows=2, cols=3)
+except InvalidGridDimensions as e:
+    print(e)
+# a 2 x 3 grid does not fit 4 variables; rows and cols must both be 0,
+# or both positive with rows * cols <= size
 
 try:
     session.set_calldata([object()])
