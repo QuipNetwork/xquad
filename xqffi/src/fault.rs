@@ -137,14 +137,29 @@ pub(crate) fn index_out_of_bounds(index: i64, len: usize) -> PyErr {
     )
 }
 
-/// `InvalidAllocation` for a host call that asked for a sample of `size`
-/// variables, more than `MAX_ALLOCATION_SIZE` allows.
+/// `InvalidAllocation` for a host call that asked for a model or sample of
+/// `size` variables, more than `MAX_ALLOCATION_SIZE` allows.
 ///
-/// The sample allocators raise the same fault inside the VM; a host call
-/// has no instruction, so `offset` is `None`.
+/// The allocators raise the same fault inside the VM; a host call has no
+/// instruction, so `offset` is `None`.
 pub(crate) fn invalid_allocation(size: usize) -> PyErr {
     with_offset(
         InvalidAllocation::new_err(format!("invalid allocation size {size}")),
+        None,
+    )
+}
+
+/// `InvalidGridDimensions` for a host call that gave a model or sample a
+/// `rows x cols` grid that does not fit `size` variables.
+///
+/// `RESIZE` raises the same fault inside the VM; a host call has no
+/// instruction, so `offset` is `None`.
+pub(crate) fn invalid_grid(rows: usize, cols: usize, size: usize) -> PyErr {
+    with_offset(
+        InvalidGridDimensions::new_err(format!(
+            "a {rows} x {cols} grid does not fit {size} variables; rows and cols \
+             must both be 0, or both positive with rows * cols <= size"
+        )),
         None,
     )
 }
