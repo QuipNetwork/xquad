@@ -125,8 +125,9 @@ its analog range with a monotonic, optimum-preserving rescaling, so an
 oversized \\(P\\) is not rejected there -- it costs usable range on the
 device instead. `SolverQuip` goes further: it scales every coefficient
 by `MILLI_SCALE = 1000` into the chain's `i32` fields, so an oversized
-coefficient can overflow `i32` and raise `EncodingError` rather than
-losing precision silently. `MAX_NATURAL_COEFFICIENT = 2_147_483` is the
+coefficient can overflow `i32` and raise `EncodingError`, and one finer
+than `1/1000` is rounded to the nearest milli, with the largest rounding
+error reported. `MAX_NATURAL_COEFFICIENT = 2_147_483` is the
 exact bound only for a SPIN model; a BINARY model -- the domain every
 worked example on this page uses -- goes through a basis change first
 that shifts the bound in both directions, and can overflow well before

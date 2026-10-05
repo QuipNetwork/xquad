@@ -38,14 +38,18 @@ XQMX model and the on-chain ``QuantumComputeMempool`` representation:
 
 Coefficient convention: XQMX coefficients are natural-scale integers (``5``
 means ``5.0``); the chain stores ``h``/``j`` as milli-scale ``i32`` (multiply
-by :data:`MILLI_SCALE`). ``propose_job`` validates only structural consistency
-(no duplicate nodes, ``len(h) == len(nodes)``, ``len(j) == len(edges)``, every
-edge endpoint present in ``nodes``); it does NOT enforce allowed-value sets, so
-the only value constraint here is that the milli value fits ``i32``.
+by :data:`MILLI_SCALE`). A coefficient off the milli grid -- a float weight,
+or a BINARY model's spin fields after the basis change -- is rounded to the
+nearest milli, and the job records the largest rounding error.
+``propose_job`` validates only structural consistency (no duplicate nodes,
+``len(h) == len(nodes)``, ``len(j) == len(edges)``, every edge endpoint present
+in ``nodes``); it does NOT enforce allowed-value sets, so the only value
+constraint here is that the milli value fits ``i32``.
 """
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -71,6 +75,11 @@ I32_MAX = 2**31 - 1
 # Largest natural-scale coefficient that still fits ``i32`` after scaling by
 # ``MILLI_SCALE`` (``2_147_483 * 1000 = 2_147_483_000 <= I32_MAX``).
 MAX_NATURAL_COEFFICIENT = I32_MAX // MILLI_SCALE
+
+# A scaled coefficient within this many milli of an integer is on the grid: the
+# gap is float noise from the scaling (``0.1 * 1000`` is not exactly ``100``),
+# not a rounding the caller should hear about.
+_MILLI_GRID_TOLERANCE = 1e-6
 
 # Coefficient-encoding doc: natural<->milli scaling, the i32 limit, and why
 # out-of-spec coefficients are accepted on-chain (the pallet does not enforce
@@ -340,7 +349,10 @@ class IsingJob:
     arrays over that graph (one entry per node/edge). ``mapping`` records the
     chosen model-variable -> topology-node assignment; ``domain`` is the
     original model domain so :func:`decode_solution` can reverse a BINARY
-    transform.
+    transform. ``quantization_error`` is the largest absolute difference, in
+    natural units, between a spin coefficient and its milli encoding: ``0.0``
+    when every coefficient was on the milli grid, and at most ``0.0005``
+    otherwise.
     """
 
     topology: Topology
@@ -348,6 +360,7 @@ class IsingJob:
     j_values: tuple[int, ...]
     mapping: dict[int, int]
     domain: XQMXDomain
+    quantization_error: float = 0.0
 
     def __post_init__(self) -> None:
         # h/j carry one entry per node/edge of the submitted graph. A length
@@ -546,23 +559,28 @@ def find_placement(
     return assignment
 
 
-def _to_milli(value: float, label: str) -> int:
-    """Scale a natural-scale coefficient to a milli ``i32``, exactly.
+def _to_milli(value: float, label: str) -> tuple[int, float]:
+    """Round a natural-scale coefficient to the nearest milli ``i32``.
+
+    Returns the milli value and the rounding error in natural units. Ties round
+    to even. A value within :data:`_MILLI_GRID_TOLERANCE` milli of the grid
+    reports an error of ``0.0``.
 
     Raises:
-        EncodingError: if the value is not representable at milli precision or
-            the scaled value does not fit ``i32``.
+        EncodingError: if the value is not finite or the rounded value does not
+            fit ``i32``.
     """
     scaled = value * MILLI_SCALE
+    if not math.isfinite(scaled):
+        raise EncodingError(f"{label} = {value} is not a finite coefficient")
     milli = round(scaled)
-    if abs(scaled - milli) > 1e-6:
-        raise EncodingError(f"{label} = {value} is not representable at milli precision (1/{MILLI_SCALE})")
     if not (I32_MIN <= milli <= I32_MAX):
         raise EncodingError(
             f"{label} = {value} overflows the encodable range "
             f"(milli {milli} outside i32 [{I32_MIN}, {I32_MAX}]); see {QUIP_COEFFICIENTS_DOC_URL}"
         )
-    return milli
+    gap = abs(scaled - milli)
+    return milli, (0.0 if gap <= _MILLI_GRID_TOLERANCE else gap / MILLI_SCALE)
 
 
 def _range_bounds(inner: object) -> tuple[int, int] | None:
@@ -665,6 +683,12 @@ def model_to_ising(
     the placed subgraph: the nodes the placement actually used and the hardware
     edges its couplings landed on, with one milli-scaled ``h``/``j`` entry each.
 
+    Each coefficient is rounded to the nearest milli rather than refused, so a
+    float weight finer than ``1/1000`` encodes. The largest rounding error is
+    recorded as :attr:`IsingJob.quantization_error`, at most ``0.0005`` per
+    coefficient. Rounding perturbs only the landscape the miners search: a
+    returned sample is scored by recomputing its energy on the original model.
+
     The submitted graph is the order's own graph. ``propose_job`` checks it for
     internal consistency only (``len(h) == len(nodes)``, every edge endpoint
     present in ``nodes``) and ``submit_solution`` computes energy over it, so it
@@ -675,7 +699,7 @@ def model_to_ising(
 
     Raises:
         EncodingError: if the model has no terms, or a coefficient is not
-            milli-representable or overflows ``i32``.
+            finite or overflows ``i32`` at milli scale.
         PlacementError: if the model cannot be placed onto the topology.
     """
     if model.mode != XQMXMode.MODEL:
@@ -703,19 +727,23 @@ def model_to_ising(
         allowed_spin=topology.allowed_spin,
     )
 
+    quantization_error = 0.0
+
     h_values = [0] * placed.num_nodes
     for var, bias in h.items():
         if bias == 0:
             continue
         position = placed.index_of(placement[var])
-        h_values[position] = _to_milli(bias, f"h[{var}]")
+        h_values[position], error = _to_milli(bias, f"h[{var}]")
+        quantization_error = max(quantization_error, error)
 
     j_values = [0] * placed.num_edges
     for (u, v), bias in j.items():
         if bias == 0:
             continue
         position = placed.edge_index(placement[u], placement[v])
-        j_values[position] = _to_milli(bias, f"j[({u}, {v})]")
+        j_values[position], error = _to_milli(bias, f"j[({u}, {v})]")
+        quantization_error = max(quantization_error, error)
 
     return IsingJob(
         topology=placed,
@@ -723,6 +751,7 @@ def model_to_ising(
         j_values=tuple(j_values),
         mapping=placement,
         domain=model.domain,
+        quantization_error=quantization_error,
     )
 
 

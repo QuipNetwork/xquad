@@ -175,8 +175,8 @@ otherwise start proposing jobs and spending funds.
 
 The normative rules for this section are
 [Coefficient encoding and allowed values](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqsa/SOLVERS.md#coefficient-encoding-and-allowed-values)
--- the same URL `EncodingError` and the allowed-value warning below both
-carry.
+-- the same URL `EncodingError`, the rounding warning, and the
+allowed-value warning below all carry.
 
 XQMX coefficients are natural-scale integers. The pallet stores
 couplings and fields as milli-scale `i32` values, read back on-chain as
@@ -189,10 +189,21 @@ print(MILLI_SCALE, MAX_NATURAL_COEFFICIENT)
 # 1000 2147483
 ```
 
-`SolverQuip` computes spin coefficients from the model and multiplies
-each by `MILLI_SCALE` before encoding. A coefficient not exactly
-representable at `1/1000` precision, or one whose milli value would
-overflow `i32`, raises `EncodingError` rather than silently truncating.
+`SolverQuip` computes spin coefficients from the model, multiplies
+each by `MILLI_SCALE`, and rounds to the nearest integer milli value,
+ties to even. A coefficient finer than `1/1000` is therefore rounded,
+not refused. Each rounding moves a coefficient by at most `0.0005`.
+`SolverQuip` reports the largest such error once per solver instance as
+a `warnings.warn`, and on every result as
+`metadata["quantization_error"]`. A coefficient whose rounded milli
+value would overflow `i32` still raises `EncodingError`.
+
+Rounding changes only the model the miners search. `result.energy` is
+recomputed on your original model, so a returned sample is never scored
+against the rounded coefficients. A BINARY model with ordinary
+three-decimal weights is the common case: the basis change below
+divides each quadratic weight by 4, so `1.5` on `x_0` and `0.001` on
+`x_0 x_1` give a spin field of `0.75025`, which encodes as `750`.
 
 `MAX_NATURAL_COEFFICIENT` is the exact ceiling only for a **SPIN**
 model, whose `h`/`j` coefficients pass through to the pallet unchanged.
@@ -292,8 +303,9 @@ from an observed job, see [Your First Quip Job](quip-first-job.md#what-the-figur
 
 ## Metadata
 
-`SolverResult.metadata` for `quip` carries six keys, populated from the
-winning submission (`xqsa/quip.py:807-816`):
+`SolverResult.metadata` for `quip` carries seven keys, six populated
+from the winning submission and one from the encoding
+(`xqsa/quip.py:1163-1173`):
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -303,11 +315,12 @@ winning submission (`xqsa/quip.py:807-816`):
 | `energy_matches_chain` | `bool` | Canary: whether the local milli recompute from the returned spin vector equals `best_energy_milli`, confirming index alignment and encoding. |
 | `num_submissions` | `int` | How many miner submissions the order received. |
 | `num_solutions` | `int` | How many solution vectors the winning submission carried. |
+| `quantization_error` | `float` | The largest absolute error, in natural units, from rounding a spin coefficient to the milli grid. `0.0` when every coefficient was already on it; at most `0.0005`. |
 
 `best_energy_milli` is milli-scale (see
 [Coefficient Encoding](#coefficient-encoding)) and is not directly
 comparable to `result.energy`, the authoritative natural-scale integer
-`_recompute_energy()` computes (`quip.py:795`); diffing the two without
+`_recompute_energy()` computes (`quip.py:1151`); diffing the two without
 converting scale first will make a correct result look wrong.
 
 `metadata["solver"]` here names the miner that solved the job, not a
@@ -330,7 +343,7 @@ network-dependent lifecycle failures:
 | Exception | Raised when |
 |---|---|
 | `QuipError` | Base class for every error below |
-| `EncodingError` | The model is not `MODEL`-mode, its domain is unsupported, or both its `linear` and `quadratic` dicts are empty. Also covers a coefficient that fails milli-scale conversion (see [Coefficient Encoding](#coefficient-encoding)), and a native order over the mempool's `MaxNodes` or `MaxEdges` |
+| `EncodingError` | The model is not `MODEL`-mode, its domain is unsupported, or both its `linear` and `quadratic` dicts are empty. Also covers a NaN coefficient, a coefficient whose rounded milli value overflows `i32` (see [Coefficient Encoding](#coefficient-encoding)), and a native order over the mempool's `MaxNodes` or `MaxEdges` |
 | `PlacementError` | The model's coupling graph is not a subgraph of the target topology. Raised in default mode only; see [Native topology mode](#native-topology-mode) |
 | `QuipSigningError` | Extrinsic assembly, keystore handling, or submission fails |
 | `QuipConnectionError` | The node is unreachable, or a configured Ising spec is not registered on-chain |

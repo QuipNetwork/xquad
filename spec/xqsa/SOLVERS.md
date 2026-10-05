@@ -124,11 +124,11 @@ A consumer that needs positions derives them from the order's own `nodes` array.
 
 ## Coefficient encoding and allowed values
 
-This section is the stable reference linked from `SolverQuip`'s `EncodingError` (on `i32` overflow) and from its one-time educational warning (on out-of-spec coefficients).
+This section is the stable reference linked from `SolverQuip`'s `EncodingError` (on `i32` overflow) and from its one-time warnings (on milli-rounded and on out-of-spec coefficients).
 
 ### Natural-scale to milli-scale
 
-XQMX coefficients are natural-scale integers: a field or coupling of `5` means `5.0`. The `QuantumComputeMempool` pallet stores `h` (fields) and `j` (couplings) as milli-scale `i32`, read back on-chain as `value / 1000`. `SolverQuip` therefore multiplies each coefficient by `MILLI_SCALE = 1000` when encoding. A coefficient that is not exactly representable at milli precision (finer than `1/1000`) is rejected with `EncodingError`.
+XQMX coefficients are natural-scale integers: a field or coupling of `5` means `5.0`. The `QuantumComputeMempool` pallet stores `h` (fields) and `j` (couplings) as milli-scale `i32`, read back on-chain as `value / 1000`. `SolverQuip` therefore multiplies each coefficient by `MILLI_SCALE = 1000` when encoding and rounds it to the nearest integer, ties to even. A coefficient finer than `1/1000` is rounded rather than rejected, so float weights and the off-grid spin fields a BINARY model's basis change produces still encode. Each rounding moves a coefficient by at most `0.0005`. The largest rounding error is recorded as `IsingJob.quantization_error`, reported once per solver instance as a `warnings.warn`, and returned on every result as `metadata["quantization_error"]`. Rounding perturbs only the model the miners search: the energy `SolverQuip` returns is recomputed on the original model.
 
 ### The `i32` limit
 

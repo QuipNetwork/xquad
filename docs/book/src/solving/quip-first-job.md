@@ -164,7 +164,7 @@ print(list(vm.outputs()[0]))
 
 ```text
 -723
-{'order_id': 150, 'solver': '5DXr9LokuLE5bs2ZZyhDwbJfR9SqceL7kohQbgMebDcymhfD', 'best_energy_milli': -1817000, 'energy_matches_chain': True, 'num_submissions': 10, 'num_solutions': 1}
+{'order_id': 150, 'solver': '5DXr9LokuLE5bs2ZZyhDwbJfR9SqceL7kohQbgMebDcymhfD', 'best_energy_milli': -1817000, 'energy_matches_chain': True, 'num_submissions': 10, 'num_solutions': 1, 'quantization_error': 0.0}
 [2, 1, 0, 3]
 ```
 

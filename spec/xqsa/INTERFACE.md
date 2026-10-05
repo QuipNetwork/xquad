@@ -93,7 +93,7 @@ class SolverResult:
 | `reads` | `int` | Number of samples/reads taken by the solver. |
 | `params` | `dict[str, Any]` | Solver-specific parameters and diagnostics. |
 
-`SolverDWaveQPU` omits `seed` (no seed exists on physical hardware) and adds `solver` and `qpu_timing` as top-level keys rather than nesting them under `params`. `SolverQuip` returns a different set of top-level keys entirely -- `order_id`, `solver`, `best_energy_milli`, `energy_matches_chain`, `num_submissions`, `num_solutions` -- with no `seed`, `reads`, or `params` key at all. A caller must know which solver produced a `SolverResult` before indexing into `metadata`.
+`SolverDWaveQPU` omits `seed` (no seed exists on physical hardware) and adds `solver` and `qpu_timing` as top-level keys rather than nesting them under `params`. `SolverQuip` returns a different set of top-level keys entirely -- `order_id`, `solver`, `best_energy_milli`, `energy_matches_chain`, `num_submissions`, `num_solutions`, `quantization_error` -- with no `seed`, `reads`, or `params` key at all. A caller must know which solver produced a `SolverResult` before indexing into `metadata`.
 
 **Example (SolverDWaveCPU):**
 
