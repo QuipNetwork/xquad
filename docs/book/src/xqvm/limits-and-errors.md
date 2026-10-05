@@ -100,11 +100,13 @@ capped at 8,192 frames and a program that grows it past that fails with
 
 An element of a `vec<xqmx>` is charged the whole-model copy rate, because
 cloning a model clones its coefficient maps: 8 bytes per declared variable
-plus 32 per live linear coefficient and 48 per live quadratic one. That is
-exactly what the allocator and the coefficient writes charged to build the
-model in the first place, and it is the same number wherever the copy
-happens -- through an `ITER`, or through `INPUT`/`OUTPUT` copying a whole
-register across the host boundary. A model does not get cheaper by being
+plus 32 per non-zero linear coefficient and 48 per non-zero quadratic one.
+A write that leaves a coefficient at 0 removes its entry, so a zeroed
+coefficient is not copied, though the write that zeroed it was still
+charged. The copy therefore never costs more than the allocator and the
+coefficient writes charged to build the model, and it is the same number
+wherever the copy happens -- through an `ITER`, or through `INPUT`/`OUTPUT`
+copying a whole register across the host boundary. A model does not get cheaper by being
 duplicated through one opcode rather than another.
 
 The charge schedule is defined over program-visible quantities -- variables

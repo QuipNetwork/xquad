@@ -235,7 +235,7 @@ Utilities for mapping 2-D coordinates to flat array indices.
 
 ## XQMX Coefficient Access
 
-Read and write the linear (bias) and quadratic (coupling) coefficients of an XQMX register. Writes create the entry on first call. Zero values are removed from sparse storage to maintain sparsity. `reg` must hold an XQMX.
+Read and write the linear (bias) and quadratic (coupling) coefficients of an XQMX register. A model write creates the entry on first call, and a model write that leaves the coefficient at `0` -- a `SETLINE` or `SETQUAD` of `0`, or an `ADDLINE` or `ADDQUAD` whose sum is `0` -- removes it. The removal is observable through what later instructions over the model are charged, not through a read; see [`xqmx`](SPEC.md#xqmx). `reg` must hold an XQMX.
 
 **Index precondition.** Every index in this section is bounded against the register's declared size, and every opcode here raises `IndexOutOfBounds` for one outside `[0, size)` -- reads as well as writes. Within that range a missing entry reads as `0`; outside it there is no entry to be missing, because the variable is not one the allocator declared. The bound is the declared size and not the extent of the sparse map, so a read of an absent in-range coefficient and a read past the end are different outcomes rather than the same `0`. An unbounded write is the case this rules out: the sparse map would accept the key and the model would carry a coefficient over a variable that does not exist, leaving a constraint that constrains nothing on a model that still solves cleanly.
 

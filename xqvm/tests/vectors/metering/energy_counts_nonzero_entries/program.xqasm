@@ -1,0 +1,72 @@
+; energy_counts_nonzero_entries (QUI-1516): ENERGY's step charge counts a
+; model's non-zero coefficients, not every coefficient the program wrote.
+;
+; spec/xqvm/SPEC.md (xqmx) states that a write leaving a coefficient at 0
+; removes its entry, and spec/xqvm/METERING.md sizes ENERGY's charge from
+; the entry counts: model_eval_steps = sample_len * SAMPLE_COPY_STEPS +
+; terms * MODEL_TERM_STEPS. Every way a coefficient can reach 0 appears
+; below -- SETLINE of 0, an ADDLINE that cancels, a SETLINE of 0 to an
+; absent entry, an ADDQUAD that cancels (through the swapped pair), and an
+; EXCLUDE expansion that cancels -- and each is still charged its
+; COEFF_WRITE_STEPS. Only quadratic[(0,2)] survives, so terms = 1 and
+; ENERGY costs 1 + 3 + 1 = 5 steps. A VM that kept the zeroed entries
+; would count 3 linear and 3 quadratic terms and charge 10, for 192.
+;
+; Steps: 2 for the model, 5 linear writes at 16 and 5 quadratic writes
+; (EXCLUDE included) at 17, 5 for the sample and 6 for its two writes,
+; 5 for ENERGY, 3 for the output and 1 for HALT: 187.
+
+PUSH 3
+BQMX r0
+
+PUSH 0
+PUSH 5
+SETLINE r0       ; linear[0] = 5
+PUSH 1
+PUSH 2
+SETLINE r0       ; linear[1] = 2
+PUSH 0
+PUSH 0
+SETLINE r0       ; linear[0] = 0, entry removed
+PUSH 1
+PUSH -2
+ADDLINE r0       ; linear[1] = 0, entry removed
+PUSH 2
+PUSH 0
+SETLINE r0       ; linear[2] = 0, no entry created
+
+PUSH 0
+PUSH 2
+PUSH 3
+SETQUAD r0       ; quadratic[(0,2)] = 3
+PUSH 0
+PUSH 1
+PUSH 4
+SETQUAD r0       ; quadratic[(0,1)] = 4
+PUSH 1
+PUSH 0
+PUSH -4
+ADDQUAD r0       ; quadratic[(0,1)] = 0, entry removed
+PUSH 1
+PUSH 2
+PUSH -5
+SETQUAD r0       ; quadratic[(1,2)] = -5
+PUSH 1
+PUSH 2
+PUSH 5
+EXCLUDE r0       ; quadratic[(1,2)] = 0, entry removed
+
+PUSH 3
+BSMX r1
+PUSH 0
+PUSH 1
+SETLINE r1       ; x0 = 1
+PUSH 2
+PUSH 1
+SETLINE r1       ; x2 = 1
+
+ENERGY r0 r1     ; 3 * x0 * x2 = 3, over terms = 1
+STOW r2
+PUSH 0
+OUTPUT r2
+HALT

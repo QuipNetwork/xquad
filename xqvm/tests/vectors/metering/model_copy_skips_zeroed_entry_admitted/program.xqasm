@@ -1,0 +1,45 @@
+; model_copy_skips_zeroed_entry_admitted (QUI-1516): a model copy is priced
+; over its non-zero entries, and a zero write still pays for itself.
+;
+; spec/xqvm/SPEC.md (xqmx) states that a write leaving a coefficient at 0
+; removes its entry, and prices a model copy at its declared size plus its
+; linear- and quadratic-entry counts. Three SETLINEs write two entries and
+; zero one of them again, so the OUTPUT copy counts one entry. Each of the
+; three writes is charged all the same: the budget counts cumulatively and
+; the removal refunds nothing.
+;
+; Sizing. 32 for the model, 3 * 32 for the writes, 64 for the copy and 8
+; for the trailing int output: 200, which this vector admits exactly. A VM
+; that counted the zeroed entry would copy for 96 and need 232.
+; model_copy_skips_zeroed_entry_refused is the same program one byte
+; short, which pins the total from below: a VM that did not charge the
+; zero write would need only 168 and be admitted there.
+;
+; The trailing int write leaves slot 0 holding a value the vector format
+; can state; see model_copy_price_admitted.
+;
+; Steps: 2 for the model, 3 * 16 for the writes, 1 + 1 + 13 for the copy
+; (value_copy_steps over one entry), 4 for the int output and 1 for HALT:
+; 70.
+
+PUSH 4
+BQMX r0          ; charges 4 * VARIABLE_BYTES = 32
+
+PUSH 0
+PUSH 1
+SETLINE r0       ; linear[0] = 1, charges LINEAR_ENTRY_BYTES = 32, total 64
+PUSH 1
+PUSH 1
+SETLINE r0       ; linear[1] = 1, charges 32, total 96
+PUSH 0
+PUSH 0
+SETLINE r0       ; linear[0] = 0, entry removed, still charges 32, total 128
+
+PUSH 0
+OUTPUT r0        ; charges model_bytes = 4 * 8 + 1 * 32 = 64, total 192
+
+PUSH 5
+STOW r1
+PUSH 0
+OUTPUT r1        ; charges VARIABLE_BYTES = 8, total 200
+HALT

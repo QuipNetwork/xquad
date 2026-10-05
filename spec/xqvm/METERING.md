@@ -233,7 +233,10 @@ model_eval_steps(sample_len, terms) = sample_len * SAMPLE_COPY_STEPS
                                      + terms * MODEL_TERM_STEPS
 ```
 
-`terms` is the model's linear-entry count plus its quadratic-entry count.
+`terms` is the model's linear-entry count plus its quadratic-entry count:
+the number of its non-zero coefficients, since a write that leaves a
+coefficient at `0` removes the entry ([SPEC.md](SPEC.md#xqmx)). The
+same two counts are `linear_len` and `quadratic_len` below.
 Both multiplications and the addition saturate. This charges for `ENERGY`
 copying the sample out of its register (`sample_len` elements) and then
 accumulating every model term into the energy (`terms` terms); both halves

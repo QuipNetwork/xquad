@@ -73,14 +73,14 @@ const PRESENT_FLOOR: usize = 69;
 /// Opcodes executed to completion by at least one vector. Lower than
 /// [`PRESENT_FLOOR`] because several opcodes appear only in vectors that
 /// assert the fault they raise.
-const REACHED_FLOOR: usize = 58;
+const REACHED_FLOOR: usize = 59;
 
 /// Vectors in the suite.
 ///
 /// The opcode floors only trip when a deleted vector was the last to cover
 /// an opcode, so removing one of several `ADD` vectors passes them. This
 /// one trips on any removal.
-const VECTOR_FLOOR: usize = 182;
+const VECTOR_FLOOR: usize = 185;
 
 /// Build the full `(code, mnemonic)` opcode list from the `opcodes!`
 /// x-macro, so the denominator cannot drift from the opcode table.
