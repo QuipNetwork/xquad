@@ -296,6 +296,17 @@ verify:python:
 # wrap the VM -- the question is whether the cdylib the venv
 # resolves against matches the source tree it was built from, not
 # whether the VM behaves correctly once loaded.
+#
+# `check-stubs` (QUI-1506) rides the same job because it asks the same
+# question of a different artefact: whether the type stubs under
+# xqffi/python/xqffi/ match the extension this tree builds. It needs that
+# extension built, which `.python-tools` (verify:python) never does, and
+# a job of its own would pay a second cold maturin build for a check that
+# takes seconds once the build exists. One `make -k` invocation runs both
+# targets, so a stale cdylib and a stale stub each surface even when the
+# other fails. check-stubs' own deps-py prerequisite re-syncs without the
+# dwave extra; `.venv/` is excluded from this job's cache, so the resync
+# does not carry into the next run.
 verify:xqffi:
     stage: verify
     needs: []
@@ -329,7 +340,7 @@ verify:xqffi:
     # one that is merely slow.
     timeout: 30m
     script:
-        - make -k check-xqffi-fresh
+        - make -k check-xqffi-fresh check-stubs
 
 # cargo-deny over the standalone pallet fixture (`make -k
 # lint-deny-fixture`). The root `cargo deny check` in verify:policy sees

@@ -12,7 +12,7 @@
         lint lint-clippy lint-doc lint-deny-rs lint-deny-fixture lint-py check-uv-lock \
         fmt fmt-rs fmt-toml fmt-check fmt-check-rs fmt-check-toml fmt-py fmt-check-py \
         test test-unit-rs test-integ-rs test-doc test-miri test-py test-wasm test-substrate-fixture \
-        test-quip test-quip-sign test-quip-e2e check-xqffi-fresh \
+        test-quip test-quip-sign test-quip-e2e check-xqffi-fresh check-stubs \
         test-cuda test-qpu test-metal \
         conformance conformance-coverage \
         example-smoke \
@@ -311,7 +311,12 @@ preflight-rs: lint-rust lint-deny-rs lint-deny-fixture test-rust test-wasm test-
 # environment as a side effect is a bad trade. It stays reachable only
 # as its own leaf target (make check-xqffi-fresh) and through its own
 # CI job (verify:xqffi).
-preflight-py: fmt-check-toml check-uv-lock lint-python test-python
+#
+# check-stubs is here although CI runs it in that same verify:xqffi job:
+# it needs only the plain deps-py sync test-python already performs, so
+# it leaves .venv/ as a local preflight expects to find it. Mypy runs in
+# an overlay environment `uv run --with` builds outside .venv/.
+preflight-py: fmt-check-toml check-uv-lock lint-python test-python check-stubs
 
 preflight-docs: check-docs-generated check-docs-handwritten
 
@@ -463,6 +468,12 @@ RUFF_VERSION := 0.15.16
 # for why the docs generators run this way). Same rationale and same
 # by-hand-with-uv.lock upkeep as RUFF_VERSION above.
 PYYAML_VERSION := 6.0.3
+
+# Pinned mypy version for check-stubs, which runs mypy's stubtest. Not a
+# dev-group dependency in pyproject.toml, so not in uv.lock either: like
+# ruff above it is fetched on demand at this pin, and nothing else has to
+# be kept in step with it.
+MYPY_VERSION := 2.4.0
 
 # Pinned Vale version for check-docs-prose. The single source of truth for
 # it: the `vale` fragment in .gitlab/ci/setup.yml greps this line out of the
@@ -803,6 +814,28 @@ check-xqffi-fresh:
 		xquad.program.XqmxSample, xquad.verifier.verify, xquad.verifier.verify_source]; \
 		assert all(s is not None for s in syms), 'xqffi symbol failed to resolve'; \
 		print(f'xqffi fresh: {len(syms)} symbols resolved')"
+
+# Asserts the hand-written type stubs under xqffi/python/xqffi/ describe
+# the extension deps-py just built (QUI-1506). Two checks, because neither
+# covers the other:
+#
+#   1. mypy's stubtest imports xqffi and compares every name, signature,
+#      parameter name and default in the stubs against the runtime
+#      module. A method added to xqffi/src/vm.rs and not to vm.pyi, or an
+#      argument renamed in one and not the other, fails here.
+#   2. scripts/check-fault-docstrings.py compares the docstring of each
+#      fault class in vm.pyi with the one xqffi/src/fault.rs gives it.
+#      stubtest does not read docstrings at all, so the stub's copy of
+#      fault.rs would otherwise drift silently.
+#
+# `uv run --no-sync --with mypy==...` layers mypy over the synced .venv/
+# in a separate, cached environment: stubtest needs the project's xqffi
+# importable, which `uvx` (isolated from the project) cannot give it, and
+# `--no-sync` keeps uv from swapping the build deps-py just made for a
+# cached wheel. CI runs this in verify:xqffi (.gitlab/ci/verify.yml).
+check-stubs: deps-py
+	uv run --no-sync --with mypy==$(MYPY_VERSION) python -m mypy.stubtest xqffi
+	uv run --no-sync python scripts/check-fault-docstrings.py
 
 # -- Conformance ------------------------------------------------------------
 
