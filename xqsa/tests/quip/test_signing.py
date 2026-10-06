@@ -16,7 +16,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Tests for the Quip Network extrinsic-assembly layer (xqsa.quip_signing).
+Tests for the Quip Network extrinsic-assembly layer (xqsa.quip.signing).
 
 These exercise our half of the contract -- keystore persistence, SCALE
 SignedPayload composition (including the >256-byte blake2_256 rule), the v4
@@ -41,8 +41,8 @@ quip_signer = pytest.importorskip(
     reason="quip_signer extension not installed (run `uv sync --extra quip`)",
 )
 
-from xqsa import quip_signing
-from xqsa.quip_signing import (
+from xqsa.quip import signing as quip_signing
+from xqsa.quip.signing import (
     EXTRINSIC_VERSION_SIGNED,
     HYBRID_ENVELOPE_LEN,
     HYBRID_PUBLIC_LEN,

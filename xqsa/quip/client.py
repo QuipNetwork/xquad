@@ -89,8 +89,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 
-from xqsa import quip_metadata
-from xqsa.quip_codec import (
+from xqsa.quip import metadata as quip_metadata
+from xqsa.quip.codec import (
     _TERMINAL_STATUSES,
     DEFAULT_ISING_SPEC_ID,
     QUIP_COEFFICIENTS_DOC_URL,
@@ -111,17 +111,17 @@ from xqsa.quip_codec import (
     model_to_ising,
     native_placement,
 )
-from xqsa.quip_faucet import DEFAULT_DRIP_PLANCK, fund_from_faucet
-from xqsa.quip_networks import NETWORKS
+from xqsa.quip.faucet import DEFAULT_DRIP_PLANCK, fund_from_faucet
+from xqsa.quip.networks import NETWORKS
 from xqsa.solver import Solver, SolverResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from xqsa.quip_codec import IsingJob
+    from xqsa.quip.codec import IsingJob
     from xqvm_py.xqmx import XQMX
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("xqsa.quip")
 
 # Default signed-extension config. ``deadline_blocks``/``block_wait`` stay well
 # under the pallet bounds (<= 1000 / <= 100); the lifecycle math lives in
@@ -337,12 +337,12 @@ class SolverQuip(Solver):
                 "substrate-interface is not installed. Install xqsa with: pip install xqsa[quip]"
             ) from exc
         try:
-            import quip_signer  # noqa: F401 -- presence check; used via xqsa.quip_signing.
+            import quip_signer  # noqa: F401 -- presence check; used via xqsa.quip.signing.
         except ImportError as exc:
             raise ImportError(
                 "the quip_signer signing extension is not installed. Install it with: pip install xqsa[quip]"
             ) from exc
-        from xqsa import quip_signing
+        from xqsa.quip import signing as quip_signing
 
         resolved_url = url or os.environ.get("QUIP_RPC_URL")
         if not resolved_url:

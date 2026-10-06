@@ -16,7 +16,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Tests for the Quip Network codec (xqsa.quip_codec).
+Tests for the Quip Network codec (xqsa.quip.codec).
 
 Pure-logic coverage: topology canonicalization, subgraph placement, Ising
 encoding (SPIN and BINARY), spin-vector decoding, and lifecycle expiry math.
@@ -36,7 +36,7 @@ import pytest
 
 dimod = pytest.importorskip("dimod", reason="dwave-samplers / dimod not installed")
 
-from xqsa.quip_codec import (
+from xqsa.quip.codec import (
     DEFAULT_ISING_SPEC_ID,
     I32_MAX,
     I32_MIN,
@@ -1178,7 +1178,7 @@ class TestSolverQuipConstruction:
         _install(monkeypatch, _default_iface())
         _clear_quip_env(monkeypatch)
         monkeypatch.setenv("HOME", str(tmp_path))
-        from xqsa import quip_signing
+        from xqsa.quip import signing as quip_signing
 
         fake = sys.modules["quip_signer"]
         fake.HybridSigner.from_seed.return_value.public_key = b"\x01" * 32
@@ -1293,7 +1293,7 @@ class TestSolverQuipConstruction:
 
     def test_for_network_uses_preset_rpc(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip
-        from xqsa.quip_networks import NETWORKS
+        from xqsa.quip.networks import NETWORKS
 
         _install(monkeypatch, _default_iface())
         _clear_quip_env(monkeypatch)
@@ -1303,7 +1303,7 @@ class TestSolverQuipConstruction:
     def test_for_network_beats_env_url(self, monkeypatch) -> None:
         # The preset enters as url=, so an exported QUIP_RPC_URL cannot redirect it.
         from xqsa.quip import SolverQuip
-        from xqsa.quip_networks import NETWORKS
+        from xqsa.quip.networks import NETWORKS
 
         _install(monkeypatch, _default_iface())
         _clear_quip_env(monkeypatch)
@@ -1313,7 +1313,7 @@ class TestSolverQuipConstruction:
 
     def test_for_network_passes_kwargs_through(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip
-        from xqsa.quip_networks import NETWORKS
+        from xqsa.quip.networks import NETWORKS
 
         _install(monkeypatch, _default_iface())
         _clear_quip_env(monkeypatch)
@@ -1339,7 +1339,7 @@ class TestSolverQuipConstruction:
 
     def test_for_network_sets_preset_faucet_and_name(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip
-        from xqsa.quip_networks import NETWORKS
+        from xqsa.quip.networks import NETWORKS
 
         _install(monkeypatch, _default_iface())
         _clear_quip_env(monkeypatch)
@@ -1351,7 +1351,7 @@ class TestSolverQuipConstruction:
 
     def test_for_network_faucet_none_keeps_the_preset(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip
-        from xqsa.quip_networks import NETWORKS
+        from xqsa.quip.networks import NETWORKS
 
         _install(monkeypatch, _default_iface())
         _clear_quip_env(monkeypatch)
@@ -2063,7 +2063,7 @@ def _force_timeout(monkeypatch) -> None:
     monotonic() returns 0 for the deadline baseline, then 100 for the post-check,
     so a non-final order raises QuipTimeoutError without real sleeping.
     """
-    import xqsa.quip as quip_mod
+    import xqsa.quip.client as quip_mod
 
     calls = {"n": 0}
 
@@ -2580,7 +2580,7 @@ class TestSolverQuipNativeTopology:
 
 
 def test_format_planck_matches_the_documented_formula() -> None:
-    from xqsa.quip import _format_planck
+    from xqsa.quip.client import _format_planck
 
     assert _format_planck(1_002_182_560_255, 12) == "1.002182560255"
     assert _format_planck(20_000_000_000_000, 12) == "20.000000000000"
@@ -2822,7 +2822,7 @@ class TestSolverQuipDisplay:
 
 
 def test_quip_metadata_logger_parents_under_xqsa_quip() -> None:
-    """xqsa.quip_metadata's logger renamed to xqsa.quip.metadata, nesting under xqsa.quip."""
+    """xqsa.quip.metadata's logger renamed to xqsa.quip.metadata, nesting under xqsa.quip."""
     assert logging.getLogger("xqsa.quip.metadata").parent.name == "xqsa.quip"
 
 
@@ -2836,32 +2836,32 @@ class TestEnvFlag:
 
     @pytest.mark.parametrize("spelling", ["1", "true", "yes", "on", "TRUE", " YES "])
     def test_true_spellings(self, monkeypatch, spelling) -> None:
-        from xqsa.quip import _env_flag
+        from xqsa.quip.client import _env_flag
 
         monkeypatch.setenv("QUIP_TEST_FLAG", spelling)
         assert _env_flag("QUIP_TEST_FLAG") is True
 
     @pytest.mark.parametrize("spelling", ["0", "false", "no", "off", "FALSE", " NO "])
     def test_false_spellings(self, monkeypatch, spelling) -> None:
-        from xqsa.quip import _env_flag
+        from xqsa.quip.client import _env_flag
 
         monkeypatch.setenv("QUIP_TEST_FLAG", spelling)
         assert _env_flag("QUIP_TEST_FLAG") is False
 
     def test_unset_is_none(self, monkeypatch) -> None:
-        from xqsa.quip import _env_flag
+        from xqsa.quip.client import _env_flag
 
         monkeypatch.delenv("QUIP_TEST_FLAG", raising=False)
         assert _env_flag("QUIP_TEST_FLAG") is None
 
     def test_empty_is_none(self, monkeypatch) -> None:
-        from xqsa.quip import _env_flag
+        from xqsa.quip.client import _env_flag
 
         monkeypatch.setenv("QUIP_TEST_FLAG", "")
         assert _env_flag("QUIP_TEST_FLAG") is None
 
     def test_garbage_raises_naming_the_variable(self, monkeypatch) -> None:
-        from xqsa.quip import _env_flag
+        from xqsa.quip.client import _env_flag
 
         monkeypatch.setenv("QUIP_TEST_FLAG", "maybe")
         with pytest.raises(ValueError, match="QUIP_TEST_FLAG"):
@@ -2934,7 +2934,7 @@ class TestSolverQuipGateResolution:
 
 def test_quip_cancelled_error_is_a_quip_error() -> None:
     from xqsa.quip import QuipCancelledError
-    from xqsa.quip_codec import QuipError
+    from xqsa.quip.codec import QuipError
 
     assert issubclass(QuipCancelledError, QuipError)
 
@@ -3111,7 +3111,7 @@ class TestSolveAutofundGate:
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
 
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", fake_fund)
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", fake_fund)
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         result = solver.solve(_model())
         assert isinstance(result, SolverResult)
@@ -3125,7 +3125,7 @@ class TestSolveAutofundGate:
 
         calls: list[tuple] = []
         solver, _iface = _solve_ready_short(monkeypatch, autofund=lambda quote: False)
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: calls.append((dest, kwargs)))
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", lambda dest, **kwargs: calls.append((dest, kwargs)))
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         with pytest.raises(QuipCancelledError):
             solver.solve(_model())
@@ -3141,7 +3141,7 @@ class TestSolveAutofundGate:
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
 
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", fake_fund)
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", fake_fund)
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         solver.solve(_model())
         assert calls == [{"url": "http://faucet"}]
@@ -3158,7 +3158,7 @@ class TestSolveAutofundGate:
             autoconfirm=lambda quote: asked.append(quote) or True,
             autofund=lambda quote: asked.append(quote) or True,
         )
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: funded.append(dest))
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", lambda dest, **kwargs: funded.append(dest))
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         with pytest.raises(QuipSubmissionError, match="more than one faucet drip"):
             solver.solve(_model())
@@ -3179,7 +3179,7 @@ class TestSolveAutofundGate:
             autoconfirm=lambda quote: asked.append(quote) or True,
             autofund=lambda quote: asked.append(quote) or True,
         )
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: funded.append(dest))
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", lambda dest, **kwargs: funded.append(dest))
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         with pytest.raises(QuipSubmissionError, match="at most one drip"):
             solver.solve(_model())
@@ -3192,7 +3192,7 @@ class TestSolveAutofundGate:
 
         calls: list = []
         solver, _iface = _solve_ready_short(monkeypatch, autofund=False)
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: calls.append(dest))
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", lambda dest, **kwargs: calls.append(dest))
         monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=False))
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         with pytest.raises(QuipCancelledError, match="autofund=lambda q"):
@@ -3201,14 +3201,14 @@ class TestSolveAutofundGate:
         assert "wait_for" not in captured
 
     def test_faucet_error_propagates_without_proposing(self, monkeypatch) -> None:
-        from xqsa.quip_faucet import QuipFaucetError
+        from xqsa.quip.faucet import QuipFaucetError
 
         solver, _iface = _solve_ready_short(monkeypatch)
 
         def refuse(dest, *, url, amount=None):
             raise QuipFaucetError(403, {"error": "destination already funded"}, "refused")
 
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", refuse)
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", refuse)
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         with pytest.raises(QuipFaucetError):
             solver.solve(_model())
@@ -3221,7 +3221,7 @@ class TestSolveAutofundGate:
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
 
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", fake_fund)
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", fake_fund)
         monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
         stderr = _FakeTTY(isatty=True)
         monkeypatch.setattr(sys, "stderr", stderr)
@@ -3237,7 +3237,7 @@ class TestSolveAutofundGate:
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
 
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", fake_fund)
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", fake_fund)
         monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
         stderr, stdout = _FakeTTY(isatty=False), _FakeTTY(isatty=True)
         monkeypatch.setattr(sys, "stderr", stderr)
@@ -3270,7 +3270,7 @@ class TestSolveAutofundGate:
         from xqsa.quip import QuipSubmissionError
 
         solver, _iface = _solve_ready_short(monkeypatch)
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: {})
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", lambda dest, **kwargs: {})
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         _force_timeout(monkeypatch)  # xqsa.quip.time.monotonic: 0.0 then 100.0, past FUND_WAIT_SECONDS
         with pytest.raises(QuipSubmissionError, match="insufficient balance"):
@@ -3281,7 +3281,7 @@ class TestSolveAutofundGate:
 
         calls: list = []
         solver, _iface = _solve_ready_short(monkeypatch, autoconfirm=lambda quote: False)
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: calls.append((dest, kwargs)))
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", lambda dest, **kwargs: calls.append((dest, kwargs)))
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         with pytest.raises(QuipCancelledError):
             solver.solve(_model())

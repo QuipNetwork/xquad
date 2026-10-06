@@ -24,7 +24,7 @@ env vars at its RPC + faucet:
 
     QUIP_RPC_URL=ws://localhost:20049/rpc \\
     QUIP_FAUCET_URL=http://localhost:20049/api/faucet \\
-        uv run --extra quip pytest xqsa/tests/test_quip_live.py -m quip -v
+        uv run --extra quip pytest xqsa/tests/quip/test_live.py -m quip -v
 
 Two tiers:
 
@@ -66,15 +66,12 @@ from xqsa.quip import (
     QuipSubmissionError,
     QuipTimeoutError,
     SolverQuip,
-    _as_hex,
-    _canonical_hex,
-    _is_native,
-    _require_h256,
 )
-from xqsa.quip_codec import DEFAULT_ISING_SPEC_ID, PlacementError
-from xqsa.quip_faucet import fund_from_faucet
-from xqsa.quip_metadata import connect as connect_shimmed
-from xqsa.quip_signing import SIGNED_EXTENSIONS, _extension_fields, load_or_generate_keystore
+from xqsa.quip.client import _is_native
+from xqsa.quip.codec import DEFAULT_ISING_SPEC_ID, PlacementError, _as_hex, _canonical_hex, _require_h256
+from xqsa.quip.faucet import fund_from_faucet
+from xqsa.quip.metadata import connect as connect_shimmed
+from xqsa.quip.signing import SIGNED_EXTENSIONS, _extension_fields, load_or_generate_keystore
 from xqvm_py.xqmx import XQMX
 
 RPC_URL = os.environ.get("QUIP_RPC_URL")
@@ -128,7 +125,7 @@ MINER_IDLE_SKIP = (
 def chain():
     """A read-only substrate-interface connection for direct chain assertions.
 
-    Built through ``xqsa.quip_metadata.connect`` for the same reason SolverQuip
+    Built through ``xqsa.quip.metadata.connect`` for the same reason SolverQuip
     is: Quip runtimes serve metadata V16, which scalecodec cannot decode, so a
     stock ``SubstrateInterface`` fails on the first query.
     """
@@ -506,7 +503,7 @@ class TestEndToEnd:
         """The live pipeline returns a feasible, chain-consistent spin result.
 
         Optimality and encoding correctness are guarded deterministically by
-        ``test_encoded_problem_argmin_decodes_to_optimum`` in ``test_quip.py``.
+        ``test_encoded_problem_argmin_decodes_to_optimum`` in ``test_client.py``.
         This test covers propose, fleet solve, chain record, and decode without
         requiring the probabilistic live fleet to reach the global optimum.
         """
@@ -521,7 +518,7 @@ class TestEndToEnd:
         """The live pipeline returns a feasible, chain-consistent binary result.
 
         Optimality and encoding correctness are guarded deterministically by
-        ``test_encoded_problem_argmin_decodes_to_optimum`` in ``test_quip.py``.
+        ``test_encoded_problem_argmin_decodes_to_optimum`` in ``test_client.py``.
         This test covers propose, fleet solve, chain record, and decode without
         requiring the probabilistic live fleet to reach the global optimum.
         """

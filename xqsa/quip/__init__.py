@@ -16,43 +16,43 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-XQSA -- Solvers for XQMX quadratic models.
+Quip Network backend: :class:`SolverQuip` and its supporting modules.
 
-Provides pluggable solvers that take XQMX models and return
-optimized samples. The first solver wraps DWave's CPU simulated annealer.
+The public surface re-exported here is what ``from xqsa.quip import X`` has
+always resolved. :mod:`xqsa.quip.signing` is not imported, because it needs
+the ``quip_signer`` extension from the ``[quip]`` extra.
 """
 
-from .cuda_gpu import SolverCudaGPU
-from .dwave_cpu import SolverDWaveCPU
-from .dwave_qpu import SolverDWaveQPU
-from .metal_gpu import SolverMetalGPU
-from .quip import (
-    EncodingError,
+from .client import (
+    DEFAULT_BLOCK_WAIT,
+    DEFAULT_DEADLINE_BLOCKS,
+    DEFAULT_KEYSTORE,
+    DEFAULT_POLL_INTERVAL,
+    DEFAULT_TIMEOUT,
+    FEE_HEADROOM_PLANCK,
+    FUND_WAIT_SECONDS,
+    JOB_ORDERS_STORAGE,
+    JOB_PROPOSED_EVENT,
+    MEMPOOL_PALLET,
+    MINEABLE_TOPOLOGIES_STORAGE,
+    NATIVE_TOPOLOGY,
+    ORDER_SOLUTIONS_STORAGE,
+    PROPOSE_JOB_CALL,
+    RECLAIM_ORDER_CALL,
     JobQuote,
-    PlacementError,
     QuipCancelledError,
     QuipConnectionError,
-    QuipError,
-    QuipFaucetError,
     QuipJobFailedError,
-    QuipMetadataError,
-    QuipSigningError,
     QuipSubmissionError,
     QuipTimeoutError,
     QuipTopologyError,
     SolverQuip,
-    fund_from_faucet,
 )
-from .registry import DEFAULT_SOLVER, SOLVERS, build_solver
-from .solver import Solver, SolverResult
+from .codec import EncodingError, PlacementError, QuipError, QuipMetadataError, QuipSigningError
+from .faucet import QuipFaucetError, fund_from_faucet
+from .networks import NETWORKS
 
 __all__ = [
-    "Solver",
-    "SolverResult",
-    "SolverCudaGPU",
-    "SolverDWaveCPU",
-    "SolverDWaveQPU",
-    "SolverMetalGPU",
     "SolverQuip",
     "JobQuote",
     "QuipError",
@@ -67,8 +67,21 @@ __all__ = [
     "QuipFaucetError",
     "PlacementError",
     "EncodingError",
-    "SOLVERS",
-    "DEFAULT_SOLVER",
-    "build_solver",
+    "NETWORKS",
     "fund_from_faucet",
+    "DEFAULT_BLOCK_WAIT",
+    "DEFAULT_DEADLINE_BLOCKS",
+    "DEFAULT_KEYSTORE",
+    "DEFAULT_POLL_INTERVAL",
+    "DEFAULT_TIMEOUT",
+    "FEE_HEADROOM_PLANCK",
+    "FUND_WAIT_SECONDS",
+    "NATIVE_TOPOLOGY",
+    "MEMPOOL_PALLET",
+    "PROPOSE_JOB_CALL",
+    "RECLAIM_ORDER_CALL",
+    "JOB_PROPOSED_EVENT",
+    "JOB_ORDERS_STORAGE",
+    "ORDER_SOLUTIONS_STORAGE",
+    "MINEABLE_TOPOLOGIES_STORAGE",
 ]
