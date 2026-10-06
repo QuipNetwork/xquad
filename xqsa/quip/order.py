@@ -318,7 +318,13 @@ class JobOrder:
             QuipFaucetError: if the faucet refuses or cannot be reached.
         """
         self._require_draft("submit")
+        quoted_earlier = self._prepared is not None
         call_params, quote = self._prepare()
+        if quoted_earlier:
+            # The balance may have moved since quote(), e.g. another order's
+            # reward was reserved; the gates must judge the account as it is now.
+            quote = replace(quote, balance_planck=self._client._free_balance())
+            self._prepared = (call_params, quote)
         self._client._clear_gates(quote)
         self._submitted_at = time.perf_counter()
         self._order_id, self._included_block = self._client._propose(call_params, self.reward)

@@ -357,6 +357,16 @@ class TestJobOrderQuoteAndSubmit:
         assert captured["params"][1]["reward"] == 2 * UNIT
         assert captured["nonces"] == [None, 4]
 
+    def test_submit_after_quote_rereads_the_balance(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        assert order.quote().affordable
+        solver._iface.storage[("System", "Account")] = {"data": {"free": 0}}  # spent elsewhere since.
+        with pytest.raises(QuipSubmissionError, match="insufficient balance"):
+            order.submit()
+        assert order.quote().balance_planck == 0
+        assert "wait_for" not in captured
+
     def test_submit_without_quote_builds_params_once(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)
         solver.create_order(_model()).submit()
