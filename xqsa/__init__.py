@@ -28,6 +28,7 @@ from .dwave_qpu import SolverDWaveQPU
 from .metal_gpu import SolverMetalGPU
 from .quip import (
     EncodingError,
+    JobOrder,
     JobQuote,
     PlacementError,
     QuipCancelledError,
@@ -55,6 +56,7 @@ __all__ = [
     "SolverDWaveQPU",
     "SolverMetalGPU",
     "SolverQuip",
+    "JobOrder",
     "JobQuote",
     "QuipError",
     "QuipCancelledError",
