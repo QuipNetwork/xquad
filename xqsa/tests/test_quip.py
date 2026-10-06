@@ -381,12 +381,103 @@ class TestModelToIsing:
         with pytest.raises(EncodingError, match="overflows"):
             model_to_ising(over, PATH5)
 
-    def test_non_milli_coefficient_rejected(self) -> None:
-        """A float coefficient finer than milli precision is rejected, not rounded."""
+    def test_sub_milli_coefficient_rounds_to_nearest(self) -> None:
+        """A SPIN coefficient finer than 1/1000 rounds to the nearest milli, not refused."""
+        model = XQMX.spin_model(2)
+        model.set_linear(0, 1.2346)  # milli 1234.6 -> 1235, error 0.0004
+        model.set_linear(1, 0.0001)  # milli 0.1 -> 0, error 0.0001
+        model.set_quadratic(0, 1, 1)
+        job = model_to_ising(model, PATH5, mapping={0: 0, 1: 1})
+        assert job.h_values == (1235, 0)
+        assert job.quantization_error == pytest.approx(0.0004)
+
+    def test_binary_model_with_three_decimal_weights_encodes(self) -> None:
+        """The QUI-1533 reproduction: a BINARY model's spin fields land off the milli grid."""
+        model = XQMX.binary_model(2)
+        model.set_linear(0, 1.5)
+        model.set_quadratic(0, 1, 0.001)
+        job = model_to_ising(model, Topology.of([0, 1], [(0, 1)]))
+        # h0 = 1.5/2 + 0.001/4 = 0.75025, h1 = j01 = 0.00025.
+        assert job.h_values == (750, 0)
+        assert job.j_values == (0,)
+        assert job.quantization_error == pytest.approx(0.00025)
+
+    def test_quantization_error_is_the_largest_rounding_error(self) -> None:
+        """The reported error is the max |coefficient - milli / 1000|, bounded by half a milli."""
+        model = XQMX.binary_model(4)
+        weights = {(0, 1): 1.237, (1, 2): -0.913, (2, 3): 2.071, (0, 3): 0.333}
+        for index, value in enumerate((0.457, -1.119, 0.802, -0.064)):
+            model.set_linear(index, value)
+        for (u, v), value in weights.items():
+            model.set_quadratic(u, v, value)
+        job = model_to_ising(model, SQUARE)
+
+        spin = dimod.BinaryQuadraticModel(model.linear, model.quadratic, 0.0, dimod.BINARY).change_vartype(
+            dimod.SPIN, inplace=False
+        )
+        errors = [
+            abs(bias - job.h_values[job.topology.index_of(job.mapping[var])] / MILLI_SCALE)
+            for var, bias in spin.linear.items()
+        ]
+        errors += [
+            abs(bias - job.j_values[job.topology.edge_index(job.mapping[u], job.mapping[v])] / MILLI_SCALE)
+            for (u, v), bias in spin.quadratic.items()
+        ]
+        assert job.quantization_error == pytest.approx(max(errors))
+        assert 0.0 < job.quantization_error <= 0.0005
+
+    def test_on_grid_float_reports_zero_error(self) -> None:
+        """A float that is a milli multiple up to float noise reports no rounding."""
+        model = XQMX.spin_model(3)
+        model.set_linear(0, 0.1)  # 0.1 * 1000 is 100.00000000000001
+        model.set_linear(1, -0.007)
+        model.set_quadratic(1, 2, 0.25)
+        job = model_to_ising(model, PATH5, mapping={0: 0, 1: 1, 2: 2})
+        assert job.h_values == (100, -7, 0)
+        assert job.j_values == (250,)
+        assert job.quantization_error == 0.0
+
+    def test_integer_model_reports_zero_error(self) -> None:
+        model = XQMX.spin_model(2)
+        model.set_linear(0, 3)
+        model.set_quadratic(0, 1, -2)
+        assert model_to_ising(model, PATH5).quantization_error == 0.0
+
+    def test_rounding_into_overflow_raises(self) -> None:
+        """The i32 check applies to the rounded milli value."""
+        fits = XQMX.spin_model(1)
+        fits.set_linear(0, MAX_NATURAL_COEFFICIENT + 0.6472)  # milli 2_147_483_647.2 -> I32_MAX
+        assert model_to_ising(fits, PATH5).h_values == (I32_MAX,)
+
+        over = XQMX.spin_model(1)
+        over.set_linear(0, MAX_NATURAL_COEFFICIENT + 0.6478)  # milli 2_147_483_647.8 -> I32_MAX + 1
+        with pytest.raises(EncodingError, match="overflows"):
+            model_to_ising(over, PATH5)
+
+    def test_nan_coefficient_rejected(self) -> None:
+        """NaN has no nearest milli; XQMX itself already rejects the infinities."""
         model = XQMX.spin_model(1)
-        model.set_linear(0, 0.0001)  # 0.1 milli -- finer than the 1/1000 grid
-        with pytest.raises(EncodingError, match="milli precision"):
+        model.set_linear(0, float("nan"))
+        with pytest.raises(EncodingError, match="not a finite coefficient"):
             model_to_ising(model, PATH5)
+
+    def test_all_coefficients_rounding_to_zero_rejected(self) -> None:
+        """A model that rounds to an all-zero order is refused, not proposed."""
+        model = XQMX.spin_model(2)
+        model.set_linear(0, 0.0004)
+        model.set_quadratic(0, 1, 0.0003)
+        with pytest.raises(EncodingError, match="rounds to 0"):
+            model_to_ising(model, PATH5)
+
+    def test_partial_rounding_to_zero_still_encodes(self) -> None:
+        """A single term rounding to zero is a rounding error, not a refusal."""
+        model = XQMX.spin_model(2)
+        model.set_linear(0, 0.0004)
+        model.set_quadratic(0, 1, 1)
+        job = model_to_ising(model, PATH5, mapping={0: 0, 1: 1})
+        assert job.h_values == (0, 0)
+        assert job.j_values == (1000,)
+        assert job.quantization_error == pytest.approx(0.0004)
 
     def test_binary_path_is_milli_exact(self) -> None:
         """The BINARY->spin transform yields milli-exact i32 coefficients."""
@@ -1699,6 +1790,38 @@ class TestSolverQuipAllowedValueWarning:
             solver._maybe_warn_allowed_values(job)
 
 
+class TestSolverQuipQuantizationWarning:
+    """The milli-rounding warning reports the largest error and fires at most once."""
+
+    @staticmethod
+    def _rounded_job() -> IsingJob:
+        model = XQMX.spin_model(2)
+        model.set_linear(0, 0.0012)  # milli 1.2 -> 1, error 0.0002
+        model.set_quadratic(0, 1, 1)
+        return model_to_ising(model, PATH5)
+
+    def test_warns_once_with_the_error(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+        job = self._rounded_job()
+        with pytest.warns(UserWarning) as record:
+            solver._maybe_warn_quantization(job)
+            solver._maybe_warn_quantization(job)  # suppressed by the one-time flag
+        assert len(record) == 1
+        message = str(record[0].message)
+        assert "0.0002" in message
+        assert QUIP_COEFFICIENTS_DOC_URL in message
+
+    def test_no_warning_without_rounding(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+        model = XQMX.spin_model(2)
+        model.set_linear(0, 0.5)
+        model.set_quadratic(0, 1, 1)
+        job = model_to_ising(model, PATH5)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # any warning would raise
+            solver._maybe_warn_quantization(job)
+
+
 def _patch_signing(monkeypatch, solver, *, receipt=None, build_raises: Exception | None = None) -> dict:
     """Stub the quip_signing layer on ``solver`` and capture the submitted call.
 
@@ -2043,6 +2166,7 @@ class TestSolverQuipCollect:
         assert result.metadata["energy_matches_chain"] is True
         assert result.metadata["num_submissions"] == 1
         assert result.metadata["num_solutions"] == 2
+        assert result.metadata["quantization_error"] == 0.0
 
     def test_picks_lowest_best_energy_submission(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch, iface=_chain_iface(order=_order(), head=200), topology=TOPO_HASH)
@@ -2128,6 +2252,27 @@ class TestSolverQuipSolve:
         assert result.metadata["order_id"] == 1
         assert result.metadata["energy_matches_chain"] is True
         assert result.energy == 0
+
+    def test_solve_rounds_sub_milli_model_and_reports_error(self, monkeypatch) -> None:
+        """A sub-milli model is submitted rounded, warned about, and its error lands in metadata."""
+        solver = _make_solver(monkeypatch, iface=_chain_iface(order=_order(), head=200), topology=TOPO_HASH)
+        model = XQMX.spin_model(2)
+        model.set_linear(0, 1.0004)  # milli 1000.4 -> 1000
+        model.set_quadratic(0, 1, -0.5)
+        job = model_to_ising(model, solver._fetch_topology())
+        vector = _spin_vector(job, {0: -1, 1: 1})
+        solver._iface.maps[("QuantumPow", "MineableTopologies")] = [(TOPO_HASH, ())]
+        solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [
+            (b"solver", _submission("0xSOLVER", [vector], ising_energy_milli(job, vector)))
+        ]
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+
+        with pytest.warns(UserWarning, match="rounded to the chain's milli grid"):
+            result = solver.solve(model)
+        assert captured["call_params"]["ising_params"]["h_values"] == (list(job.h_values),)
+        assert job.h_values[job.topology.index_of(job.mapping[0])] == 1000
+        assert result.metadata["quantization_error"] == pytest.approx(0.0004)
+        assert result.metadata["energy_matches_chain"] is True
 
     def test_solve_timeout_carries_order_id(self, monkeypatch) -> None:
         from xqsa.quip import QuipTimeoutError

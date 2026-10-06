@@ -359,6 +359,7 @@ class SolverQuip(Solver):
         self._timeout = timeout
         self._topology_cache: dict[str, Topology] = {}
         self._warned_allowed_values = False
+        self._warned_quantization = False
         self._quip_signing = quip_signing
         # The env faucet belongs to the env RPC: an explicit url= may name another
         # chain, so it never draws from whatever faucet happens to be exported.
@@ -827,7 +828,7 @@ class SolverQuip(Solver):
         )
 
     # ------------------------------------------------------------------
-    # Coefficient allowed-value warning
+    # Coefficient warnings
     # ------------------------------------------------------------------
 
     def _maybe_warn_allowed_values(self, job: IsingJob) -> None:
@@ -850,6 +851,24 @@ class SolverQuip(Solver):
             f"(e.g. {kind}[{position}] = {milli} milli). Quip accepts and solves these as-is and real "
             f"hardware rescales coefficients monotonically (the optimum is preserved), so submission "
             f"proceeds. See {QUIP_COEFFICIENTS_DOC_URL}.",
+            stacklevel=2,
+        )
+
+    def _maybe_warn_quantization(self, job: IsingJob) -> None:
+        """Emit a one-time warning if encoding rounded any coefficient to the milli grid.
+
+        Rounding never blocks submission: it perturbs only the landscape the
+        miners search, and every returned sample is scored on the original
+        model. The warning fires at most once per solver instance; the error is
+        also reported per result as ``metadata["quantization_error"]``.
+        """
+        if self._warned_quantization or job.quantization_error == 0.0:
+            return
+        self._warned_quantization = True
+        warnings.warn(
+            f"coefficients were rounded to the chain's milli grid (1/1000); the largest rounding error is "
+            f"{job.quantization_error:.6g}. Miners search the rounded model, and returned samples are scored "
+            f"on the original one. See {QUIP_COEFFICIENTS_DOC_URL}.",
             stacklevel=2,
         )
 
@@ -1104,8 +1123,10 @@ class SolverQuip(Solver):
 
         Selects the submission with the lowest chain ``best_energy_milli``,
         decodes every spin vector in it, and keeps the one with the best
-        locally-recomputed (authoritative) energy on the original model. With no
-        submissions, auto-reclaims the reserved reward and raises.
+        locally-recomputed (authoritative) energy on the original model. On a
+        rounded job (``quantization_error > 0``) the submission ranking uses the
+        chain's energies on the rounded model. With no submissions, auto-reclaims
+        the reserved reward and raises.
 
         Raises:
             QuipJobFailedError: if the order finalized with no usable solution
@@ -1150,6 +1171,7 @@ class SolverQuip(Solver):
                 "energy_matches_chain": ising_energy_milli(job, best_vector) == chain_best_milli,
                 "num_submissions": len(submissions),
                 "num_solutions": len(chosen_solutions),
+                "quantization_error": job.quantization_error,
             },
         )
 
@@ -1240,6 +1262,7 @@ class SolverQuip(Solver):
         self._validate_model(model)
         job = self._job_for(model, kwargs.get("topology"), kwargs.get("mapping"))
         self._maybe_warn_allowed_values(job)
+        self._maybe_warn_quantization(job)
         wire, ext_hash = self._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, self._propose_call_params(job))
         fee, fee_exact = self._query_fee(wire)
         symbol, decimals = self._token()
@@ -1346,12 +1369,12 @@ class SolverQuip(Solver):
     def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
         """Propose ``model`` as a job, await a solution, and decode the best one.
 
-        Encodes the model onto the hardware topology, warns once about any
-        out-of-spec coefficients, builds the ``propose_job`` extrinsic, quotes
-        it (see :meth:`quote`) and shows the quote, passes the consent gates,
-        proposes the job (reserving the reward on-chain), polls for finality
-        by block height, then decodes the winning solution. If the order
-        finalizes with no solutions, the reward is auto-reclaimed and
+        Encodes the model onto the hardware topology, warns once each about
+        out-of-spec and milli-rounded coefficients, builds the ``propose_job``
+        extrinsic, quotes it (see :meth:`quote`) and shows the quote, passes the
+        consent gates, proposes the job (reserving the reward on-chain), polls
+        for finality by block height, then decodes the winning solution. If the
+        order finalizes with no solutions, the reward is auto-reclaimed and
         :class:`QuipJobFailedError` is raised.
 
         The ``autoconfirm`` gate comes first, so the price is accepted before
