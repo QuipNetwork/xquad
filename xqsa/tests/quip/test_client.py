@@ -930,6 +930,8 @@ UNIT = 1_000_000_000_000  # 1 AGLS in planck (chain MinReward default).
 # Stand-in for a deployment's QuantumPow.DefaultTopology. The real hash is
 # per-deployment and read from the chain; nothing is pinned in the codebase.
 DEFAULT_TOPOLOGY_HASH = "0x" + "cb" * 32
+# Stand-in for the chain's genesis block hash, as get_block_hash(0) returns it.
+GENESIS_HASH = "0x" + "9e" * 32
 
 # A topology carrying allowed-value sets, so check_allowed_values has data.
 TOPO_WITH_SETS = Topology.of(
@@ -986,6 +988,7 @@ class FakeSubstrate:
         self.token_decimals = token_decimals
         self.rpc = dict(rpc) if rpc is not None else {"payment_queryInfo": {"result": {"partialFee": "2182560255"}}}
         self.rpc_calls: list[tuple[str, list | None]] = []
+        self.genesis_hash: object = GENESIS_HASH
 
     def rpc_request(self, method: str, params: list | None = None):
         self.rpc_calls.append((method, params))
@@ -1017,6 +1020,10 @@ class FakeSubstrate:
 
     def get_block_header(self, block_hash: str | None = None, ignore_decoding_errors: bool = False):
         return {"header": {"number": self.head}}
+
+    def get_block_hash(self, block_id: int | None = None) -> str | None:
+        assert block_id == 0, "only the genesis hash is read"
+        return self.genesis_hash
 
     def get_events(self, block_hash: str | None = None):
         return self.events
@@ -1073,7 +1080,12 @@ def _fake_quip_signer() -> types.ModuleType:
 
 
 def _default_iface(*, with_default_spec_const: bool = False, balance: int | None = None) -> FakeSubstrate:
-    constants: dict = {("QuantumComputeMempool", "MinReward"): UNIT}
+    constants: dict = {
+        ("QuantumComputeMempool", "MinReward"): UNIT,
+        ("QuantumComputeMempool", "MaxDeadlineBlocks"): 1000,
+        ("QuantumComputeMempool", "MaxBlockWait"): 100,
+        ("QuantumComputeMempool", "MaxSolutions"): 20,
+    }
     if with_default_spec_const:
         constants[("QuantumComputeMempool", "DefaultIsingSpecId")] = DEFAULT_ISING_SPEC_ID
     storage: dict = {
@@ -1279,6 +1291,57 @@ class TestSolverQuipConstruction:
         iface = _default_iface()
         del iface.constants[("QuantumComputeMempool", "MinReward")]
         with pytest.raises(QuipConnectionError, match="reward=.*QUIP_REWARD"):
+            _make_solver(monkeypatch, iface=iface)
+
+    def test_limits_read_from_chain_constants(self, monkeypatch) -> None:
+        from xqsa.quip.chain import ChainLimits
+
+        solver = _make_solver(monkeypatch)
+        assert solver._limits == ChainLimits(
+            min_reward=UNIT, max_deadline_blocks=1000, max_block_wait=100, max_solutions=20
+        )
+
+    def test_absent_limits_read_as_none(self, monkeypatch) -> None:
+        iface = _default_iface()
+        for name in ("MaxDeadlineBlocks", "MaxBlockWait", "MaxSolutions"):
+            del iface.constants[("QuantumComputeMempool", name)]
+        limits = _make_solver(monkeypatch, iface=iface)._limits
+        assert (limits.max_deadline_blocks, limits.max_block_wait, limits.max_solutions) == (None, None, None)
+
+    def test_min_reward_read_once_for_the_default_reward(self, monkeypatch) -> None:
+        iface = _default_iface()
+        reads: list[str] = []
+        original = iface.get_constant
+
+        def counting(module: str, name: str):
+            reads.append(name)
+            return original(module, name)
+
+        iface.get_constant = counting
+        _make_solver(monkeypatch, iface=iface, spec_id=DEFAULT_ISING_SPEC_ID)
+        assert reads.count("MinReward") == 1
+
+    def test_genesis_hash_read_at_construction(self, monkeypatch) -> None:
+        assert _make_solver(monkeypatch)._genesis_hash == GENESIS_HASH
+
+    def test_genesis_hash_read_fault_raises_connection_error(self, monkeypatch) -> None:
+        from xqsa.quip import QuipConnectionError
+
+        iface = _default_iface()
+
+        def _boom(block_id=None):
+            raise RuntimeError("socket closed")
+
+        iface.get_block_hash = _boom
+        with pytest.raises(QuipConnectionError, match="genesis block hash: socket closed"):
+            _make_solver(monkeypatch, iface=iface)
+
+    def test_missing_genesis_hash_raises_connection_error(self, monkeypatch) -> None:
+        from xqsa.quip import QuipConnectionError
+
+        iface = _default_iface()
+        iface.genesis_hash = None
+        with pytest.raises(QuipConnectionError, match="no genesis block hash"):
             _make_solver(monkeypatch, iface=iface)
 
     def test_topology_explicit_arg_beats_env(self, monkeypatch) -> None:

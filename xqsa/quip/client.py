@@ -211,8 +211,10 @@ class SolverQuip(Solver):
         except Exception as exc:  # noqa: BLE001 -- any connect failure is a connection error.
             raise QuipConnectionError(f"could not connect to the Quip node at {resolved_url}: {exc}") from exc
         self._url = resolved_url
+        self._genesis_hash = chain.genesis_hash(self._iface)
 
         self._spec_id = self._resolve_spec_id(spec_id)
+        self._limits = chain.read_limits(self._iface)
         self._reward = self._resolve_reward(reward)
         self._topology_hash = self._resolve_topology_hash(topology)
 
@@ -389,24 +391,22 @@ class SolverQuip(Solver):
         """Resolve the proposal reward (planck): arg, then ``QUIP_REWARD``, then MinReward.
 
         The reward spends funds, so a chain without ``MinReward`` is an error
-        rather than a silent default.
+        rather than a silent default. ``MinReward`` comes from the limits read
+        at construction, not a second constant read.
 
         Raises:
-            QuipConnectionError: if reading ``MinReward`` fails, or the runtime
-                does not define it.
-            QuipMetadataError: propagated unchanged from the constant read.
+            QuipConnectionError: if the runtime does not define ``MinReward``.
         """
         if reward is not None:
             return int(reward)
         env_reward = os.environ.get("QUIP_REWARD")
         if env_reward:
             return int(env_reward)
-        value = self._read_constant("MinReward")
-        if value is None:
+        if self._limits.min_reward is None:
             raise QuipConnectionError(
                 f"the chain defines no {MEMPOOL_PALLET}.MinReward constant; pass reward= or set QUIP_REWARD"
             )
-        return int(value)
+        return self._limits.min_reward
 
     # ------------------------------------------------------------------
     # Chain reads

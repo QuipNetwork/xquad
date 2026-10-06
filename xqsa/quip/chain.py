@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from xqsa.quip.codec import _as_hex, _as_int_or_none, _canonical_hex, _event_ids, effective_expiry, is_final
@@ -80,6 +81,57 @@ def read_constant(iface: Any, name: str) -> Any | None:
     except Exception as exc:  # noqa: BLE001 -- a fault, not a genuine absence.
         raise QuipConnectionError(f"could not read the {MEMPOOL_PALLET}.{name} constant: {exc}") from exc
     return getattr(const, "value", None)
+
+
+@dataclass(frozen=True)
+class ChainLimits:
+    """The ``QuantumComputeMempool`` order bounds, read once per client.
+
+    Each field is ``None`` when the runtime does not expose that constant; a
+    missing bound is not checked.
+    """
+
+    min_reward: int | None
+    max_deadline_blocks: int | None
+    max_block_wait: int | None
+    max_solutions: int | None
+
+
+def read_limits(iface: Any) -> ChainLimits:
+    """Read the mempool's order bounds into a :class:`ChainLimits`.
+
+    Raises:
+        QuipConnectionError: if reading a constant fails.
+        QuipMetadataError: propagated unchanged from the constant reads.
+    """
+
+    def read(name: str) -> int | None:
+        value = read_constant(iface, name)
+        return None if value is None else int(value)
+
+    return ChainLimits(
+        min_reward=read("MinReward"),
+        max_deadline_blocks=read("MaxDeadlineBlocks"),
+        max_block_wait=read("MaxBlockWait"),
+        max_solutions=read("MaxSolutions"),
+    )
+
+
+def genesis_hash(iface: Any) -> str:
+    """Return the chain's genesis block hash as ``0x`` hex.
+
+    Raises:
+        QuipConnectionError: if the hash cannot be read.
+    """
+    try:
+        raw = iface.get_block_hash(0)
+    except QuipMetadataError:
+        raise  # undecodable metadata, not a missing genesis block.
+    except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
+        raise QuipConnectionError(f"could not read the genesis block hash: {exc}") from exc
+    if not raw:
+        raise QuipConnectionError("the node returned no genesis block hash")
+    return _as_hex(raw)
 
 
 def default_topology(iface: Any) -> str | None:
