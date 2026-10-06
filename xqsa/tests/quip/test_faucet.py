@@ -15,7 +15,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Unit tests for xqsa.quip_faucet, mocking the faucet HTTP endpoint."""
+"""Unit tests for xqsa.quip.faucet, mocking the faucet HTTP endpoint."""
 
 from __future__ import annotations
 
@@ -26,8 +26,8 @@ from unittest.mock import patch
 
 import pytest
 
-from xqsa.quip_codec import QuipError
-from xqsa.quip_faucet import QuipFaucetError, fund_from_faucet
+from xqsa.quip.codec import QuipError
+from xqsa.quip.faucet import QuipFaucetError, fund_from_faucet
 
 DEST = "0xdeadbeef"
 URL = "http://localhost:20049/api/faucet"
@@ -36,8 +36,8 @@ URL = "http://localhost:20049/api/faucet"
 @pytest.fixture(autouse=True)
 def _skip_ssl_context(monkeypatch):
     """Stub out CA bundle resolution and TLS context creation; not under test here."""
-    monkeypatch.setattr("xqsa.quip_faucet.quip_metadata._default_ca_bundle", lambda: None)
-    monkeypatch.setattr("xqsa.quip_faucet.ssl.create_default_context", lambda **kwargs: object())
+    monkeypatch.setattr("xqsa.quip.faucet.quip_metadata._default_ca_bundle", lambda: None)
+    monkeypatch.setattr("xqsa.quip.faucet.ssl.create_default_context", lambda **kwargs: object())
 
 
 def _response(body: dict, status: int = 200):
@@ -68,7 +68,7 @@ def test_quip_faucet_error_is_quip_error():
     assert issubclass(QuipFaucetError, QuipError)
 
 
-@patch("xqsa.quip_faucet.urllib.request.urlopen")
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
 def test_success_returns_body(mock_urlopen):
     body = {"amount": 10_000_000_000_000, "dest": DEST}
     mock_urlopen.return_value = _Ctx(_response(body))
@@ -78,7 +78,7 @@ def test_success_returns_body(mock_urlopen):
     assert result == body
 
 
-@patch("xqsa.quip_faucet.urllib.request.urlopen")
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
 def test_request_omits_amount_when_none(mock_urlopen):
     mock_urlopen.return_value = _Ctx(_response({"amount": 1}))
 
@@ -91,7 +91,7 @@ def test_request_omits_amount_when_none(mock_urlopen):
     assert req.full_url == URL + "/request"
 
 
-@patch("xqsa.quip_faucet.urllib.request.urlopen")
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
 def test_request_includes_amount_when_set(mock_urlopen):
     mock_urlopen.return_value = _Ctx(_response({"amount": 42}))
 
@@ -102,7 +102,7 @@ def test_request_includes_amount_when_set(mock_urlopen):
     assert sent == {"dest": DEST, "amount": 42}
 
 
-@patch("xqsa.quip_faucet.urllib.request.urlopen")
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
 def test_url_joined_without_double_slash(mock_urlopen):
     mock_urlopen.return_value = _Ctx(_response({"amount": 1}))
 
@@ -112,8 +112,8 @@ def test_url_joined_without_double_slash(mock_urlopen):
     assert req.full_url == URL + "/request"
 
 
-@patch("xqsa.quip_faucet.time.sleep")
-@patch("xqsa.quip_faucet.urllib.request.urlopen")
+@patch("xqsa.quip.faucet.time.sleep")
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
 def test_rate_limit_retries_once_then_succeeds(mock_urlopen, mock_sleep):
     rate_limited = _http_error(429, {"error": "rate limited", "retry_after_seconds": 4.66})
     success = _Ctx(_response({"amount": 10}))
@@ -126,8 +126,8 @@ def test_rate_limit_retries_once_then_succeeds(mock_urlopen, mock_sleep):
     mock_sleep.assert_called_once_with(4.66)
 
 
-@patch("xqsa.quip_faucet.time.sleep")
-@patch("xqsa.quip_faucet.urllib.request.urlopen")
+@patch("xqsa.quip.faucet.time.sleep")
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
 def test_rate_limit_twice_raises(mock_urlopen, mock_sleep):
     mock_urlopen.side_effect = [
         _http_error(429, {"error": "rate limited", "retry_after_seconds": 1}),
@@ -141,7 +141,7 @@ def test_rate_limit_twice_raises(mock_urlopen, mock_sleep):
     assert mock_urlopen.call_count == 2
 
 
-@patch("xqsa.quip_faucet.urllib.request.urlopen")
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
 def test_already_funded_raises_without_retry(mock_urlopen):
     mock_urlopen.side_effect = _http_error(
         403, {"error": "destination already funded", "free_balance_plancks": 20_000_000_000_000}
@@ -155,7 +155,7 @@ def test_already_funded_raises_without_retry(mock_urlopen):
     assert excinfo.value.body["free_balance_plancks"] == 20_000_000_000_000
 
 
-@patch("xqsa.quip_faucet.urllib.request.urlopen")
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
 def test_bad_amount_raises_with_server_message(mock_urlopen):
     mock_urlopen.side_effect = _http_error(400, {"error": "amount must be a positive integer (plancks)"})
 
@@ -165,7 +165,7 @@ def test_bad_amount_raises_with_server_message(mock_urlopen):
     assert "amount must be a positive integer" in str(excinfo.value)
 
 
-@patch("xqsa.quip_faucet.urllib.request.urlopen")
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
 def test_url_error_raises_with_no_status(mock_urlopen):
     mock_urlopen.side_effect = urllib.error.URLError("connection refused")
 
@@ -176,7 +176,7 @@ def test_url_error_raises_with_no_status(mock_urlopen):
     assert excinfo.value.body == {}
 
 
-@patch("xqsa.quip_faucet.urllib.request.urlopen")
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
 def test_non_json_error_body_tolerated(mock_urlopen):
     mock_urlopen.side_effect = _http_error(500, None)
 
@@ -187,7 +187,7 @@ def test_non_json_error_body_tolerated(mock_urlopen):
     assert excinfo.value.body == {}
 
 
-@patch("xqsa.quip_faucet.urllib.request.urlopen")
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
 def test_non_json_success_body_reads_as_empty(mock_urlopen):
     resp = io.BytesIO(b"<html>not the faucet</html>")
     resp.status = 200
@@ -195,7 +195,7 @@ def test_non_json_success_body_reads_as_empty(mock_urlopen):
     assert fund_from_faucet(DEST, url=URL) == {}
 
 
-@patch("xqsa.quip_faucet.urllib.request.urlopen")
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
 def test_non_object_error_body_tolerated(mock_urlopen):
     mock_urlopen.side_effect = urllib.error.HTTPError(URL, 400, "error", {}, io.BytesIO(b"[1, 2]"))
     with pytest.raises(QuipFaucetError) as excinfo:
@@ -203,8 +203,8 @@ def test_non_object_error_body_tolerated(mock_urlopen):
     assert excinfo.value.body == {}
 
 
-@patch("xqsa.quip_faucet.time.sleep")
-@patch("xqsa.quip_faucet.urllib.request.urlopen")
+@patch("xqsa.quip.faucet.time.sleep")
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
 def test_rate_limit_beyond_cap_raises_without_sleeping(mock_urlopen, mock_sleep):
     mock_urlopen.side_effect = [_http_error(429, {"retry_after_seconds": 86400})]
     with pytest.raises(QuipFaucetError) as excinfo:
@@ -222,10 +222,10 @@ def test_ca_bundle_env_is_read_like_websocket_client(monkeypatch, tmp_path, kind
     elif kind == "dir":
         bundle.mkdir()
     monkeypatch.setenv("WEBSOCKET_CLIENT_CA_BUNDLE", str(bundle))
-    monkeypatch.setattr("xqsa.quip_faucet.quip_metadata._default_ca_bundle", lambda: "/certifi.pem")
+    monkeypatch.setattr("xqsa.quip.faucet.quip_metadata._default_ca_bundle", lambda: "/certifi.pem")
     seen: list[dict] = []
-    monkeypatch.setattr("xqsa.quip_faucet.ssl.create_default_context", lambda **kwargs: seen.append(kwargs))
-    with patch("xqsa.quip_faucet.urllib.request.urlopen", return_value=_response({"amount": 1})):
+    monkeypatch.setattr("xqsa.quip.faucet.ssl.create_default_context", lambda **kwargs: seen.append(kwargs))
+    with patch("xqsa.quip.faucet.urllib.request.urlopen", return_value=_response({"amount": 1})):
         fund_from_faucet(DEST, url=URL)
     expected = {"file": {"cafile": str(bundle)}, "dir": {"capath": str(bundle)}, "missing": {"cafile": "/certifi.pem"}}
     assert seen == [expected[kind]]
@@ -235,7 +235,7 @@ def test_bad_ca_bundle_raises_faucet_error(monkeypatch):
     def boom(**kwargs):
         raise FileNotFoundError(kwargs)
 
-    monkeypatch.setattr("xqsa.quip_faucet.ssl.create_default_context", boom)
+    monkeypatch.setattr("xqsa.quip.faucet.ssl.create_default_context", boom)
     with pytest.raises(QuipFaucetError) as excinfo:
         fund_from_faucet(DEST, url=URL)
     assert excinfo.value.status is None

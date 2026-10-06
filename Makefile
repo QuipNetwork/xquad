@@ -646,7 +646,7 @@ test-substrate-fixture:
 	cargo test --locked --manifest-path fixtures/pallet-xqvm/Cargo.toml
 
 # Full SolverQuip sweep -- the signing tests plus the live-devnet end-to-end
-# suite. Run this when an MR changes SolverQuip (xqsa/quip*.py); it is the
+# suite. Run this when an MR changes SolverQuip (xqsa/quip/); it is the
 # Optional Check the MR template names. Opt-in and NOT part of `make test` /
 # preflight: the e2e leaf needs a running Quip devnet and hard-errors without
 # QUIP_RPC_URL, so drive it with the devnet env vars set (see test-quip-e2e):
@@ -656,7 +656,7 @@ test-substrate-fixture:
 #       QUIP_FAUCET_URL=http://localhost:20049/api/faucet
 test-quip: test-quip-sign test-quip-e2e
 
-# Run the quip-marked signing tests (xqsa/tests/test_quip_signing.py): the
+# Run the quip-marked signing tests (xqsa/tests/quip/test_signing.py): the
 # pure-Python SCALE / keystore / extrinsic tests that need the `[quip]` extra
 # and so are deselected by `make test-py` (`-m "not ... quip"`). This is the
 # local leaf for the CI `test:quip` job (.gitlab/ci/test.yml).
@@ -684,10 +684,10 @@ test-quip: test-quip-sign test-quip-e2e
 test-quip-sign:
 	uv sync --extra quip
 	uv run --no-sync maturin develop --locked --manifest-path xqffi/Cargo.toml
-	uv run --no-sync pytest xqsa/tests/test_quip_signing.py -m quip
+	uv run --no-sync pytest xqsa/tests/quip/test_signing.py -m quip
 
 # Live Quip Network devnet end-to-end tests for SolverQuip
-# (xqsa/tests/test_quip_live.py) -- the chain-backed sibling of
+# (xqsa/tests/quip/test_live.py) -- the chain-backed sibling of
 # `test-quip-sign`. Opt-in and deliberately NOT part of `make test` /
 # preflight: like the cuda / qpu / metal hardware tiers they need a running
 # Quip devnet, so they are driven by hand or a dedicated runner. Point the two
@@ -715,7 +715,7 @@ test-quip-e2e:
 	uv sync --extra quip
 	uv run --no-sync maturin develop --locked --manifest-path xqffi/Cargo.toml
 	QUIP_RPC_URL="$(QUIP_RPC_URL)" QUIP_FAUCET_URL="$(QUIP_FAUCET_URL)" \
-		uv run --no-sync pytest xqsa/tests/test_quip_live.py -m quip -v
+		uv run --no-sync pytest xqsa/tests/quip/test_live.py -m quip -v
 
 # Real-hardware xqsa solver tests -- CUDA, D-Wave QPU, Apple Metal -- each
 # exercising the encode -> solve -> verify -> decode pipeline against an

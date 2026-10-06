@@ -16,52 +16,20 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Named Quip Network presets for :meth:`xqsa.quip.SolverQuip.for_network`.
+Deprecated alias for :mod:`xqsa.quip.networks`.
 
-A preset names the coordinates of one Quip network, so a caller writes
-``SolverQuip.for_network("aglais")`` instead of carrying an RPC address around.
-
-The values move. The ``aglais`` entry was verified live on 2026-09-28; testnet
-endpoints change between releases and are corrected here in a patch release.
-Verify before a run: any node can lag the chain tip and serve a stale view, and
-bootnode-2 and bootnode-3 serve the same chain as bootnode-1.
-https://aglais.quip.network publishes the testnet's current endpoints; check
-``aglais`` against it when a connection fails. ``devnet`` is the default
-localdev stack, fronted by Caddy on port 20049.
-
-There is no mainnet entry because there is no Quip mainnet yet.
+Importing ``xqsa.quip_networks`` warns and returns the ``xqsa.quip.networks`` module
+itself, so attribute access and patch targets keep working. QUI-1608 removes
+this shim.
 """
 
-from __future__ import annotations
+import importlib
+import sys
+import warnings
 
-from collections.abc import Mapping
-from dataclasses import dataclass
-from types import MappingProxyType
-
-
-@dataclass(frozen=True)
-class QuipNetwork:
-    """Coordinates of one Quip network.
-
-    Attributes:
-        rpc: Websocket RPC endpoint, passed to ``SolverQuip`` as ``url``.
-        faucet: Base URL of the network's faucet, passed to ``SolverQuip`` as ``faucet``.
-    """
-
-    rpc: str
-    faucet: str
-
-
-NETWORKS: Mapping[str, QuipNetwork] = MappingProxyType(
-    {
-        "aglais": QuipNetwork(
-            rpc="wss://bootnode-1.aglais.quip.network:20049/rpc",
-            faucet="https://faucet.aglais.quip.network",
-        ),
-        "devnet": QuipNetwork(
-            rpc="ws://localhost:20049/rpc",
-            faucet="http://localhost:20049/api/faucet",
-        ),
-    }
+warnings.warn(
+    "xqsa.quip_networks is deprecated; import xqsa.quip.networks instead",
+    DeprecationWarning,
+    stacklevel=2,
 )
-"""Known networks by name. Read-only."""
+sys.modules[__name__] = importlib.import_module("xqsa.quip.networks")

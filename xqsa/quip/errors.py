@@ -1,0 +1,151 @@
+# Copyright (C) 2026 Postquant Labs Incorporated
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+"""
+Every Quip error class, in one dependency-free module.
+
+Nothing here imports the optional ``[quip]`` extra, so ``xqsa`` re-exports
+these without ``substrate-interface`` or ``quip_signer`` installed.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from xqsa.quip.quote import JobQuote
+
+
+class QuipError(Exception):
+    """Base class for all Quip Network codec/backend errors."""
+
+
+class PlacementError(QuipError):
+    """Raised when a model cannot be placed onto the hardware topology.
+
+    Carries the couplings (model variable pairs) that could not be satisfied,
+    so the caller can report exactly which interactions have no hardware edge.
+    """
+
+    def __init__(self, message: str, couplings: Iterable[tuple[int, int]] = ()) -> None:
+        super().__init__(message)
+        self.couplings: tuple[tuple[int, int], ...] = tuple(couplings)
+
+
+class EncodingError(QuipError):
+    """Raised when a model cannot be encoded into the on-chain representation."""
+
+
+class QuipSigningError(QuipError):
+    """Raised when extrinsic assembly, keystore handling, or submission fails.
+
+    Defined here in the dependency-free errors module (rather than in
+    :mod:`xqsa.quip.signing`, which does ``import quip_signer`` at module top) so it can
+    be re-exported from ``xqsa`` without pulling in the optional ``[quip]``
+    extra -- ``import xqsa`` stays healthy without the extension installed.
+    """
+
+
+class QuipMetadataError(QuipError):
+    """Raised when a node's runtime metadata cannot be decoded by this client.
+
+    ``substrate-interface``/``scalecodec`` decode metadata up to V14 and Quip
+    runtimes serve V16, so :mod:`xqsa.quip.metadata` fetches V14 through the
+    versioned runtime API instead. This is raised only when that path and the
+    stock ``state_getMetadata`` both fail, and it names the version the node
+    serves in place of the bare ``Index '16' not present in Enum type mapping``
+    that ``scalecodec`` would otherwise surface.
+
+    Defined here in the dependency-free errors module for the same reason as
+    :class:`QuipSigningError`: it can be re-exported from ``xqsa`` without
+    pulling in the optional ``[quip]`` extra.
+    """
+
+
+class QuipCancelledError(QuipError):
+    """Raised when a consent gate (``autoconfirm`` or ``autofund``) declines a job.
+
+    Carries the :class:`~xqsa.quip.JobQuote` that was declined as ``quote``, so a caller
+    can tell "you said no" from "it failed" and still see the price.
+    """
+
+    def __init__(self, quote: JobQuote, message: str) -> None:
+        self.quote = quote
+        super().__init__(message)
+
+
+class QuipConnectionError(QuipError):
+    """Raised when the Quip node is unreachable or missing expected chain state."""
+
+
+class QuipSubmissionError(QuipError):
+    """Raised when an extrinsic cannot be submitted or is rejected by the chain."""
+
+
+class QuipTopologyError(QuipError):
+    """Retained for compatibility; nothing in :mod:`xqsa.quip` raises it any more.
+
+    It used to report a resolved topology that was registered but absent from
+    ``QuantumPow.MineableTopologies``. That set is the chain's active *mining*
+    set: it gates ``submit_proof``, i.e. block production, and has no bearing on
+    whether the compute mempool admits or answers an order. An order carries its
+    nodes, edges and coefficients inline and no topology hash at all, so the
+    chain cannot perceive which topology an order was built against. The check
+    was therefore answering a mempool question with a consensus predicate and is
+    gone; the class stays exported so downstream ``except`` clauses still import.
+    """
+
+
+class QuipTimeoutError(QuipError):
+    """Raised when an order does not reach finality before the configured timeout.
+
+    Carries ``order_id`` so the caller can later recover the result via
+    :meth:`~xqsa.quip.SolverQuip.query` once the order finalizes.
+    """
+
+    def __init__(self, order_id: int, message: str | None = None) -> None:
+        self.order_id = order_id
+        super().__init__(message or f"order {order_id} did not reach finality before the timeout")
+
+
+class QuipJobFailedError(QuipError):
+    """Raised when a final order yielded no usable solution.
+
+    Carries ``order_id``. Auto-reclaim of the reserved reward is best-effort and
+    applies only on the no-submissions path (there the message notes the refund
+    outcome); the other paths -- a winning submission with no solution vectors,
+    or a missing result field -- raise without reclaiming.
+    """
+
+    def __init__(self, order_id: int, message: str | None = None) -> None:
+        self.order_id = order_id
+        super().__init__(message or f"order {order_id} closed with no solutions")
+
+
+class QuipFaucetError(QuipError):
+    """Raised when a faucet funding request fails.
+
+    Carries the HTTP status (``None`` for a transport-level failure) and the
+    parsed JSON error body, so a caller can distinguish a rate limit, a
+    balance-ceiling denial, and a malformed request from each other.
+    """
+
+    def __init__(self, status: int | None, body: dict, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+        self.body = body

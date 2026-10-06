@@ -27,17 +27,22 @@ from .dwave_cpu import SolverDWaveCPU
 from .dwave_qpu import SolverDWaveQPU
 from .metal_gpu import SolverMetalGPU
 from .quip import (
+    EncodingError,
     JobQuote,
+    PlacementError,
     QuipCancelledError,
     QuipConnectionError,
+    QuipError,
+    QuipFaucetError,
     QuipJobFailedError,
+    QuipMetadataError,
+    QuipSigningError,
     QuipSubmissionError,
     QuipTimeoutError,
     QuipTopologyError,
     SolverQuip,
+    fund_from_faucet,
 )
-from .quip_codec import EncodingError, PlacementError, QuipError, QuipMetadataError, QuipSigningError
-from .quip_faucet import QuipFaucetError, fund_from_faucet
 from .registry import DEFAULT_SOLVER, SOLVERS, build_solver
 from .solver import Solver, SolverResult
 

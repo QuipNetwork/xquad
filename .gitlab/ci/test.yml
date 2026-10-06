@@ -209,9 +209,9 @@ test:python:
 # Quip Network signing-layer tests. These are pure-Python SCALE / keystore /
 # submission-state-machine tests that need only the `quip_signer` wheel from the
 # `[quip]` extra, not a live chain. The base `test:python` job runs `uv sync`
-# without the extra, so `test_quip_signing.py`'s `importorskip("quip_signer")`
-# skips the whole module there and a malformed extrinsic or keystore regression
-# would not turn CI red. `make test-quip-sign` installs the extra
+# without the extra, so `xqsa/tests/quip/test_signing.py`'s
+# `importorskip("quip_signer")` skips the whole module there and a malformed
+# extrinsic or keystore regression would not turn CI red. `make test-quip-sign` installs the extra
 # (`uv run --extra quip`) so those tests execute.
 #
 # NOTE: this runs only the `test-quip-sign` leaf, NOT the full `make test-quip`

@@ -15,21 +15,22 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""
-Deprecated alias for :mod:`xqsa.quip.signing`.
+"""The deprecated ``xqsa.quip_*`` paths warn and alias the ``xqsa.quip`` modules."""
 
-Importing ``xqsa.quip_signing`` warns and returns the ``xqsa.quip.signing`` module
-itself, so attribute access and patch targets keep working. QUI-1608 removes
-this shim.
-"""
+from __future__ import annotations
 
 import importlib
 import sys
-import warnings
 
-warnings.warn(
-    "xqsa.quip_signing is deprecated; import xqsa.quip.signing instead",
-    DeprecationWarning,
-    stacklevel=2,
-)
-sys.modules[__name__] = importlib.import_module("xqsa.quip.signing")
+import pytest
+
+
+@pytest.mark.parametrize("name", ["codec", "signing", "metadata", "faucet", "networks"])
+def test_shim_warns_and_aliases_new_module(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    if name == "signing":
+        pytest.importorskip("quip_signer", reason="quip_signer extension not installed")
+    new = importlib.import_module(f"xqsa.quip.{name}")
+    monkeypatch.delitem(sys.modules, f"xqsa.quip_{name}", raising=False)
+    with pytest.warns(DeprecationWarning, match=f"xqsa.quip_{name}"):
+        old = importlib.import_module(f"xqsa.quip_{name}")
+    assert old is new

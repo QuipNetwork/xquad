@@ -15,21 +15,3 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""
-Deprecated alias for :mod:`xqsa.quip.signing`.
-
-Importing ``xqsa.quip_signing`` warns and returns the ``xqsa.quip.signing`` module
-itself, so attribute access and patch targets keep working. QUI-1608 removes
-this shim.
-"""
-
-import importlib
-import sys
-import warnings
-
-warnings.warn(
-    "xqsa.quip_signing is deprecated; import xqsa.quip.signing instead",
-    DeprecationWarning,
-    stacklevel=2,
-)
-sys.modules[__name__] = importlib.import_module("xqsa.quip.signing")

@@ -1,10 +1,10 @@
 # Testing SolverQuip against a Quip network
 
-`SolverQuip` (the [`xqsa`](../xqsa/) `"quip"` backend, [`xqsa/quip.py`](../xqsa/quip.py))
+`SolverQuip` (the [`xqsa`](../xqsa/) `"quip"` backend, [`xqsa/quip/`](../xqsa/quip/))
 submits Ising jobs to a live Quip Network chain, waits for a solver fleet to
 return a solution, decodes the best one, and runs an energy canary against the
 chain's recorded result. The gated live suite
-([`xqsa/tests/test_quip_live.py`](../xqsa/tests/test_quip_live.py), pytest marker
+([`xqsa/tests/quip/test_live.py`](../xqsa/tests/quip/test_live.py), pytest marker
 `quip`) exercises that whole path end to end against a real chain.
 
 This guide covers running that suite in the two environments you can point it
@@ -34,8 +34,8 @@ The three quip targets live in the [`Makefile`](../Makefile):
 
 | Target | Runs | Needs a chain? |
 | --- | --- | --- |
-| `make test-quip-sign` | signing tests ([`test_quip_signing.py`](../xqsa/tests/test_quip_signing.py)) -- pure-Python SCALE / keystore / extrinsic | no |
-| `make test-quip-e2e` | live suite ([`test_quip_live.py`](../xqsa/tests/test_quip_live.py)) against a chain | yes |
+| `make test-quip-sign` | signing tests ([`test_signing.py`](../xqsa/tests/quip/test_signing.py)) -- pure-Python SCALE / keystore / extrinsic | no |
+| `make test-quip-e2e` | live suite ([`test_live.py`](../xqsa/tests/quip/test_live.py)) against a chain | yes |
 | `make test-quip` | both of the above (the MR-template Optional Check) | yes (for the e2e leaf) |
 
 `make test-quip-sign` is also what the CI `test:quip` job runs; it needs no
@@ -56,7 +56,7 @@ self-install the `[quip]` extra via `uv run --extra quip`.
 Any variable exported in your shell -- or passed as `make VAR=val` -- reaches
 pytest, so you can set `QUIP_MINER_PROBE_TIMEOUT` alongside the two the
 recipe forwards. On macOS, whose python.org and uv Pythons ship no CA
-bundle, `xqsa.quip_metadata.connect` and the suite's faucet requests verify
+bundle, `xqsa.quip.metadata.connect` and the suite's faucet requests verify
 TLS against certifi's bundle unless `SSL_CERT_FILE` or `SSL_CERT_DIR` is
 set, or `WEBSOCKET_CLIENT_CA_BUNDLE` names an existing file or directory, so
 aglais needs no CA export.
@@ -230,7 +230,7 @@ what the signing layer speaks.
 
 ### Coordinates (verify before a run -- these move)
 
-- **RPC:** the `aglais` preset in `xqsa/quip_networks.py` is the source of
+- **RPC:** the `aglais` preset in `xqsa/quip/networks.py` is the source of
   truth; it points at bootnode-1's validator RPC (bootnode-2 and bootnode-3
   serve the same chain). The commands below spell out its current RPC and
   faucet values; if they disagree with the preset, the preset wins. Any
@@ -239,7 +239,7 @@ what the signing layer speaks.
   caught up before trusting reads (see the liveness check below), and point
   `QUIP_RPC_URL` at a different RPC if the one you are on is not syncing.
 - **Faucet:** the `aglais` preset's faucet coordinate in
-  `xqsa/quip_networks.py` is the source of truth, healthy as of 2026-09-15
+  `xqsa/quip/networks.py` is the source of truth, healthy as of 2026-09-15
   (`/health` returns `{"status":"ok"}`; the bare root returns 404, which is not a
   fault). Set `QUIP_FAUCET_URL` to it and the funded tier runs. The faucet
   [gates requests two ways](https://gitlab.com/quip.network/faucet/-/blob/10ca67676777da0031be5bf8dd2f9ed6967d269a/README.md?plain=1#L54-62). A `429` with
@@ -258,12 +258,12 @@ what the signing layer speaks.
   rather than assuming a pinned value. The signer reads `transactionVersion`
   from the chain, so a bump to that number alone does not break submission.
   The signed-extension list and its order are fixed client-side
-  (`SIGNED_EXTENSIONS` in `xqsa/quip_signing.py`), so a runtime that adds,
+  (`SIGNED_EXTENSIONS` in `xqsa/quip/signing.py`), so a runtime that adds,
   removes, reorders or reshapes an extension breaks signing. After an upgrade,
-  run `test_quip_live.py::TestConnectivity`, which checks that list against the
+  run `test_live.py::TestConnectivity`, which checks that list against the
   chain.
 - **Metadata:** the runtime serves Metadata V16, which `scalecodec` cannot
-  decode. Build clients through `xqsa.quip_metadata.connect`, which pulls V14
+  decode. Build clients through `xqsa.quip.metadata.connect`, which pulls V14
   from the versioned runtime API; a stock `SubstrateInterface` fails with
   `Index '16' not present in Enum type mapping` (see the gotcha below).
 - **Spec id:** `DEFAULT_ISING_SPEC_ID = 0x8f46f3a3...` (== chain
@@ -272,8 +272,8 @@ what the signing layer speaks.
 Quick version + liveness check. A synced node reports `isSyncing == false` and
 `currentBlock == highestBlock`; if it is behind, its state reads are stale:
 
-    uv run --extra quip python -c "from xqsa.quip_metadata import connect; \
-        from xqsa.quip_networks import NETWORKS; \
+    uv run --extra quip python -c "from xqsa.quip.metadata import connect; \
+        from xqsa.quip.networks import NETWORKS; \
         s=connect(NETWORKS['aglais'].rpc); \
         print('runtime', s.rpc_request('state_getRuntimeVersion',[])['result']); \
         print('sync   ', s.rpc_request('system_syncState',[])['result']); \
@@ -336,12 +336,12 @@ once when the fleet is active.
   session; do not hard-code pinned facts. The signer adapts `transactionVersion`
   from the chain, but the signed-extension list is fixed client-side, so an
   upgrade that changes it breaks submission. Run
-  `test_quip_live.py::TestConnectivity` after every known upgrade.
+  `test_live.py::TestConnectivity` after every known upgrade.
 - **Metadata V16 blocks a stock client:** `substrate-interface` decodes through
   `scalecodec`, whose `MetadataAll` enum ends at V14, so
   `SubstrateInterface.init_runtime()` raises `ValueError: Index '16' not present
   in Enum type mapping` against any runtime from `specVersion 116` on. No
-  release of either library decodes V16. `xqsa.quip_metadata` fetches V14
+  release of either library decodes V16. `xqsa.quip.metadata` fetches V14
   through `state_call("Metadata_metadata_at_version", 14)` instead, and
   `SolverQuip` builds its client that way; ad-hoc scripts must do the same. The
   shim falls back to `state_getMetadata` for older DevNet images, and raises
@@ -364,7 +364,7 @@ once when the fleet is active.
   `TestEndToEnd` asserts only pipeline correctness (`energy_matches_chain`, a
   returned solution, domain feasibility); encoding and optimality correctness
   are guarded deterministically offline by
-  `test_quip.py::test_encoded_problem_argmin_decodes_to_optimum`.
+  `test_client.py::test_encoded_problem_argmin_decodes_to_optimum`.
 - **Direct `pytest` invocation:** export `QUIP_RPC_URL` / `QUIP_FAUCET_URL` as
   environment variables before the command. Passing them as trailing `KEY=VAL`
   args is a make-ism (`make VAR=val`); pytest reads trailing `KEY=VAL` tokens
