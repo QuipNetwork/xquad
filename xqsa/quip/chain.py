@@ -287,6 +287,20 @@ def query_fee(iface: Any, quip_signing: Any, wire: bytes) -> tuple[int, bool]:
         return FEE_HEADROOM_PLANCK, False
 
 
+def ss58_address(iface: Any, account_id: Any) -> str:
+    """Encode ``account_id`` as an SS58 address in the chain's format, or ``0x`` hex if that fails.
+
+    Display only, so an unknown format or a missing ``scalecodec`` never
+    blocks a quote.
+    """
+    try:
+        from scalecodec.utils.ss58 import ss58_encode
+
+        return ss58_encode(bytes(account_id), iface.ss58_format)
+    except Exception:  # noqa: BLE001 -- display only; never block a quote on it.
+        return _as_hex(account_id)
+
+
 def token(iface: Any) -> tuple[str, int]:
     """Return the chain's token symbol and decimals, or ``("planck", 0)`` if unknown."""
     try:

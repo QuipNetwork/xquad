@@ -989,6 +989,7 @@ class FakeSubstrate:
         self.rpc = dict(rpc) if rpc is not None else {"payment_queryInfo": {"result": {"partialFee": "2182560255"}}}
         self.rpc_calls: list[tuple[str, list | None]] = []
         self.genesis_hash: object = GENESIS_HASH
+        self.ss58_format = 42
 
     def rpc_request(self, method: str, params: list | None = None):
         self.rpc_calls.append((method, params))
@@ -2670,6 +2671,19 @@ class TestJobQuote:
         defaults.update(overrides)
         return JobQuote(**defaults)
 
+    @classmethod
+    def _full_quote(cls, **overrides: object):
+        full: dict[str, object] = dict(
+            account="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            quoted_at_block=412301,
+            num_variables=12,
+            num_spins=12,
+            num_couplings=30,
+            placement="0x8f46f3a31321d1d093314fc769c42cbe7a83d71a0b69e6571a0f68e2a04067f0",
+        )
+        full.update(overrides)
+        return cls._quote(**full)
+
     def test_total_is_reward_plus_fee(self) -> None:
         quote = self._quote(reward_planck=1000, fee_planck=200)
         assert quote.total_planck == 1200
@@ -2687,28 +2701,72 @@ class TestJobQuote:
         quote = self._quote(reward_planck=1000, fee_planck=200, balance_planck=500)
         assert quote.shortfall_planck == 700
 
-    def test_str_lines_all_start_with_quip_tag_and_are_ascii(self) -> None:
+    def test_affordable_tracks_the_shortfall(self) -> None:
+        assert self._quote(reward_planck=1000, fee_planck=200, balance_planck=1200).affordable
+        assert not self._quote(reward_planck=1000, fee_planck=200, balance_planck=1199).affordable
+
+    def test_new_fields_default_to_none(self) -> None:
+        quote = self._quote()
+        assert (quote.account, quote.quoted_at_block, quote.placement) == (None, None, None)
+        assert (quote.num_variables, quote.num_spins, quote.num_couplings) == (None, None, None)
+
+    def test_str_is_a_72_column_box(self) -> None:
+        lines = str(self._full_quote()).splitlines()
+        assert lines[0].startswith("╭─ Job quote ")
+        assert lines[-1].startswith("╰")
+        assert {len(line) for line in lines} == {72}
+
+    def test_str_full_box(self) -> None:
+        assert str(self._full_quote()) == "\n".join(
+            [
+                "╭─ Job quote ──────────────────────────────────────────────────────────╮",
+                "│ Network     aglais                                                   │",
+                "│ Account     5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY         │",
+                "│ Quoted at   block 412301                                             │",
+                "├──────────────────────────────────────────────────────────────────────┤",
+                "│ Problem     12 variables -> 12 spins, 30 couplings                   │",
+                "│ Placed on   topology                                                 │",
+                "│             0x8f46f3a31321d1d093314fc769c42cbe7a83d71a0b69e6571a0f68 │",
+                "│             e2a04067f0                                               │",
+                "├──────────────────────────────────────────────────────────────────────┤",
+                "│ Reward       1.000000000000 AGLS  refunded if unanswered             │",
+                "│ Fee          0.002182560255 AGLS  exact                              │",
+                "│ Total        1.002182560255 AGLS                                     │",
+                "╞══════════════════════════════════════════════════════════════════════╡",
+                "│ Balance     20.000000000000 AGLS                                     │",
+                "│ Shortfall    0.000000000000 AGLS                                     │",
+                "│ Affordable  yes                                                      │",
+                "╰──────────────────────────────────────────────────────────────────────╯",
+            ]
+        )
+
+    def test_str_native_placement_on_one_line(self) -> None:
+        assert "│ Placed on   native " in str(self._full_quote(placement="native"))
+
+    def test_str_omits_unknown_rows_and_sections(self) -> None:
         text = str(self._quote())
-        lines = text.splitlines()
-        assert lines
-        assert all(line.startswith("[quip]") for line in lines)
-        assert text.isascii()
+        for absent in ("Account", "Quoted at", "Problem", "Placed on"):
+            assert absent not in text
+        assert {len(line) for line in text.splitlines()} == {72}
 
     def test_str_decimal_points_align_across_amount_lines(self) -> None:
         text = str(self._quote())
-        amount_lines = [line for line in text.splitlines() if "." in line]
+        amount_lines = [line for line in text.splitlines() if "AGLS" in line]
         assert len(amount_lines) == 5  # reward, fee, total, balance, shortfall
         assert len({line.index(".") for line in amount_lines}) == 1
 
-    def test_str_header_names_the_network(self) -> None:
-        assert "network aglais" in str(self._quote(network="aglais"))
+    def test_str_names_the_network(self) -> None:
+        assert "│ Network     aglais " in str(self._quote(network="aglais"))
 
-    def test_str_header_says_custom_endpoint_when_network_is_none(self) -> None:
-        assert "custom endpoint" in str(self._quote(network=None))
+    def test_str_says_custom_endpoint_when_network_is_none(self) -> None:
+        assert "│ Network     custom endpoint " in str(self._quote(network=None))
 
-    def test_str_header_fee_exact_vs_estimated(self) -> None:
-        assert "fee exact" in str(self._quote(fee_exact=True))
-        assert "fee estimated" in str(self._quote(fee_exact=False))
+    def test_str_fee_exact_vs_estimated(self) -> None:
+        assert "AGLS  exact " in str(self._quote(fee_exact=True))
+        assert "AGLS  estimated " in str(self._quote(fee_exact=False))
+
+    def test_str_shows_unaffordable(self) -> None:
+        assert "│ Affordable  no " in str(self._quote(balance_planck=0))
 
     def test_str_has_no_fractional_part_when_decimals_is_zero(self) -> None:
         quote = self._quote(
@@ -2769,6 +2827,37 @@ class TestSolverQuipQuote:
         assert quote.token_decimals == 0
         assert "." not in str(quote)
 
+    def test_quote_describes_account_block_and_placement(self, monkeypatch) -> None:
+        iface = self._iface()
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver)
+        quote = solver.quote(_model())
+        ss58_encode = pytest.importorskip("scalecodec.utils.ss58").ss58_encode
+
+        assert quote.account == ss58_encode(bytes(solver._signer.account_id), 42)
+        assert quote.account.startswith("5")
+        assert quote.quoted_at_block == iface.head
+        assert quote.placement == TOPO_HASH
+        assert (quote.num_spins, quote.num_couplings) == (
+            _job(solver).topology.num_nodes,
+            _job(solver).topology.num_edges,
+        )
+        assert quote.num_variables == 2
+
+    def test_quote_account_falls_back_to_hex(self, monkeypatch) -> None:
+        iface = self._iface()
+        iface.ss58_format = None
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver)
+        assert solver.quote(_model()).account == "0x" + bytes(solver._signer.account_id).hex()
+
+    def test_quote_placement_is_native(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, iface=self._iface(), topology="native")
+        _patch_signing(monkeypatch, solver)
+        quote = solver.quote(_model())
+        assert quote.placement == "native"
+        assert quote.num_spins == quote.num_variables
+
     def test_quote_never_submits(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch, iface=self._iface(), topology=TOPO_HASH)
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
@@ -2793,7 +2882,7 @@ class TestSolverQuipQuote:
         _patch_signing(monkeypatch, solver)
         quote = solver.quote(_model())
         assert quote.network == "aglais"
-        assert "network aglais" in str(quote)
+        assert "│ Network     aglais " in str(quote)
 
 
 class TestSolverQuipInsufficientBalance:
@@ -3310,7 +3399,7 @@ class TestSolveAutofundGate:
         solver.solve(_model())
         shown = "".join(stdout.written)
         assert "Fund 0x" in shown
-        assert "[quip] job quote" in shown
+        assert "╭─ Job quote " in shown
         assert stderr.written == []
 
     def test_no_faucet_raises_before_the_autofund_gate(self, monkeypatch) -> None:

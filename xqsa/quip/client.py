@@ -785,6 +785,11 @@ class SolverQuip(Solver):
             )
         return native
 
+    def _placement(self, topology: str | None) -> str:
+        """Name where a job is placed: :data:`NATIVE_TOPOLOGY`, or the effective topology hash."""
+        effective = topology or self._topology_hash
+        return NATIVE_TOPOLOGY if _is_native(effective) else _as_hex(effective)
+
     def _check_order_size(self, topology: Topology) -> None:
         """Raise if ``topology`` exceeds the mempool's ``MaxNodes`` / ``MaxEdges``.
 
@@ -849,6 +854,12 @@ class SolverQuip(Solver):
             balance_planck=self._free_balance(),
             token_symbol=symbol,
             token_decimals=decimals,
+            account=chain.ss58_address(self._iface, self._signer.account_id),
+            quoted_at_block=self._current_block(),
+            num_variables=len(job.mapping),
+            num_spins=job.topology.num_nodes,
+            num_couplings=job.topology.num_edges,
+            placement=self._placement(kwargs.get("topology")),
         )
         return job, wire, ext_hash, quote
 
