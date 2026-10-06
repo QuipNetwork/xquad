@@ -57,22 +57,30 @@ def normalise(doc: str) -> str:
 
 
 def stub_docstrings(source: str) -> dict[str, str]:
-    """Map `XqvmError` and each class the stub derives from it to its docstring.
+    """Map `XqvmError` and every class the stub derives from it to its docstring.
 
-    Only direct subclasses are found, which is every fault `fault.rs`
-    declares. A class with no docstring maps to the empty string.
+    The whole family counts, not only direct subclasses, so a grouping
+    class between `XqvmError` and a fault does not hide the fault, the
+    same set `runtime_docstrings` collects with `issubclass`. A stub may
+    name a base it declares further down, so the family is grown until it
+    stops changing rather than in one pass in source order. A class with
+    no docstring maps to the empty string.
 
     Raises `SyntaxError` when `source` does not parse.
     """
 
-    docs: dict[str, str] = {}
-    for node in ast.parse(source).body:
-        if not isinstance(node, ast.ClassDef):
-            continue
-        bases = {base.id for base in node.bases if isinstance(base, ast.Name)}
-        if node.name == BASE or BASE in bases:
-            docs[node.name] = ast.get_docstring(node) or ""
-    return docs
+    classes = {
+        node.name: (
+            {base.id for base in node.bases if isinstance(base, ast.Name)},
+            ast.get_docstring(node) or "",
+        )
+        for node in ast.parse(source).body
+        if isinstance(node, ast.ClassDef)
+    }
+    family = {BASE} & classes.keys()
+    while grown := {name for name, (bases, _) in classes.items() if bases & family} - family:
+        family |= grown
+    return {name: classes[name][1] for name in family}
 
 
 def runtime_docstrings(module: ModuleType) -> dict[str, str]:

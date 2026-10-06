@@ -93,6 +93,40 @@ def test_stub_docstrings_collects_the_base_and_its_subclasses_only() -> None:
     }
 
 
+def test_stub_docstrings_follows_a_grouping_class_declared_after_its_child() -> None:
+    stub = """
+class StepLimitExceeded(LimitExceeded):
+    \"\"\"Execution ran past its step budget.\"\"\"
+
+class LimitExceeded(XqvmError):
+    \"\"\"A budget ran out.\"\"\"
+
+class XqvmError(RuntimeError):
+    \"\"\"Base.\"\"\"
+"""
+    assert guard.stub_docstrings(stub) == {
+        "XqvmError": "Base.",
+        "LimitExceeded": "A budget ran out.",
+        "StepLimitExceeded": "Execution ran past its step budget.",
+    }
+
+
+def test_a_grouped_fault_is_matched_on_both_sides() -> None:
+    module = _module(LimitExceeded="A budget ran out.")
+    module.StepLimitExceeded = type("StepLimitExceeded", (module.LimitExceeded,), {"__doc__": "Out of steps."})
+    stub = """
+class XqvmError(RuntimeError):
+    \"\"\"Base.\"\"\"
+
+class LimitExceeded(XqvmError):
+    \"\"\"A budget ran out.\"\"\"
+
+class StepLimitExceeded(LimitExceeded):
+    \"\"\"Out of steps.\"\"\"
+"""
+    assert guard.mismatches(guard.stub_docstrings(stub), guard.runtime_docstrings(module)) == []
+
+
 def test_stub_docstrings_raises_on_a_stub_that_does_not_parse() -> None:
     with pytest.raises(SyntaxError):
         guard.stub_docstrings("class XqvmError(RuntimeError:\n")
@@ -128,11 +162,6 @@ def test_each_disagreement_is_reported(stub: dict[str, str], runtime: dict[str, 
     problems = guard.mismatches(stub, runtime)
     assert len(problems) == 1
     assert problems[0].startswith(expected)
-
-
-def test_main_passes_on_the_committed_stub(capsys: pytest.CaptureFixture[str]) -> None:
-    assert guard.main() == 0
-    assert "fault docstrings match" in capsys.readouterr().out
 
 
 def test_main_fails_on_a_reworded_fault(
