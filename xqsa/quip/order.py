@@ -33,7 +33,7 @@ from __future__ import annotations
 import time
 import warnings
 from collections.abc import Mapping
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 from xqsa.quip.display import box
@@ -134,13 +134,13 @@ def merge_options(
 
 def _check_raw_values(options: _OrderOptions, *, strict: bool, stacklevel: int) -> None:
     """Refuse (strict) or warn about (lenient) raw chain dicts anywhere but ``mapping``."""
-    for field in fields(options):
-        if field.name == "mapping" or not isinstance(getattr(options, field.name), Mapping):
+    for option in fields(options):
+        if option.name == "mapping" or not isinstance(getattr(options, option.name), Mapping):
             continue
         if strict:
-            raise TypeError(f"{field.name}: raw chain values are not accepted")
+            raise TypeError(f"{option.name}: raw chain values are not accepted")
         warnings.warn(
-            f"{field.name}: passing a raw chain value is deprecated and unchecked",
+            f"{option.name}: passing a raw chain value is deprecated and unchecked",
             DeprecationWarning,
             stacklevel=stacklevel,
         )
@@ -189,6 +189,18 @@ def _require_int(value: Any, name: str) -> int:
     return value
 
 
+@dataclass(frozen=True)
+class _SignedCall:
+    """A signed ``propose_job`` extrinsic and the nonce it was signed with.
+
+    ``wire`` is a sendable transaction, so it is kept out of ``repr``.
+    """
+
+    wire: bytes = field(repr=False)
+    ext_hash: str
+    nonce: int
+
+
 class JobOrder:
     """One Quip order: its model, placement and options, from draft to final.
 
@@ -198,10 +210,12 @@ class JobOrder:
     :meth:`submit` raise; :meth:`status` works in every state. Options are read
     through read-only properties and :meth:`options`.
 
-    :meth:`quote` and :meth:`submit` sign the same call params, built once per
-    configuration. The quote's signed copy only prices the call; :meth:`submit`
-    signs afresh with the account's nonce at that moment, so a quote taken
-    earlier never leaves a stale nonce behind.
+    The order caches its signed extrinsic, never a quote. :meth:`quote` signs
+    once and re-prices the same bytes on every call, reading the fee, balance
+    and head block afresh. :meth:`submit` quotes afresh too, then sends the
+    cached bytes if the account nonce has not moved, and re-signs otherwise.
+    The cache is dropped on :meth:`set` and on every :meth:`submit`, whatever
+    its outcome, and is never shown, logged, pickled or copied.
 
     Examples:
         Connects to the network, so it is not run as a doctest::
@@ -222,8 +236,10 @@ class JobOrder:
         self._job = job
         self._genesis_hash = genesis_hash
         self._state: OrderState = "draft"
-        # The call params and their quote; the content only, never a signed transaction.
-        self._prepared: tuple[dict, JobQuote] | None = None
+        # The signed extrinsic, reused until set() or submit(); never a quote.
+        self._signed: _SignedCall | None = None
+        # The most recent quote, from quote() or submit(); shown, never gated on.
+        self._last_quote: JobQuote | None = None
         self._order_id: int | None = None
         self._included_block: int | None = None
         self._submitted_at: float | None = None
@@ -284,7 +300,7 @@ class JobOrder:
         if (merged.topology, merged.mapping) != (self._options.topology, self._options.mapping):
             self._job = self._client._place(self._model, merged)
         self._options = merged
-        self._prepared = None
+        self._signed = None
         return self
 
     # -- lifecycle -------------------------------------------------------
@@ -292,7 +308,9 @@ class JobOrder:
     def quote(self) -> JobQuote:
         """Price the draft without proposing it.
 
-        Repeat calls reuse the quote until the next :meth:`set`.
+        Every call reads the fee, balance and head block afresh. The signed
+        extrinsic it prices is reused until the next :meth:`set` or
+        :meth:`submit`.
 
         Raises:
             QuipSubmissionError: if the order is no longer a draft, or the
@@ -300,15 +318,16 @@ class JobOrder:
             QuipConnectionError: if a chain read faults.
         """
         self._require_draft("quote")
-        return self._prepare()[1]
+        return self._fresh_quote(self._signed_call())
 
     def submit(self) -> Self:
         """Propose the draft and return once it is included in a block.
 
-        Shows the quote, refuses a shortfall no faucet drip can cover, asks the
-        ``autoconfirm`` and, if short, ``autofund`` gates, then signs with the
-        account's current nonce and proposes. Signing comes after the gates, so
-        time spent at a prompt or waiting on a drip never ages the nonce.
+        Quotes afresh, shows the quote, refuses a shortfall no faucet drip can
+        cover, and asks the ``autoconfirm`` and, if short, ``autofund`` gates.
+        It then sends the bytes :meth:`quote` signed if the account nonce has
+        not moved since, and re-signs otherwise. The cached extrinsic is
+        dropped whatever the outcome, so a retry signs anew.
 
         Raises:
             QuipSubmissionError: if the order is no longer a draft, the account
@@ -318,16 +337,13 @@ class JobOrder:
             QuipFaucetError: if the faucet refuses or cannot be reached.
         """
         self._require_draft("submit")
-        quoted_earlier = self._prepared is not None
-        call_params, quote = self._prepare()
-        if quoted_earlier:
-            # The balance may have moved since quote(), e.g. another order's
-            # reward was reserved; the gates must judge the account as it is now.
-            quote = replace(quote, balance_planck=self._client._free_balance())
-            self._prepared = (call_params, quote)
-        self._client._clear_gates(quote)
+        call_params = self._call_params()
+        signed, self._signed = self._signed_call(call_params), None
+        # The balance and fee may have moved since quote(), e.g. another order's
+        # reward was reserved; the gates judge the account as it is now.
+        self._client._clear_gates(self._fresh_quote(signed))
         self._submitted_at = time.perf_counter()
-        self._order_id, self._included_block = self._client._propose(call_params, self.reward)
+        self._order_id, self._included_block = self._client._propose(signed, call_params, self.reward)
         self._state = "submitted"
         return self
 
@@ -350,12 +366,26 @@ class JobOrder:
             self._state = "final"
         return {"state": self._state, **snapshot}
 
-    def _prepare(self) -> tuple[dict, JobQuote]:
-        """Build the call params and their quote once per configuration."""
-        if self._prepared is None:
-            call_params = self._client._propose_call_params(self._job, self._options)
-            self._prepared = (call_params, self._client._quote_call(call_params, self._job, self._options))
-        return self._prepared
+    def _call_params(self) -> dict:
+        """Build the ``propose_job`` call params for the current configuration."""
+        return self._client._propose_call_params(self._job, self._options)
+
+    def _signed_call(self, call_params: dict | None = None) -> _SignedCall:
+        """Return the cached signed extrinsic, signing ``call_params`` first if there is none."""
+        if self._signed is None:
+            self._signed = self._client._sign(call_params if call_params is not None else self._call_params())
+        return self._signed
+
+    def _fresh_quote(self, signed: _SignedCall) -> JobQuote:
+        """Price ``signed`` now and remember it for the display."""
+        self._last_quote = self._client._quote_wire(signed.wire, self._job, self._options)
+        return self._last_quote
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Pickle and copy without the signed extrinsic: a copy signs its own."""
+        state = self.__dict__.copy()
+        state["_signed"] = None
+        return state
 
     def _require_draft(self, action: str) -> None:
         if self._state != "draft":
@@ -391,10 +421,10 @@ class JobOrder:
             ("Block wait", f"{options.block_wait} blocks"),
             ("Reward", f"{_format_planck(options.reward, decimals)} {symbol}"),
         ]
-        if self._prepared is None:
+        if self._last_quote is None:
             quoted = "not quoted"
         else:
-            quote = self._prepared[1]
+            quote = self._last_quote
             total = f"{_format_planck(quote.total_planck, decimals)} {symbol}"
             afford = "affordable" if quote.affordable else "not affordable"
             quoted = ", ".join(

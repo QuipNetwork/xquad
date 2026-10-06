@@ -69,7 +69,7 @@ from xqsa.quip.errors import (  # noqa: F401 -- the Quip* errors stay importable
 )
 from xqsa.quip.faucet import DEFAULT_DRIP_PLANCK, fund_from_faucet
 from xqsa.quip.networks import NETWORKS
-from xqsa.quip.order import JobOrder, _OrderOptions, check_client_defaults, merge_options
+from xqsa.quip.order import JobOrder, _OrderOptions, _SignedCall, check_client_defaults, merge_options
 from xqsa.quip.quote import JobQuote, _format_planck
 from xqsa.solver import Solver, SolverResult
 
@@ -582,35 +582,45 @@ class SolverQuip(Solver):
         }
         return call_params
 
-    def _propose(self, call_params: dict, reward: int) -> tuple[int, int | None]:
-        """Sign ``call_params`` with the current nonce and propose them: ``(order_id, included_block)``.
+    def _sign(self, call_params: dict, nonce: int | None = None) -> _SignedCall:
+        """Sign ``call_params`` as a ``propose_job`` extrinsic with ``nonce``, else the current one.
 
-        The nonce is read, the call signed with it, and the nonce read again
-        just before sending. If it moved, another transaction from this
-        account landed in between, so the call is signed once more with the
-        new nonce and checked again; if it moves a second time nothing is
-        sent. This narrows the race to the gap between the last read and the
-        send, but cannot close it: a node rejects a transaction that reuses a
-        nonce before charging a fee, and that surfaces as a
-        :class:`QuipSubmissionError` from the send.
+        Raises:
+            QuipSubmissionError: if assembly or signing fails.
+            QuipConnectionError: if the nonce cannot be read.
+        """
+        if nonce is None:
+            nonce = self._account_nonce()
+        wire, ext_hash = self._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, call_params, nonce=nonce)
+        return _SignedCall(wire=wire, ext_hash=ext_hash, nonce=nonce)
+
+    def _propose(self, signed: _SignedCall, call_params: dict, reward: int) -> tuple[int, int | None]:
+        """Send ``signed`` if its nonce is still current, else re-sign once: ``(order_id, included_block)``.
+
+        The nonce is read just before sending. If it moved since ``signed``
+        was signed, another transaction from this account used it, so the
+        call is signed once more with the new nonce and checked again; if it
+        moves a second time nothing is sent. This narrows the race to the gap
+        between the last read and the send, but cannot close it: a node
+        rejects a transaction that reuses a nonce before charging a fee, and
+        that surfaces as a :class:`QuipSubmissionError` from the send.
 
         Raises:
             QuipSubmissionError: if the nonce moves twice, signing fails, the
                 extrinsic fails on chain, or no ``JobProposed`` event is found.
             QuipConnectionError: if the nonce cannot be read.
         """
-        nonce = self._account_nonce()
-        for _attempt in range(2):
-            wire, ext_hash = self._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, call_params, nonce=nonce)
-            current = self._account_nonce()
-            if current == nonce:
-                order_id, block_hash = self._propose_job(wire, ext_hash, reward)
-                return order_id, self._included_block(block_hash)
-            logger.info("account nonce moved from %d to %d while signing; signing again", nonce, current)
-            nonce = current
-        raise QuipSubmissionError(
-            "account nonce moved twice while submitting; another client is sending from this account. Nothing was sent."
-        )
+        current = self._account_nonce()
+        if current != signed.nonce:
+            logger.info("account nonce moved from %d to %d since signing; signing again", signed.nonce, current)
+            signed = self._sign(call_params, nonce=current)
+            if self._account_nonce() != signed.nonce:
+                raise QuipSubmissionError(
+                    "account nonce moved twice while submitting; another client is sending from this account. "
+                    "Nothing was sent."
+                )
+        order_id, block_hash = self._propose_job(signed.wire, signed.ext_hash, reward)
+        return order_id, self._included_block(block_hash)
 
     def _propose_job(self, wire: bytes, ext_hash: str, reward: int) -> tuple[int, str | None]:
         """Submit a built ``propose_job`` extrinsic: ``(order_id, inclusion block hash)``.
@@ -918,14 +928,12 @@ class SolverQuip(Solver):
         merged = self._settle_topology(merged)
         return JobOrder(self, model, merged, self._place(model, merged), self._genesis_hash)
 
-    def _quote_call(self, call_params: dict, job: IsingJob, options: _OrderOptions) -> JobQuote:
-        """Price ``call_params`` without proposing them.
+    def _quote_wire(self, wire: bytes, job: IsingJob, options: _OrderOptions) -> JobQuote:
+        """Price the signed ``wire`` without sending it, reading the balance and head block now.
 
-        Signs a copy only to ask the chain its fee; :func:`~xqsa.quip.chain.query_fee`
-        disarms that copy before it leaves this process, and :meth:`JobOrder.submit`
-        signs afresh.
+        :func:`~xqsa.quip.chain.query_fee` disarms a copy of ``wire`` before it
+        leaves this process, so the node never holds a sendable transaction.
         """
-        wire, _ext_hash = self._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, call_params)
         fee, fee_exact = self._query_fee(wire)
         symbol, decimals = self._token()
         return JobQuote(

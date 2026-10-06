@@ -279,7 +279,7 @@ class TestJobOrderLifecycle:
         with pytest.raises(QuipCancelledError):
             order.submit()
         assert order.status()["state"] == "draft"
-        assert captured["nonces"] == [None]  # the quote's copy only.
+        assert order._signed is None  # dropped: a retry signs anew.
         assert "wait_for" not in captured
 
 
@@ -335,27 +335,39 @@ class TestJobOrderSet:
 
 
 class TestJobOrderQuoteAndSubmit:
-    def test_quote_cached_until_set(self, monkeypatch) -> None:
+    def test_each_quote_reprices_the_same_signed_bytes(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)
         order = solver.create_order(_model())
         first = order.quote()
-        assert order.quote() is first
-        assert captured["builds"] == 1
-        order.set(reward=2 * UNIT)
+        solver._iface.storage[("System", "Account")] = {"data": {"free": 3 * UNIT}}
         second = order.quote()
-        assert second.reward_planck == 2 * UNIT
+        assert second is not first
+        assert (first.balance_planck, second.balance_planck) == (10 * UNIT, 3 * UNIT)
+        assert captured["builds"] == 1  # signed once, priced twice.
+        priced = [params for method, params in solver._iface.rpc_calls if method == "payment_queryInfo"]
+        assert priced == [priced[0], priced[0]]
+
+    def test_set_drops_the_signed_bytes(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        order.quote()
+        order.set(reward=2 * UNIT)
+        assert order._signed is None
+        assert order.quote().reward_planck == 2 * UNIT
         assert captured["builds"] == 2
         assert captured["params"][1]["reward"] == 2 * UNIT
 
-    def test_quote_and_submit_sign_identical_params(self, monkeypatch) -> None:
+    def test_submit_sends_the_quoted_bytes(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)
         solver._iface.nonce = 4
         order = solver.create_order(_model(), reward=2 * UNIT)
         order.quote()
         order.submit()
-        assert captured["params"][0] is captured["params"][1]
-        assert captured["params"][1]["reward"] == 2 * UNIT
-        assert captured["nonces"] == [None, 4]
+        assert captured["builds"] == 1
+        assert captured["nonces"] == [4]
+        assert captured["sent"] == captured["wires"]
+        assert captured["params"][0]["reward"] == 2 * UNIT
+        assert order._signed is None
 
     def test_submit_after_quote_rereads_the_balance(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)
@@ -367,11 +379,24 @@ class TestJobOrderQuoteAndSubmit:
         assert order.quote().balance_planck == 0
         assert "wait_for" not in captured
 
-    def test_submit_without_quote_builds_params_once(self, monkeypatch) -> None:
+    def test_failed_submit_drops_the_signed_bytes(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        order.quote()
+        solver._iface.storage[("System", "Account")] = {"data": {"free": 0}}
+        with pytest.raises(QuipSubmissionError, match="insufficient balance"):
+            order.submit()
+        assert order._signed is None
+        solver._iface.storage[("System", "Account")] = {"data": {"free": 10 * UNIT}}
+        order.submit()
+        assert captured["builds"] == 2  # the retry signed anew.
+        assert captured["sent"] == [captured["wires"][1]]
+
+    def test_submit_without_quote_signs_once(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)
         solver.create_order(_model()).submit()
-        assert captured["builds"] == 2  # price, then send
-        assert captured["params"][0] is captured["params"][1]
+        assert captured["builds"] == 1  # signed, priced, then sent as is.
+        assert captured["sent"] == captured["wires"]
 
     def test_two_drafts_each_sign_with_the_nonce_current_at_submit(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)
@@ -388,39 +413,46 @@ class TestJobOrderQuoteAndSubmit:
         second.quote()
         first.submit()
         second.submit()
-        assert captured["nonces"] == [None, None, 0, 1]
+        # Both quoted at nonce 0; the second re-signs at 1 once the first is sent.
+        assert captured["nonces"] == [0, 0, 1]
+        assert captured["sent"] == [captured["wires"][0], captured["wires"][2]]
 
 
 class TestJobOrderNonceCheck:
     def test_unchanged_nonce_sends_after_one_signature(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)
+        solver._iface.nonce = 5
         order = solver.create_order(_model())
         order.quote()
-        reads = _nonces(monkeypatch, solver, [5, 5])
+        reads = _nonces(monkeypatch, solver, [5])
         order.submit()
-        assert reads == [5, 5]
-        assert captured["nonces"] == [None, 5]
-        assert "wait_for" in captured
+        assert reads == [5]
+        assert captured["nonces"] == [5]
+        assert captured["sent"] == captured["wires"]
 
     def test_nonce_moving_once_signs_again(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)
+        solver._iface.nonce = 5
         order = solver.create_order(_model())
         order.quote()
-        _nonces(monkeypatch, solver, [5, 6, 6])
+        _nonces(monkeypatch, solver, [6, 6])
         order.submit()
-        assert captured["nonces"] == [None, 5, 6]
+        assert captured["nonces"] == [5, 6]
+        assert captured["sent"] == [captured["wires"][1]]
         assert order.order_id() == 1
 
     def test_nonce_moving_twice_raises_without_sending(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)
+        solver._iface.nonce = 5
         order = solver.create_order(_model())
         order.quote()
-        _nonces(monkeypatch, solver, [5, 6, 7])
+        _nonces(monkeypatch, solver, [6, 7])
         with pytest.raises(QuipSubmissionError, match="nonce moved twice"):
             order.submit()
-        assert captured["nonces"] == [None, 5, 6]
+        assert captured["nonces"] == [5, 6]
         assert "wait_for" not in captured  # submit_and_watch never called
         assert order.status()["state"] == "draft"
+        assert order._signed is None
 
     def test_nonce_read_fault_raises_connection_error(self, monkeypatch) -> None:
         from xqsa.quip import QuipConnectionError
@@ -433,6 +465,28 @@ class TestJobOrderNonceCheck:
         monkeypatch.setattr(solver._iface, "get_account_nonce", boom)
         with pytest.raises(QuipConnectionError, match="account nonce.*socket closed"):
             solver.create_order(_model()).submit()
+
+
+class TestJobOrderSignedBytesStayPrivate:
+    def test_copy_and_pickle_state_drop_the_signed_bytes(self, monkeypatch) -> None:
+        import copy
+
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        order.quote()
+        assert order._signed is not None
+        assert order.__getstate__()["_signed"] is None
+        assert copy.copy(order)._signed is None
+        assert order._signed is not None  # the original keeps its own.
+
+    def test_signed_bytes_never_rendered(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        order.quote()
+        wire = captured["wires"][0]
+        assert "wire" not in repr(order._signed)
+        for text in (str(order), repr(order), repr(order._signed)):
+            assert "0x" + wire.hex() not in text and repr(wire) not in text
 
 
 class TestSolverQuipCompatibility:

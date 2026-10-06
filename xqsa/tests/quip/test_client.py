@@ -1898,9 +1898,10 @@ def _patch_signing(monkeypatch, solver, *, receipt=None, build_raises: Exception
     so submission tests never touch real crypto or a chain. ``receipt`` may be a
     receipt or a callable ``(call_function) -> receipt`` to vary the outcome per
     call (e.g. a successful propose followed by a failing reclaim). ``captured["builds"]``
-    counts calls into ``build_signed_extrinsic``; ``captured["nonces"]`` and
-    ``captured["params"]`` record each build's explicit nonce (``None`` when the
-    signing layer reads it) and call params.
+    counts calls into ``build_signed_extrinsic``; ``captured["nonces"]``,
+    ``captured["params"]`` and ``captured["wires"]`` record each build's explicit
+    nonce (``None`` when the signing layer reads it), call params and distinct
+    wire bytes, and ``captured["sent"]`` the wires that reached the node.
     """
     captured: dict = {"builds": 0}
     qs = solver._quip_signing
@@ -1912,11 +1913,14 @@ def _patch_signing(monkeypatch, solver, *, receipt=None, build_raises: Exception
         captured.setdefault("params", []).append(call_params)
         if build_raises is not None:
             raise build_raises
-        return b"\x00\x01", "0xext"
+        wire = bytes([0, captured["builds"]])  # b"\x00\x01", then b"\x00\x02", ...: one per build.
+        captured.setdefault("wires", []).append(wire)
+        return wire, "0xext"
 
     def fake_submit(iface, wire_bytes, ext_hash, wait_for="inblock"):
         captured["wait_for"] = wait_for
         captured["submitted_wire"] = wire_bytes
+        captured.setdefault("sent", []).append(wire_bytes)
         return receipt(captured["call_function"]) if callable(receipt) else receipt
 
     monkeypatch.setattr(qs, "build_signed_extrinsic", fake_build)
@@ -2380,9 +2384,9 @@ class TestSolverQuipSolve:
         # gate, so "builds" is no longer the signal; submission is.
         assert "wait_for" not in captured  # never reached submission
 
-    def test_solve_signs_the_quoted_params_afresh(self, monkeypatch) -> None:
-        # One build prices the call, one signs it to send; both carry the same
-        # params, and only the send pins the nonce it read.
+    def test_solve_signs_once_and_sends_the_priced_bytes(self, monkeypatch) -> None:
+        # submit() signs once with the current nonce, prices those bytes, and
+        # sends them unchanged when the nonce has not moved.
         iface = _chain_iface(order=_order(), head=200)
         iface.maps[("QuantumPow", "MineableTopologies")] = [(TOPO_HASH, ())]
         solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
@@ -2394,9 +2398,9 @@ class TestSolverQuipSolve:
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         solver._iface.nonce = 7
         solver.solve(_model())
-        assert captured["builds"] == 2
-        assert captured["params"][0] is captured["params"][1]
-        assert captured["nonces"] == [None, 7]
+        assert captured["builds"] == 1
+        assert captured["nonces"] == [7]
+        assert captured["sent"] == captured["wires"]
 
     def test_solve_proceeds_when_topology_is_not_mineable(self, monkeypatch) -> None:
         # Inverted guard. solve() used to reject a registered hash absent from
