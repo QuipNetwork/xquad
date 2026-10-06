@@ -36,7 +36,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, replace
 from typing import TYPE_CHECKING, Any, Literal, Self
 
-from xqsa.quip.display import box
+from xqsa.quip.display import box, terms_rows
 from xqsa.quip.errors import QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
@@ -527,14 +527,13 @@ class JobOrder:
             ),
             ("Placed", placed),
         ]
-        terms = [
-            ("Payout", _variant_text(options.resolution)),
-            ("Access", _variant_text(options.mode)),
-            ("Floors", "none"),
-            ("Deadline", f"{options.deadline_blocks} blocks"),
-            ("Block wait", f"{options.block_wait} blocks"),
-            ("Reward", f"{_format_planck(options.reward, decimals)} {symbol}"),
-        ]
+        terms = terms_rows(
+            resolution=options.resolution,
+            mode=options.mode,
+            deadline_blocks=options.deadline_blocks,
+            block_wait=options.block_wait,
+            reward=f"{_format_planck(options.reward, decimals)} {symbol}",
+        )
         if self._last_quote is None:
             quoted = "not quoted"
         else:
@@ -553,14 +552,13 @@ class JobOrder:
             receipt = f"failed in {block or 'an unknown block'}: {self._error}"
         else:
             receipt = f"order {self._order_id}" + (f", included in {block}" if block else "")
+            try:
+                outcome = self.receipt()._outcome()
+            except Exception:  # noqa: BLE001 -- display only; a read fault keeps the plain row.
+                pass
+            else:
+                leader = f", leader {outcome.leader}" if outcome.leader else ""
+                receipt += f", {outcome.status}{leader}"
         network = [("Network", self._client._network or "custom endpoint")]
         summary = [("Quote", quoted), ("Receipt", receipt)]
         return box(f"Job order ({self._state})", [network, problem, terms, summary])
-
-
-def _variant_text(value: Any) -> str:
-    """Render a unit enum variant as words (``"SingleBest"`` -> ``"single best"``); anything else as ``repr``."""
-    if not isinstance(value, str):
-        return repr(value)
-    words = "".join(f" {char}" if char.isupper() else char for char in value).split()
-    return " ".join(word.lower() for word in words)

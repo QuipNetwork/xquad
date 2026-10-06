@@ -27,20 +27,60 @@ method reads the chain when called; constructing a receipt reads nothing.
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
+from functools import cached_property
 from typing import TYPE_CHECKING, Any, Self
 
 from xqsa.quip import chain
-from xqsa.quip.chain import MEMPOOL_PALLET, RECLAIM_ORDER_CALL, _status_str
+from xqsa.quip.chain import MEMPOOL_PALLET, RECLAIM_ORDER_CALL, _coerce_block_number, _status_str
 from xqsa.quip.codec import _TERMINAL_STATUSES, ORDER_STATUS_CLOSED
+from xqsa.quip.display import box, terms_rows
 from xqsa.quip.errors import QuipSubmissionError, QuipTimeoutError
+from xqsa.quip.quote import _format_planck
 
 if TYPE_CHECKING:
     from xqsa.quip.client import SolverQuip
 
+logger = logging.getLogger("xqsa.quip")
+
 _SINGLE_BEST = "SingleBest"
+
+
+@dataclass(frozen=True)
+class _Facts:
+    """What the chain recorded when the order was placed; none of it changes afterwards.
+
+    ``submitted_ms`` and ``fee`` are ``None`` when their read faulted.
+    """
+
+    proposer: str
+    spec_id: str
+    num_spins: int
+    num_couplings: int
+    reward: int
+    mode: Any
+    resolution: Any
+    deadline_blocks: int
+    block_wait: int
+    created_at: int
+    submitted_ms: int | None
+    fee: int | None
+
+
+@dataclass(frozen=True)
+class _Outcome:
+    """The order's outcome now: ``status`` is ``open``, ``final`` or ``closed``."""
+
+    status: str
+    answers: int
+    leader: str | None
+    energy_milli: int | None
 
 
 class JobOrderReceipt:
@@ -256,6 +296,65 @@ class JobOrderReceipt:
     def _fetch_order(self) -> Mapping[str, Any]:
         return self._client._fetch_order(self._order_id)
 
+    @cached_property
+    def _facts(self) -> _Facts:
+        """Read the order's placement facts once: the order, its block's time, and the fee it paid."""
+        iface = self._client._iface
+        order = self._fetch_order()
+        created_at = _coerce_block_number(order["created_at"])
+        block_hash = self._best_effort("the submission block", lambda: chain.block_hash(iface, created_at))
+        submitted_ms = fee = None
+        if block_hash is not None:
+            submitted_ms = self._best_effort("the submission time", lambda: chain.block_timestamp(iface, block_hash))
+            fee = self._best_effort("the fee", lambda: chain.proposal_fee(iface, block_hash, self._order_id))
+        params, timing = order["ising_params"], order["timing"]
+        return _Facts(
+            proposer=self._ss58(order["proposer"]),
+            spec_id=str(order["spec_id"]),
+            num_spins=len(params["nodes"]),
+            num_couplings=len(params["edges"]),
+            reward=int(order["reward"]),
+            mode=order["mode"],
+            resolution=order["resolution"],
+            deadline_blocks=int(timing["deadline_blocks"]),
+            block_wait=int(timing["block_wait"]),
+            created_at=created_at,
+            submitted_ms=submitted_ms,
+            fee=fee,
+        )
+
+    def _best_effort(self, what: str, read: Any) -> Any:
+        """Return ``read()``, or ``None`` with a warning if it faults; for display-only facts."""
+        try:
+            return read()
+        except Exception as exc:  # noqa: BLE001 -- display only; the receipt stays usable.
+            logger.warning("could not read %s of order %d: %s", what, self._order_id, exc)
+            return None
+
+    def _outcome(self) -> _Outcome:
+        """Read the order's status, answer count and leader now."""
+        order = self._fetch_order()
+        lifecycle = self._client._order_lifecycle(order, self._client._current_block())
+        if lifecycle["status"] == ORDER_STATUS_CLOSED:
+            status = "closed"
+        else:
+            status = "final" if lifecycle["is_final"] else "open"
+        ranking = self._ranking()
+        leader = ranking[0] if ranking else None
+        return _Outcome(
+            status=status,
+            answers=_solution_count(order),
+            leader=None if leader is None else self._ss58(leader["solver"]),
+            energy_milli=None if leader is None else int(leader["energy_milli"]),
+        )
+
+    def _ss58(self, account: Any) -> str:
+        """Render a decoded account as SS58 in the chain's format, or as given if it cannot be read."""
+        try:
+            return chain.ss58_address(self._client._iface, chain.account_bytes(account))
+        except Exception:  # noqa: BLE001 -- display only.
+            return str(account)
+
     def _ranking(self) -> list[Mapping[str, Any]]:
         """Return the chain's ranked ``{"solver", "energy_milli"}`` entries, best first."""
         iface = self._client._iface
@@ -264,6 +363,68 @@ class JobOrderReceipt:
 
     def __repr__(self) -> str:
         return f"JobOrderReceipt(order_id={self._order_id})"
+
+    def __str__(self) -> str:
+        """Render the receipt as a box: network, problem, terms, outcome, then money.
+
+        Reads the chain when called; a read fault renders a one-line box
+        naming it instead.
+        """
+        try:
+            return self._render()
+        except Exception as exc:  # noqa: BLE001 -- printing must never raise.
+            return box(f"Job order {self._order_id} receipt", [[("Chain", f"could not be read: {exc}")]])
+
+    def _render(self) -> str:
+        client = self._client
+        facts, outcome = self._facts, self._outcome()
+        symbol, decimals = client._token()
+
+        def amount(planck: int | None) -> str:
+            return "unknown" if planck is None else f"{_format_planck(planck, decimals)} {symbol}"
+
+        submitted = f"block {facts.created_at}, " + (
+            "time unknown"
+            if facts.submitted_ms is None
+            else datetime.fromtimestamp(facts.submitted_ms / 1000, UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+        )
+        network = [
+            ("Network", client._network or "custom endpoint"),
+            ("Proposer", facts.proposer),
+            ("Submitted", submitted),
+        ]
+        problem = [("Problem", f"{facts.num_spins} spins, {facts.num_couplings} couplings"), ("Spec", facts.spec_id)]
+        terms = terms_rows(
+            resolution=facts.resolution,
+            mode=facts.mode,
+            deadline_blocks=facts.deadline_blocks,
+            block_wait=facts.block_wait,
+            reward=amount(facts.reward),
+        )
+        energy = "none" if outcome.energy_milli is None else f"{Decimal(outcome.energy_milli) / 1000}"
+        results = [
+            ("Status", outcome.status),
+            ("Answers", str(outcome.answers)),
+            ("Leader", outcome.leader or "none"),
+            ("Energy", energy),
+        ]
+        money = [("Fee", amount(facts.fee)), *self._payout_rows(outcome, amount)]
+        return box(f"Job order {self._order_id} receipt", [network, problem, terms, results, money], double_before=4)
+
+    def _payout_rows(self, outcome: _Outcome, amount: Any) -> list[tuple[str, str]]:
+        """The Money rows after the fee: each winner's share, or what happens to an unanswered reward."""
+        if outcome.answers == 0:
+            if outcome.status == "closed":
+                return [("Reward", "reclaimed")]
+            if outcome.status == "final":
+                return [("Reward", f"unanswered: reclaim with get_receipt({self._order_id}).reclaim()")]
+            return [("Reward", "reserved, no answers yet")]
+        try:
+            settlement = self.settlement()
+        except NotImplementedError as exc:
+            return [("Reward", str(exc))]
+        state = "claimed" if settlement["claimed"] else "awaiting claim"
+        return [("Winner", f"{amount(winner['allocation_planck'])}, {state}") for winner in settlement["winners"]]
 
 
 def _minutes_until(blocks: int, block_time_ms: int | None) -> str:

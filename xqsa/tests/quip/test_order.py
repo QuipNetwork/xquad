@@ -24,7 +24,13 @@ from dataclasses import replace
 
 import pytest
 
-from xqsa.quip import QuipCancelledError, QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
+from xqsa.quip import (
+    QuipCancelledError,
+    QuipConnectionError,
+    QuipOrderOptionError,
+    QuipSubmissionError,
+    QuipUnconfirmedError,
+)
 from xqsa.quip.chain import ChainLimits
 from xqsa.quip.order import JobOrder, _OrderOptions, check_client_defaults, merge_options
 from xqsa.solver import SolverResult
@@ -701,8 +707,35 @@ class TestJobOrderDisplay:
         order.submit()
         text = str(order)
         assert text.startswith("╭─ Job order (submitted) ")
-        assert "│ Receipt     order 1, included in block 200 " in text
+        assert "│ Receipt     order 1, included in block 200, final " in text
         assert {len(line) for line in text.splitlines()} == {72}
+
+    def test_receipt_row_keeps_the_plain_text_when_the_live_read_faults(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model()).submit()
+
+        def _boom():
+            raise QuipConnectionError("node gone")
+
+        monkeypatch.setattr(order.receipt(), "_outcome", _boom)
+        text = str(order)
+        assert "│ Receipt     order 1, included in block 200 " in text
+        assert ", final" not in text
+        assert {len(line) for line in text.splitlines()} == {72}
+
+    def test_receipt_row_names_the_leader(self, monkeypatch) -> None:
+        ss58_encode = pytest.importorskip("scalecodec.utils.ss58").ss58_encode
+
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model()).submit()
+        solver._iface.storage[("QuantumComputeMempool", "OrderFrontRunner")] = {
+            "solver": "0x" + "cd" * 32,
+            "energy_milli": -5,
+        }
+        leader = ss58_encode(b"\xcd" * 32, 42)
+        text = str(order)
+        assert "│ Receipt     order 1, included in block 200, final, leader " in text
+        assert f"│             {leader} " in text  # the address wraps whole onto the next line.
 
     def test_topology_placement_wraps_the_hash(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)

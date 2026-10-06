@@ -19,11 +19,12 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 import pytest
 
-from xqsa.quip import QuipConnectionError, QuipMetadataError, QuipSubmissionError, QuipTimeoutError
+from xqsa.quip import QuipConnectionError, QuipMetadataError, QuipSubmissionError, QuipTimeoutError, chain
 from xqsa.quip.chain import (
     _attribute,
     account_bytes,
@@ -35,6 +36,7 @@ from xqsa.quip.chain import (
     proposer_orders,
     top_solvers,
 )
+from xqsa.quip.display import terms_rows, variant_text
 from xqsa.quip.receipt import JobOrderReceipt
 
 from .test_client import (
@@ -281,9 +283,16 @@ TOP_N = {"TopNEqual": {"n": 3}}
 
 
 def _receipt_order(**kw) -> dict:
-    """``_order`` plus the two fields a receipt reads: ``reward`` and ``resolution``."""
+    """``_order`` plus what a receipt reads: ``reward``, ``resolution`` and the fields its display shows."""
     resolution = kw.pop("resolution", "SingleBest")
-    return {**_order(**kw), "reward": REWARD, "resolution": resolution}
+    return {
+        **_order(**kw),
+        "reward": REWARD,
+        "resolution": resolution,
+        "mode": "Open",
+        "spec_id": "0x" + "ab" * 32,
+        "ising_params": {"nodes": [0, 1, 2], "edges": [[0, 1], [1, 2]]},
+    }
 
 
 def _answer(solver_id: str, energy: int, submitted_at: int, vectors=((1, -1),)) -> tuple:
@@ -709,3 +718,194 @@ class TestListOrders:
     def test_exactly_32_does_not_warn(self, monkeypatch, recwarn) -> None:
         assert len(self._solver(monkeypatch, list(range(32))).list_orders()) == 32
         assert not [w for w in recwarn if "orders on this account" in str(w.message)]
+
+
+PROPOSER = "0x" + "11" * 32
+SOLVER = "0x" + "cd" * 32
+FEE = 2_182_560_255
+SUBMITTED_MS = 1_700_000_000_000  # 2023-11-14 22:13:20 UTC.
+SUBMITTED_TEXT = "2023-11-14 22:13:20 UTC"
+LEADING = {"solver": SOLVER, "energy_milli": -1500}
+
+
+def _display_for(monkeypatch, *, head: int = 200, fee: int | None = FEE, ms: int | None = SUBMITTED_MS, **kw):
+    """A receipt for order 1 with the fee event and block time its display reads.
+
+    ``created_at`` stays 0 because ``FakeSubstrate.get_block_hash`` serves only block 0.
+    """
+    order = kw.pop("order", None) or _receipt_order(proposer=PROPOSER)
+    receipt = _receipt_for(monkeypatch, order=order, head=head, **kw)
+    iface = receipt._client._iface
+    iface.events = [_proposed(1, 1), *([_fee(1, fee)] if fee is not None else [])]
+    if ms is not None:
+        iface.storage[("Timestamp", "Now")] = ms
+    return receipt
+
+
+def _rows(text: str) -> list[str]:
+    return [line[2:-2].rstrip() for line in text.splitlines() if line.startswith("│")]
+
+
+class TestJobOrderReceiptDisplay:
+    def test_awaiting_claim_box(self, monkeypatch) -> None:
+        pytest.importorskip("scalecodec.utils.ss58")  # the addresses below are SS58 of 0x11.. and 0xcd...
+        receipt = _display_for(monkeypatch, answers=[_answer(SOLVER, -1500, 9)], front=LEADING)
+        text = str(receipt)
+        assert text == "\n".join(
+            [
+                "╭─ Job order 1 receipt ────────────────────────────────────────────────╮",
+                "│ Network     custom endpoint                                          │",
+                "│ Proposer    5CT5jwBEAhveEjgiSCQbkaKcKcUyF3VJ8qNXM9rXsuQyn3Kd         │",
+                "│ Submitted   block 0, 2023-11-14 22:13:20 UTC                         │",
+                "├──────────────────────────────────────────────────────────────────────┤",
+                "│ Problem     3 spins, 2 couplings                                     │",
+                "│ Spec        0xababababababababababababababababababababababababababab │",
+                "│             ababababab                                               │",
+                "├──────────────────────────────────────────────────────────────────────┤",
+                "│ Payout      single best                                              │",
+                "│ Access      open                                                     │",
+                "│ Floors      none                                                     │",
+                "│ Deadline    100 blocks                                               │",
+                "│ Block wait  10 blocks                                                │",
+                "│ Reward      5.000000000000 AGLS                                      │",
+                "├──────────────────────────────────────────────────────────────────────┤",
+                "│ Status      final                                                    │",
+                "│ Answers     1                                                        │",
+                "│ Leader      5GiYowJ1A5h6K97yVfx5Nxw6Gmdb1vYLc1LjnYwWsv3KiM4a         │",
+                "│ Energy      -1.5                                                     │",
+                "╞══════════════════════════════════════════════════════════════════════╡",
+                "│ Fee         0.002182560255 AGLS                                      │",
+                "│ Winner      5.000000000000 AGLS, awaiting claim                      │",
+                "╰──────────────────────────────────────────────────────────────────────╯",
+            ]
+        )
+        assert {len(line) for line in text.splitlines()} == {72}
+
+    @pytest.mark.parametrize(
+        ("order_kw", "head", "front", "status", "money"),
+        [
+            pytest.param({"solution_count": 0}, 50, None, "open", "Reward      reserved, no answers yet", id="open"),
+            pytest.param(
+                {"solution_count": 0},
+                200,
+                None,
+                "final",
+                "Reward      unanswered: reclaim with get_receipt(1).reclaim()",
+                id="unanswered",
+            ),
+            pytest.param(
+                {},
+                200,
+                LEADING,
+                "final",
+                "Winner      5.000000000000 AGLS, awaiting claim",
+                id="awaiting-claim",
+            ),
+            pytest.param(
+                {"status": "Closed"}, 200, LEADING, "closed", "Winner      5.000000000000 AGLS, claimed", id="settled"
+            ),
+            pytest.param(
+                {"status": "Closed", "solution_count": 0}, 200, None, "closed", "Reward      reclaimed", id="reclaimed"
+            ),
+        ],
+    )
+    def test_status_and_money_rows(self, monkeypatch, order_kw, head, front, status, money) -> None:
+        order = _receipt_order(proposer=PROPOSER, **order_kw)
+        receipt = _display_for(monkeypatch, order=order, head=head, front=front)
+        rows = _rows(str(receipt))
+        assert f"Status      {status}" in rows
+        assert money in rows
+
+    def test_top_n_with_answers_shows_the_unsupported_settlement(self, monkeypatch) -> None:
+        order = _receipt_order(proposer=PROPOSER, resolution=TOP_N)
+        text = str(_display_for(monkeypatch, order=order))
+        assert "QUI-1606" in text
+        assert "│ Reward      " in text.split("╞")[1]
+        assert {len(line) for line in text.splitlines()} == {72}
+
+    def test_missing_fee_reads_unknown_and_warns(self, monkeypatch, caplog) -> None:
+        receipt = _display_for(monkeypatch, fee=None)
+        with caplog.at_level(logging.WARNING, logger="xqsa.quip"):
+            text = str(receipt)
+        assert "│ Fee         unknown " in text
+        assert any("the fee of order 1" in record.getMessage() for record in caplog.records)
+
+    def test_missing_timestamp_reads_unknown(self, monkeypatch, caplog) -> None:
+        receipt = _display_for(monkeypatch, ms=None)
+        with caplog.at_level(logging.WARNING, logger="xqsa.quip"):
+            text = str(receipt)
+        assert "│ Submitted   block 0, time unknown " in text
+        assert any("the submission time of order 1" in record.getMessage() for record in caplog.records)
+        assert f"{FEE / 10**12:.12f} AGLS" in text  # the fee still reads.
+
+    def test_time_renders_in_utc(self, monkeypatch) -> None:
+        assert f"│ Submitted   block 0, {SUBMITTED_TEXT} " in str(_display_for(monkeypatch))
+
+    def test_facts_are_read_once(self, monkeypatch) -> None:
+        receipt = _display_for(monkeypatch)
+        reads: list[int] = []
+        real = chain.proposal_fee
+
+        def counting(*args, **kwargs):
+            reads.append(1)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(chain, "proposal_fee", counting)
+        assert str(receipt) == str(receipt)
+        assert len(reads) == 1
+
+    @pytest.mark.parametrize("warm", [False, True], ids=["cold", "cached-facts"])
+    def test_chain_fault_renders_a_one_row_box(self, monkeypatch, warm) -> None:
+        receipt = _display_for(monkeypatch)
+        if warm:
+            str(receipt)
+
+        def _boom(order_id: int):
+            raise QuipConnectionError("node gone")
+
+        monkeypatch.setattr(receipt._client, "_fetch_order", _boom)
+        text = str(receipt)
+        assert text == "\n".join(
+            [
+                "╭─ Job order 1 receipt ────────────────────────────────────────────────╮",
+                "│ Chain       could not be read: node gone                             │",
+                "╰──────────────────────────────────────────────────────────────────────╯",
+            ]
+        )
+
+    def test_genesis_hash_never_shown(self, monkeypatch) -> None:
+        assert GENESIS_HASH not in str(_display_for(monkeypatch))
+        solver, _ = _ready(monkeypatch)
+        assert GENESIS_HASH not in str(solver.create_order(_model()).submit())
+
+    def test_energy_is_milli_scaled(self, monkeypatch) -> None:
+        assert "│ Energy      -1.5 " in str(_display_for(monkeypatch, front=LEADING))
+
+    def test_large_energy_keeps_every_milli(self, monkeypatch) -> None:
+        leader = {**LEADING, "energy_milli": -1234567890}
+        assert "│ Energy      -1234567.89 " in str(_display_for(monkeypatch, front=leader))
+
+    def test_no_leader_reads_none(self, monkeypatch) -> None:
+        text = str(_display_for(monkeypatch, order=_receipt_order(proposer=PROPOSER, solution_count=0)))
+        assert "│ Leader      none " in text
+        assert "│ Energy      none " in text
+
+
+class TestDisplayHelpers:
+    @pytest.mark.parametrize(
+        ("value", "text"),
+        [("SingleBest", "single best"), ("Open", "open"), ({"TopNEqual": {"n": 3}}, "{'TopNEqual': {'n': 3}}")],
+    )
+    def test_variant_text(self, value, text) -> None:
+        assert variant_text(value) == text
+
+    def test_terms_rows(self) -> None:
+        rows = terms_rows(resolution="SingleBest", mode="Open", deadline_blocks=100, block_wait=10, reward="1 AGLS")
+        assert rows == [
+            ("Payout", "single best"),
+            ("Access", "open"),
+            ("Floors", "none"),
+            ("Deadline", "100 blocks"),
+            ("Block wait", "10 blocks"),
+            ("Reward", "1 AGLS"),
+        ]
