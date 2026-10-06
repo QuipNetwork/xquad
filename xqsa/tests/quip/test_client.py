@@ -2018,24 +2018,24 @@ class TestSolverQuipSubmission:
         solver = _make_solver(monkeypatch)
         solver._iface.events = [_job_proposed_event(42)]
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
-        assert solver._propose_job(b"\x00\x01", "0xext", UNIT) == (42, "0xblock")
+        sent = solver._propose_job(b"\x00\x01", "0xext", UNIT)
+        assert (sent.order_id, sent.block_hash, sent.error) == (42, "0xblock", None)
 
-    def test_propose_job_submit_failure_raises(self, monkeypatch) -> None:
-        from xqsa.quip import QuipSubmissionError
-
+    def test_propose_job_dispatch_failure_is_reported_not_raised(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error="System.ExtrinsicFailed: {...}"))
-        with pytest.raises(QuipSubmissionError, match="failed on-chain"):
-            solver._propose_job(b"\x00\x01", "0xext", UNIT)
+        sent = solver._propose_job(b"\x00\x01", "0xext", UNIT)
+        assert (sent.order_id, sent.error) == (None, "System.ExtrinsicFailed: {...}")
 
-    def test_propose_job_missing_event_raises(self, monkeypatch) -> None:
-        from xqsa.quip import QuipSubmissionError
+    def test_propose_job_missing_event_is_unconfirmed(self, monkeypatch) -> None:
+        from xqsa.quip import QuipUnconfirmedError
 
         solver = _make_solver(monkeypatch)
         solver._iface.events = []  # included, but no JobProposed event.
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
-        with pytest.raises(QuipSubmissionError, match="no JobProposed"):
+        with pytest.raises(QuipUnconfirmedError, match="no JobProposed") as info:
             solver._propose_job(b"\x00\x01", "0xext", UNIT)
+        assert (info.value.extrinsic_hash, info.value.block_hash) == ("0xext", "0xblock")
 
     @pytest.mark.parametrize("attrs_form", ["mapping", "params"])
     def test_order_id_extraction_tolerates_attribute_shapes(self, monkeypatch, attrs_form) -> None:

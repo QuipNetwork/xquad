@@ -42,6 +42,7 @@ from .quip import (
     QuipSubmissionError,
     QuipTimeoutError,
     QuipTopologyError,
+    QuipUnconfirmedError,
     SolverQuip,
     fund_from_faucet,
 )
@@ -66,6 +67,7 @@ __all__ = [
     "QuipOrderOptionError",
     "QuipTimeoutError",
     "QuipTopologyError",
+    "QuipUnconfirmedError",
     "QuipJobFailedError",
     "QuipSigningError",
     "QuipFaucetError",

@@ -511,7 +511,7 @@ class TestJobOrder:
         assert {len(line) for line in str(quote).splitlines()} == {72}
 
         order.submit()
-        assert order.status()["state"] in ("submitted", "final")
+        assert order.status()["state"] in ("submitted", "finalized")
         order_id = order.order_id()
         assert isinstance(order_id, int)
         assert order._included_block is not None

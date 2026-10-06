@@ -66,10 +66,11 @@ from xqsa.quip.errors import (  # noqa: F401 -- the Quip* errors stay importable
     QuipSubmissionError,
     QuipTimeoutError,
     QuipTopologyError,
+    QuipUnconfirmedError,
 )
 from xqsa.quip.faucet import DEFAULT_DRIP_PLANCK, fund_from_faucet
 from xqsa.quip.networks import NETWORKS
-from xqsa.quip.order import JobOrder, _OrderOptions, _SignedCall, check_client_defaults, merge_options
+from xqsa.quip.order import JobOrder, _OrderOptions, _Sent, _SignedCall, check_client_defaults, merge_options
 from xqsa.quip.quote import JobQuote, _format_planck
 from xqsa.solver import Solver, SolverResult
 
@@ -594,8 +595,8 @@ class SolverQuip(Solver):
         wire, ext_hash = self._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, call_params, nonce=nonce)
         return _SignedCall(wire=wire, ext_hash=ext_hash, nonce=nonce)
 
-    def _propose(self, signed: _SignedCall, call_params: dict, reward: int) -> tuple[int, int | None]:
-        """Send ``signed`` if its nonce is still current, else re-sign once: ``(order_id, included_block)``.
+    def _propose(self, signed: _SignedCall, call_params: dict, reward: int) -> _Sent:
+        """Send ``signed`` if its nonce is still current, else re-sign once, and report the outcome.
 
         The nonce is read just before sending. If it moved since ``signed``
         was signed, another transaction from this account used it, so the
@@ -606,8 +607,10 @@ class SolverQuip(Solver):
         that surfaces as a :class:`QuipSubmissionError` from the send.
 
         Raises:
-            QuipSubmissionError: if the nonce moves twice, signing fails, the
-                extrinsic fails on chain, or no ``JobProposed`` event is found.
+            QuipSubmissionError: if the nonce moves twice, signing fails, or the
+                extrinsic certainly did not land. Nothing was placed.
+            QuipUnconfirmedError: if it was sent but its outcome or order id is
+                unknown (see :meth:`_propose_job`).
             QuipConnectionError: if the nonce cannot be read.
         """
         current = self._account_nonce()
@@ -619,30 +622,44 @@ class SolverQuip(Solver):
                     "account nonce moved twice while submitting; another client is sending from this account. "
                     "Nothing was sent."
                 )
-        order_id, block_hash = self._propose_job(signed.wire, signed.ext_hash, reward)
-        return order_id, self._included_block(block_hash)
+        return self._propose_job(signed.wire, signed.ext_hash, reward)
 
-    def _propose_job(self, wire: bytes, ext_hash: str, reward: int) -> tuple[int, str | None]:
-        """Submit a built ``propose_job`` extrinsic: ``(order_id, inclusion block hash)``.
+    def _propose_job(self, wire: bytes, ext_hash: str, reward: int) -> _Sent:
+        """Send a built ``propose_job`` extrinsic and report what it placed.
 
-        Reads the ``JobProposed`` event from the inclusion block for the
-        ``order_id`` (the call has no return value -- the id is only emitted
-        as an event).
+        Returns a :class:`_Sent` with the order id when the dispatch succeeded,
+        or with the chain's error when it failed (the fee was paid and no
+        order exists). The id is read from the ``JobProposed`` event in the
+        inclusion block (the call has no return value).
 
         Raises:
-            QuipSubmissionError: if the extrinsic fails on-chain or no
-                ``JobProposed`` event is found in the inclusion block.
+            QuipSubmissionError: if the extrinsic certainly did not land.
+            QuipUnconfirmedError: if it was sent but may or may not have landed,
+                its dispatch result could not be read, or its order id could
+                not be read from a successful dispatch.
         """
-        receipt = self._submit_built(MEMPOOL_PALLET, PROPOSE_JOB_CALL, wire, ext_hash)
-        order_id = self._read_proposed_order_id(receipt.block_hash)
+        receipt = chain.send_extrinsic(
+            self._iface, self._quip_signing, MEMPOOL_PALLET, PROPOSE_JOB_CALL, wire, ext_hash
+        )
+        block_hash = receipt.block_hash
+        if receipt.is_unverified:
+            raise chain.unconfirmed_error(ext_hash, block_hash, receipt.error)
+        included_block = self._included_block(block_hash)
+        if receipt.error is not None:
+            logger.warning("propose_job %s failed on chain in block %s: %s", ext_hash, block_hash, receipt.error)
+            return _Sent(ext_hash=ext_hash, block_hash=block_hash, included_block=included_block, error=receipt.error)
+        try:
+            order_id = self._read_proposed_order_id(block_hash)
+        except Exception as exc:  # noqa: BLE001 -- the order is on chain; never let it read as unsent.
+            raise chain.unconfirmed_error(ext_hash, block_hash, f"the order id could not be read: {exc}") from exc
         logger.info(
             "proposed Quip job: order_id=%d spec_id=%s reward=%d planck (block %s)",
             order_id,
             self._spec_id,
             reward,
-            receipt.block_hash,
+            block_hash,
         )
-        return order_id, receipt.block_hash
+        return _Sent(ext_hash=ext_hash, block_hash=block_hash, included_block=included_block, order_id=order_id)
 
     def _included_block(self, block_hash: str | None) -> int | None:
         """Return the height of the inclusion block, or ``None`` if it cannot be read.
@@ -1145,6 +1162,9 @@ class SolverQuip(Solver):
             QuipFaucetError: if the faucet refuses or cannot be reached.
             QuipTimeoutError: if the order does not finalize within ``timeout``
                 (the order id is recoverable via :meth:`query`).
+            QuipUnconfirmedError: if the job was sent but its outcome or order
+                id is unknown. It may be on chain, so do not solve the same
+                model again on that account without checking.
             QuipJobFailedError: if the order finalizes with no usable solution.
         """
         order = self._create_order(model, kwargs, strict=False).submit()

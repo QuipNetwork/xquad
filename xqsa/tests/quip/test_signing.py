@@ -49,6 +49,7 @@ from xqsa.quip.signing import (
     MULTI_ADDRESS_ID,
     ExtrinsicReceipt,
     QuipSigningError,
+    SendOutcomeUnknown,
     build_signed_extrinsic,
     encode_compact_u32,
     encode_compact_u128,
@@ -643,6 +644,32 @@ class TestSubmitAndWatch:
         with pytest.raises(QuipSigningError, match="transaction pool"):
             submit_and_watch(iface, b"\x01\x02", "0x" + "cd" * 32, wait_for="inblock")
         assert iface.unwatched  # the subscription was closed, not left hanging
+
+    @pytest.mark.parametrize(
+        ("message", "uncertain"),
+        [
+            ("invalid", False),
+            ("dropped", False),
+            ({"usurped": "0x" + "ab" * 32}, False),
+            ({"retracted": "0x" + "ab" * 32}, True),
+            ({"finalityTimeout": "0x" + "ab" * 32}, True),
+        ],
+    )
+    def test_pool_statuses_after_which_it_may_land_are_uncertain(self, message, uncertain) -> None:
+        # retracted and finalityTimeout can still see the extrinsic included;
+        # the rest take it out of the pool for good.
+        iface = FakeIface()
+        iface.watch_message = {"params": {"result": message}}
+        with pytest.raises(QuipSigningError) as info:
+            submit_and_watch(iface, b"\x01\x02", "0x" + "cd" * 32, wait_for="inblock")
+        assert isinstance(info.value, SendOutcomeUnknown) is uncertain
+
+    def test_unverified_receipt_is_flagged(self) -> None:
+        unverified = ExtrinsicReceipt(
+            extrinsic_hash="0x", block_hash="0xb", is_finalized=False, error="unclassified: get_block failed"
+        )
+        failed = ExtrinsicReceipt(extrinsic_hash="0x", block_hash="0xb", is_finalized=False, error="Module error")
+        assert unverified.is_unverified and not failed.is_unverified
 
     def test_inblock_success_string_phase_matches_by_extrinsic_idx(self) -> None:
         # Regression (QUI-569): newer substrate-interface decodes event `phase`

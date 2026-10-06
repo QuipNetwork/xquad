@@ -47,7 +47,7 @@ The order options among them (``reward``, ``deadline_blocks``,
 draft :class:`JobOrder` that inherits them and may override them; the draft is
 edited with :meth:`JobOrder.set`, priced with :meth:`JobOrder.quote` and
 proposed with :meth:`JobOrder.submit`, after which it is read-only and
-:meth:`JobOrder.status` follows it to final::
+:meth:`JobOrder.status` follows it to ``finalized``::
 
     order = solver.create_order(model, deadline_blocks=200)
     print(order.quote())
@@ -129,6 +129,7 @@ from .errors import (
     QuipSubmissionError,
     QuipTimeoutError,
     QuipTopologyError,
+    QuipUnconfirmedError,
 )
 from .faucet import fund_from_faucet
 from .networks import NETWORKS
@@ -147,6 +148,7 @@ __all__ = [
     "QuipOrderOptionError",
     "QuipTimeoutError",
     "QuipTopologyError",
+    "QuipUnconfirmedError",
     "QuipJobFailedError",
     "QuipSigningError",
     "QuipFaucetError",

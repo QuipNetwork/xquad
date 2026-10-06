@@ -258,6 +258,11 @@ class ExtrinsicReceipt:
         """True iff the extrinsic reached a block with no dispatch error."""
         return self.block_hash is not None and self.error is None
 
+    @property
+    def is_unverified(self) -> bool:
+        """True when inclusion was reported but its dispatch result could not be read."""
+        return self.error is not None and self.error.startswith(UNCLASSIFIED_PREFIX)
+
 
 def build_signed_extrinsic(
     iface: Any,
@@ -388,10 +393,12 @@ def submit_and_watch(
             if terminal:
                 iface.rpc_request("author_unwatchExtrinsic", [subscription_id])
                 status = sorted(terminal)[0]
-                raise QuipSigningError(f"transaction pool rejected the extrinsic: {status} ({lowered[status]})")
+                error = SendOutcomeUnknown if status in _UNCERTAIN_POOL_FAILURES else QuipSigningError
+                raise error(f"transaction pool rejected the extrinsic: {status} ({lowered[status]})")
         elif isinstance(result, str) and result.lower() in _TERMINAL_POOL_FAILURES:
             iface.rpc_request("author_unwatchExtrinsic", [subscription_id])
-            raise QuipSigningError(f"transaction pool rejected the extrinsic: {result}")
+            error = SendOutcomeUnknown if result.lower() in _UNCERTAIN_POOL_FAILURES else QuipSigningError
+            raise error(f"transaction pool rejected the extrinsic: {result}")
         return None  # non-terminal status -- keep waiting.
 
     response = iface.rpc_request("author_submitAndWatchExtrinsic", [ext_hex], result_handler=_result_handler)
@@ -505,6 +512,24 @@ _WAIT_STAGES = frozenset({"sent", "inblock", "finalized"})
 # ``finalitytimeout`` arrive as single-key dicts (``{"usurped": "0x..."}``), so
 # ``_result_handler`` matches this set against both the string and the dict keys.
 _TERMINAL_POOL_FAILURES = frozenset({"dropped", "invalid", "usurped", "retracted", "finalitytimeout"})
+# The terminal statuses after which the extrinsic may still land: ``retracted``
+# means its block left the best chain, and the pool may include it again;
+# ``finalitytimeout`` means it was in a block that did not finalize in time.
+# The rest mean it is out of the pool for good.
+_UNCERTAIN_POOL_FAILURES = frozenset({"retracted", "finalitytimeout"})
+
+# Prefix of a receipt error that means inclusion could not be verified, as
+# opposed to a dispatch error the chain reported.
+UNCLASSIFIED_PREFIX = "unclassified: "
+
+
+class SendOutcomeUnknown(QuipSigningError):
+    """Raised when the pool reports a status after which the extrinsic may still land.
+
+    A :class:`QuipSigningError`, so callers that treat every pool failure
+    alike keep working; the order path tells it apart, because resending
+    after it can place a second order.
+    """
 
 
 def _extension_fields(
@@ -598,9 +623,9 @@ def _fetch_dispatch_error(iface: Any, *, block_hash: str, ext_hash: str) -> str 
     try:
         block = iface.get_block(block_hash=block_hash, include_author=False, ignore_decoding_errors=True)
     except Exception as exc:  # noqa: BLE001 -- surface as a non-success receipt, never crash the caller.
-        return f"unclassified: get_block failed for {block_hash}: {exc}"
+        return f"{UNCLASSIFIED_PREFIX}get_block failed for {block_hash}: {exc}"
     if not block:
-        return f"unclassified: get_block returned no block for {block_hash}"
+        return f"{UNCLASSIFIED_PREFIX}get_block returned no block for {block_hash}"
 
     target = _strip_0x(ext_hash).lower()
     ext_idx: int | None = None
@@ -612,7 +637,7 @@ def _fetch_dispatch_error(iface: Any, *, block_hash: str, ext_hash: str) -> str 
             ext_idx = idx
             break
     if ext_idx is None:
-        return f"unclassified: extrinsic {target[:16]} not found in block {_strip_0x(block_hash)[:16]}"
+        return f"{UNCLASSIFIED_PREFIX}extrinsic {target[:16]} not found in block {_strip_0x(block_hash)[:16]}"
 
     for event in iface.get_events(block_hash=block_hash) or []:
         value = event.value if hasattr(event, "value") else event

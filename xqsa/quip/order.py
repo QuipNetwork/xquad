@@ -37,7 +37,7 @@ from dataclasses import dataclass, field, fields, replace
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 from xqsa.quip.display import box
-from xqsa.quip.errors import QuipOrderOptionError, QuipSubmissionError
+from xqsa.quip.errors import QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
 
 if TYPE_CHECKING:
@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from xqsa.quip.quote import JobQuote
     from xqvm_py.xqmx import XQMX
 
-OrderState = Literal["draft", "submitted", "final"]
+OrderState = Literal["draft", "submitted", "unconfirmed", "failed", "finalized"]
 
 # The options an order accepts; ``mode``, ``resolution`` and ``delivery`` are
 # client defaults only.
@@ -201,14 +201,36 @@ class _SignedCall:
     nonce: int
 
 
+@dataclass(frozen=True)
+class _Sent:
+    """What a ``propose_job`` that reached a block placed.
+
+    ``order_id`` is set when the dispatch succeeded; ``error`` holds the
+    chain's dispatch error when it failed, in which case the fee was paid and
+    no order exists.
+    """
+
+    ext_hash: str
+    block_hash: str | None
+    included_block: int | None
+    order_id: int | None = None
+    error: str | None = None
+
+
 class JobOrder:
-    """One Quip order: its model, placement and options, from draft to final.
+    """One Quip order: its model, placement and options, from draft to finalized.
 
     Built by :meth:`~xqsa.quip.SolverQuip.create_order`, never directly. A
     draft is edited with :meth:`set`, priced with :meth:`quote` and proposed
-    with :meth:`submit`. After submission :meth:`set`, :meth:`quote` and
-    :meth:`submit` raise; :meth:`status` works in every state. Options are read
+    with :meth:`submit`. Every other state refuses :meth:`set`, :meth:`quote`
+    and :meth:`submit`; :meth:`status` works in every state. Options are read
     through read-only properties and :meth:`options`.
+
+    States: ``draft``; ``submitted`` once placed with a known order id, then
+    ``finalized`` once the chain closes it; ``failed`` when it was included but
+    its dispatch failed, so the fee was paid and no order exists; and
+    ``unconfirmed`` when it was sent but its outcome or order id is unknown.
+    An ``unconfirmed`` order may be on chain, so it is never sent again.
 
     The order caches its signed extrinsic, never a quote. :meth:`quote` signs
     once and re-prices the same bytes on every call, reading the fee, balance
@@ -242,6 +264,10 @@ class JobOrder:
         self._last_quote: JobQuote | None = None
         self._order_id: int | None = None
         self._included_block: int | None = None
+        # The sent extrinsic's hash and inclusion block, and the chain's error when its dispatch failed.
+        self._ext_hash: str | None = None
+        self._block_hash: str | None = None
+        self._error: str | None = None
         self._submitted_at: float | None = None
 
     # -- options ---------------------------------------------------------
@@ -329,10 +355,19 @@ class JobOrder:
         not moved since, and re-signs otherwise. The cached extrinsic is
         dropped whatever the outcome, so a retry signs anew.
 
+        A failure before the extrinsic certainly reaches the chain leaves the
+        order a draft. Once it reaches a block the order is ``submitted``, or
+        ``failed`` if its dispatch failed. If it was sent but its outcome or
+        order id is unknown, the order is ``unconfirmed``.
+
         Raises:
             QuipSubmissionError: if the order is no longer a draft, the account
                 cannot cover the quote, the nonce moves twice while submitting,
-                or proposing fails.
+                or the extrinsic certainly did not land (the order stays a
+                draft); or if its dispatch failed on chain (the order is
+                ``failed`` and the fee was paid).
+            QuipUnconfirmedError: if it was sent but its outcome or order id is
+                unknown; the order is ``unconfirmed`` and must not be resubmitted.
             QuipCancelledError: if a consent gate declines.
             QuipFaucetError: if the faucet refuses or cannot be reached.
         """
@@ -343,7 +378,22 @@ class JobOrder:
         # reward was reserved; the gates judge the account as it is now.
         self._client._clear_gates(self._fresh_quote(signed))
         self._submitted_at = time.perf_counter()
-        self._order_id, self._included_block = self._client._propose(signed, call_params, self.reward)
+        try:
+            sent = self._client._propose(signed, call_params, self.reward)
+        except QuipUnconfirmedError as exc:
+            self._state = "unconfirmed"
+            self._ext_hash, self._block_hash = exc.extrinsic_hash, exc.block_hash
+            self._included_block = self._client._included_block(exc.block_hash)
+            raise
+        self._ext_hash, self._block_hash, self._included_block = sent.ext_hash, sent.block_hash, sent.included_block
+        if sent.error is not None:
+            self._state = "failed"
+            self._error = sent.error
+            raise QuipSubmissionError(
+                f"propose_job {sent.ext_hash} failed on chain in block {sent.block_hash}: {sent.error}. "
+                "The fee was paid and no order was placed."
+            )
+        self._order_id = sent.order_id
         self._state = "submitted"
         return self
 
@@ -352,19 +402,44 @@ class JobOrder:
         return self._order_id
 
     def status(self) -> dict[str, Any]:
-        """Return the order's state and, once submitted, its on-chain lifecycle.
+        """Return the order's state and what is known of it.
 
-        A draft reports ``{"state": "draft", "options": ...}``. A submitted
-        order adds ``"state"`` to :meth:`SolverQuip.status
-        <xqsa.quip.SolverQuip.status>`, and moves to ``"final"`` once the
-        chain says it is.
+        - ``draft``: ``state`` and ``options``.
+        - ``unconfirmed``: ``state``, ``extrinsic_hash``, ``block_hash`` and
+          ``included_block`` (``None`` when unknown).
+        - ``failed``: the same, plus the chain's dispatch ``error``.
+        - ``submitted`` and ``finalized``: ``state``, ``order_id``,
+          ``chain_status`` (the chain's ``OrderStatus``), the order's block
+          heights under the pallet's names (``created_at``,
+          ``first_solution_at``, ``effective_expiry``), ``current_block`` and
+          ``solution_count``. Reading it moves a submitted order to
+          ``finalized`` once the chain says it is final.
         """
-        if self._order_id is None:
+        if self._state == "draft":
             return {"state": self._state, "options": self.options()}
-        snapshot = self._client.status(self._order_id)
-        if snapshot["is_final"]:
-            self._state = "final"
-        return {"state": self._state, **snapshot}
+        if self._order_id is None:
+            sent = {
+                "state": self._state,
+                "extrinsic_hash": self._ext_hash,
+                "block_hash": self._block_hash,
+                "included_block": self._included_block,
+            }
+            return sent if self._state == "unconfirmed" else {**sent, "error": self._error}
+        order = self._client._fetch_order(self._order_id)
+        current_block = self._client._current_block()
+        lifecycle = self._client._order_lifecycle(order, current_block)
+        if lifecycle["is_final"]:
+            self._state = "finalized"
+        return {
+            "state": self._state,
+            "order_id": self._order_id,
+            "chain_status": lifecycle["status"],
+            "created_at": lifecycle["created_at"],
+            "first_solution_at": lifecycle["first_solution_at"],
+            "effective_expiry": lifecycle["effective_expiry"],
+            "current_block": current_block,
+            "solution_count": int(order.get("solution_count", 0) or 0),
+        }
 
     def _call_params(self) -> dict:
         """Build the ``propose_job`` call params for the current configuration."""
@@ -430,12 +505,15 @@ class JobOrder:
             quoted = ", ".join(
                 [f"{total} total", afford] + ([f"block {quote.quoted_at_block}"] if quote.quoted_at_block else [])
             )
-        if self._order_id is None:
+        block = f"block {self._included_block}" if self._included_block is not None else None
+        if self._state == "draft":
             receipt = "not submitted"
-        elif self._included_block is None:
-            receipt = f"order {self._order_id}"
+        elif self._state == "unconfirmed":
+            receipt = f"unconfirmed, extrinsic\n{self._ext_hash}" + (f"\nseen in {block}" if block else "")
+        elif self._state == "failed":
+            receipt = f"failed in {block or 'an unknown block'}: {self._error}"
         else:
-            receipt = f"order {self._order_id}, included in block {self._included_block}"
+            receipt = f"order {self._order_id}" + (f", included in {block}" if block else "")
         network = [("Network", self._client._network or "custom endpoint")]
         summary = [("Quote", quoted), ("Receipt", receipt)]
         return box(f"Job order ({self._state})", [network, problem, terms, summary])

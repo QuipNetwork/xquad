@@ -32,7 +32,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from xqsa.quip.codec import _as_hex, _as_int_or_none, _canonical_hex, _event_ids, effective_expiry, is_final
-from xqsa.quip.errors import QuipConnectionError, QuipMetadataError, QuipSubmissionError
+from xqsa.quip.errors import (
+    QuipConnectionError,
+    QuipError,
+    QuipMetadataError,
+    QuipSubmissionError,
+    QuipUnconfirmedError,
+)
 
 # The same logger as the client, so the fee-fallback warning keeps its record name.
 logger = logging.getLogger("xqsa.quip")
@@ -403,6 +409,54 @@ def submit_built(
             f"{receipt.error or 'unknown dispatch error'}"
         )
     return receipt
+
+
+def send_extrinsic(
+    iface: Any, quip_signing: Any, call_module: str, call_function: str, wire: bytes, ext_hash: str
+) -> Any:
+    """Send built extrinsic bytes and wait for a block, classifying what is known of the outcome.
+
+    Unlike :func:`submit_built`, a receipt with a dispatch error is returned,
+    not raised, so the caller can record the order as failed.
+
+    Raises:
+        QuipSubmissionError: if the extrinsic certainly did not land: the node
+            rejected it outright, or the pool dropped, invalidated or usurped it.
+        QuipUnconfirmedError: if it may have landed: the connection failed while
+            watching, the pool reported ``retracted`` or ``finalityTimeout``, or
+            no inclusion block was reported.
+    """
+    try:
+        receipt = quip_signing.submit_and_watch(iface, wire, ext_hash)
+    except quip_signing.SendOutcomeUnknown as exc:
+        raise _unconfirmed(call_module, call_function, ext_hash, None, str(exc)) from exc
+    except quip_signing.QuipSigningError as exc:
+        raise QuipSubmissionError(f"{call_module}.{call_function} could not be submitted: {exc}") from exc
+    except QuipError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- a transport fault mid-watch leaves the outcome unknown.
+        raise _unconfirmed(call_module, call_function, ext_hash, None, f"the connection failed: {exc}") from exc
+    if not receipt.block_hash:
+        raise _unconfirmed(call_module, call_function, ext_hash, None, "no inclusion block was reported")
+    return receipt
+
+
+def _unconfirmed(
+    call_module: str, call_function: str, ext_hash: str, block_hash: str | None, why: str
+) -> QuipUnconfirmedError:
+    """Build the error for a sent extrinsic whose outcome is unknown."""
+    where = f" in block {block_hash}" if block_hash else ""
+    return QuipUnconfirmedError(
+        ext_hash,
+        block_hash,
+        f"{call_module}.{call_function} {ext_hash} was sent{where} but its outcome is unknown ({why}). "
+        "Do not resubmit: it may already be on chain.",
+    )
+
+
+def unconfirmed_error(ext_hash: str, block_hash: str | None, why: str) -> QuipUnconfirmedError:
+    """Build the :class:`QuipUnconfirmedError` for a sent ``propose_job`` whose outcome is unknown."""
+    return _unconfirmed(MEMPOOL_PALLET, PROPOSE_JOB_CALL, ext_hash, block_hash, why)
 
 
 def read_proposed_order_id(iface: Any, block_hash: str | None) -> int:
