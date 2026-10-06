@@ -812,20 +812,24 @@ _PLAIN_RELEASE_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 def reopening_version(branch: str, version: str) -> str | None:
     """The `-dev` version `branch` reopens at from release `version`, or None if no one number is right.
 
-    On `main` a release version is what the release merge leaves behind,
-    and the reopening bump is the next patch: arithmetic on the version
-    read, with no release history needed. On `dev` there is no single
-    answer -- whether the next minor counts from the version read or from
-    the line `dev` was already on depends on how the release version got
-    there -- so the caller states the rule instead. A prerelease or post
-    release on `main` is not what a release merge leaves either, and gets
-    the rule too.
+    Both answers are arithmetic on the version read, with no release
+    history needed. On `main` a release version is what the release merge
+    leaves behind, and the reopening bump is the next patch. On `dev` it
+    is the next minor either way a release version can get there: a patch
+    tag carried in by a back-merge that skipped the version carry (`dev`
+    goes back to its own line, one minor past the patch), or a minor
+    shipped from `dev` and never bumped. A prerelease or post release is
+    not what either leaves, so the caller states the rule instead.
     """
     match = _PLAIN_RELEASE_RE.match(version)
-    if branch != "main" or match is None:
+    if match is None:
         return None
     major, minor, patch = (int(part) for part in match.groups())
-    return f"{major}.{minor}.{patch + 1}-dev"
+    if branch == "main":
+        return f"{major}.{minor}.{patch + 1}-dev"
+    if branch == "dev":
+        return f"{major}.{minor + 1}.0-dev"
+    return None
 
 
 def check_branch(root: Path, branch: str) -> int:

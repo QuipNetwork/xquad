@@ -377,30 +377,37 @@ def test_working_branch_at_a_dev_version_passes(tree: Path, branch: str) -> None
     assert f"{branch} is a working branch" in result.stdout
 
 
-@pytest.mark.parametrize(("release", "reopen"), [("0.4.2", "0.4.3-dev"), ("1.2.9", "1.2.10-dev")])
-def test_main_at_a_release_names_the_reopening_bump(tmp_path: Path, release: str, reopen: str) -> None:
-    """The reopening version is the next patch of the version read, never a fixed example."""
-    result = run_guard(write_tree(tmp_path, cargo=release, pep=release), branch="main")
+@pytest.mark.parametrize(
+    ("branch", "release", "reopen"),
+    [
+        ("main", "0.4.2", "0.4.3-dev"),
+        ("main", "1.2.9", "1.2.10-dev"),
+        ("dev", "0.4.2", "0.5.0-dev"),
+        ("dev", "0.9.3", "0.10.0-dev"),
+    ],
+)
+def test_branch_at_a_release_names_the_reopening_bump(tmp_path: Path, branch: str, release: str, reopen: str) -> None:
+    """The reopening version is computed from the version read, never a fixed example."""
+    result = run_guard(write_tree(tmp_path, cargo=release, pep=release), branch=branch)
     assert result.returncode == 1
-    assert f"main carries {release}, which is a release version." in result.stderr
+    assert f"{branch} carries {release}, which is a release version." in result.stderr
     assert f"make set-version VERSION={reopen}\n" in result.stderr
 
 
-def test_dev_at_a_release_states_the_rule_without_a_number(tmp_path: Path) -> None:
-    """dev has no single reopening version, so the only version on screen is the one read."""
-    result = run_guard(write_tree(tmp_path, cargo="0.4.2", pep="0.4.2"), branch="dev")
+@pytest.mark.parametrize("branch", ["main", "dev"])
+@pytest.mark.parametrize(
+    ("cargo", "pep", "release"),
+    [(CARGO_RC, PEP_RC, "0.4.0"), ("0.4.2-1", "0.4.2.post1", "0.4.2")],
+    ids=["prerelease", "post-release"],
+)
+def test_branch_off_a_plain_release_states_the_rule_without_a_number(
+    tmp_path: Path, branch: str, cargo: str, pep: str, release: str
+) -> None:
+    """A prerelease or post release is not what a release leaves on either branch, so no version is computed."""
+    result = run_guard(write_tree(tmp_path, cargo=cargo, pep=pep), branch=branch)
     assert result.returncode == 1
-    assert "x.(y+1).0-dev" in result.stderr
     assert "make set-version VERSION=<next>-dev" in result.stderr
-    assert set(re.findall(r"\d+\.\d+\.\d+", result.stderr)) == {"0.4.2"}
-
-
-def test_main_at_a_prerelease_states_the_rule_without_a_number(bumped: Path) -> None:
-    """A prerelease is not what a release merge leaves on main, so no patch is computed from it."""
-    result = run_guard(bumped, branch="main")
-    assert result.returncode == 1
-    assert "make set-version VERSION=<next>-dev" in result.stderr
-    assert set(re.findall(r"\d+\.\d+\.\d+", result.stderr)) == {"0.4.0"}
+    assert set(re.findall(r"\d+\.\d+\.\d+", result.stderr)) == {release}
 
 
 # --- The table sweeps ------------------------------------------------------
