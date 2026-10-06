@@ -114,7 +114,7 @@ single-language MR can run just its half:
 ```sh
 make preflight          # everything below, in one shot
 make preflight-rs       # fmt, clippy, rustdoc, deny (root + pallet fixture), unit/integration/doc tests + vectors, coverage report, wasm, pallet fixture
-make preflight-py       # taplo, ruff format + lint, pytest, example smoke, uv.lock freshness
+make preflight-py       # taplo, ruff format + lint, pytest, example smoke, uv.lock freshness, xqffi stubs
 make preflight-docs     # generated-doc freshness, docs drift, README length, prose (needs vale)
 make preflight-policy   # changelog render, release-notes scoping, atomic spec-MR and commit-message guards
 ```

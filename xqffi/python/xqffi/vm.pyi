@@ -232,7 +232,12 @@ def triu(i: int, j: int) -> int:
     """
 
 class XqvmError(RuntimeError):
-    """Base class of every fault the XQVM raises."""
+    """Base class of every fault the XQVM raises.
+
+    `offset` is the byte offset of the faulting instruction in the
+    instruction stream, or `None` where the fault has no single
+    instruction.
+    """
 
     offset: int | None
     """Byte offset of the faulting instruction in the instruction stream, or

@@ -33,7 +33,7 @@ make install-hooks    # point git at .githooks/ pre-commit hook
 # Preflight (run locally exactly what CI enforces; N/A a language you didn't touch)
 make preflight         # preflight-rs + preflight-py + preflight-docs + preflight-policy
 make preflight-rs      # fmt, clippy, rustdoc, deny (root + pallet fixture), unit/integration/doc tests + vectors, coverage report, wasm, pallet fixture
-make preflight-py      # taplo, ruff format + lint, pytest, example smoke, uv.lock freshness
+make preflight-py      # taplo, ruff format + lint, pytest, example smoke, uv.lock freshness, xqffi stubs
 make preflight-docs    # generated-doc freshness + docs drift + README length + prose (needs vale)
 make preflight-release # crate packaging dry-run + four Python dists (needs maturin/twine/uv; not in `preflight`)
 
@@ -65,6 +65,7 @@ make test-py          # pytest xqcp/tests xqsa/tests xquad/tests scripts/tests
 make check-uv-lock     # uv lock --check -- fails if uv.lock is stale against pyproject.toml
 make check-xqffi-fresh # uv sync --extra dwave + import xquad -- asserts the xqffi cdylib is
                        # fresh; mutates .venv/, re-run `make deps-py` afterwards
+make check-stubs      # mypy stubtest + fault docstrings -- the xqffi .pyi stubs match the built module
 make repl             # Python REPL with xqffi + workspace packages
 
 # Conformance and examples
@@ -369,7 +370,7 @@ happened to share a stage barrier and nothing else:
 
 | Phase | Question it answers | What it covers |
 | --- | --- | --- |
-| `verify` | Does the workspace match what it's required to match? | clippy, rustdoc, cargo-deny (root workspace and pallet fixture), ruff, `uv.lock` freshness, the fresh-xqffi-cdylib check, atomic spec-MR guard, commit-message guard, merge-request-title guard, branch containment guard, changelog render |
+| `verify` | Does the workspace match what it's required to match? | clippy, rustdoc, cargo-deny (root workspace and pallet fixture), ruff, `uv.lock` freshness, the fresh-xqffi-cdylib check, the xqffi type-stub check, atomic spec-MR guard, commit-message guard, merge-request-title guard, branch containment guard, changelog render |
 | `test` | Does the workspace do what it should when executed? | unit, integration, doc tests, the specification vectors and their coverage report (Rust); pytest and example smoke tests (Python); Quip signing-layer tests; WASM no_std tests; Substrate pallet fixture |
 | `hardware` | Does it work on real hardware? | CUDA, D-Wave QPU, and Metal solver tests on real hardware (protected refs only) |
 | `docs` | Is the documentation correct and buildable? | generated-docs freshness, docs drift guard, package README length guard, mdbook build, GitLab Pages publish (release tags only) |
