@@ -40,6 +40,7 @@ than a process launch each.
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -76,14 +77,17 @@ def _load_guard():
 guard = _load_guard()
 
 
-def run_guard(root: Path, *args: str, tag: str | None = None) -> subprocess.CompletedProcess[str]:
+def run_guard(
+    root: Path, *args: str, tag: str | None = None, branch: str | None = None
+) -> subprocess.CompletedProcess[str]:
     """Invoke the guard against `root` with a cleared CI environment.
 
-    CI_COMMIT_TAG is blanked rather than inherited: this suite's own job
-    runs inside a pipeline that may set it, and a test that does not name a
-    tag is asserting about its absence.
+    CI_COMMIT_TAG and CI_COMMIT_BRANCH are blanked rather than inherited:
+    this suite's own job runs inside a pipeline that may set them, and a
+    test that does not name a tag or a branch is asserting about its
+    absence.
     """
-    env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "CI_COMMIT_TAG": tag or ""}
+    env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "CI_COMMIT_TAG": tag or "", "CI_COMMIT_BRANCH": branch or ""}
     return subprocess.run(
         [sys.executable, str(SCRIPT), "--root", str(root), *args],
         capture_output=True,
@@ -361,6 +365,49 @@ def test_tag_with_no_single_version_is_a_setup_error(bumped: Path, tag: str, blo
     result = run_guard(bumped, tag=tag)
     assert result.returncode == 2
     assert blocker in result.stderr
+
+
+# --- The working-branch assertion -----------------------------------------
+
+
+@pytest.mark.parametrize("branch", ["main", "dev"])
+def test_working_branch_at_a_dev_version_passes(tree: Path, branch: str) -> None:
+    result = run_guard(tree, branch=branch)
+    assert result.returncode == 0, result.stderr
+    assert f"{branch} is a working branch" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("branch", "release", "reopen"),
+    [
+        ("main", "0.4.2", "0.4.3-dev"),
+        ("main", "1.2.9", "1.2.10-dev"),
+        ("dev", "0.4.2", "0.5.0-dev"),
+        ("dev", "0.9.3", "0.10.0-dev"),
+    ],
+)
+def test_branch_at_a_release_names_the_reopening_bump(tmp_path: Path, branch: str, release: str, reopen: str) -> None:
+    """The reopening version is computed from the version read, never a fixed example."""
+    result = run_guard(write_tree(tmp_path, cargo=release, pep=release), branch=branch)
+    assert result.returncode == 1
+    assert f"{branch} carries {release}, which is a release version." in result.stderr
+    assert f"make set-version VERSION={reopen}\n" in result.stderr
+
+
+@pytest.mark.parametrize("branch", ["main", "dev"])
+@pytest.mark.parametrize(
+    ("cargo", "pep", "release"),
+    [(CARGO_RC, PEP_RC, "0.4.0"), ("0.4.2-1", "0.4.2.post1", "0.4.2")],
+    ids=["prerelease", "post-release"],
+)
+def test_branch_off_a_plain_release_states_the_rule_without_a_number(
+    tmp_path: Path, branch: str, cargo: str, pep: str, release: str
+) -> None:
+    """A prerelease or post release is not what a release leaves on either branch, so no version is computed."""
+    result = run_guard(write_tree(tmp_path, cargo=cargo, pep=pep), branch=branch)
+    assert result.returncode == 1
+    assert "make set-version VERSION=<next>-dev" in result.stderr
+    assert set(re.findall(r"\d+\.\d+\.\d+", result.stderr)) == {release}
 
 
 # --- The table sweeps ------------------------------------------------------

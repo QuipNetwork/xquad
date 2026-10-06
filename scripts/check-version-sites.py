@@ -806,6 +806,32 @@ def do_set(root: Path, version: str) -> int:
     return 0
 
 
+_PLAIN_RELEASE_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+
+
+def reopening_version(branch: str, version: str) -> str | None:
+    """The `-dev` version `branch` reopens at from release `version`, or None if no one number is right.
+
+    Both answers are arithmetic on the version read, with no release
+    history needed. On `main` a release version is what the release merge
+    leaves behind, and the reopening bump is the next patch. On `dev` it
+    is the next minor either way a release version can get there: a patch
+    tag carried in by a back-merge that skipped the version carry (`dev`
+    goes back to its own line, one minor past the patch), or a minor
+    shipped from `dev` and never bumped. A prerelease or post release is
+    not what either leaves, so the caller states the rule instead.
+    """
+    match = _PLAIN_RELEASE_RE.match(version)
+    if match is None:
+        return None
+    major, minor, patch = (int(part) for part in match.groups())
+    if branch == "main":
+        return f"{major}.{minor}.{patch + 1}-dev"
+    if branch == "dev":
+        return f"{major}.{minor + 1}.0-dev"
+    return None
+
+
 def check_branch(root: Path, branch: str) -> int:
     """Assert a long-lived branch's tree carries a development version.
 
@@ -822,6 +848,8 @@ def check_branch(root: Path, branch: str) -> int:
     this guard knowing the release history. The drift it exists to
     catch is a bump that never happened at all, and the suffix is
     enough to see that.
+
+    Only the error text goes further: see `reopening_version`.
     """
     version = tree_version(root)
     if version is None:
@@ -835,19 +863,20 @@ def check_branch(root: Path, branch: str) -> int:
         print(f"version sites OK ({len(SITES)} sites at {version}, {branch} is a working branch)")
         return 0
 
+    reopen = reopening_version(branch, version)
     emit(
         f"{branch} carries {version}, which is a release version.",
         "",
         "main and dev are working branches before 1.0 and carry a -dev",
-        "suffix: main the next patch (0.4.1-dev), dev the next minor",
-        "(0.5.0-dev). A release version on one of them means a tag was cut",
+        "suffix: main the next patch, x.y.(z+1)-dev, and dev the next minor,",
+        "x.(y+1).0-dev. A release version on one of them means a tag was cut",
         "and the reopening bump was skipped, so every artefact built from",
         "this branch is named as the published release while the branch",
         "moves on underneath the name. Nothing else notices -- the tag",
         "comparison only runs on a tag, and there is no tag here.",
         "",
         "To fix:",
-        "  make set-version VERSION=<next>-dev",
+        f"  make set-version VERSION={reopen or '<next>-dev'}",
         "  cargo check && uv lock",
         "  cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml",
     )
