@@ -325,16 +325,51 @@ def wrap_bounded(value: Any) -> Any:
     return (value,)
 
 
+def account_nonce(iface: Any, account_id: Any) -> int:
+    """Return the account's next nonce, counting its transactions pending in the node's pool.
+
+    ``get_account_nonce`` is ``system_accountNextIndex``, which includes the
+    pool, so a transaction this account already sent but that is not yet in a
+    block moves it.
+
+    Raises:
+        QuipConnectionError: if the nonce cannot be read.
+    """
+    address = "0x" + bytes(account_id).hex()
+    try:
+        return int(iface.get_account_nonce(account_address=address))
+    except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
+        raise QuipConnectionError(f"could not read the account nonce of {address}: {exc}") from exc
+
+
+def block_number(iface: Any, block_hash: str) -> int:
+    """Return the height of the block ``block_hash``.
+
+    Reads the header shallowly, as :func:`current_block` does.
+    """
+    header = iface.get_block_header(block_hash=block_hash, ignore_decoding_errors=True)
+    return _coerce_block_number(header["header"]["number"])
+
+
 def build_extrinsic(
-    iface: Any, quip_signing: Any, signer: Any, call_module: str, call_function: str, call_params: dict
+    iface: Any,
+    quip_signing: Any,
+    signer: Any,
+    call_module: str,
+    call_function: str,
+    call_params: dict,
+    nonce: int | None = None,
 ) -> tuple[bytes, str]:
     """Sign an extrinsic via :func:`xqsa.quip.signing.build_signed_extrinsic`: ``(wire, hash)``.
+
+    ``nonce`` signs with that account nonce; ``None`` lets the signing layer
+    read the current one.
 
     Raises:
         QuipSubmissionError: if assembly or signing fails.
     """
     try:
-        return quip_signing.build_signed_extrinsic(iface, signer, call_module, call_function, call_params)
+        return quip_signing.build_signed_extrinsic(iface, signer, call_module, call_function, call_params, nonce=nonce)
     except quip_signing.QuipSigningError as exc:
         raise QuipSubmissionError(f"{call_module}.{call_function} could not be submitted: {exc}") from exc
 

@@ -265,8 +265,11 @@ def build_signed_extrinsic(
     call_module: str,
     call_function: str,
     call_params: dict,
+    nonce: int | None = None,
 ) -> tuple[bytes, str]:
     """Assemble a hybrid-signed v4 extrinsic, returning ``(wire_bytes, ext_hash)``.
+
+    ``nonce`` signs with that account nonce; ``None`` reads the current one.
 
     ``iface`` is a connected ``substrate-interface`` ``SubstrateInterface`` used
     only for ``compose_call`` and read-only chain state (nonce, genesis hash,
@@ -301,7 +304,8 @@ def build_signed_extrinsic(
         raise QuipSigningError(f"signer account id is {len(account)} bytes; expected {ACCOUNT_ID_LEN}")
     if len(signer.public_key) != HYBRID_PUBLIC_LEN:
         raise QuipSigningError(f"signer public key is {len(signer.public_key)} bytes; expected {HYBRID_PUBLIC_LEN}")
-    nonce = int(iface.get_account_nonce(account_address="0x" + account.hex()))
+    if nonce is None:
+        nonce = int(iface.get_account_nonce(account_address="0x" + account.hex()))
     genesis_bytes = bytes.fromhex(_strip_0x(iface.get_block_hash(block_id=0)))
     runtime_version = iface.rpc_request("state_getRuntimeVersion", [])["result"]
     spec_version = int(runtime_version["specVersion"])

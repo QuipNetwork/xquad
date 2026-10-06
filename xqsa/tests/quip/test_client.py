@@ -990,6 +990,7 @@ class FakeSubstrate:
         self.rpc_calls: list[tuple[str, list | None]] = []
         self.genesis_hash: object = GENESIS_HASH
         self.ss58_format = 42
+        self.nonce = 0
 
     def rpc_request(self, method: str, params: list | None = None):
         self.rpc_calls.append((method, params))
@@ -1021,6 +1022,9 @@ class FakeSubstrate:
 
     def get_block_header(self, block_hash: str | None = None, ignore_decoding_errors: bool = False):
         return {"header": {"number": self.head}}
+
+    def get_account_nonce(self, account_address: str) -> int:
+        return self.nonce
 
     def get_block_hash(self, block_id: int | None = None) -> str | None:
         assert block_id == 0, "only the genesis hash is read"
@@ -1894,15 +1898,18 @@ def _patch_signing(monkeypatch, solver, *, receipt=None, build_raises: Exception
     so submission tests never touch real crypto or a chain. ``receipt`` may be a
     receipt or a callable ``(call_function) -> receipt`` to vary the outcome per
     call (e.g. a successful propose followed by a failing reclaim). ``captured["builds"]``
-    counts calls into ``build_signed_extrinsic``, so a test can assert an
-    extrinsic was assembled exactly once.
+    counts calls into ``build_signed_extrinsic``; ``captured["nonces"]`` and
+    ``captured["params"]`` record each build's explicit nonce (``None`` when the
+    signing layer reads it) and call params.
     """
     captured: dict = {"builds": 0}
     qs = solver._quip_signing
 
-    def fake_build(iface, signer, call_module, call_function, call_params):
+    def fake_build(iface, signer, call_module, call_function, call_params, nonce=None):
         captured.update(iface=iface, call_module=call_module, call_function=call_function, call_params=call_params)
         captured["builds"] += 1
+        captured.setdefault("nonces", []).append(nonce)
+        captured.setdefault("params", []).append(call_params)
         if build_raises is not None:
             raise build_raises
         return b"\x00\x01", "0xext"
@@ -1927,9 +1934,8 @@ def _ok_receipt(solver, *, error: str | None = None):
 class TestSolverQuipSubmission:
     """_propose_call_params / _build_extrinsic / _submit_built / _propose_job / _wrap_bounded.
 
-    ``_propose_job`` now takes a prebuilt ``(wire, ext_hash)`` pair rather than
-    building the extrinsic itself: ``solve()`` builds once, via ``_prepare``,
-    then displays the quote before deciding whether to submit that same wire.
+    ``_propose_job`` takes a prebuilt ``(wire, ext_hash)`` pair; ``_propose``
+    signs it with the current nonce after the gates have passed.
     """
 
     @staticmethod
@@ -1947,7 +1953,7 @@ class TestSolverQuipSubmission:
     def test_propose_call_params_composition(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)
         job = self._simple_job()
-        params = solver._propose_call_params(job)
+        params = solver._propose_call_params(job, solver._default_options())
 
         assert params["spec_id"] == solver._spec_id
         assert params["reward"] == solver._reward
@@ -1968,7 +1974,7 @@ class TestSolverQuipSubmission:
     def test_build_extrinsic_returns_wire_and_hash(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)
         captured = _patch_signing(monkeypatch, solver)
-        params = solver._propose_call_params(self._simple_job())
+        params = solver._propose_call_params(self._simple_job(), solver._default_options())
 
         wire, ext_hash = solver._build_extrinsic("QuantumComputeMempool", "propose_job", params)
 
@@ -2008,7 +2014,7 @@ class TestSolverQuipSubmission:
         solver = _make_solver(monkeypatch)
         solver._iface.events = [_job_proposed_event(42)]
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
-        assert solver._propose_job(b"\x00\x01", "0xext") == 42
+        assert solver._propose_job(b"\x00\x01", "0xext", UNIT) == (42, "0xblock")
 
     def test_propose_job_submit_failure_raises(self, monkeypatch) -> None:
         from xqsa.quip import QuipSubmissionError
@@ -2016,7 +2022,7 @@ class TestSolverQuipSubmission:
         solver = _make_solver(monkeypatch)
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error="System.ExtrinsicFailed: {...}"))
         with pytest.raises(QuipSubmissionError, match="failed on-chain"):
-            solver._propose_job(b"\x00\x01", "0xext")
+            solver._propose_job(b"\x00\x01", "0xext", UNIT)
 
     def test_propose_job_missing_event_raises(self, monkeypatch) -> None:
         from xqsa.quip import QuipSubmissionError
@@ -2025,7 +2031,7 @@ class TestSolverQuipSubmission:
         solver._iface.events = []  # included, but no JobProposed event.
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         with pytest.raises(QuipSubmissionError, match="no JobProposed"):
-            solver._propose_job(b"\x00\x01", "0xext")
+            solver._propose_job(b"\x00\x01", "0xext", UNIT)
 
     @pytest.mark.parametrize("attrs_form", ["mapping", "params"])
     def test_order_id_extraction_tolerates_attribute_shapes(self, monkeypatch, attrs_form) -> None:
@@ -2374,7 +2380,9 @@ class TestSolverQuipSolve:
         # gate, so "builds" is no longer the signal; submission is.
         assert "wait_for" not in captured  # never reached submission
 
-    def test_solve_builds_extrinsic_exactly_once(self, monkeypatch) -> None:
+    def test_solve_signs_the_quoted_params_afresh(self, monkeypatch) -> None:
+        # One build prices the call, one signs it to send; both carry the same
+        # params, and only the send pins the nonce it read.
         iface = _chain_iface(order=_order(), head=200)
         iface.maps[("QuantumPow", "MineableTopologies")] = [(TOPO_HASH, ())]
         solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
@@ -2384,8 +2392,11 @@ class TestSolverQuipSolve:
             (b"solver", _submission("0xSOLVER", [vector], ising_energy_milli(job, vector)))
         ]
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        solver._iface.nonce = 7
         solver.solve(_model())
-        assert captured["builds"] == 1
+        assert captured["builds"] == 2
+        assert captured["params"][0] is captured["params"][1]
+        assert captured["nonces"] == [None, 7]
 
     def test_solve_proceeds_when_topology_is_not_mineable(self, monkeypatch) -> None:
         # Inverted guard. solve() used to reject a registered hash absent from
@@ -2527,7 +2538,7 @@ class TestSolverQuipNativeTopology:
 
         monkeypatch.setattr(solver, "_fetch_topology", _fail)
         _patch_signing(monkeypatch, solver)
-        job = solver._prepare(_k5_model(), {})[0]
+        job = solver.create_order(_k5_model())._job
         assert job.nodes == (0, 1, 2, 3, 4)
         assert len(job.edges) == 10
 
@@ -2559,13 +2570,13 @@ class TestSolverQuipNativeTopology:
         assert calls == [TOPO_HASH]
         assert job.nodes  # a job was actually built against the fetched topology.
 
-    def test_query_native_rederives_the_same_job_prepare_built(self, monkeypatch) -> None:
+    def test_query_native_rederives_the_same_job_an_order_built(self, monkeypatch) -> None:
         iface = _chain_iface(order=_order(), head=200)
         solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
         model = _k5_model()
         _patch_signing(monkeypatch, solver)
 
-        prepared_job, _wire, _hash, _quote = solver._prepare(model, {"topology": "native"})
+        prepared_job = solver.create_order(model, topology="native")._job
 
         captured: dict = {}
 

@@ -15,7 +15,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""JobOrder option validation: the checks every order passes before signing."""
+"""JobOrder: option validation, the draft lifecycle, the nonce check and the displays."""
 
 from __future__ import annotations
 
@@ -24,11 +24,21 @@ from dataclasses import replace
 
 import pytest
 
-from xqsa.quip import QuipOrderOptionError, QuipSubmissionError
+from xqsa.quip import QuipCancelledError, QuipOrderOptionError, QuipSubmissionError
 from xqsa.quip.chain import ChainLimits
-from xqsa.quip.order import _OrderOptions, check_client_defaults, merge_options
+from xqsa.quip.order import JobOrder, _OrderOptions, check_client_defaults, merge_options
+from xqsa.solver import SolverResult
 
-from .test_client import UNIT, _make_solver
+from .test_client import (
+    GENESIS_HASH,
+    TOPO_HASH,
+    UNIT,
+    _make_solver,
+    _model,
+    _ok_receipt,
+    _patch_signing,
+    _solve_ready,
+)
 
 LIMITS = ChainLimits(min_reward=UNIT, max_deadline_blocks=1000, max_block_wait=100, max_solutions=20)
 NO_LIMITS = ChainLimits(min_reward=None, max_deadline_blocks=None, max_block_wait=None, max_solutions=None)
@@ -181,3 +191,345 @@ class TestClientDefaults:
 
         with pytest.raises(ValueError, match="QUI-1607"):
             _make_solver(monkeypatch, iface=_Unreachable(), mode="Whitelist")
+
+
+def _ready(monkeypatch, **solver_kwargs):
+    """A funded solver with signing patched: ``(solver, captured)``."""
+    solver = _solve_ready(monkeypatch, **solver_kwargs)
+    return solver, _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+
+
+def _nonces(monkeypatch, solver, values: list[int]) -> list[int]:
+    """Make the account nonce read ``values`` in turn; returns the list of reads made."""
+    reads: list[int] = []
+    pending = iter(values)
+
+    def read(account_address: str) -> int:
+        reads.append(value := next(pending))
+        return value
+
+    monkeypatch.setattr(solver._iface, "get_account_nonce", read)
+    return reads
+
+
+class TestJobOrderLifecycle:
+    def test_create_order_returns_a_draft(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        assert isinstance(order, JobOrder)
+        assert order.order_id() is None
+        assert order.status() == {"state": "draft", "options": order.options()}
+
+    def test_order_inherits_client_defaults(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch, reward=2 * UNIT, deadline_blocks=200, block_wait=20)
+        assert solver.create_order(_model()).options() == {
+            "reward": 2 * UNIT,
+            "deadline_blocks": 200,
+            "block_wait": 20,
+            "topology": TOPO_HASH,
+            "mapping": None,
+        }
+
+    def test_create_order_overrides_defaults(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model(), reward=3 * UNIT, mapping={0: 0, 1: 1})
+        assert (order.reward, order.deadline_blocks, order.block_wait) == (3 * UNIT, 100, 10)
+        assert order.mapping == {0: 0, 1: 1}
+
+    def test_genesis_hash_stamped(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        assert solver.create_order(_model())._genesis_hash == GENESIS_HASH
+
+    def test_submit_moves_to_submitted(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        assert order.submit() is order
+        assert order.order_id() == 1
+        assert order._included_block == solver._iface.head
+        assert captured["submitted_wire"] == b"\x00\x01"
+
+    @pytest.mark.parametrize("action", ["set", "quote", "submit"])
+    def test_everything_but_status_refused_after_submit(self, monkeypatch, action) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model()).submit()
+        call = {"set": lambda: order.set(reward=2 * UNIT), "quote": order.quote, "submit": order.submit}[action]
+        with pytest.raises(QuipSubmissionError, match=f"order 1 is submitted; {action}\\(\\) works only on a draft"):
+            call()
+
+    def test_status_after_submit_reaches_final(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model()).submit()
+        solver._iface.head = 10_000  # past the order's effective expiry.
+        status = order.status()
+        assert status["state"] == "final"
+        assert status["order_id"] == 1
+        assert status["is_final"] is True
+        with pytest.raises(QuipSubmissionError, match="is final"):
+            order.set(reward=2 * UNIT)
+
+    def test_status_while_open_stays_submitted(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model()).submit()
+        solver._iface.head = 1  # well before expiry.
+        assert order.status()["state"] == "submitted"
+
+    def test_declined_gate_leaves_a_draft_and_signs_nothing(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch, autoconfirm=lambda quote: False)
+        order = solver.create_order(_model())
+        with pytest.raises(QuipCancelledError):
+            order.submit()
+        assert order.status()["state"] == "draft"
+        assert captured["nonces"] == [None]  # the quote's copy only.
+        assert "wait_for" not in captured
+
+
+class TestJobOrderSet:
+    def test_set_applies_and_returns_the_order(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        assert order.set(deadline_blocks=300, block_wait=0) is order
+        assert (order.deadline_blocks, order.block_wait) == (300, 0)
+
+    def test_set_refusal_keeps_the_old_options(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        with pytest.raises(QuipOrderOptionError, match="deadline_blocks"):
+            order.set(deadline_blocks=5)
+        assert order.deadline_blocks == 100
+
+    def test_set_rechecks_against_existing_values(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model(), deadline_blocks=300, block_wait=100)
+        with pytest.warns(UserWarning, match="block_wait=100 is not below deadline_blocks=100") as record:
+            order.set(deadline_blocks=100)
+        assert record[0].filename == __file__  # the warning points at the caller.
+
+    def test_set_unknown_option_raises(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with pytest.raises(TypeError, match="unknown order option 'mode'"):
+            solver.create_order(_model()).set(mode="Open")
+
+    def test_set_topology_replaces_the_placement(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        order.set(topology="NATIVE")
+        assert order.topology == "native"
+        assert order._job.topology.num_nodes == 2
+
+    def test_set_only_replaces_when_placement_changes(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        job = order._job
+        order.set(reward=2 * UNIT, topology=TOPO_HASH.upper().replace("0X", "0x"))
+        assert order._job is job
+
+    def test_set_rejects_a_malformed_topology(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with pytest.raises(ValueError, match="topology"):
+            solver.create_order(_model()).set(topology="0x1234")
+
+    def test_native_with_mapping_refused(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with pytest.raises(ValueError, match="mapping"):
+            solver.create_order(_model(), topology="native", mapping={0: 0, 1: 1})
+
+
+class TestJobOrderQuoteAndSubmit:
+    def test_quote_cached_until_set(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        first = order.quote()
+        assert order.quote() is first
+        assert captured["builds"] == 1
+        order.set(reward=2 * UNIT)
+        second = order.quote()
+        assert second.reward_planck == 2 * UNIT
+        assert captured["builds"] == 2
+        assert captured["params"][1]["reward"] == 2 * UNIT
+
+    def test_quote_and_submit_sign_identical_params(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        solver._iface.nonce = 4
+        order = solver.create_order(_model(), reward=2 * UNIT)
+        order.quote()
+        order.submit()
+        assert captured["params"][0] is captured["params"][1]
+        assert captured["params"][1]["reward"] == 2 * UNIT
+        assert captured["nonces"] == [None, 4]
+
+    def test_submit_without_quote_builds_params_once(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        solver.create_order(_model()).submit()
+        assert captured["builds"] == 2  # price, then send
+        assert captured["params"][0] is captured["params"][1]
+
+    def test_two_drafts_each_sign_with_the_nonce_current_at_submit(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        iface = solver._iface
+        send = solver._quip_signing.submit_and_watch
+
+        def send_and_bump(*args, **kwargs):
+            iface.nonce += 1  # the node now counts this transaction.
+            return send(*args, **kwargs)
+
+        monkeypatch.setattr(solver._quip_signing, "submit_and_watch", send_and_bump)
+        first, second = solver.create_order(_model()), solver.create_order(_model(), reward=2 * UNIT)
+        first.quote()
+        second.quote()
+        first.submit()
+        second.submit()
+        assert captured["nonces"] == [None, None, 0, 1]
+
+
+class TestJobOrderNonceCheck:
+    def test_unchanged_nonce_sends_after_one_signature(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        order.quote()
+        reads = _nonces(monkeypatch, solver, [5, 5])
+        order.submit()
+        assert reads == [5, 5]
+        assert captured["nonces"] == [None, 5]
+        assert "wait_for" in captured
+
+    def test_nonce_moving_once_signs_again(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        order.quote()
+        _nonces(monkeypatch, solver, [5, 6, 6])
+        order.submit()
+        assert captured["nonces"] == [None, 5, 6]
+        assert order.order_id() == 1
+
+    def test_nonce_moving_twice_raises_without_sending(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        order.quote()
+        _nonces(monkeypatch, solver, [5, 6, 7])
+        with pytest.raises(QuipSubmissionError, match="nonce moved twice"):
+            order.submit()
+        assert captured["nonces"] == [None, 5, 6]
+        assert "wait_for" not in captured  # submit_and_watch never called
+        assert order.status()["state"] == "draft"
+
+    def test_nonce_read_fault_raises_connection_error(self, monkeypatch) -> None:
+        from xqsa.quip import QuipConnectionError
+
+        solver, _ = _ready(monkeypatch)
+
+        def boom(account_address):
+            raise RuntimeError("socket closed")
+
+        monkeypatch.setattr(solver._iface, "get_account_nonce", boom)
+        with pytest.raises(QuipConnectionError, match="account nonce.*socket closed"):
+            solver.create_order(_model()).submit()
+
+
+class TestSolverQuipCompatibility:
+    def test_limits_read_once_per_client(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        reads: list[str] = []
+        original = solver._iface.get_constant
+
+        def counting(module, name):
+            reads.append(name)
+            return original(module, name)
+
+        monkeypatch.setattr(solver._iface, "get_constant", counting)
+        solver.create_order(_model()).quote()
+        solver.create_order(_model(), deadline_blocks=200).quote()
+        assert reads == []
+
+    def test_create_order_is_strict(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with pytest.raises(TypeError, match="unknown order option 'colour'"):
+            solver.create_order(_model(), colour="red")
+
+    def test_create_order_refuses_a_raw_client_default(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch, mode={"Bid": 5})
+        with pytest.raises(TypeError, match="mode: raw chain values"):
+            solver.create_order(_model())
+
+    def test_quote_shortcut_warns_and_prices(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        with pytest.warns(DeprecationWarning, match="create_order") as record:
+            quote = solver.quote(_model(), reward=2 * UNIT)
+        assert record[0].filename == __file__
+        assert quote.reward_planck == 2 * UNIT
+        assert "wait_for" not in captured
+
+    def test_solve_applies_known_options_per_call(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        assert isinstance(solver.solve(_model(), reward=2 * UNIT, deadline_blocks=200), SolverResult)
+        assert (captured["call_params"]["reward"], captured["call_params"]["deadline_blocks"]) == (2 * UNIT, 200)
+        assert solver._reward == UNIT  # the client default is untouched.
+
+    def test_solve_warns_on_an_unknown_option_and_submits(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        with pytest.warns(DeprecationWarning, match="ignoring unknown SolverQuip option 'colour'") as record:
+            solver.solve(_model(), colour="red")
+        assert record[0].filename == __file__
+        assert "wait_for" in captured
+
+    def test_solve_warns_on_a_raw_client_default_and_submits(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch, resolution={"TopNEqual": 3})
+        with pytest.warns(DeprecationWarning, match="resolution: passing a raw chain value"):
+            solver.solve(_model())
+        assert captured["call_params"]["resolution"] == {"TopNEqual": 3}
+
+    def test_solve_refuses_an_out_of_limit_option_before_signing(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        with pytest.raises(QuipOrderOptionError, match="MinReward"):
+            solver.solve(_model(), reward=1)
+        assert captured["builds"] == 0
+
+
+class TestJobOrderDisplay:
+    def test_draft_box(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        text = str(solver.create_order(_model(), topology="native"))
+        assert text == "\n".join(
+            [
+                "╭─ Job order (draft) ──────────────────────────────────────────────────╮",
+                "│ Network     custom endpoint                                          │",
+                "├──────────────────────────────────────────────────────────────────────┤",
+                "│ Model       2 variables, 1 couplings, spin                           │",
+                "│ Placed      native, 2 spins                                          │",
+                "├──────────────────────────────────────────────────────────────────────┤",
+                "│ Payout      single best                                              │",
+                "│ Access      open                                                     │",
+                "│ Floors      none                                                     │",
+                "│ Deadline    100 blocks                                               │",
+                "│ Block wait  10 blocks                                                │",
+                "│ Reward      1.000000000000 AGLS                                      │",
+                "├──────────────────────────────────────────────────────────────────────┤",
+                "│ Quote       not quoted                                               │",
+                "│ Receipt     not submitted                                            │",
+                "╰──────────────────────────────────────────────────────────────────────╯",
+            ]
+        )
+
+    def test_quoted_and_submitted_rows(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        order.quote()
+        assert "│ Quote       1.002182560255 AGLS total, affordable, block 200 " in str(order)
+        order.submit()
+        text = str(order)
+        assert text.startswith("╭─ Job order (submitted) ")
+        assert "│ Receipt     order 1, included in block 200 " in text
+        assert {len(line) for line in text.splitlines()} == {72}
+
+    def test_topology_placement_wraps_the_hash(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        lines = str(solver.create_order(_model())).splitlines()
+        assert {len(line) for line in lines} == {72}
+        assert any(line.startswith("│ Placed      topology, ") for line in lines)
+
+    def test_quote_box_carries_a_full_ss58_address(self, monkeypatch) -> None:
+        ss58_encode = pytest.importorskip("scalecodec.utils.ss58").ss58_encode
+
+        solver, _ = _ready(monkeypatch)
+        text = str(solver.create_order(_model()).quote())
+        assert f"│ Account     {ss58_encode(bytes(solver._signer.account_id), 42)} " in text
+        assert {len(line) for line in text.splitlines()} == {72}

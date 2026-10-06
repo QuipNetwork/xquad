@@ -60,8 +60,6 @@ pytest.importorskip(
 )
 
 from xqsa.quip import (
-    MEMPOOL_PALLET,
-    PROPOSE_JOB_CALL,
     QuipJobFailedError,
     QuipSubmissionError,
     QuipTimeoutError,
@@ -210,10 +208,8 @@ def _miner_solves(tmp_path_factory) -> bool:
     # different hardware nodes and so prove nothing about them: placement is
     # per-model, and whether an order is answered depends on the nodes it lands
     # on. A gate must exercise what it gates, native mode included.
-    job = solver._job_for(_asymmetric_spin_model(), None, None)
     try:
-        wire, ext_hash = solver._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, solver._propose_call_params(job))
-        order_id = solver._propose_job(wire, ext_hash)
+        order_id = solver.create_order(_asymmetric_spin_model()).submit().order_id()
     except Exception:
         return False
 
