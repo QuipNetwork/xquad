@@ -27,7 +27,7 @@ import warnings
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 from xqsa.quip import chain
 from xqsa.quip import metadata as quip_metadata
@@ -93,6 +93,10 @@ DEFAULT_TIMEOUT = 600.0
 # faucet answers only once the drip is on chain, so this covers a lagging RPC
 # node, not block time.
 FUND_WAIT_SECONDS = 30.0
+
+# The most order ids list_orders() returns, newest first. Fixed on purpose;
+# see the warning it raises past it.
+LIST_ORDERS_LIMIT = 32
 
 # Keystore used when no seed or keystore is configured; created on first use.
 DEFAULT_KEYSTORE = "~/.quip/keystore.json"
@@ -1195,6 +1199,45 @@ class SolverQuip(Solver):
         """
         self._fetch_order(order_id)
         return JobOrderReceipt(self, order_id, self._genesis_hash)
+
+    def list_orders(self, state: Literal["submitted", "finalized"] | None = None, account: Any = None) -> list[int]:
+        """Return the ids of an account's orders, newest first.
+
+        Reads the chain's per-account order list, so it includes orders
+        placed from any session. ``state`` keeps only the orders still open
+        (``"submitted"``) or final (``"finalized"``), at one more read per
+        order. ``account`` lists another account's orders instead of this
+        client's signer, as SS58 text, ``0x`` hex or bytes.
+
+        At most :data:`LIST_ORDERS_LIMIT` (32) ids are returned; past that it
+        warns and returns the newest 32.
+
+        Raises:
+            ValueError: if ``state`` is not ``"submitted"`` or ``"finalized"``,
+                or ``account`` cannot be read as an account.
+            QuipConnectionError: if an order or the head block cannot be read.
+        """
+        if state not in (None, "submitted", "finalized"):
+            raise ValueError(f"state={state!r}; expected 'submitted', 'finalized' or None")
+        owner = self._signer.account_id if account is None else chain.account_bytes(account)
+        order_ids = chain.proposer_orders(self._iface, owner)[::-1]
+        if state is not None:
+            current_block = self._current_block()
+            order_ids = [
+                order_id
+                for order_id in order_ids
+                if self._order_lifecycle(self._fetch_order(order_id), current_block)["is_final"]
+                == (state == "finalized")
+            ]
+        if len(order_ids) > LIST_ORDERS_LIMIT:
+            warnings.warn(
+                f"showing {LIST_ORDERS_LIMIT} of {len(order_ids)} orders on this account. This "
+                f"{LIST_ORDERS_LIMIT}-order page limit was imposed for the old protocol cap of 32 orders per "
+                "account; please flag it to the xquad team so it can be lifted.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return order_ids[:LIST_ORDERS_LIMIT]
 
     def status(self, order_id: int) -> dict[str, Any]:
         """Return a lightweight lifecycle snapshot of an order (no solution decode).

@@ -662,3 +662,50 @@ class TestJobOrderPassThroughs:
         monkeypatch.setattr(order._receipt, "status", lambda: snapshot)
         assert order.status() is snapshot
         assert order._state == "finalized"
+
+
+class TestListOrders:
+    def _solver(self, monkeypatch, ids, *, final=frozenset(), head: int = 50):
+        """A solver whose account proposed ``ids``; the orders in ``final`` are past expiry."""
+        iface = _chain_iface(order=_receipt_order(), head=head)
+        iface.storage[(MEMPOOL, "ProposerOrders")] = ids
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        monkeypatch.setattr(
+            solver, "_fetch_order", lambda order_id: _receipt_order(status="Closed" if order_id in final else "Opened")
+        )
+        return solver
+
+    def test_newest_first(self, monkeypatch) -> None:
+        assert self._solver(monkeypatch, [3, 7, 9]).list_orders() == [9, 7, 3]
+
+    def test_no_orders(self, monkeypatch) -> None:
+        assert self._solver(monkeypatch, None).list_orders() == []
+
+    @pytest.mark.parametrize(("state", "expected"), [("submitted", [9, 3]), ("finalized", [7])])
+    def test_state_filter(self, monkeypatch, state, expected) -> None:
+        assert self._solver(monkeypatch, [3, 7, 9], final={7}).list_orders(state=state) == expected
+
+    def test_unknown_state_refused(self, monkeypatch) -> None:
+        with pytest.raises(ValueError, match="state='open'"):
+            self._solver(monkeypatch, [1]).list_orders(state="open")
+
+    def test_other_account(self, monkeypatch) -> None:
+        solver = self._solver(monkeypatch, [1])
+        keys: list = []
+        query = solver._iface.query
+        monkeypatch.setattr(
+            solver._iface, "query", lambda module, name, params=None, **kw: keys.append(params) or query(module, name)
+        )
+        solver.list_orders(account="0x" + "11" * 32)
+        assert keys == [[bytes.fromhex("11" * 32)]]
+
+    def test_caps_at_32_and_warns(self, monkeypatch) -> None:
+        solver = self._solver(monkeypatch, list(range(40)))
+        with pytest.warns(UserWarning, match="showing 32 of 40 orders on this account") as record:
+            ids = solver.list_orders()
+        assert ids == list(range(39, 7, -1))
+        assert "flag it to the xquad team" in str(record[0].message)
+
+    def test_exactly_32_does_not_warn(self, monkeypatch, recwarn) -> None:
+        assert len(self._solver(monkeypatch, list(range(32))).list_orders()) == 32
+        assert not [w for w in recwarn if "orders on this account" in str(w.message)]
