@@ -295,7 +295,7 @@ mod tests {
         assert_eq!(lines.len(), 1);
         let i = instr(&lines);
         assert_eq!(i.mnemonic, "NOP");
-        assert!(i.operands.is_empty());
+        assert_eq!(i.operands, []);
     }
 
     #[test]
@@ -435,7 +435,7 @@ mod tests {
         let lines = parse_test("Halt").unwrap();
         let i = instr(&lines);
         assert_eq!(i.mnemonic, "HALT");
-        assert!(i.operands.is_empty());
+        assert_eq!(i.operands, []);
     }
 
     #[test]

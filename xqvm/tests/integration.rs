@@ -343,7 +343,7 @@ fn push_pop() {
     let vm = run(|b| {
         b.emit_push(42).emit_pop().emit_halt();
     });
-    assert!(vm.stack().is_empty());
+    assert_eq!(vm.stack(), []);
 }
 
 #[test]
@@ -1726,7 +1726,7 @@ fn reset_clears_state() {
     vm.run(&bytecode).unwrap();
     assert_eq!(vm.stack(), &[99]);
     vm.reset();
-    assert!(vm.stack().is_empty());
+    assert_eq!(vm.stack(), []);
 }
 
 #[test]
@@ -2145,7 +2145,7 @@ fn sclr_clears_entire_stack() {
             .emit_sclr()
             .emit_halt();
     });
-    assert!(vm.stack().is_empty());
+    assert_eq!(vm.stack(), []);
 }
 
 #[test]
@@ -3523,7 +3523,7 @@ fn reset_clears_the_outputs_of_the_previous_run() {
 
     vm.reset();
     assert!(vm.outputs().is_empty(), "outputs must not survive a reset");
-    assert!(vm.stack().is_empty());
+    assert_eq!(vm.stack(), []);
     assert_eq!(vm.steps(), 0);
     assert_eq!(vm.memory_used(), 0);
 

@@ -49,13 +49,13 @@ fn asm(src: &str) -> Vec<Instruction> {
 #[test]
 fn empty_program_produces_empty_buffer() {
     let prog = assemble_source("").unwrap();
-    assert!(prog.code().is_empty());
+    assert_eq!(prog.code(), []);
 }
 
 #[test]
 fn comment_only_produces_empty_buffer() {
     let prog = assemble_source("; nothing here\n; more comments").unwrap();
-    assert!(prog.code().is_empty());
+    assert_eq!(prog.code(), []);
 }
 
 #[test]

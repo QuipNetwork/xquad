@@ -661,7 +661,7 @@ mod tests {
     #[test]
     fn empty_builder_produces_empty_code() {
         let program = InstructionBuilder::new().build().unwrap();
-        assert!(program.code().is_empty());
+        assert_eq!(program.code(), []);
     }
 
     #[test]

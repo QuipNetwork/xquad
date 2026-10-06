@@ -37,53 +37,53 @@ assert_cmd = "2.2"
 predicates = "3"
 
 [workspace.lints.rust]
-missing-docs          = "warn"
-nonstandard-style     = "deny"
-redundant-lifetimes   = "warn"
-rust-2018-idioms      = "deny"
-unreachable-pub       = "warn"
-unsafe-code           = "deny"
-unused-extern-crates  = "warn"
-unused-imports        = "warn"
-unused-must-use       = "deny"
-unused-results        = "warn"
-unused-qualifications = "warn"
+missing_docs          = "warn"
+nonstandard_style     = { level = "deny", priority = -1 }
+redundant_lifetimes   = "warn"
+rust_2018_idioms      = { level = "deny", priority = -1 }
+unreachable_pub       = "warn"
+unsafe_code           = "deny"
+unused_extern_crates  = "warn"
+unused_imports        = "warn"
+unused_must_use       = "deny"
+unused_results        = "warn"
+unused_qualifications = "warn"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 
 # Panic prevention
-unwrap-used        = "deny"
-expect-used        = "warn"
+unwrap_used        = "deny"
+expect_used        = "warn"
 panic              = "warn"
-panic-in-result-fn = "deny"
+panic_in_result_fn = "deny"
 unimplemented      = "deny"
 todo               = "deny"
-indexing-slicing   = "warn"
+indexing_slicing   = "warn"
 
 # No cheating
-allow-attributes                = "deny"
-allow-attributes-without-reason = "deny"
+allow_attributes                = "deny"
+allow_attributes_without_reason = "deny"
 
 # Code hygiene
-dbg-macro             = "warn"
-print-stdout          = "deny"
-print-stderr          = "deny"
-redundant-clone       = "warn"
-uninlined-format-args = "warn"
-manual-string-new     = "warn"
-use-self              = "deny"
+dbg_macro             = "warn"
+print_stdout          = "deny"
+print_stderr          = "deny"
+redundant_clone       = "warn"
+uninlined_format_args = "warn"
+manual_string_new     = "warn"
+use_self              = "deny"
 
 # Safety
-await-holding-lock = "deny"
-large-futures      = "deny"
+await_holding_lock = "deny"
+large_futures      = "deny"
 exit               = "deny"
-mem-forget         = "deny"
+mem_forget         = "deny"
 
 # Pedantic relaxations (too noisy)
-module-name-repetitions = "allow"
-similar-names           = "allow"
-must-use-candidate      = "allow"
+module_name_repetitions = "allow"
+similar_names           = "allow"
+must_use_candidate      = "allow"
 
 [workspace.lints.rustdoc]
 all = "warn"
