@@ -1123,8 +1123,10 @@ class SolverQuip(Solver):
 
         Selects the submission with the lowest chain ``best_energy_milli``,
         decodes every spin vector in it, and keeps the one with the best
-        locally-recomputed (authoritative) energy on the original model. With no
-        submissions, auto-reclaims the reserved reward and raises.
+        locally-recomputed (authoritative) energy on the original model. On a
+        rounded job (``quantization_error > 0``) the submission ranking uses the
+        chain's energies on the rounded model. With no submissions, auto-reclaims
+        the reserved reward and raises.
 
         Raises:
             QuipJobFailedError: if the order finalized with no usable solution

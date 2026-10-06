@@ -461,6 +461,24 @@ class TestModelToIsing:
         with pytest.raises(EncodingError, match="not a finite coefficient"):
             model_to_ising(model, PATH5)
 
+    def test_all_coefficients_rounding_to_zero_rejected(self) -> None:
+        """A model that rounds to an all-zero order is refused, not proposed."""
+        model = XQMX.spin_model(2)
+        model.set_linear(0, 0.0004)
+        model.set_quadratic(0, 1, 0.0003)
+        with pytest.raises(EncodingError, match="rounds to 0"):
+            model_to_ising(model, PATH5)
+
+    def test_partial_rounding_to_zero_still_encodes(self) -> None:
+        """A single term rounding to zero is a rounding error, not a refusal."""
+        model = XQMX.spin_model(2)
+        model.set_linear(0, 0.0004)
+        model.set_quadratic(0, 1, 1)
+        job = model_to_ising(model, PATH5, mapping={0: 0, 1: 1})
+        assert job.h_values == (0, 0)
+        assert job.j_values == (1000,)
+        assert job.quantization_error == pytest.approx(0.0004)
+
     def test_binary_path_is_milli_exact(self) -> None:
         """The BINARY->spin transform yields milli-exact i32 coefficients."""
         model = XQMX.binary_model(3)

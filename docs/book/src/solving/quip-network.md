@@ -200,7 +200,13 @@ value would overflow `i32` still raises `EncodingError`.
 
 Rounding changes only the model the miners search. `result.energy` is
 recomputed on your original model, so a returned sample is never scored
-against the rounded coefficients. A BINARY model with ordinary
+against the rounded coefficients. The winning submission is still
+chosen by the chain's energy on the rounded model; only the vectors
+inside it are re-scored on yours. `quantization_error` bounds each
+coefficient, not the energy: a sample's energy can move by up to
+`quantization_error` times the number of nonzero terms. A model whose
+coefficients all round to zero raises `EncodingError` rather than
+proposing an empty order. A BINARY model with ordinary
 three-decimal weights is the common case: the basis change below
 divides each quadratic weight by 4, so `1.5` on `x_0` and `0.001` on
 `x_0 x_1` give a spin field of `0.75025`, which encodes as `750`.
@@ -343,7 +349,7 @@ network-dependent lifecycle failures:
 | Exception | Raised when |
 |---|---|
 | `QuipError` | Base class for every error below |
-| `EncodingError` | The model is not `MODEL`-mode, its domain is unsupported, or both its `linear` and `quadratic` dicts are empty. Also covers a NaN coefficient, a coefficient whose rounded milli value overflows `i32` (see [Coefficient Encoding](#coefficient-encoding)), and a native order over the mempool's `MaxNodes` or `MaxEdges` |
+| `EncodingError` | The model is not `MODEL`-mode, its domain is unsupported, or both its `linear` and `quadratic` dicts are empty. Also covers a NaN coefficient, a model whose coefficients all round to zero at milli scale, a coefficient whose rounded milli value overflows `i32` (see [Coefficient Encoding](#coefficient-encoding)), and a native order over the mempool's `MaxNodes` or `MaxEdges` |
 | `PlacementError` | The model's coupling graph is not a subgraph of the target topology. Raised in default mode only; see [Native topology mode](#native-topology-mode) |
 | `QuipSigningError` | Extrinsic assembly, keystore handling, or submission fails |
 | `QuipConnectionError` | The node is unreachable, or a configured Ising spec is not registered on-chain |

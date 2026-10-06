@@ -698,8 +698,9 @@ def model_to_ising(
     spin per unused node, to express a model that touches a handful.
 
     Raises:
-        EncodingError: if the model has no terms, or a coefficient is not
-            finite or overflows ``i32`` at milli scale.
+        EncodingError: if the model has no terms, every coefficient rounds to
+            zero at milli scale, or a coefficient is not finite or overflows
+            ``i32`` at milli scale.
         PlacementError: if the model cannot be placed onto the topology.
     """
     if model.mode != XQMXMode.MODEL:
@@ -744,6 +745,12 @@ def model_to_ising(
         position = placed.edge_index(placement[u], placement[v])
         j_values[position], error = _to_milli(bias, f"j[({u}, {v})]")
         quantization_error = max(quantization_error, error)
+
+    if not any(h_values) and not any(j_values):
+        raise EncodingError(
+            f"every coefficient rounds to 0 at milli precision (1/{MILLI_SCALE}); nothing to solve. "
+            f"See {QUIP_COEFFICIENTS_DOC_URL}."
+        )
 
     return IsingJob(
         topology=placed,
