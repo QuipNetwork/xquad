@@ -2822,7 +2822,7 @@ class TestSolverQuipDisplay:
 
 
 def test_quip_metadata_logger_parents_under_xqsa_quip() -> None:
-    """xqsa.quip.metadata's logger renamed to xqsa.quip.metadata, nesting under xqsa.quip."""
+    """The metadata logger, once xqsa.quip_metadata, is xqsa.quip.metadata, nesting under xqsa.quip."""
     assert logging.getLogger("xqsa.quip.metadata").parent.name == "xqsa.quip"
 
 

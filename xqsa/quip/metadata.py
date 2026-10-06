@@ -51,7 +51,7 @@ Usage::
 The shim depends on the runtime continuing to answer
 ``Metadata_metadata_at_version(14)``. If a future runtime drops V14, every
 ``substrate-interface`` client in the stack breaks at once and a migration to an
-async client becomes forced; :class:`~xqsa.quip.codec.QuipMetadataError` is what
+async client becomes forced; :class:`~xqsa.quip.errors.QuipMetadataError` is what
 reports that day, naming the version the node actually serves.
 """
 
