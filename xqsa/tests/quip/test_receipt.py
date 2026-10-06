@@ -909,3 +909,16 @@ class TestDisplayHelpers:
             ("Block wait", "10 blocks"),
             ("Reward", "1 AGLS"),
         ]
+
+
+class TestDeprecations:
+    def test_order_status_does_not_warn(self, monkeypatch, recwarn) -> None:
+        solver, _ = _ready(monkeypatch)
+        solver.create_order(_model()).submit().status()
+        assert not [w for w in recwarn if issubclass(w.category, DeprecationWarning)]
+
+    def test_receipt_is_exported(self) -> None:
+        import xqsa
+        import xqsa.quip
+
+        assert xqsa.JobOrderReceipt is xqsa.quip.JobOrderReceipt is JobOrderReceipt

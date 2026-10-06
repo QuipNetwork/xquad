@@ -2172,6 +2172,7 @@ def _chain_iface(*, order: dict, head: int, submissions: list[tuple] | None = No
     return iface
 
 
+@pytest.mark.filterwarnings("ignore:SolverQuip.status:DeprecationWarning")
 class TestSolverQuipLifecycle:
     """_order_lifecycle and status() against the mocked chain."""
 
@@ -2424,8 +2425,22 @@ class TestSolverQuipSolve:
         assert solver.solve(_model()).metadata["order_id"] == 1
 
 
+@pytest.mark.filterwarnings("ignore:SolverQuip.query:DeprecationWarning")
 class TestSolverQuipQuery:
     """query() finality gating and result recovery."""
+
+    def test_query_warns_deprecated(self, monkeypatch) -> None:
+        iface = _chain_iface(order=_order(status="Opened"), head=50)
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        with pytest.warns(DeprecationWarning, match=r"query\(\) is deprecated; use SolverQuip.get_receipt"):
+            solver.query(1, _model())
+
+    def test_status_warns_deprecated_and_keeps_its_keys(self, monkeypatch) -> None:
+        iface = _chain_iface(order=_order(status="Opened"), head=50)
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        with pytest.warns(DeprecationWarning, match=r"get_receipt\(order_id\).status\(\)"):
+            snap = solver.status(1)
+        assert {"status", "is_final"} <= snap.keys()
 
     def test_query_returns_none_when_not_final(self, monkeypatch) -> None:
         iface = _chain_iface(order=_order(status="Opened"), head=50)  # 50 < expiry 100
@@ -2455,6 +2470,7 @@ class TestSolverQuipQuery:
         assert captured["call_function"] == "reclaim_order"
 
 
+@pytest.mark.filterwarnings("ignore:SolverQuip.query:DeprecationWarning")
 class TestSolverQuipNativeTopology:
     """topology="native" / QUIP_TOPOLOGY=native: submit over the model's own coupling graph."""
 

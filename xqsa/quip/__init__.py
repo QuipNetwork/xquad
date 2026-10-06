@@ -47,11 +47,15 @@ The order options among them (``reward``, ``deadline_blocks``,
 draft :class:`JobOrder` that inherits them and may override them; the draft is
 edited with :meth:`JobOrder.set`, priced with :meth:`JobOrder.quote` and
 proposed with :meth:`JobOrder.submit`, after which it is read-only and
-:meth:`JobOrder.status` follows it to ``finalized``::
+:meth:`JobOrder.status` follows it to ``finalized``. A submitted order has a
+:class:`JobOrderReceipt`, its handle on the chain, which any session rebuilds
+from the order id with :meth:`SolverQuip.get_receipt`; :meth:`SolverQuip.list_orders`
+lists an account's order ids::
 
     order = solver.create_order(model, deadline_blocks=200)
     print(order.quote())
-    order.submit()
+    order.submit().wait()
+    print(order.receipt())
 
 Every option is checked against the chain's limits, read once per client,
 before anything is signed: a reward below ``MinReward``, a deadline outside 10
@@ -135,10 +139,12 @@ from .faucet import fund_from_faucet
 from .networks import NETWORKS
 from .order import JobOrder
 from .quote import JobQuote
+from .receipt import JobOrderReceipt
 
 __all__ = [
     "SolverQuip",
     "JobOrder",
+    "JobOrderReceipt",
     "JobQuote",
     "QuipError",
     "QuipCancelledError",

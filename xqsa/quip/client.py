@@ -1164,7 +1164,11 @@ class SolverQuip(Solver):
         mapping: Mapping[int, int] | None = None,
         topology: str | None = None,
     ) -> SolverResult | None:
-        """Recover the result of an already-proposed order.
+        """Recover the result of an already-proposed order. Deprecated.
+
+        Use :meth:`get_receipt` to follow an order without its model; decoding
+        a receipt's answers onto a model is QUI-1609. This keeps working, with
+        a ``DeprecationWarning``, until QUI-1608 removes it.
 
         Returns ``None`` if the order is not yet final (poll again later). Once
         final, re-derives the deterministic placement from ``model`` and decodes
@@ -1180,13 +1184,18 @@ class SolverQuip(Solver):
         Raises:
             ValueError: if ``mapping`` is given with ``topology="native"``.
         """
+        warnings.warn(
+            "SolverQuip.query() is deprecated; use SolverQuip.get_receipt(order_id) to follow the order",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._validate_model(model)
         self._native_for(topology, mapping)  # reject native + mapping= before any chain read.
-        order = self._fetch_order(order_id)
-        if not self._order_lifecycle(order, self._current_block())["is_final"]:
+        receipt = self.get_receipt(order_id)
+        if receipt.status()["state"] != "finalized":
             return None
         job = self._job_for(model, topology, mapping)
-        return self._collect_result(JobOrderReceipt(self, order_id, self._genesis_hash), job, model, elapsed=0.0)
+        return self._collect_result(receipt, job, model, elapsed=0.0)
 
     def get_receipt(self, order_id: int) -> JobOrderReceipt:
         """Return the receipt of the order ``order_id`` on this client's chain.
@@ -1240,11 +1249,20 @@ class SolverQuip(Solver):
         return order_ids[:LIST_ORDERS_LIMIT]
 
     def status(self, order_id: int) -> dict[str, Any]:
-        """Return a lightweight lifecycle snapshot of an order (no solution decode).
+        """Return a lightweight lifecycle snapshot of an order (no solution decode). Deprecated.
+
+        Use ``get_receipt(order_id).status()``, whose keys follow
+        :meth:`JobOrder.status <xqsa.quip.JobOrder.status>`. This keeps its
+        old keys, with a ``DeprecationWarning``, until QUI-1608 removes it.
 
         One ``JobOrders`` read plus the chain head: status, key block heights,
         the computed ``effective_expiry``, and whether the order ``is_final``.
         """
+        warnings.warn(
+            "SolverQuip.status() is deprecated; use SolverQuip.get_receipt(order_id).status()",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         order = self._fetch_order(order_id)
         current_block = self._current_block()
         lifecycle = self._order_lifecycle(order, current_block)
