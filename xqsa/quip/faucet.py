@@ -37,7 +37,7 @@ import urllib.error
 import urllib.request
 
 from xqsa.quip import metadata as quip_metadata
-from xqsa.quip.codec import QuipError
+from xqsa.quip.errors import QuipFaucetError
 
 logger = logging.getLogger("xqsa.quip.faucet")
 
@@ -49,20 +49,6 @@ DEFAULT_DRIP_PLANCK = 10_000_000_000_000
 # is 5 seconds; a larger ask is a misconfigured endpoint, and sleeping on it
 # would stall solve() in a script that no gate was meant to block.
 MAX_RETRY_AFTER_SECONDS = 30.0
-
-
-class QuipFaucetError(QuipError):
-    """Raised when a faucet funding request fails.
-
-    Carries the HTTP status (``None`` for a transport-level failure) and the
-    parsed JSON error body, so a caller can distinguish a rate limit, a
-    balance-ceiling denial, and a malformed request from each other.
-    """
-
-    def __init__(self, status: int | None, body: dict, message: str) -> None:
-        super().__init__(message)
-        self.status = status
-        self.body = body
 
 
 def _post_request(url: str, dest: str, amount: int | None, timeout: float) -> tuple[int, dict]:
@@ -78,7 +64,7 @@ def _post_request(url: str, dest: str, amount: int | None, timeout: float) -> tu
     payload: dict = {"dest": dest}
     if amount is not None:
         payload["amount"] = amount
-    # Verifies TLS with the same CA default as xqsa.quip_metadata.connect, so
+    # Verifies TLS with the same CA default as xqsa.quip.metadata.connect, so
     # an https:// faucet works on macOS without an exported SSL_CERT_FILE.
     # ssl ignores WEBSOCKET_CLIENT_CA_BUNDLE, so it is honoured here explicitly,
     # the way websocket-client reads it: a file, a directory, or ignored when missing.

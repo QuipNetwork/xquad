@@ -41,9 +41,9 @@ applies it before calling ``sign``.
 The extrinsic layout is adapted from ``quip.network/faucet`` and the
 ``quip-protocol`` miner's ``shared/substrate_client.py``; it carries the H4
 suite (sr25519 + FN-DSA-512) as published by ``quip-signer`` 0.3.x, and is
-validated by ``test_quip_signing.py`` plus live submission. The
+validated by ``test_signing.py`` plus live submission. The
 signed-extension order in :data:`SIGNED_EXTENSIONS` is the one
-item only a live metadata check can confirm, so ``test_quip_live.py`` asserts it
+item only a live metadata check can confirm, so ``test_live.py`` asserts it
 against the chain's own metadata.
 """
 
@@ -59,7 +59,8 @@ from typing import TYPE_CHECKING, Any
 
 import quip_signer
 
-from xqsa.quip.codec import QuipSigningError, _as_int_or_none, _canonical_hex, _event_ids, _strip_0x
+from xqsa.quip.codec import _as_int_or_none, _canonical_hex, _event_ids, _strip_0x
+from xqsa.quip.errors import QuipSigningError
 
 if TYPE_CHECKING:
     from quip_signer import HybridSigner
@@ -80,7 +81,7 @@ SIGNED_PAYLOAD_HASH_THRESHOLD = 256
 #
 # ``_extension_fields`` carries both halves per extension and
 # ``_signed_extensions`` concatenates each of them in this order, and
-# ``test_quip_live.py::TestConnectivity::test_signed_extensions_match_chain``
+# ``test_live.py::TestConnectivity::test_signed_extensions_match_chain``
 # asserts it against live metadata -- so the next insertion fails a test rather
 # than a submission.
 SIGNED_EXTENSIONS: tuple[str, ...] = (
@@ -110,7 +111,7 @@ KEYSTORE_SCHEME = "hybrid-falcon512"
 KEYSTORE_FILE_MODE = 0o600
 
 
-# QuipSigningError lives in the dependency-free quip_codec module (imported
+# QuipSigningError lives in the dependency-free errors module (imported
 # above) so it can be re-exported from ``xqsa`` without importing this module's
 # ``quip_signer`` dependency; it is re-exported here for backward compatibility.
 
@@ -519,8 +520,8 @@ def _extension_fields(
 
     One table rather than two parallel ones: the halves are what the runtime
     defines together, and splitting them let a name be added to one and missed
-    in the other. ``test_quip_signing.py`` asserts this table's keys against
-    :data:`SIGNED_EXTENSIONS`, and ``test_quip_live.py`` asserts the empty
+    in the other. ``test_signing.py`` asserts this table's keys against
+    :data:`SIGNED_EXTENSIONS`, and ``test_live.py`` asserts the empty
     entries really encode nothing on-chain.
     """
     return {

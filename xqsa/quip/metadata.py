@@ -51,7 +51,7 @@ Usage::
 The shim depends on the runtime continuing to answer
 ``Metadata_metadata_at_version(14)``. If a future runtime drops V14, every
 ``substrate-interface`` client in the stack breaks at once and a migration to an
-async client becomes forced; :class:`~xqsa.quip_codec.QuipMetadataError` is what
+async client becomes forced; :class:`~xqsa.quip.codec.QuipMetadataError` is what
 reports that day, naming the version the node actually serves.
 """
 
@@ -65,7 +65,7 @@ import sys
 from collections.abc import Mapping
 from typing import Any
 
-from xqsa.quip.codec import QuipMetadataError
+from xqsa.quip.errors import QuipMetadataError
 
 __all__ = ["METADATA_AT_VERSION_API", "TARGET_METADATA_VERSION", "connect", "v14_interface_class"]
 

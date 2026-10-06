@@ -58,6 +58,13 @@ from typing import TYPE_CHECKING
 
 import dimod
 
+from xqsa.quip.errors import (  # noqa: F401 -- the Quip* errors stay importable from here.
+    EncodingError,
+    PlacementError,
+    QuipError,
+    QuipMetadataError,
+    QuipSigningError,
+)
 from xqvm_py.xqmx import XQMX, XQMXDomain, XQMXMode
 
 if TYPE_CHECKING:
@@ -101,52 +108,6 @@ ORDER_STATUS_EXPIRED = "Expired"
 ORDER_STATUS_CLOSED = "Closed"
 # Statuses past which an order never accepts more solutions.
 _TERMINAL_STATUSES = frozenset({ORDER_STATUS_EXPIRED, ORDER_STATUS_CLOSED})
-
-
-class QuipError(Exception):
-    """Base class for all Quip Network codec/backend errors."""
-
-
-class PlacementError(QuipError):
-    """Raised when a model cannot be placed onto the hardware topology.
-
-    Carries the couplings (model variable pairs) that could not be satisfied,
-    so the caller can report exactly which interactions have no hardware edge.
-    """
-
-    def __init__(self, message: str, couplings: Iterable[tuple[int, int]] = ()) -> None:
-        super().__init__(message)
-        self.couplings: tuple[tuple[int, int], ...] = tuple(couplings)
-
-
-class EncodingError(QuipError):
-    """Raised when a model cannot be encoded into the on-chain representation."""
-
-
-class QuipSigningError(QuipError):
-    """Raised when extrinsic assembly, keystore handling, or submission fails.
-
-    Defined here in the dependency-free codec module (rather than in
-    ``quip_signing``, which does ``import quip_signer`` at module top) so it can
-    be re-exported from ``xqsa`` without pulling in the optional ``[quip]``
-    extra -- ``import xqsa`` stays healthy without the extension installed.
-    """
-
-
-class QuipMetadataError(QuipError):
-    """Raised when a node's runtime metadata cannot be decoded by this client.
-
-    ``substrate-interface``/``scalecodec`` decode metadata up to V14 and Quip
-    runtimes serve V16, so :mod:`xqsa.quip_metadata` fetches V14 through the
-    versioned runtime API instead. This is raised only when that path and the
-    stock ``state_getMetadata`` both fail, and it names the version the node
-    serves in place of the bare ``Index '16' not present in Enum type mapping``
-    that ``scalecodec`` would otherwise surface.
-
-    Defined here in the dependency-free codec module for the same reason as
-    :class:`QuipSigningError`: it can be re-exported from ``xqsa`` without
-    pulling in the optional ``[quip]`` extra.
-    """
 
 
 @dataclass(frozen=True)
@@ -865,7 +826,7 @@ def is_final(status: str, current_block: int, expiry: int) -> bool:
 # ---------------------------------------------------------------------------
 # Shared normalizers for chain-decoded hex/int/event shapes.
 #
-# ``quip.py`` and ``quip_signing.py`` both massage the same substrate-interface
+# ``client.py`` and ``signing.py`` both massage the same substrate-interface
 # decode shapes; these pure helpers live here (the dependency-free module both
 # already import) so int/hex/event normalization has a single home.
 # ---------------------------------------------------------------------------
