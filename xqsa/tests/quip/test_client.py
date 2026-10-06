@@ -1758,10 +1758,10 @@ class TestSolverQuipAllowedValueWarning:
         # The decode path from a chain-shaped meta dict through to the warning,
         # which nothing covered before: reading a key the meta does not carry
         # yields None and disables the warning with no error to notice. This
-        # fixture spells the same literals as quip_codec, so it catches a
+        # fixture spells the same literals as xqsa.quip.codec, so it catches a
         # one-sided edit here, NOT a pallet-side rename -- only the chain can
         # witness that. test_allowed_value_spec_names_match_the_pallet in
-        # test_quip_live.py is the guard for that half.
+        # test_live.py is the guard for that half.
         topo_hash = "0x" + "ab" * 32
         iface = _default_iface()
         iface.storage[("QuantumPow", "RegisteredTopologies")] = {

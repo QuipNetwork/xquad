@@ -49,7 +49,7 @@ Run locally what CI enforces. Mark a language N/A if this MR does not touch it.
 
 ### Optional Checks
 - [ ] `make test-miri` passes -- run if the MR adds or changes `unsafe` code (not a CI gate)
-- [ ] `make test-quip` passes -- run if the MR changes SolverQuip (`xqsa/quip*.py`); needs a running Quip devnet or testnet -- see `docs/guide/solverquip-testing.md`
+- [ ] `make test-quip` passes -- run if the MR changes SolverQuip (`xqsa/quip/`); needs a running Quip devnet or testnet -- see `docs/guide/solverquip-testing.md`
 
 ### Commits & Documentation
 - [ ] This MR's title follows Conventional Commits (`<type>[(scope)][!]: <description>`) -- enforced by `verify:policy`, and by the title pattern on the MR form

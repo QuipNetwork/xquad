@@ -101,10 +101,10 @@ fits MAX_NATURAL_COEFFICIENT (2,147,483): False
 ```
 
 [Quip Network](../solving/quip-network.md#coefficient-encoding) confirms
-the exact bound directly from `xqsa.quip_codec`:
+the exact bound directly from `xqsa.quip.codec`:
 
 ```python
-from xqsa.quip_codec import MILLI_SCALE, MAX_NATURAL_COEFFICIENT
+from xqsa.quip.codec import MILLI_SCALE, MAX_NATURAL_COEFFICIENT
 print(MILLI_SCALE, MAX_NATURAL_COEFFICIENT)
 # 1000 2147483
 ```

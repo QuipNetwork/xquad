@@ -256,7 +256,7 @@ class TestSignedExtensions:
 
     def test_eth_set_origin_sits_between_metadata_hash_and_weight_reclaim(self) -> None:
         # QUI-1257: the live runtime lists 12 extensions, with EthSetOrigin
-        # (pallet_revive's SetOrigin) in this slot. test_quip_live.py asserts the
+        # (pallet_revive's SetOrigin) in this slot. test_live.py asserts the
         # whole tuple against chain metadata; this pins the position offline.
         order = quip_signing.SIGNED_EXTENSIONS
         assert order.index("EthSetOrigin") == order.index("CheckMetadataHash") + 1

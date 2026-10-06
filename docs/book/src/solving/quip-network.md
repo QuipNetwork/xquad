@@ -7,7 +7,7 @@ not control, running an algorithm it does not choose -- to solve it,
 and decodes whatever comes back as an XQMX sample.
 
 This page is derived from
-[`xqsa/quip.py`](https://gitlab.com/quip.network/xquad/-/blob/main/xqsa/quip.py),
+[`xqsa/quip/`](https://gitlab.com/quip.network/xquad/-/tree/main/xqsa/quip),
 `spec/xqsa/SOLVERS.md`, and an internal contributor testing guide. The
 mechanism it describes has been exercised end to end against `aglais`,
 the public Quip test network. [Your First Quip Job](quip-first-job.md)
@@ -64,7 +64,7 @@ on-chain but `SolverQuip` does not exercise them.
 ### Named networks
 
 `SolverQuip.for_network(name, **kwargs)` builds a solver from a named
-preset in `xqsa.quip_networks` instead of an explicit `url`:
+preset in `xqsa.quip.networks` instead of an explicit `url`:
 
 ```python
 SolverQuip.for_network("aglais")
@@ -73,7 +73,7 @@ SolverQuip.for_network("aglais")
 Two presets are registered: `aglais`, the public test network, and
 `devnet`, the local Docker stack contributors run for offline testing.
 The RPC and faucet coordinates behind each preset live in
-`xqsa.quip_networks`, move with the deployment, and are corrected in
+`xqsa.quip.networks`, move with the deployment, and are corrected in
 patch releases. The test network's own page,
 [aglais.quip.network](https://aglais.quip.network), publishes the
 current endpoints and the faucet; check the preset against it if a
@@ -181,10 +181,10 @@ allowed-value warning below all carry.
 XQMX coefficients are natural-scale integers. The pallet stores
 couplings and fields as milli-scale `i32` values, read back on-chain as
 `value / 1000`. Confirmed directly from
-[`xqsa/quip_codec.py`](https://gitlab.com/quip.network/xquad/-/blob/main/xqsa/quip_codec.py):
+[`xqsa/quip/codec.py`](https://gitlab.com/quip.network/xquad/-/blob/main/xqsa/quip/codec.py):
 
 ```python
-from xqsa.quip_codec import MILLI_SCALE, MAX_NATURAL_COEFFICIENT
+from xqsa.quip.codec import MILLI_SCALE, MAX_NATURAL_COEFFICIENT
 print(MILLI_SCALE, MAX_NATURAL_COEFFICIENT)
 # 1000 2147483
 ```
@@ -311,7 +311,7 @@ from an observed job, see [Your First Quip Job](quip-first-job.md#what-the-figur
 
 `SolverResult.metadata` for `quip` carries seven keys, six populated
 from the winning submission and one from the encoding
-(`xqsa/quip.py:1163-1173`):
+(`xqsa/quip/client.py:735-745`):
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -326,8 +326,8 @@ from the winning submission and one from the encoding
 `best_energy_milli` is milli-scale (see
 [Coefficient Encoding](#coefficient-encoding)) and is not directly
 comparable to `result.energy`, the authoritative natural-scale integer
-`_recompute_energy()` computes (`quip.py:1151`); diffing the two without
-converting scale first will make a correct result look wrong.
+`_recompute_energy()` computes (`xqsa/quip/client.py:723`); diffing the
+two without converting scale first will make a correct result look wrong.
 
 `metadata["solver"]` here names the miner that solved the job, not a
 piece of hardware -- [D-Wave QPU](dwave-qpu.md#how-a-qpu-result-differs)
@@ -362,7 +362,7 @@ network-dependent lifecycle failures:
 | `QuipJobFailedError` | A final order has no usable solution; carries `order_id` |
 
 The `EncodingError` emptiness check tests the dicts themselves, not the
-values inside them (`quip_codec.py:643-644`) -- but `XQMX.set_linear()`
+values inside them (`xqsa/quip/codec.py:671-672`) -- but `XQMX.set_linear()`
 / `set_quadratic()` pop a key the moment its value reaches `0`
 (`xqvm_py/xqmx.py:175-226`), so for any model built through the normal
 API, "has no terms" and "carries only zero terms" are the same
@@ -373,7 +373,7 @@ submits all-zero coefficient arrays.
 
 `EncodingError` and `PlacementError` can be raised entirely locally,
 before anything touches the network -- they come from
-`xqsa.quip_codec`, the same module the coefficient encoding above uses.
+`xqsa.quip.codec`, the same module the coefficient encoding above uses.
 The one exception is the native size check, which reads `MaxNodes` and
 `MaxEdges` from the chain first. `QuipCancelledError` is also raised
 before anything is proposed. The rest depend on chain state or the
