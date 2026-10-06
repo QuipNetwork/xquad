@@ -27,11 +27,19 @@ private methods.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from xqsa.quip.codec import _as_hex, _as_int_or_none, _canonical_hex, _event_ids, effective_expiry, is_final
+from xqsa.quip.codec import (
+    _as_hex,
+    _as_int_or_none,
+    _canonical_hex,
+    _event_ids,
+    _phase_extrinsic_index,
+    effective_expiry,
+    is_final,
+)
 from xqsa.quip.errors import (
     QuipConnectionError,
     QuipError,
@@ -60,6 +68,13 @@ RECLAIM_ORDER_CALL = "reclaim_order"
 JOB_PROPOSED_EVENT = "JobProposed"
 JOB_ORDERS_STORAGE = "JobOrders"
 ORDER_SOLUTIONS_STORAGE = "OrderSolutions"
+ORDER_FRONT_RUNNER_STORAGE = "OrderFrontRunner"
+ORDER_TOP_SOLVERS_STORAGE = "OrderTopSolvers"
+PROPOSER_ORDERS_STORAGE = "ProposerOrders"
+
+# The fee a signed extrinsic paid, emitted in the same phase as its own events.
+TRANSACTION_PAYMENT_PALLET = "TransactionPayment"
+TRANSACTION_FEE_PAID_EVENT = "TransactionFeePaid"
 
 # ``QuantumPow`` topology storage this backend reads. ``RegisteredTopologies``
 # (queried in ``SolverQuip._fetch_topology``) is the topology set a hash must belong to.
@@ -468,17 +483,9 @@ def read_proposed_order_id(iface: Any, block_hash: str | None) -> int:
     """
     if not block_hash:
         raise QuipSubmissionError("propose_job was included but returned no block hash; cannot read the order id")
-    for record in iface.get_events(block_hash=block_hash) or []:
-        value = record.value if hasattr(record, "value") else record
-        inner = value.get("event", value) if isinstance(value, dict) else value
-        if not isinstance(inner, dict):
-            continue
-        module_id, event_id = _event_ids(inner)
+    for _phase, module_id, event_id, attrs in _events(iface, block_hash):
         if module_id != MEMPOOL_PALLET or event_id != JOB_PROPOSED_EVENT:
             continue
-        attrs = inner.get("attributes")
-        if attrs is None:
-            attrs = inner.get("params")
         order_id = _order_id_from_attributes(attrs)
         if order_id is not None:
             return order_id
@@ -537,6 +544,108 @@ def order_lifecycle(order: Mapping[str, Any], current_block: int) -> dict[str, A
     }
 
 
+def proposer_orders(iface: Any, account_id: Any) -> list[int]:
+    """Return the ids of the orders ``account_id`` proposed, oldest first.
+
+    ``ProposerOrders`` is a value-query ``BoundedVec<u64>`` the pallet pushes
+    to on each proposal, so an account with no orders reads as empty and
+    reversing the list gives newest first.
+    """
+    entry = iface.query(MEMPOOL_PALLET, PROPOSER_ORDERS_STORAGE, [account_id])
+    return [int(order_id) for order_id in getattr(entry, "value", None) or []]
+
+
+def front_runner(iface: Any, order_id: int) -> Mapping[str, Any] | None:
+    """Return a ``SingleBest`` order's leader as ``{"solver", "energy_milli"}``, or ``None``.
+
+    ``OrderFrontRunner`` holds one entry, written by the first accepted answer
+    and replaced only by a strictly lower energy; an unanswered order, or one
+    ranked top-N, has none.
+    """
+    entry = iface.query(MEMPOOL_PALLET, ORDER_FRONT_RUNNER_STORAGE, [order_id])
+    return getattr(entry, "value", None)
+
+
+def top_solvers(iface: Any, order_id: int) -> list[Mapping[str, Any]]:
+    """Return a top-N order's ranked ``{"solver", "energy_milli"}`` entries, best first.
+
+    ``OrderTopSolvers`` is a value query, so an unanswered order, or one
+    ranked ``SingleBest``, reads as empty.
+    """
+    entry = iface.query(MEMPOOL_PALLET, ORDER_TOP_SOLVERS_STORAGE, [order_id])
+    return list(getattr(entry, "value", None) or [])
+
+
+def block_hash(iface: Any, number: int) -> str:
+    """Return the hash of the block at height ``number`` as ``0x`` hex.
+
+    Raises:
+        QuipConnectionError: if the hash cannot be read, or the node knows no
+            block at that height.
+    """
+    try:
+        raw = iface.get_block_hash(number)
+    except QuipMetadataError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
+        raise QuipConnectionError(f"could not read the hash of block {number}: {exc}") from exc
+    if not raw:
+        raise QuipConnectionError(f"the node returned no hash for block {number}")
+    return _as_hex(raw)
+
+
+def block_timestamp(iface: Any, block_hash: str) -> int:
+    """Return the ``Timestamp.Now`` of the block ``block_hash``, in Unix milliseconds.
+
+    Raises:
+        QuipConnectionError: if the timestamp is absent or cannot be read.
+    """
+    try:
+        entry = iface.query("Timestamp", "Now", block_hash=block_hash)
+    except QuipMetadataError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
+        raise QuipConnectionError(f"could not read Timestamp.Now at block {block_hash}: {exc}") from exc
+    millis = _as_int_or_none(getattr(entry, "value", None))
+    if millis is None:
+        raise QuipConnectionError(f"Timestamp.Now is absent at block {block_hash}")
+    return millis
+
+
+def proposal_fee(iface: Any, block_hash: str, order_id: int) -> int:
+    """Return the fee, in planck, that the ``propose_job`` of ``order_id`` paid.
+
+    Finds the order's ``JobProposed`` event in its inclusion block, then the
+    ``TransactionFeePaid`` event of the same extrinsic, matched by phase
+    index. ``actual_fee`` is the whole charge, tip included.
+
+    Raises:
+        QuipConnectionError: if the block holds no ``JobProposed`` event for
+            ``order_id``, or no fee event in that extrinsic's phase.
+    """
+    events = list(_events(iface, block_hash))
+    phase = next(
+        (
+            phase
+            for phase, module_id, event_id, attrs in events
+            if module_id == MEMPOOL_PALLET
+            and event_id == JOB_PROPOSED_EVENT
+            and _order_id_from_attributes(attrs) == order_id
+        ),
+        None,
+    )
+    if phase is None:
+        raise QuipConnectionError(f"block {block_hash} holds no {JOB_PROPOSED_EVENT} event for order {order_id}")
+    for event_phase, module_id, event_id, attrs in events:
+        if (event_phase, module_id, event_id) == (phase, TRANSACTION_PAYMENT_PALLET, TRANSACTION_FEE_PAID_EVENT):
+            fee = _as_int_or_none(_attribute(attrs, "actual_fee"))
+            if fee is not None:
+                return fee
+    raise QuipConnectionError(
+        f"block {block_hash} holds no {TRANSACTION_FEE_PAID_EVENT} event for the propose_job of order {order_id}"
+    )
+
+
 def fetch_solutions(iface: Any, order_id: int) -> list[Mapping[str, Any]]:
     """Return every solver's submission for ``order_id`` (decoded ``JobSolution``s).
 
@@ -549,6 +658,31 @@ def fetch_solutions(iface: Any, order_id: int) -> list[Mapping[str, Any]]:
         if decoded is not None:
             submissions.append(decoded)
     return submissions
+
+
+def _events(iface: Any, block_hash: str) -> Iterator[tuple[int | None, object, object, object]]:
+    """Yield ``(phase_index, module_id, event_id, attributes)`` for each event at ``block_hash``.
+
+    Unwraps the record shapes ``substrate-interface`` decodes into.
+    ``phase_index`` is the index of the extrinsic that emitted the event, read
+    from the sibling ``extrinsic_idx`` field or from the ``phase`` dict, and
+    ``None`` for events outside an extrinsic. ``attributes`` falls back to the
+    older ``params`` key.
+    """
+    for record in iface.get_events(block_hash=block_hash) or []:
+        value = record.value if hasattr(record, "value") else record
+        if not isinstance(value, dict):
+            continue
+        inner = value.get("event", value)
+        if not isinstance(inner, dict):
+            continue
+        phase = value.get("extrinsic_idx")
+        if phase is None:
+            phase = _phase_extrinsic_index(value.get("phase"))
+        attrs = inner.get("attributes")
+        if attrs is None:
+            attrs = inner.get("params")
+        yield _as_int_or_none(phase), *_event_ids(inner), attrs
 
 
 def _is_storage_absent(exc: BaseException) -> bool:
@@ -606,10 +740,20 @@ def _order_id_from_attributes(attrs: object) -> int | None:
     int-first field it would return a plausible-but-wrong id and ``solve()``
     would settle the wrong order silently. Better to raise "no order id found".
     """
+    return _as_int_or_none(_attribute(attrs, "order_id"))
+
+
+def _attribute(attrs: object, name: str) -> object:
+    """Read the field ``name`` from decoded event attributes, or ``None`` if absent.
+
+    Accepts a field-keyed mapping or a ``params`` list of ``{"name", "value"}``
+    dicts. A bare positional list yields ``None``; see
+    :func:`_order_id_from_attributes` for why.
+    """
     if isinstance(attrs, Mapping):
-        return _as_int_or_none(attrs.get("order_id")) if "order_id" in attrs else None
+        return attrs.get(name)
     if isinstance(attrs, (list, tuple)):
         for item in attrs:
-            if isinstance(item, Mapping) and item.get("name") == "order_id":
-                return _as_int_or_none(item.get("value"))
+            if isinstance(item, Mapping) and item.get("name") == name:
+                return item.get("value")
     return None

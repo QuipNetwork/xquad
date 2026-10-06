@@ -60,7 +60,7 @@ from typing import TYPE_CHECKING, Any
 
 import quip_signer
 
-from xqsa.quip.codec import _as_int_or_none, _canonical_hex, _event_ids, _strip_0x
+from xqsa.quip.codec import _as_int_or_none, _canonical_hex, _event_ids, _phase_extrinsic_index, _strip_0x
 from xqsa.quip.errors import QuipSigningError
 
 if TYPE_CHECKING:
@@ -727,23 +727,6 @@ def _fetch_dispatch_error(iface: Any, *, block_hash: str, ext_hash: str) -> str 
     return (
         f"unclassified: no System.ExtrinsicSuccess/Failed matched phase {ext_idx} in block {_strip_0x(block_hash)[:16]}"
     )
-
-
-def _phase_extrinsic_index(phase: Any) -> int | None:
-    """Extract the extrinsic index from a SCALE-decoded event ``phase`` field."""
-    if isinstance(phase, dict):
-        applied = phase.get("ApplyExtrinsic")
-        if applied is None:
-            return None
-        if isinstance(applied, dict):
-            index = applied.get("extrinsic_idx")
-            if index is None:
-                index = applied.get("index")
-            return _as_int_or_none(index)
-        return _as_int_or_none(applied)
-    if isinstance(phase, (int, str)):
-        return _as_int_or_none(phase)
-    return None
 
 
 def _coerce_seed(seed: bytes | str) -> bytes:

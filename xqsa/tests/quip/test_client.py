@@ -1014,7 +1014,7 @@ class FakeSubstrate:
             return None
         return _Const(self.constants[(module, name)])
 
-    def query(self, module: str, name: str, params: list | None = None):
+    def query(self, module: str, name: str, params: list | None = None, block_hash: str | None = None):
         return _StorageEntry(self.storage.get((module, name)))
 
     def query_map(self, module: str, name: str, params: list | None = None):
