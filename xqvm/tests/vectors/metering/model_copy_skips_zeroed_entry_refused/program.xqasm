@@ -1,0 +1,30 @@
+; model_copy_skips_zeroed_entry_refused (QUI-1516): the same program as
+; model_copy_skips_zeroed_entry_admitted, at one byte below its total.
+;
+; The zero write is charged although it removes the entry it lands on
+; (spec/xqvm/SPEC.md, xqmx), so the run asks for 200 bytes and a budget
+; of 199 refuses the trailing int output. A VM that skipped the charge for
+; a zero write would ask for 168 and run to completion. The admitted
+; sibling pins the same total from above.
+
+PUSH 4
+BQMX r0          ; charges 4 * VARIABLE_BYTES = 32
+
+PUSH 0
+PUSH 1
+SETLINE r0       ; linear[0] = 1, charges LINEAR_ENTRY_BYTES = 32, total 64
+PUSH 1
+PUSH 1
+SETLINE r0       ; linear[1] = 1, charges 32, total 96
+PUSH 0
+PUSH 0
+SETLINE r0       ; linear[0] = 0, entry removed, still charges 32, total 128
+
+PUSH 0
+OUTPUT r0        ; charges model_bytes = 4 * 8 + 1 * 32 = 64, total 192
+
+PUSH 5
+STOW r1
+PUSH 0
+OUTPUT r1        ; wants VARIABLE_BYTES = 8, total 200, refused at 199
+HALT

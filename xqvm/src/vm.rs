@@ -361,10 +361,12 @@ fn equality_expansion_bytes(n: u64) -> u64 {
 
 /// Bytes one whole [`XqmxModel`] costs to duplicate.
 ///
-/// Priced at exactly what the allocator and the coefficient writes charged
-/// to build it: the declared size at [`VARIABLE_BYTES`] plus one entry per
-/// live coefficient. Measuring the copy the same way the original was
-/// measured is what keeps a copy from being cheaper than the thing it copies.
+/// Priced the way the allocator and the coefficient writes charged to build
+/// it: the declared size at [`VARIABLE_BYTES`] plus one entry per non-zero
+/// coefficient. A write that left a coefficient at zero removed its entry,
+/// so the copy does not count it (`spec/xqvm/SPEC.md`, `xqmx`). Measuring the
+/// copy the same way the original was measured is what keeps a copy from
+/// being cheaper than the thing it copies.
 fn model_bytes(m: &XqmxModel) -> u64 {
     let size = u64::try_from(m.size).unwrap_or(u64::MAX);
     let linear = u64::try_from(m.linear_len()).unwrap_or(u64::MAX);
