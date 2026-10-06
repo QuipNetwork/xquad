@@ -23,7 +23,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from xqsa.quip import QuipConnectionError, QuipMetadataError
+from xqsa.quip import QuipConnectionError, QuipMetadataError, QuipSubmissionError, QuipTimeoutError
 from xqsa.quip.chain import (
     _attribute,
     block_hash,
@@ -33,8 +33,24 @@ from xqsa.quip.chain import (
     proposer_orders,
     top_solvers,
 )
+from xqsa.quip.receipt import JobOrderReceipt
 
-from .test_client import FakeSubstrate, _job_proposed_event
+from .test_client import (
+    GENESIS_HASH,
+    TOPO_HASH,
+    UNIT,
+    FakeSubstrate,
+    _chain_iface,
+    _force_timeout,
+    _job_proposed_event,
+    _make_solver,
+    _model,
+    _ok_receipt,
+    _order,
+    _patch_signing,
+    _submission,
+)
+from .test_order import _ready
 
 MEMPOOL = "QuantumComputeMempool"
 BLOCK = "0xblock"
@@ -230,3 +246,284 @@ class TestChainReaders:
     )
     def test_attribute(self, attrs, expected):
         assert _attribute(attrs, "order_id") == expected
+
+
+REWARD = 5 * UNIT
+TOP_N = {"TopNEqual": {"n": 3}}
+
+
+def _receipt_order(**kw) -> dict:
+    """``_order`` plus the two fields a receipt reads: ``reward`` and ``resolution``."""
+    resolution = kw.pop("resolution", "SingleBest")
+    return {**_order(**kw), "reward": REWARD, "resolution": resolution}
+
+
+def _answer(solver_id: str, energy: int, submitted_at: int, vectors=((1, -1),)) -> tuple:
+    """One ``OrderSolutions`` map entry."""
+    return (
+        solver_id.encode(),
+        {**_submission(solver_id, [list(v) for v in vectors], energy), "submitted_at": submitted_at},
+    )
+
+
+def _receipt_for(monkeypatch, *, order=None, head: int = 50, answers=None, front=None, top=None):
+    """A receipt for order 1 on a mocked chain; ``front``/``top`` seed the ranking storage."""
+    iface = _chain_iface(order=order or _receipt_order(), head=head, submissions=answers)
+    if front is not None:
+        iface.storage[(MEMPOOL, "OrderFrontRunner")] = front
+    if top is not None:
+        iface.storage[(MEMPOOL, "OrderTopSolvers")] = top
+    return _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH).get_receipt(1)
+
+
+class TestJobOrderReceipt:
+    def test_get_receipt(self, monkeypatch) -> None:
+        receipt = _receipt_for(monkeypatch)
+        assert isinstance(receipt, JobOrderReceipt)
+        assert receipt.order_id == 1
+        assert receipt._genesis_hash == GENESIS_HASH
+
+    def test_get_receipt_missing_order_raises(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)  # default iface has no JobOrders entry.
+        with pytest.raises(QuipConnectionError, match="not found"):
+            solver.get_receipt(7)
+
+    def test_construction_reads_nothing(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+
+        def _boom(order_id: int):
+            raise AssertionError("construction must not read the chain")
+
+        monkeypatch.setattr(solver, "_fetch_order", _boom)
+        assert JobOrderReceipt(solver, 1, GENESIS_HASH).order_id == 1
+
+    def test_repr_hides_the_genesis_hash(self, monkeypatch) -> None:
+        text = repr(_receipt_for(monkeypatch))
+        assert text == "JobOrderReceipt(order_id=1)"
+        assert GENESIS_HASH not in text
+
+    def test_status_open_is_submitted(self, monkeypatch) -> None:
+        assert _receipt_for(monkeypatch, head=50).status() == {
+            "state": "submitted",
+            "order_id": 1,
+            "chain_status": "Opened",
+            "created_at": 0,
+            "first_solution_at": None,
+            "effective_expiry": 100,
+            "current_block": 50,
+            "solution_count": 1,
+        }
+
+    def test_status_past_expiry_is_finalized(self, monkeypatch) -> None:
+        assert _receipt_for(monkeypatch, head=200).status()["state"] == "finalized"
+
+    def test_status_stays_finalized_on_a_lagging_read(self, monkeypatch) -> None:
+        receipt = _receipt_for(monkeypatch, head=200)
+        assert receipt.status()["state"] == "finalized"
+        receipt._client._iface.head = 50
+        snap = receipt.status()
+        assert (snap["state"], snap["current_block"]) == ("finalized", 50)  # only state is sticky.
+
+
+class TestJobOrderReceiptWait:
+    def test_timeout_error_pickles_without_its_receipt(self, monkeypatch) -> None:
+        import pickle
+
+        error = QuipTimeoutError(1, receipt=_receipt_for(monkeypatch))
+        error.add_note("retry with get_receipt(1)")
+        restored = pickle.loads(pickle.dumps(error))
+        assert (type(restored), restored.order_id, str(restored), restored.receipt) == (
+            QuipTimeoutError,
+            1,
+            str(error),
+            None,
+        )
+        assert restored.__notes__ == ["retry with get_receipt(1)"]
+
+    def test_terminal_status_returns_immediately(self, monkeypatch) -> None:
+        # Closed short-circuits regardless of height (head 5 < expiry 100).
+        receipt = _receipt_for(monkeypatch, order=_receipt_order(status="Closed"), head=5)
+        assert receipt.wait() is receipt
+
+    def test_terminal_skips_head_read(self, monkeypatch) -> None:
+        # A terminal status is final regardless of height, so the head-height
+        # RPC must be skipped entirely.
+        receipt = _receipt_for(monkeypatch, order=_receipt_order(status="Closed"), head=5)
+
+        def _boom() -> int:
+            raise AssertionError("head-height read must be skipped for a terminal order")
+
+        monkeypatch.setattr(receipt._client, "_current_block", _boom)
+        assert receipt.wait() is receipt
+
+    def test_final_by_height(self, monkeypatch) -> None:
+        # Opened but past the hard deadline (head 200 >= expiry 100).
+        receipt = _receipt_for(monkeypatch, order=_receipt_order(status="Opened"), head=200)
+        assert receipt.wait() is receipt
+
+    def test_times_out_carrying_the_receipt(self, monkeypatch) -> None:
+        iface = _chain_iface(order=_receipt_order(status="Opened"), head=50)  # 50 < expiry 100 -> never final
+        receipt = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH, timeout=0.0).get_receipt(1)
+        _force_timeout(monkeypatch)
+        with pytest.raises(QuipTimeoutError) as excinfo:
+            receipt.wait()
+        assert excinfo.value.order_id == 1
+        assert excinfo.value.receipt is receipt
+
+
+class TestJobOrderReceiptSolvers:
+    def test_front_runner_first_then_energy_then_submission_order(self, monkeypatch) -> None:
+        answers = [
+            _answer("0xA", 100, 5),
+            _answer("0xB", 300, 9),  # the front runner, though not the lowest energy.
+            _answer("0xC", 100, 3),  # ties 0xA on energy; submitted earlier.
+            _answer("0xD", 200, 1),
+        ]
+        front = {"solver": "0xB", "energy_milli": 300}
+        receipt = _receipt_for(monkeypatch, answers=answers, front=front)
+        assert [entry["solver"] for entry in receipt.solvers()] == ["0xB", "0xC", "0xA", "0xD"]
+
+    def test_entry_shape(self, monkeypatch) -> None:
+        answers = [_answer("0xA", 100, 5, vectors=[(1, -1), (-1, 1)])]
+        receipt = _receipt_for(monkeypatch, answers=answers)
+        assert receipt.solvers() == [{"solver": "0xA", "energy_milli": 100, "submitted_at": 5, "num_solutions": 2}]
+
+    def test_top_n_ranking_leads(self, monkeypatch) -> None:
+        answers = [_answer("0xA", 100, 5), _answer("0xB", 50, 1), _answer("0xC", 300, 2)]
+        # 0xGHOST is ranked but never answered, so it is skipped.
+        top = [
+            {"solver": "0xC", "energy_milli": 300},
+            {"solver": "0xGHOST", "energy_milli": 1},
+            {"solver": "0xA", "energy_milli": 100},
+        ]
+        receipt = _receipt_for(monkeypatch, order=_receipt_order(resolution=TOP_N), answers=answers, top=top)
+        assert [entry["solver"] for entry in receipt.solvers()] == ["0xC", "0xA", "0xB"]
+
+    def test_no_answers(self, monkeypatch) -> None:
+        assert _receipt_for(monkeypatch, answers=[]).solvers() == []
+
+
+class TestJobOrderReceiptRawSolutions:
+    ANSWERS = [_answer("0xA", 100, 5, vectors=[(1, -1), (-1, 1)]), _answer("0xB", 200, 6)]
+
+    def test_all_solvers(self, monkeypatch) -> None:
+        receipt = _receipt_for(monkeypatch, answers=self.ANSWERS)
+        assert receipt.raw_solutions() == {
+            "0xA": {"energy_milli": 100, "spins": [[1, -1], [-1, 1]]},
+            "0xB": {"energy_milli": 200, "spins": [[1, -1]]},
+        }
+
+    def test_one_solver(self, monkeypatch) -> None:
+        receipt = _receipt_for(monkeypatch, answers=self.ANSWERS)
+        assert receipt.raw_solutions("0xB") == {"energy_milli": 200, "spins": [[1, -1]]}
+
+    def test_unknown_solver_names_the_order(self, monkeypatch) -> None:
+        receipt = _receipt_for(monkeypatch, answers=self.ANSWERS)
+        with pytest.raises(KeyError, match="0xZ did not answer order 1"):
+            receipt.raw_solutions("0xZ")
+
+
+class TestJobOrderReceiptSettlement:
+    LEADER = {"solver": "0xB", "energy_milli": 300}
+    WINNER = [{"solver": "0xB", "energy_milli": 300, "allocation_planck": REWARD}]
+
+    @pytest.mark.parametrize(
+        ("order", "front", "expected"),
+        [
+            pytest.param(
+                _receipt_order(status="Opened"), LEADER, {"claimed": False, "winners": WINNER}, id="open-leader"
+            ),
+            pytest.param(
+                _receipt_order(status="Closed"), LEADER, {"claimed": True, "winners": WINNER}, id="closed-answered"
+            ),
+            pytest.param(
+                _receipt_order(status="Opened", solution_count=0),
+                None,
+                {"claimed": False, "winners": []},
+                id="unanswered",
+            ),
+            pytest.param(
+                _receipt_order(status="Closed", solution_count=0),
+                None,
+                {"claimed": False, "winners": []},
+                id="reclaimed",
+            ),
+        ],
+    )
+    def test_single_best(self, monkeypatch, order, front, expected) -> None:
+        assert _receipt_for(monkeypatch, order=order, front=front).settlement() == expected
+
+    def test_top_n_not_supported(self, monkeypatch) -> None:
+        receipt = _receipt_for(monkeypatch, order=_receipt_order(resolution=TOP_N))
+        with pytest.raises(NotImplementedError, match="QUI-1606"):
+            receipt.settlement()
+
+
+def _fail_dispatch(monkeypatch, solver) -> None:
+    _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error="QuantumComputeMempool.RewardTooLow"))
+
+
+def _lose_order_id(monkeypatch, solver) -> None:
+    solver._iface.events = []  # included, but no JobProposed event.
+
+
+class TestJobOrderPassThroughs:
+    def test_finalized_stays_finalized_on_a_lagging_read(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)  # head 200 is past the order's expiry.
+        order = solver.create_order(_model()).submit().wait()
+        solver._iface.head = 50  # a node behind the one that saw it final.
+        assert order.status()["state"] == "finalized"
+        assert order.receipt().status()["state"] == "finalized"
+        assert order._state == "finalized"
+
+    def test_submit_sets_the_receipt(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model()).submit()
+        receipt = order.receipt()
+        assert receipt.order_id == order.order_id()
+        assert receipt._genesis_hash == order._genesis_hash
+
+    @pytest.mark.parametrize(
+        ("setup", "match"),
+        [
+            pytest.param(None, "submit\\(\\) it first", id="draft"),
+            pytest.param(_fail_dispatch, "failed on chain", id="failed"),
+            pytest.param(_lose_order_id, "is unconfirmed", id="unconfirmed"),
+        ],
+    )
+    def test_receipt_refused_without_an_order_id(self, monkeypatch, setup, match) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        if setup is not None:
+            setup(monkeypatch, solver)
+            with pytest.raises(QuipSubmissionError):
+                order.submit()
+        with pytest.raises(QuipSubmissionError, match=match):
+            order.receipt()
+
+    def test_wait_returns_the_order_and_finalizes_it(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)  # head 200 is past the order's expiry.
+        order = solver.create_order(_model()).submit()
+        assert order.wait() is order
+        assert order._state == "finalized"
+
+    def test_readers_delegate_to_the_receipt(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model()).submit()
+        seen: list[object] = []
+        monkeypatch.setattr(order._receipt, "solvers", lambda: ["solvers"])
+        monkeypatch.setattr(order._receipt, "settlement", lambda: {"claimed": False, "winners": []})
+        monkeypatch.setattr(order._receipt, "raw_solutions", lambda solver=None: seen.append(solver) or {"raw": solver})
+        assert order.solvers() == ["solvers"]
+        assert order.settlement() == {"claimed": False, "winners": []}
+        assert order.raw_solutions() == {"raw": None}
+        assert order.raw_solutions("0xSOLVER") == {"raw": "0xSOLVER"}
+        assert seen == [None, "0xSOLVER"]
+
+    def test_status_goes_through_the_receipt(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model()).submit()
+        snapshot = {"state": "finalized", "order_id": 1}
+        monkeypatch.setattr(order._receipt, "status", lambda: snapshot)
+        assert order.status() is snapshot
+        assert order._state == "finalized"

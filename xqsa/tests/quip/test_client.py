@@ -2132,7 +2132,7 @@ def _submission(solver_id: str, vectors: list[list[int]], best_energy_milli: int
 
 
 def _force_timeout(monkeypatch) -> None:
-    """Patch xqsa.quip's clock so _await_finality's first deadline check trips.
+    """Patch xqsa.quip's clock so a wait's first deadline check trips.
 
     monotonic() returns 0 for the deadline baseline, then 100 for the post-check,
     so a non-final order raises QuipTimeoutError without real sleeping.
@@ -2162,41 +2162,7 @@ def _chain_iface(*, order: dict, head: int, submissions: list[tuple] | None = No
 
 
 class TestSolverQuipLifecycle:
-    """_await_finality, _order_lifecycle, and status() against the mocked chain."""
-
-    def test_await_finality_terminal_status_returns_immediately(self, monkeypatch) -> None:
-        # Closed short-circuits regardless of height (head 5 < expiry 100).
-        iface = _chain_iface(order=_order(status="Closed"), head=5)
-        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
-        assert solver._await_finality(1)["status"] == "Closed"
-
-    def test_await_finality_terminal_skips_head_read(self, monkeypatch) -> None:
-        # A terminal status is final regardless of height, so the head-height
-        # RPC must be skipped entirely.
-        iface = _chain_iface(order=_order(status="Closed"), head=5)
-        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
-
-        def _boom() -> int:
-            raise AssertionError("head-height read must be skipped for a terminal order")
-
-        monkeypatch.setattr(solver, "_current_block", _boom)
-        assert solver._await_finality(1)["status"] == "Closed"
-
-    def test_await_finality_by_height(self, monkeypatch) -> None:
-        # Opened but past the hard deadline (head 200 >= expiry 100).
-        iface = _chain_iface(order=_order(status="Opened"), head=200)
-        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
-        assert solver._await_finality(1)["status"] == "Opened"
-
-    def test_await_finality_times_out(self, monkeypatch) -> None:
-        from xqsa.quip import QuipTimeoutError
-
-        iface = _chain_iface(order=_order(status="Opened"), head=50)  # 50 < expiry 100 -> never final
-        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH, timeout=0.0)
-        _force_timeout(monkeypatch)
-        with pytest.raises(QuipTimeoutError) as excinfo:
-            solver._await_finality(1)
-        assert excinfo.value.order_id == 1
+    """_order_lifecycle and status() against the mocked chain."""
 
     def test_status_snapshot(self, monkeypatch) -> None:
         iface = _chain_iface(order=_order(status="Opened", solution_count=2), head=150)
@@ -2359,6 +2325,7 @@ class TestSolverQuipSolve:
         with pytest.raises(QuipTimeoutError) as excinfo:
             solver.solve(_model())
         assert excinfo.value.order_id == 1
+        assert excinfo.value.receipt.order_id == 1
 
     def test_solve_no_solutions_reclaims_and_fails(self, monkeypatch) -> None:
         from xqsa.quip import QuipJobFailedError

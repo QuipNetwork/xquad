@@ -43,7 +43,6 @@ from xqsa.quip.chain import (  # noqa: F401 -- FEE_HEADROOM_PLANCK and the palle
     _status_str,
 )
 from xqsa.quip.codec import (
-    _TERMINAL_STATUSES,
     DEFAULT_ISING_SPEC_ID,
     QUIP_COEFFICIENTS_DOC_URL,
     Topology,
@@ -72,6 +71,7 @@ from xqsa.quip.faucet import DEFAULT_DRIP_PLANCK, fund_from_faucet
 from xqsa.quip.networks import NETWORKS
 from xqsa.quip.order import JobOrder, _OrderOptions, _Sent, _SignedCall, check_client_defaults, merge_options
 from xqsa.quip.quote import JobQuote, _format_planck
+from xqsa.quip.receipt import JobOrderReceipt
 from xqsa.solver import Solver, SolverResult
 
 if TYPE_CHECKING:
@@ -738,32 +738,6 @@ class SolverQuip(Solver):
         """See :func:`xqsa.quip.chain.order_lifecycle`."""
         return chain.order_lifecycle(order, current_block)
 
-    def _await_finality(self, order_id: int) -> Mapping[str, Any]:
-        """Poll the order until it is final by block height, returning it.
-
-        The lazy lifecycle means an order can be past its expiry while still
-        reported ``Opened``, so finality is decided by height
-        (:func:`~xqsa.quip.codec.is_final`), never by waiting for ``OrderClosed``.
-
-        Raises:
-            QuipTimeoutError: if the order does not finalize within ``timeout``
-                (carries ``order_id`` so the result is recoverable via
-                :meth:`query`).
-        """
-        deadline = time.monotonic() + self._timeout
-        while True:
-            order = self._fetch_order(order_id)
-            # A terminal chain status is final regardless of height, so skip the
-            # extra head-height read on the terminal check (and on every poll of
-            # an already-closed order via query()).
-            if _status_str(order["status"]) in _TERMINAL_STATUSES:
-                return order
-            if self._order_lifecycle(order, self._current_block())["is_final"]:
-                return order
-            if time.monotonic() >= deadline:
-                raise QuipTimeoutError(order_id)
-            time.sleep(self._poll_interval)
-
     def _fetch_solutions(self, order_id: int) -> list[Mapping[str, Any]]:
         """See :func:`xqsa.quip.chain.fetch_solutions`."""
         return chain.fetch_solutions(self._iface, order_id)
@@ -1161,16 +1135,16 @@ class SolverQuip(Solver):
                 declines (carries the quote).
             QuipFaucetError: if the faucet refuses or cannot be reached.
             QuipTimeoutError: if the order does not finalize within ``timeout``
-                (the order id is recoverable via :meth:`query`).
+                (it carries the order's receipt; :meth:`get_receipt` rebuilds
+                it from the order id).
             QuipUnconfirmedError: if the job was sent but its outcome or order
                 id is unknown. It may be on chain, so do not solve the same
                 model again on that account without checking.
             QuipJobFailedError: if the order finalizes with no usable solution.
         """
-        order = self._create_order(model, kwargs, strict=False).submit()
+        order = self._create_order(model, kwargs, strict=False).submit().wait()
         order_id = order._order_id
         assert order_id is not None and order._submitted_at is not None  # submit() sets both.
-        self._await_finality(order_id)
         elapsed = time.perf_counter() - order._submitted_at
         return self._collect_result(order_id, order._job, model, elapsed=elapsed)
 
@@ -1205,6 +1179,18 @@ class SolverQuip(Solver):
             return None
         job = self._job_for(model, topology, mapping)
         return self._collect_result(order_id, job, model, elapsed=0.0)
+
+    def get_receipt(self, order_id: int) -> JobOrderReceipt:
+        """Return the receipt of the order ``order_id`` on this client's chain.
+
+        Works in any session: the receipt reads everything from the chain, so
+        it needs neither the order object nor the model.
+
+        Raises:
+            QuipConnectionError: if no such order exists on chain.
+        """
+        self._fetch_order(order_id)
+        return JobOrderReceipt(self, order_id, self._genesis_hash)
 
     def status(self, order_id: int) -> dict[str, Any]:
         """Return a lightweight lifecycle snapshot of an order (no solution decode).
