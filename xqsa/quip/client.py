@@ -62,12 +62,14 @@ from xqsa.quip.errors import (  # noqa: F401 -- the Quip* errors stay importable
     QuipError,
     QuipJobFailedError,
     QuipMetadataError,
+    QuipOrderOptionError,
     QuipSubmissionError,
     QuipTimeoutError,
     QuipTopologyError,
 )
 from xqsa.quip.faucet import DEFAULT_DRIP_PLANCK, fund_from_faucet
 from xqsa.quip.networks import NETWORKS
+from xqsa.quip.order import check_client_defaults
 from xqsa.quip.quote import JobQuote, _format_planck
 from xqsa.solver import Solver, SolverResult
 
@@ -123,7 +125,9 @@ class SolverQuip(Solver):
         ImportError: if the ``[quip]`` extra is not installed
             (``pip install xqsa[quip]`` -- provides ``substrate-interface`` and
             the ``quip_signer`` signing extension).
-        ValueError: if no RPC URL is configured.
+        ValueError: if no RPC URL is configured, or ``mode``, ``resolution``
+            or ``delivery`` names a value no order can use yet (checked before
+            connecting).
         QuipConnectionError: if the node is unreachable or the configured Ising
             spec is not registered on-chain.
         QuipMetadataError: if the node's runtime metadata cannot be decoded by
@@ -171,6 +175,7 @@ class SolverQuip(Solver):
         resolved_url = url or os.environ.get("QUIP_RPC_URL")
         if not resolved_url:
             raise ValueError("A Quip RPC URL is required. Pass url= or set QUIP_RPC_URL.")
+        check_client_defaults(mode, resolution, delivery)  # before any network I/O.
 
         self._signer = self._build_signer(quip_signing, seed=seed, keystore=keystore)
 

@@ -97,6 +97,19 @@ class QuipSubmissionError(QuipError):
     """Raised when an extrinsic cannot be submitted or is rejected by the chain."""
 
 
+class QuipOrderOptionError(QuipSubmissionError):
+    """Raised when an order option is refused before anything is signed.
+
+    Carries the offending option's name as ``option``. A subclass of
+    :class:`QuipSubmissionError`, which the chain raised for the same values
+    after charging the fee.
+    """
+
+    def __init__(self, option: str, message: str) -> None:
+        self.option = option
+        super().__init__(message)
+
+
 class QuipTopologyError(QuipError):
     """Retained for compatibility; nothing in :mod:`xqsa.quip` raises it any more.
 
