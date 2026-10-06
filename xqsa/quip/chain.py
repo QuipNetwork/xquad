@@ -322,6 +322,39 @@ def ss58_address(iface: Any, account_id: Any) -> str:
         return _as_hex(account_id)
 
 
+def account_bytes(account_id: Any) -> bytes:
+    """Return a decoded ``AccountId`` as raw bytes.
+
+    ``substrate-interface`` decodes an account as SS58 text when the chain
+    has an address format, and as ``0x`` hex or bytes otherwise; all three
+    reduce to the same 32 bytes, so two accounts compare equal whichever way
+    each was read.
+
+    Raises:
+        ValueError: if ``account_id`` is text that is neither hex nor SS58.
+    """
+    if isinstance(account_id, str):
+        if account_id.startswith("0x"):
+            return bytes.fromhex(account_id[2:])
+        from scalecodec.utils.ss58 import ss58_decode
+
+        return bytes.fromhex(ss58_decode(account_id))
+    return bytes(account_id)
+
+
+def block_time_ms(iface: Any) -> int | None:
+    """Return the chain's expected block time in milliseconds, or ``None`` if unknown.
+
+    Reads the ``Babe.ExpectedBlockTime`` constant. Display only, so any
+    failure reads as unknown.
+    """
+    try:
+        constant = iface.get_constant("Babe", "ExpectedBlockTime")
+    except Exception:  # noqa: BLE001 -- display only; never block a caller on it.
+        return None
+    return _as_int_or_none(getattr(constant, "value", None))
+
+
 def token(iface: Any) -> tuple[str, int]:
     """Return the chain's token symbol and decimals, or ``("planck", 0)`` if unknown."""
     try:

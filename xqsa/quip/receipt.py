@@ -27,14 +27,15 @@ method reads the chain when called; constructing a receipt reads nothing.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Self
 
 from xqsa.quip import chain
-from xqsa.quip.chain import _status_str
+from xqsa.quip.chain import MEMPOOL_PALLET, RECLAIM_ORDER_CALL, _status_str
 from xqsa.quip.codec import _TERMINAL_STATUSES, ORDER_STATUS_CLOSED
-from xqsa.quip.errors import QuipTimeoutError
+from xqsa.quip.errors import QuipSubmissionError, QuipTimeoutError
 
 if TYPE_CHECKING:
     from xqsa.quip.client import SolverQuip
@@ -58,6 +59,7 @@ class JobOrderReceipt:
             receipt.wait()
             receipt.solvers()
             receipt.settlement()
+            receipt.reclaim()  # only for a final order nobody answered.
     """
 
     def __init__(self, client: SolverQuip, order_id: int, genesis_hash: str) -> None:
@@ -202,6 +204,55 @@ class JobOrderReceipt:
         claimed = _status_str(order["status"]) == ORDER_STATUS_CLOSED and _solution_count(order) > 0
         return {"claimed": claimed, "winners": winners}
 
+    def reclaim(self) -> int:
+        """Refund the reward of a final order nobody answered, and return it in planck.
+
+        Only the proposer can reclaim, and only once the order is final with
+        no answers. This checks those conditions against the latest block,
+        in the order the chain does, and raises before anything is signed,
+        so a refused reclaim costs no fee. An answer that lands between the
+        check and inclusion still fails on chain, which stays the authority.
+        Nothing reclaims on its own.
+
+        Raises:
+            QuipSubmissionError: if this account did not propose the order,
+                the order is already closed, it is still open, or it was
+                answered; or if the chain refuses the reclaim.
+            QuipConnectionError: if the order or the head block cannot be read.
+            QuipUnconfirmedError: if the reclaim was sent but its outcome is
+                unknown.
+        """
+        client = self._client
+        order_id = self._order_id
+        # The head first: the order read after it then reflects every answer
+        # up to that block, so a reclaim the chain would refuse is caught here.
+        current_block = client._current_block()
+        order = self._fetch_order()
+        lifecycle = client._order_lifecycle(order, current_block)
+
+        proposer = chain.account_bytes(order["proposer"])
+        if proposer != bytes(client._signer.account_id):
+            proposed_by = chain.ss58_address(client._iface, proposer)
+            raise QuipSubmissionError(f"order {order_id} was proposed by {proposed_by}, not by this account")
+        if lifecycle["status"] == ORDER_STATUS_CLOSED:
+            raise QuipSubmissionError(f"order {order_id} is already closed (reclaimed or settled)")
+        expiry = lifecycle["effective_expiry"]
+        # The reclaim executes in a later block than the head read here, so an
+        # order one block short of expiry is already reclaimable on chain.
+        if not (lifecycle["is_final"] or self._final_seen) and current_block + 1 < expiry:
+            about = _minutes_until(expiry - current_block - 1, chain.block_time_ms(client._iface))
+            raise QuipSubmissionError(f"order {order_id} is open until block {expiry}{about}; reclaim after it closes")
+        answers = _solution_count(order)
+        if answers:
+            solvers = "solver" if answers == 1 else "solvers"
+            raise QuipSubmissionError(
+                f"order {order_id} was answered by {answers} {solvers}; its reward awaits the winner's claim "
+                "and cannot be reclaimed"
+            )
+
+        client._submit_extrinsic(MEMPOOL_PALLET, RECLAIM_ORDER_CALL, {"order_id": order_id})
+        return int(order["reward"])
+
     def _fetch_order(self) -> Mapping[str, Any]:
         return self._client._fetch_order(self._order_id)
 
@@ -213,6 +264,13 @@ class JobOrderReceipt:
 
     def __repr__(self) -> str:
         return f"JobOrderReceipt(order_id={self._order_id})"
+
+
+def _minutes_until(blocks: int, block_time_ms: int | None) -> str:
+    """Render ``blocks`` as " (about M min)", or nothing when the block time is unknown."""
+    if not block_time_ms:
+        return ""
+    return f" (about {max(1, math.ceil(blocks * block_time_ms / 60_000))} min)"
 
 
 def _solution_count(order: Mapping[str, Any]) -> int:

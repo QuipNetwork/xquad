@@ -742,8 +742,8 @@ class SolverQuip(Solver):
         """See :func:`xqsa.quip.chain.fetch_solutions`."""
         return chain.fetch_solutions(self._iface, order_id)
 
-    def _collect_result(self, order_id: int, job: IsingJob, model: Any, *, elapsed: float) -> SolverResult:
-        """Decode the best on-chain solution for ``order_id`` into a result.
+    def _collect_result(self, receipt: JobOrderReceipt, job: IsingJob, model: Any, *, elapsed: float) -> SolverResult:
+        """Decode the best on-chain solution for the receipt's order into a result.
 
         Selects the submission with the lowest chain ``best_energy_milli``,
         decodes every spin vector in it, and keeps the one with the best
@@ -757,14 +757,14 @@ class SolverQuip(Solver):
                 (the reward is auto-reclaimed first; the message notes the
                 refund outcome).
         """
+        order_id = receipt.order_id
         submissions = self._fetch_solutions(order_id)
         if not submissions:
-            reclaimed = self._reclaim(order_id)
             refund = (
                 "the reserved reward was reclaimed"
-                if reclaimed
+                if self._try_reclaim(receipt)
                 else "the reward reclaim failed (see warnings); funds remain reserved -- "
-                "retry SolverQuip.query(order_id, model) or reclaim manually"
+                f"retry with SolverQuip.get_receipt({order_id}).reclaim()"
             )
             raise QuipJobFailedError(order_id, f"order {order_id} finalized with no solutions; {refund}")
 
@@ -799,20 +799,25 @@ class SolverQuip(Solver):
             },
         )
 
-    def _reclaim(self, order_id: int) -> bool:
-        """Best-effort ``reclaim_order`` to unreserve the reward; never raises.
+    @staticmethod
+    def _try_reclaim(receipt: JobOrderReceipt) -> bool:
+        """Best-effort :meth:`JobOrderReceipt.reclaim <xqsa.quip.JobOrderReceipt.reclaim>`; never raises.
 
-        Valid only for the proposer once the order is Expired with zero accepted
-        solutions (the pallet flips Opened->Expired by height as a side effect).
-        Any failure (not proposer, not yet expired, RPC error) is logged and
-        swallowed -- reclaim is a courtesy on the failure path, not a guarantee.
+        The failure path of :meth:`solve` and :meth:`query` calls it, so any
+        failure is logged and swallowed: the refund must never hide the
+        error that led to it.
         """
         try:
-            self._submit_extrinsic(MEMPOOL_PALLET, RECLAIM_ORDER_CALL, {"order_id": order_id})
+            refunded = receipt.reclaim()
         except Exception as exc:  # noqa: BLE001 -- reclaim must never mask the original failure.
-            logger.warning("could not reclaim the reward for order %d: %s", order_id, exc)
+            logger.warning(
+                "could not reclaim the reward for order %d: %s; retry with get_receipt(%d).reclaim()",
+                receipt.order_id,
+                exc,
+                receipt.order_id,
+            )
             return False
-        logger.info("reclaimed the reserved reward for order %d", order_id)
+        logger.info("reclaimed %d planck reserved for order %d", refunded, receipt.order_id)
         return True
 
     # ------------------------------------------------------------------
@@ -1143,10 +1148,9 @@ class SolverQuip(Solver):
             QuipJobFailedError: if the order finalizes with no usable solution.
         """
         order = self._create_order(model, kwargs, strict=False).submit().wait()
-        order_id = order._order_id
-        assert order_id is not None and order._submitted_at is not None  # submit() sets both.
+        assert order._submitted_at is not None  # submit() sets it.
         elapsed = time.perf_counter() - order._submitted_at
-        return self._collect_result(order_id, order._job, model, elapsed=elapsed)
+        return self._collect_result(order.receipt(), order._job, model, elapsed=elapsed)
 
     def query(
         self,
@@ -1178,7 +1182,7 @@ class SolverQuip(Solver):
         if not self._order_lifecycle(order, self._current_block())["is_final"]:
             return None
         job = self._job_for(model, topology, mapping)
-        return self._collect_result(order_id, job, model, elapsed=0.0)
+        return self._collect_result(JobOrderReceipt(self, order_id, self._genesis_hash), job, model, elapsed=0.0)
 
     def get_receipt(self, order_id: int) -> JobOrderReceipt:
         """Return the receipt of the order ``order_id`` on this client's chain.

@@ -228,8 +228,8 @@ class JobOrder:
     through read-only properties and :meth:`options`.
 
     A submitted order has a :class:`~xqsa.quip.JobOrderReceipt`, returned by
-    :meth:`receipt`. :meth:`wait`, :meth:`solvers`, :meth:`raw_solutions` and
-    :meth:`settlement` pass through to it.
+    :meth:`receipt`. :meth:`wait`, :meth:`solvers`, :meth:`raw_solutions`,
+    :meth:`settlement` and :meth:`reclaim` pass through to it.
 
     States: ``draft``; ``submitted`` once placed with a known order id, then
     ``finalized`` once the chain closes it; ``failed`` when it was included but
@@ -475,6 +475,10 @@ class JobOrder:
     def settlement(self) -> dict[str, Any]:
         """See :meth:`JobOrderReceipt.settlement <xqsa.quip.JobOrderReceipt.settlement>`."""
         return self.receipt().settlement()
+
+    def reclaim(self) -> int:
+        """See :meth:`JobOrderReceipt.reclaim <xqsa.quip.JobOrderReceipt.reclaim>`."""
+        return self.receipt().reclaim()
 
     def _call_params(self) -> dict:
         """Build the ``propose_job`` call params for the current configuration."""

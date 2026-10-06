@@ -26,7 +26,9 @@ import pytest
 from xqsa.quip import QuipConnectionError, QuipMetadataError, QuipSubmissionError, QuipTimeoutError
 from xqsa.quip.chain import (
     _attribute,
+    account_bytes,
     block_hash,
+    block_time_ms,
     block_timestamp,
     front_runner,
     proposal_fee,
@@ -230,6 +232,32 @@ class TestChainReaders:
     def test_proposal_fee_missing_fee_raises(self, events):
         with pytest.raises(QuipConnectionError, match="TransactionFeePaid"):
             proposal_fee(FakeSubstrate(events=events), BLOCK, 10)
+
+    def test_account_bytes_forms(self):
+        raw = bytes(range(32))
+        assert account_bytes(raw) == raw
+        assert account_bytes("0x" + raw.hex()) == raw
+
+    def test_account_bytes_ss58_round_trip(self):
+        ss58 = pytest.importorskip("scalecodec.utils.ss58")
+        raw = bytes(range(32))
+        assert account_bytes(ss58.ss58_encode(raw, 42)) == raw
+
+    def test_account_bytes_junk_text_raises(self):
+        pytest.importorskip("scalecodec.utils.ss58")
+        with pytest.raises(ValueError):
+            account_bytes("not an account")
+
+    def test_block_time_ms(self):
+        assert block_time_ms(FakeSubstrate(constants={("Babe", "ExpectedBlockTime"): 6000})) == 6000
+
+    @pytest.mark.parametrize(
+        "iface",
+        [FakeSubstrate(), FakeSubstrate(get_constant_raises=RuntimeError("boom"))],
+        ids=["absent", "raises"],
+    )
+    def test_block_time_ms_unknown(self, iface):
+        assert block_time_ms(iface) is None
 
     @pytest.mark.parametrize(
         ("attrs", "expected"),
@@ -459,6 +487,111 @@ class TestJobOrderReceiptSettlement:
             receipt.settlement()
 
 
+OTHER_ACCOUNT = b"\x11" * 32
+BLOCK_TIME = ("Babe", "ExpectedBlockTime")
+
+
+def _reclaimable(monkeypatch, *, block_time: int | None = None, head: int = 200, spell=None, **order_kw):
+    """A receipt for an order the signer could reclaim, plus the list of submitted calls.
+
+    The defaults are final (head 200 past expiry 100), unanswered, proposed by the signer;
+    ``spell`` re-spells the signer's account (bytes in, any decoded form out) as the proposer.
+    """
+    receipt = _receipt_for(monkeypatch, order=_receipt_order(**{"solution_count": 0, **order_kw}), head=head)
+    client = receipt._client
+    if spell is not None:
+        client._iface.storage[(MEMPOOL, "JobOrders")]["proposer"] = spell(bytes(client._signer.account_id))
+    if block_time is not None:
+        client._iface.constants[BLOCK_TIME] = block_time
+    calls: list[tuple] = []
+    monkeypatch.setattr(client, "_submit_extrinsic", lambda *args: calls.append(args))
+    return receipt, calls
+
+
+class TestJobOrderReceiptReclaim:
+    def test_reads_the_head_before_the_order(self, monkeypatch) -> None:
+        receipt, _ = _reclaimable(monkeypatch)
+        client, reads = receipt._client, []
+        current_block, fetch_order = client._current_block, client._fetch_order
+        monkeypatch.setattr(client, "_current_block", lambda: reads.append("head") or current_block())
+        monkeypatch.setattr(client, "_fetch_order", lambda order_id: reads.append("order") or fetch_order(order_id))
+        receipt.reclaim()
+        assert reads == ["head", "order"]
+
+    def test_a_final_already_seen_survives_a_lagging_head(self, monkeypatch) -> None:
+        receipt, calls = _reclaimable(monkeypatch)
+        receipt.wait()
+        receipt._client._iface.head = 50
+        assert receipt.reclaim() == REWARD
+        assert len(calls) == 1
+
+    def test_one_block_short_of_expiry_is_reclaimable(self, monkeypatch) -> None:
+        # The reclaim lands at head + 1 at the earliest, where the chain flips the order to Expired.
+        receipt, calls = _reclaimable(monkeypatch, head=99)
+        assert receipt.reclaim() == REWARD
+        assert calls == [(MEMPOOL, "reclaim_order", {"order_id": 1})]
+
+    @pytest.mark.parametrize("form", ["hex", "bytes", "ss58"])
+    def test_refunds_an_unanswered_final_order(self, monkeypatch, form) -> None:
+        spells = {"hex": lambda raw: "0x" + raw.hex(), "bytes": bytes}
+        if form == "ss58":
+            ss58_encode = pytest.importorskip("scalecodec.utils.ss58").ss58_encode
+            spells[form] = lambda raw: ss58_encode(raw, 42)
+        receipt, calls = _reclaimable(monkeypatch, spell=spells[form])
+        assert receipt.reclaim() == REWARD
+        assert calls == [(MEMPOOL, "reclaim_order", {"order_id": 1})]
+
+    @pytest.mark.parametrize(
+        ("order_kw", "head", "block_time", "match"),
+        [
+            pytest.param(
+                {"proposer": OTHER_ACCOUNT},
+                200,
+                None,
+                r"^order 1 was proposed by .+, not by this account$",
+                id="not-proposer",
+            ),
+            pytest.param(
+                {"status": "Closed"}, 200, None, r"^order 1 is already closed \(reclaimed or settled\)$", id="closed"
+            ),
+            pytest.param(
+                {}, 50, 6000, r"^order 1 is open until block 100 \(about 5 min\); reclaim after it closes$", id="open"
+            ),
+            pytest.param(
+                {}, 50, None, r"^order 1 is open until block 100; reclaim after it closes$", id="open-no-time"
+            ),
+            pytest.param(
+                {"solution_count": 2},
+                200,
+                None,
+                r"^order 1 was answered by 2 solvers; its reward awaits the winner's claim and cannot be reclaimed$",
+                id="answered-2",
+            ),
+            pytest.param({"solution_count": 1}, 200, None, r"^order 1 was answered by 1 solver; its", id="answered-1"),
+            # Check order follows the chain: proposer, then closed, then open, then answered.
+            pytest.param(
+                {"proposer": OTHER_ACCOUNT, "solution_count": 2, "status": "Opened"},
+                50,
+                None,
+                r"was proposed by .+, not by this account$",
+                id="not-proposer-beats-open-and-answered",
+            ),
+            pytest.param({"status": "Closed"}, 50, 6000, r"^order 1 is already closed", id="closed-beats-open"),
+        ],
+    )
+    def test_local_refusals_never_submit(self, monkeypatch, order_kw, head, block_time, match) -> None:
+        receipt, calls = _reclaimable(monkeypatch, block_time=block_time, head=head, **order_kw)
+        with pytest.raises(QuipSubmissionError, match=match):
+            receipt.reclaim()
+        assert calls == []
+
+    def test_open_rounds_up_to_whole_minutes(self, monkeypatch) -> None:
+        # 50 blocks at 7000 ms is 5.83 min.
+        receipt, _ = _reclaimable(monkeypatch, block_time=7000, head=50)
+        with pytest.raises(QuipSubmissionError, match=r"\(about 6 min\)"):
+            receipt.reclaim()
+
+
 def _fail_dispatch(monkeypatch, solver) -> None:
     _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error="QuantumComputeMempool.RewardTooLow"))
 
@@ -514,11 +647,13 @@ class TestJobOrderPassThroughs:
         monkeypatch.setattr(order._receipt, "solvers", lambda: ["solvers"])
         monkeypatch.setattr(order._receipt, "settlement", lambda: {"claimed": False, "winners": []})
         monkeypatch.setattr(order._receipt, "raw_solutions", lambda solver=None: seen.append(solver) or {"raw": solver})
+        monkeypatch.setattr(order._receipt, "reclaim", lambda: REWARD)
         assert order.solvers() == ["solvers"]
         assert order.settlement() == {"claimed": False, "winners": []}
         assert order.raw_solutions() == {"raw": None}
         assert order.raw_solutions("0xSOLVER") == {"raw": "0xSOLVER"}
         assert seen == [None, "0xSOLVER"]
+        assert order.reclaim() == REWARD
 
     def test_status_goes_through_the_receipt(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)

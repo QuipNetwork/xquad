@@ -1139,7 +1139,11 @@ def _make_solver(monkeypatch, *, iface: FakeSubstrate | None = None, **kwargs):
     _clear_quip_env(monkeypatch)
     kwargs.setdefault("url", "ws://fake:9944")
     kwargs.setdefault("seed", VALID_SEED)
-    return SolverQuip(**kwargs)
+    solver = SolverQuip(**kwargs)
+    order = resolved.storage.get(("QuantumComputeMempool", "JobOrders"))
+    if isinstance(order, dict) and order.get("proposer") == SIGNER_ACCOUNT:
+        order["proposer"] = "0x" + bytes(solver._signer.account_id).hex()
+    return solver
 
 
 class TestSolverQuipGuards:
@@ -2103,6 +2107,9 @@ def _spin_vector(job: IsingJob, var_spins: dict[int, int], default: int = 1) -> 
     return vector
 
 
+SIGNER_ACCOUNT = "<signer>"  # placeholder; _make_solver swaps in the real signer account.
+
+
 def _order(
     *,
     status: str = "Opened",
@@ -2111,8 +2118,12 @@ def _order(
     deadline_blocks: int = 100,
     block_wait: int = 10,
     solution_count: int = 1,
+    proposer: str = SIGNER_ACCOUNT,
+    reward: int = UNIT,
 ) -> dict:
     return {
+        "proposer": proposer,
+        "reward": reward,
         "status": status,
         "created_at": created_at,
         "first_solution_at": first_solution_at,
@@ -2197,7 +2208,7 @@ class TestSolverQuipCollect:
             (b"solver", _submission("0xSOLVER", [high, low], chain_best))
         ]
 
-        result = solver._collect_result(1, job, model, elapsed=1.5)
+        result = solver._collect_result(solver.get_receipt(1), job, model, elapsed=1.5)
         assert result.energy == 0  # the lower-energy vector wins
         assert result.timing == 1.5
         assert result.metadata["order_id"] == 1
@@ -2218,7 +2229,7 @@ class TestSolverQuipCollect:
             (b"a", _submission("0xLOSER", [loser], ising_energy_milli(job, loser))),
             (b"b", _submission("0xWINNER", [winner], ising_energy_milli(job, winner))),
         ]
-        result = solver._collect_result(1, job, model, elapsed=0.0)
+        result = solver._collect_result(solver.get_receipt(1), job, model, elapsed=0.0)
         assert result.metadata["solver"] == "0xWINNER"
         assert result.energy == 0
 
@@ -2231,7 +2242,7 @@ class TestSolverQuipCollect:
         solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [
             (b"solver", _submission("0xSOLVER", [vector], wrong))
         ]
-        result = solver._collect_result(1, job, model, elapsed=0.0)
+        result = solver._collect_result(solver.get_receipt(1), job, model, elapsed=0.0)
         assert result.metadata["energy_matches_chain"] is False
 
     def test_missing_pallet_field_raises_typed_error(self, monkeypatch) -> None:
@@ -2246,7 +2257,7 @@ class TestSolverQuipCollect:
         del broken["best_energy_milli"]  # simulate a renamed/absent field
         solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [(b"solver", broken)]
         with pytest.raises(QuipJobFailedError, match="field layout"):
-            solver._collect_result(1, job, _model(), elapsed=0.0)
+            solver._collect_result(solver.get_receipt(1), job, _model(), elapsed=0.0)
 
     def test_no_solutions_auto_reclaims_then_fails(self, monkeypatch) -> None:
         from xqsa.quip import QuipJobFailedError
@@ -2256,21 +2267,29 @@ class TestSolverQuipCollect:
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         job = _job(solver)
         with pytest.raises(QuipJobFailedError) as excinfo:
-            solver._collect_result(1, job, _model(), elapsed=0.0)
+            solver._collect_result(solver.get_receipt(1), job, _model(), elapsed=0.0)
         assert excinfo.value.order_id == 1
         assert "reclaimed" in str(excinfo.value)
         assert captured["call_function"] == "reclaim_order"
         assert captured["call_params"] == {"order_id": 1}
 
-    def test_reclaim_failure_is_tolerated(self, monkeypatch) -> None:
+    @pytest.mark.parametrize(
+        ("order", "error"),
+        [
+            pytest.param(_order(solution_count=0), "System.ExtrinsicFailed: NotProposer", id="chain-dispatch-failure"),
+            pytest.param(_order(solution_count=0, proposer="0x" + "11" * 32), None, id="local-refusal"),
+        ],
+    )
+    def test_reclaim_failure_is_tolerated(self, monkeypatch, order, error) -> None:
         from xqsa.quip import QuipJobFailedError
 
-        iface = _chain_iface(order=_order(solution_count=0), head=200, submissions=[])
+        iface = _chain_iface(order=order, head=200, submissions=[])
         solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
-        # reclaim_order dispatch fails (e.g. not proposer); _reclaim swallows it.
-        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error="System.ExtrinsicFailed: NotProposer"))
-        with pytest.raises(QuipJobFailedError, match="remain reserved"):
-            solver._collect_result(1, _job(solver), _model(), elapsed=0.0)
+        # The reclaim is refused, locally or on chain; _try_reclaim swallows it.
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error=error))
+        with pytest.raises(QuipJobFailedError, match="remain reserved") as excinfo:
+            solver._collect_result(solver.get_receipt(1), _job(solver), _model(), elapsed=0.0)
+        assert "get_receipt(1).reclaim()" in str(excinfo.value)
 
 
 class TestSolverQuipSolve:
@@ -2551,7 +2570,7 @@ class TestSolverQuipNativeTopology:
 
         captured: dict = {}
 
-        def _fake_collect(order_id, job, model_arg, *, elapsed):
+        def _fake_collect(receipt, job, model_arg, *, elapsed):
             captured["job"] = job
             return SolverResult(sample=model_arg, energy=0, timing=elapsed, metadata={})
 
