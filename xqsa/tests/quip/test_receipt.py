@@ -831,6 +831,12 @@ class TestJobOrderReceiptDisplay:
         assert "│ Fee         unknown " in text
         assert any("the fee of order 1" in record.getMessage() for record in caplog.records)
 
+    def test_faulted_fee_is_read_again(self, monkeypatch) -> None:
+        receipt = _display_for(monkeypatch, fee=None)
+        assert "│ Fee         unknown " in str(receipt)
+        receipt._client._iface.events = [_proposed(1, 1), _fee(1, FEE)]  # the node recovers.
+        assert f"│ Fee         {FEE / 10**12:.12f} AGLS " in str(receipt)
+
     def test_missing_timestamp_reads_unknown(self, monkeypatch, caplog) -> None:
         receipt = _display_for(monkeypatch, ms=None)
         with caplog.at_level(logging.WARNING, logger="xqsa.quip"):

@@ -34,7 +34,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from functools import cached_property
 from typing import TYPE_CHECKING, Any, Self
 
 from xqsa.quip import chain
@@ -110,6 +109,8 @@ class JobOrderReceipt:
         self._genesis_hash = genesis_hash
         # Set once a read shows the order final; a later read from a lagging node must not reopen it.
         self._final_seen = False
+        # Filled only once every placement read succeeded, so a faulted read is retried.
+        self._facts_cache: _Facts | None = None
 
     @property
     def order_id(self) -> int:
@@ -296,9 +297,13 @@ class JobOrderReceipt:
     def _fetch_order(self) -> Mapping[str, Any]:
         return self._client._fetch_order(self._order_id)
 
-    @cached_property
     def _facts(self) -> _Facts:
-        """Read the order's placement facts once: the order, its block's time, and the fee it paid."""
+        """Read the order's placement facts: the order, its block's time, and the fee it paid.
+
+        Cached once every read succeeded; a faulted read is retried on the next call.
+        """
+        if self._facts_cache is not None:
+            return self._facts_cache
         iface = self._client._iface
         order = self._fetch_order()
         created_at = _coerce_block_number(order["created_at"])
@@ -308,7 +313,7 @@ class JobOrderReceipt:
             submitted_ms = self._best_effort("the submission time", lambda: chain.block_timestamp(iface, block_hash))
             fee = self._best_effort("the fee", lambda: chain.proposal_fee(iface, block_hash, self._order_id))
         params, timing = order["ising_params"], order["timing"]
-        return _Facts(
+        facts = _Facts(
             proposer=self._ss58(order["proposer"]),
             spec_id=str(order["spec_id"]),
             num_spins=len(params["nodes"]),
@@ -322,6 +327,9 @@ class JobOrderReceipt:
             submitted_ms=submitted_ms,
             fee=fee,
         )
+        if submitted_ms is not None and fee is not None:
+            self._facts_cache = facts
+        return facts
 
     def _best_effort(self, what: str, read: Any) -> Any:
         """Return ``read()``, or ``None`` with a warning if it faults; for display-only facts."""
@@ -377,7 +385,7 @@ class JobOrderReceipt:
 
     def _render(self) -> str:
         client = self._client
-        facts, outcome = self._facts, self._outcome()
+        facts, outcome = self._facts(), self._outcome()
         symbol, decimals = client._token()
 
         def amount(planck: int | None) -> str:
