@@ -140,12 +140,14 @@ from .networks import NETWORKS
 from .order import JobOrder
 from .quote import JobQuote
 from .receipt import JobOrderReceipt
+from .solution import Solution
 
 __all__ = [
     "SolverQuip",
     "JobOrder",
     "JobOrderReceipt",
     "JobQuote",
+    "Solution",
     "QuipError",
     "QuipCancelledError",
     "QuipConnectionError",
