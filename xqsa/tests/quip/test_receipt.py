@@ -785,6 +785,7 @@ class TestJobOrderReceiptDisplay:
         ("order_kw", "head", "front", "status", "money"),
         [
             pytest.param({"solution_count": 0}, 50, None, "open", "Reward      reserved, no answers yet", id="open"),
+            pytest.param({}, 50, LEADING, "open", "Reward      reserved, leader so far", id="open-answered"),
             pytest.param(
                 {"solution_count": 0},
                 200,

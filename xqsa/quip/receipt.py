@@ -413,12 +413,13 @@ class JobOrderReceipt:
 
     def _payout_rows(self, outcome: _Outcome, amount: Any) -> list[tuple[str, str]]:
         """The Money rows after the fee: each winner's share, or what happens to an unanswered reward."""
+        if outcome.status == "open":
+            # The leader can still be displaced, and nothing is claimable before the order is final.
+            return [("Reward", "reserved, leader so far" if outcome.answers else "reserved, no answers yet")]
         if outcome.answers == 0:
             if outcome.status == "closed":
                 return [("Reward", "reclaimed")]
-            if outcome.status == "final":
-                return [("Reward", f"unanswered: reclaim with get_receipt({self._order_id}).reclaim()")]
-            return [("Reward", "reserved, no answers yet")]
+            return [("Reward", f"unanswered: reclaim with get_receipt({self._order_id}).reclaim()")]
         try:
             settlement = self.settlement()
         except NotImplementedError as exc:
