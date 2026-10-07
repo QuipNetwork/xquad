@@ -2216,11 +2216,12 @@ class TestSolverQuipCollect:
         assert result.metadata["solver"] == "0xSOLVER"
         assert result.metadata["best_energy_milli"] == chain_best
         assert result.metadata["energy_matches_chain"] is True
+        assert result.metadata["leader_read"] is False  # no front runner is set.
         assert result.metadata["num_submissions"] == 1
         assert result.metadata["num_solutions"] == 2
         assert result.metadata["quantization_error"] == 0.0
 
-    def test_picks_lowest_best_energy_submission(self, monkeypatch) -> None:
+    def test_falls_back_to_the_best_stored_vector_without_a_leader(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch, iface=_chain_iface(order=_order(), head=200), topology=TOPO_HASH)
         model = _model()
         job = _job(solver)
@@ -2232,7 +2233,67 @@ class TestSolverQuipCollect:
         ]
         result = solver._collect_result(solver.get_receipt(1), job, model, elapsed=0.0)
         assert result.metadata["solver"] == "0xWINNER"
+        assert result.metadata["leader_read"] is False
         assert result.energy == 0
+
+    def test_follows_the_front_runner_on_a_tie(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, iface=_chain_iface(order=_order(), head=200), topology=TOPO_HASH)
+        job = _job(solver)
+        vector = _spin_vector(job, {0: 1, 1: 1})
+        milli = ising_energy_milli(job, vector)
+        solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [
+            (b"a", _submission("0xA", [vector], milli)),
+            (b"b", _submission("0xB", [vector], milli)),
+        ]
+        solver._iface.storage[("QuantumComputeMempool", "OrderFrontRunner")] = {"solver": "0xB", "energy_milli": milli}
+        result = solver._collect_result(solver.get_receipt(1), job, _model(), elapsed=0.0)
+        assert result.metadata["solver"] == "0xB"
+        assert result.metadata["leader_read"] is True
+        assert result.metadata["leader"] is True
+        assert result.metadata["energy_matches_chain"] is True
+
+    def test_follows_the_front_runner_over_a_lower_stored_energy(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, iface=_chain_iface(order=_order(), head=200), topology=TOPO_HASH)
+        job = _job(solver)
+        low = _spin_vector(job, {0: 1, 1: 1})  # E = 0
+        lead = _spin_vector(job, {0: 1, 1: -1})  # E = +2
+        lead_milli = ising_energy_milli(job, lead)
+        solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [
+            (b"a", _submission("0xLOW", [low], ising_energy_milli(job, low))),
+            (b"b", _submission("0xLEAD", [lead], lead_milli)),
+        ]
+        solver._iface.storage[("QuantumComputeMempool", "OrderFrontRunner")] = {
+            "solver": "0xLEAD",
+            "energy_milli": lead_milli,
+        }
+        result = solver._collect_result(solver.get_receipt(1), job, _model(), elapsed=0.0)
+        assert result.metadata["solver"] == "0xLEAD"
+        assert result.metadata["leader_read"] is True
+        assert result.metadata["leader"] is True
+        assert result.metadata["best_energy_milli"] == lead_milli
+        assert result.energy == 2
+
+    def test_mismatched_leader_returns_the_best_stored_sample(self, monkeypatch) -> None:
+        # The chain ranks 0xLEAD at E = 0, but its stored vector only reaches +2
+        # (an overwrite, QUI-1408); 0xOTHER stored the E = 0 vector.
+        solver = _make_solver(monkeypatch, iface=_chain_iface(order=_order(), head=200), topology=TOPO_HASH)
+        job = _job(solver)
+        good = _spin_vector(job, {0: 1, 1: 1})  # E = 0
+        worse = _spin_vector(job, {0: 1, 1: -1})  # E = +2
+        solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [
+            (b"a", _submission("0xLEAD", [worse], ising_energy_milli(job, worse))),
+            (b"b", _submission("0xOTHER", [good], ising_energy_milli(job, good))),
+        ]
+        solver._iface.storage[("QuantumComputeMempool", "OrderFrontRunner")] = {
+            "solver": "0xLEAD",
+            "energy_milli": ising_energy_milli(job, good),
+        }
+        result = solver._collect_result(solver.get_receipt(1), job, _model(), elapsed=0.0)
+        assert result.energy == 0
+        assert result.metadata["solver"] == "0xOTHER"
+        assert result.metadata["leader"] is False
+        assert result.metadata["leader_read"] is True
+        assert result.metadata["energy_matches_chain"] is False
 
     def test_canary_false_on_energy_mismatch(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch, iface=_chain_iface(order=_order(), head=200), topology=TOPO_HASH)
@@ -2245,6 +2306,24 @@ class TestSolverQuipCollect:
         ]
         result = solver._collect_result(solver.get_receipt(1), job, model, elapsed=0.0)
         assert result.metadata["energy_matches_chain"] is False
+
+    def test_canary_false_when_the_ranked_energy_differs_from_the_leaders_vector(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, iface=_chain_iface(order=_order(), head=200), topology=TOPO_HASH)
+        job = _job(solver)
+        vector = _spin_vector(job, {0: 1, 1: 1})
+        stored = ising_energy_milli(job, vector)
+        ranked = stored + 1000  # the chain ranks the leader at an energy its vector does not recompute to.
+        solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [
+            (b"solver", _submission("0xSOLVER", [vector], stored))
+        ]
+        solver._iface.storage[("QuantumComputeMempool", "OrderFrontRunner")] = {
+            "solver": "0xSOLVER",
+            "energy_milli": ranked,
+        }
+        result = solver._collect_result(solver.get_receipt(1), job, _model(), elapsed=0.0)
+        assert result.metadata["leader_read"] is True
+        assert result.metadata["energy_matches_chain"] is False
+        assert result.metadata["best_energy_milli"] == ranked
 
     def test_missing_pallet_field_raises_typed_error(self, monkeypatch) -> None:
         # A pre-release field rename must surface as QuipJobFailedError, not a
@@ -2275,22 +2354,31 @@ class TestSolverQuipCollect:
         assert captured["call_params"] == {"order_id": 1}
 
     @pytest.mark.parametrize(
-        ("order", "error"),
+        ("order", "error", "reason"),
         [
-            pytest.param(_order(solution_count=0), "System.ExtrinsicFailed: NotProposer", id="chain-dispatch-failure"),
-            pytest.param(_order(solution_count=0, proposer="0x" + "11" * 32), None, id="local-refusal"),
+            pytest.param(
+                _order(solution_count=0),
+                "System.ExtrinsicFailed: NotProposer",
+                "NotProposer",
+                id="chain-dispatch-failure",
+            ),
+            pytest.param(
+                _order(solution_count=0, proposer="0x" + "11" * 32), None, "not by this account", id="local-refusal"
+            ),
+            pytest.param(_order(solution_count=0, status="Closed"), None, "already closed", id="already-closed"),
         ],
     )
-    def test_reclaim_failure_is_tolerated(self, monkeypatch, order, error) -> None:
+    def test_reclaim_failure_is_tolerated(self, monkeypatch, order, error, reason) -> None:
         from xqsa.quip import QuipJobFailedError
 
         iface = _chain_iface(order=order, head=200, submissions=[])
         solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
         # The reclaim is refused, locally or on chain; _try_reclaim swallows it.
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error=error))
-        with pytest.raises(QuipJobFailedError, match="remain reserved") as excinfo:
+        with pytest.raises(QuipJobFailedError, match="the reward was not reclaimed: ") as excinfo:
             solver._collect_result(solver.get_receipt(1), _job(solver), _model(), elapsed=0.0)
-        assert "get_receipt(1).reclaim()" in str(excinfo.value)
+        assert reason in str(excinfo.value)
+        assert "remain reserved" not in str(excinfo.value)
 
 
 class TestSolverQuipSolve:
