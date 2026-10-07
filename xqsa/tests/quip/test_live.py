@@ -67,12 +67,21 @@ from xqsa.quip import (
     QuipTimeoutError,
     SolverQuip,
 )
+from xqsa.quip import chain as quip_chain
 from xqsa.quip.client import _is_native
-from xqsa.quip.codec import DEFAULT_ISING_SPEC_ID, PlacementError, _as_hex, _canonical_hex, _require_h256
+from xqsa.quip.codec import (
+    DEFAULT_ISING_SPEC_ID,
+    PlacementError,
+    _as_hex,
+    _canonical_hex,
+    _require_h256,
+    ising_energy_milli,
+)
 from xqsa.quip.faucet import fund_from_faucet
 from xqsa.quip.metadata import connect as connect_shimmed
 from xqsa.quip.signing import SIGNED_EXTENSIONS, _extension_fields, load_or_generate_keystore
-from xqvm_py.xqmx import XQMX
+from xqsa.quip.solution import decode_answers, pick_best
+from xqvm_py.xqmx import XQMX, compute_energy
 
 RPC_URL = os.environ.get("QUIP_RPC_URL")
 FAUCET_URL = os.environ.get("QUIP_FAUCET_URL")
@@ -262,6 +271,68 @@ def _dense_spin_model() -> XQMX:
         for j in range(i + 1, size):
             model.set_quadratic(i, j, 1 if (i + j) % 2 == 0 else -1)
     return model
+
+
+def _model_vector(job, spins: dict[int, int]) -> list[int]:
+    """A per-node spin vector giving each model variable its spin in ``spins``; unplaced nodes read +1."""
+    vector = [1] * job.topology.num_nodes
+    for var, node in job.mapping.items():
+        vector[job.topology.index_of(node)] = spins[var]
+    return vector
+
+
+def _by_energy(model: XQMX) -> list[dict[int, int]]:
+    """Every spin assignment of a small SPIN model, lowest energy first."""
+    assignments = [{var: 1 if bits >> var & 1 else -1 for var in range(model.size)} for bits in range(2**model.size)]
+
+    def energy(spins: dict[int, int]) -> int:
+        sample = XQMX.spin_sample(model.size, model.rows, model.cols)
+        for var, spin in spins.items():
+            sample.set_linear(var, spin)
+        return int(compute_energy(model, sample))
+
+    return sorted(assignments, key=energy)
+
+
+def _self_solve(solver: SolverQuip, model: XQMX, vectors: list[list[int]]) -> int:
+    """Propose ``model`` and answer it with ``vectors`` in one ``batch_all``; returns the order id.
+
+    The answer lands in the proposal's own extrinsic, so it is the order's
+    first and its account leads unless a strictly lower energy arrives. The
+    account registers as a solver first if it is not one. The next order id
+    is predicted, so a proposal from elsewhere in the same block reverts the
+    batch; that is retried.
+    """
+    pallet = "QuantumComputeMempool"
+    account = "0x" + bytes(solver._signer.account_id).hex()
+    if solver._iface.query(pallet, "Solvers", [account]).value is None:
+        solver._submit_extrinsic(pallet, "register_solver", {"solver_type": "Cpu"})
+    propose = solver.create_order(model)._call_params()
+    solutions = quip_chain.wrap_bounded([quip_chain.wrap_bounded(list(vector)) for vector in vectors])
+    for _attempt in range(3):
+        order_id = int(solver._iface.query(pallet, "NextOrderId").value)
+        calls = [
+            {"call_module": pallet, "call_function": "propose_job", "call_args": propose},
+            {
+                "call_module": pallet,
+                "call_function": "submit_solution",
+                "call_args": {"order_id": order_id, "solutions": solutions},
+            },
+        ]
+        try:
+            solver._submit_extrinsic("Utility", "batch_all", {"calls": calls})
+        except QuipSubmissionError:
+            continue
+        return order_id
+    pytest.fail("the self-solve batch was refused three times")
+
+
+def _claim(solver: SolverQuip, order_id: int) -> None:
+    """Claim a self-answered order's reward back, best-effort, so the test leaves nothing reserved."""
+    try:
+        solver._submit_extrinsic("QuantumComputeMempool", "claim_reward", {"order_id": order_id})
+    except QuipSubmissionError:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -657,3 +728,50 @@ class TestEndToEnd:
             recovered = solver.query(order_id, model)
         assert recovered is not None
         assert recovered.energy == result.energy
+
+
+class TestLeader:
+    def test_tied_order_follows_our_lead(self, make_solver, solving_miner) -> None:
+        """Our ground-state answer lands first; a fleet answer can only tie it, so we stay the leader."""
+        model = _asymmetric_spin_model()
+        solver = make_solver()
+        job = solver.create_order(model)._job
+        order_id = _self_solve(solver, model, [_model_vector(job, _by_energy(model)[0])])
+        receipt = solver.get_receipt(order_id).wait()
+
+        ours = quip_chain.ss58_address(solver._iface, bytes(solver._signer.account_id))
+        entries = receipt.solvers()
+        assert entries[0]["solver"] == ours
+        if not any(entry["energy_milli"] == entries[0]["ranked_energy_milli"] for entry in entries[1:]):
+            _claim(solver, order_id)
+            pytest.skip("no other solver tied our answer; the tie-break went unexercised")
+
+        pick = pick_best(receipt, job, model)
+        assert (pick.solution.solver, pick.solution.leader, pick.leader_read) == (ours, True, True)
+        assert pick.energy_matches_chain is True
+        with pytest.warns(DeprecationWarning):
+            result = solver.query(order_id, model)
+        assert result is not None
+        assert result.metadata["solver"] == ours
+        _claim(solver, order_id)
+
+    def test_four_vector_answer_comes_back_whole(self, make_solver) -> None:
+        """A 4-vector answer is stored and decoded in full, best first."""
+        model = _asymmetric_spin_model()
+        solver = make_solver()
+        if (solver._limits.max_solutions or 4) < 4:
+            pytest.skip("the chain's MaxSolutions is under 4")
+        job = solver.create_order(model)._job
+        assignments = _by_energy(model)[:4]
+        vectors = [_model_vector(job, spins) for spins in reversed(assignments)]
+        order_id = _self_solve(solver, model, vectors)
+        receipt = solver.get_receipt(order_id).wait()
+
+        ours = quip_chain.ss58_address(solver._iface, bytes(solver._signer.account_id))
+        solutions = decode_answers(receipt, job, model, solver=ours)
+        assert len(solutions) == 4
+        assert [s.energy_milli for s in solutions] == sorted(ising_energy_milli(job, v) for v in vectors)
+        assert [solutions[0].sample.get_linear(var) for var in range(model.size)] == [
+            assignments[0][var] for var in range(model.size)
+        ]
+        _claim(solver, order_id)
