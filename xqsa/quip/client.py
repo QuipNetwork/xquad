@@ -60,6 +60,7 @@ from xqsa.quip.errors import (  # noqa: F401 -- the Quip* errors stay importable
     QuipJobFailedError,
     QuipMetadataError,
     QuipOrderOptionError,
+    QuipReclaimRefusedError,
     QuipSubmissionError,
     QuipTimeoutError,
     QuipTopologyError,
@@ -700,6 +701,18 @@ class SolverQuip(Solver):
         wire, ext_hash = self._build_extrinsic(call_module, call_function, call_params)
         return self._submit_built(call_module, call_function, wire, ext_hash, wait_for=wait_for)
 
+    def _send_extrinsic(self, call_module: str, call_function: str, call_params: dict) -> Any:
+        """Sign and send an extrinsic, returning its receipt even when the dispatch failed.
+
+        :meth:`_build_extrinsic` then :func:`xqsa.quip.chain.send_extrinsic`.
+
+        Raises:
+            QuipSubmissionError: if the extrinsic certainly did not land.
+            QuipUnconfirmedError: if it was sent but may or may not have landed.
+        """
+        wire, ext_hash = self._build_extrinsic(call_module, call_function, call_params)
+        return chain.send_extrinsic(self._iface, self._quip_signing, call_module, call_function, wire, ext_hash)
+
     def _build_extrinsic(
         self, call_module: str, call_function: str, call_params: dict, nonce: int | None = None
     ) -> tuple[bytes, str]:
@@ -759,14 +772,12 @@ class SolverQuip(Solver):
         Raises:
             QuipJobFailedError: if the order finalized with no usable solution.
                 With no answers at all, the reward is auto-reclaimed first and
-                the message gives the outcome, or why the reclaim was refused.
+                the message gives the outcome: why the reclaim was refused, or
+                how to retry it when it failed for another reason.
         """
         order_id = receipt.order_id
         if not self._fetch_solutions(order_id):
-            refused = self._try_reclaim(receipt)
-            refund = (
-                "the reserved reward was reclaimed" if refused is None else f"the reward was not reclaimed: {refused}"
-            )
+            refund = self._try_reclaim(receipt)
             raise QuipJobFailedError(order_id, f"order {order_id} finalized with no solutions; {refund}")
 
         pick = pick_best(receipt, job, model)
@@ -790,26 +801,28 @@ class SolverQuip(Solver):
         )
 
     @staticmethod
-    def _try_reclaim(receipt: JobOrderReceipt) -> str | None:
+    def _try_reclaim(receipt: JobOrderReceipt) -> str:
         """Best-effort :meth:`JobOrderReceipt.reclaim <xqsa.quip.JobOrderReceipt.reclaim>`; never raises.
 
-        Returns ``None`` once the reward is refunded, else the reason the
-        reclaim was refused or failed. The failure path of :meth:`solve` and
-        :meth:`query` calls it, so any failure is logged and swallowed: the
-        refund must never hide the error that led to it.
+        Returns what became of the reward, for the error message. A
+        :class:`QuipReclaimRefusedError` gives only its reason, since sending
+        the reclaim again cannot succeed; any other failure leaves the reward
+        possibly reserved, so the retry is named. The failure path of
+        :meth:`solve` and :meth:`query` calls it, so any failure is logged and
+        swallowed: the refund must never hide the error that led to it.
         """
+        order_id = receipt.order_id
         try:
             refunded = receipt.reclaim()
+        except QuipReclaimRefusedError as exc:
+            logger.warning("the reward for order %d was not reclaimed: %s", order_id, exc)
+            return f"the reward was not reclaimed: {exc}"
         except Exception as exc:  # noqa: BLE001 -- reclaim must never mask the original failure.
-            logger.warning(
-                "could not reclaim the reward for order %d: %s; retry with get_receipt(%d).reclaim()",
-                receipt.order_id,
-                exc,
-                receipt.order_id,
-            )
-            return str(exc)
-        logger.info("reclaimed %d planck reserved for order %d", refunded, receipt.order_id)
-        return None
+            retry = f"it may still be reserved -- retry with SolverQuip.get_receipt({order_id}).reclaim()"
+            logger.warning("the reward for order %d was not reclaimed: %s; %s", order_id, exc, retry)
+            return f"the reward was not reclaimed: {exc}; {retry}"
+        logger.info("reclaimed %d planck reserved for order %d", refunded, order_id)
+        return "the reserved reward was reclaimed"
 
     # ------------------------------------------------------------------
     # Public surface
@@ -1108,8 +1121,8 @@ class SolverQuip(Solver):
         vector of the solver it ranks first (see :meth:`JobOrder.best
         <xqsa.quip.JobOrder.best>`). If the order finalizes with no solutions,
         the reward is auto-reclaimed and :class:`QuipJobFailedError` is raised,
-        saying why if the reclaim was refused. A faucet drip is not returned if
-        the job fails after it.
+        saying why if the reclaim was refused, or how to retry it if it failed.
+        A faucet drip is not returned if the job fails after it.
 
         Unlike :meth:`create_order`, an unknown option or a raw chain dict
         warns with a ``DeprecationWarning`` instead of raising, until QUI-1608.

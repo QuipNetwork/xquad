@@ -2368,7 +2368,7 @@ class TestSolverQuipCollect:
             pytest.param(_order(solution_count=0, status="Closed"), None, "already closed", id="already-closed"),
         ],
     )
-    def test_reclaim_failure_is_tolerated(self, monkeypatch, order, error, reason) -> None:
+    def test_reclaim_refusal_is_tolerated_without_a_retry(self, monkeypatch, order, error, reason) -> None:
         from xqsa.quip import QuipJobFailedError
 
         iface = _chain_iface(order=order, head=200, submissions=[])
@@ -2378,7 +2378,42 @@ class TestSolverQuipCollect:
         with pytest.raises(QuipJobFailedError, match="the reward was not reclaimed: ") as excinfo:
             solver._collect_result(solver.get_receipt(1), _job(solver), _model(), elapsed=0.0)
         assert reason in str(excinfo.value)
-        assert "remain reserved" not in str(excinfo.value)
+        assert "retry" not in str(excinfo.value)
+
+    @pytest.mark.parametrize(
+        ("fault", "reason"),
+        [
+            pytest.param("node-refused", "could not be submitted", id="node-refused"),
+            pytest.param("outcome-unknown", "outcome is unknown", id="outcome-unknown"),
+            pytest.param("unverified", "result could not be read", id="unverified"),
+            pytest.param("read-fault", "connection reset", id="read-fault"),
+        ],
+    )
+    def test_reclaim_fault_is_tolerated_with_a_retry(self, monkeypatch, fault, reason) -> None:
+        from xqsa.quip import QuipJobFailedError
+
+        iface = _chain_iface(order=_order(solution_count=0), head=200, submissions=[])
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        qs = solver._quip_signing
+
+        def send(call_function):
+            if fault == "node-refused":
+                raise qs.QuipSigningError("author_submitExtrinsic rejected the extrinsic: {'code': 1014}")
+            if fault == "outcome-unknown":
+                raise qs.SendOutcomeUnknown("the pool reported retracted")
+            return _ok_receipt(solver, error=f"{qs.UNCLASSIFIED_PREFIX}get_events failed for 0xblock")
+
+        _patch_signing(monkeypatch, solver, receipt=send)
+        receipt = solver.get_receipt(1)
+        if fault == "read-fault":
+            monkeypatch.setattr(
+                solver, "_current_block", lambda: (_ for _ in ()).throw(ConnectionError("connection reset"))
+            )
+        # The reward may still be reserved, so the message names the retry.
+        with pytest.raises(QuipJobFailedError, match="the reward was not reclaimed: ") as excinfo:
+            solver._collect_result(receipt, _job(solver), _model(), elapsed=0.0)
+        assert reason in str(excinfo.value)
+        assert "it may still be reserved -- retry with SolverQuip.get_receipt(1).reclaim()" in str(excinfo.value)
 
 
 class TestSolverQuipSolve:

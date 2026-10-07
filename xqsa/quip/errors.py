@@ -111,6 +111,17 @@ class QuipOrderOptionError(QuipSubmissionError):
         super().__init__(message)
 
 
+class QuipReclaimRefusedError(QuipSubmissionError):
+    """Raised when the chain refuses a reclaim, so sending it again cannot succeed.
+
+    The order was proposed by another account, is already closed, is still
+    open, or was answered, whether found before anything is signed or by the
+    chain at dispatch. A subclass of :class:`QuipSubmissionError`; every
+    other reclaim failure is a fault after which the reward may still be
+    reserved and a retry may refund it.
+    """
+
+
 class QuipUnconfirmedError(QuipSubmissionError):
     """Raised when a ``propose_job`` was sent but its outcome or order id is unknown.
 
