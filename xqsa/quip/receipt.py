@@ -175,19 +175,25 @@ class JobOrderReceipt:
     def solvers(self) -> list[dict[str, Any]]:
         """Return who answered, in the chain's ranking order.
 
-        Each entry is ``{"solver", "energy_milli", "submitted_at",
-        "num_solutions"}``, with the solver's best energy in milli Ising units
-        as the chain computed it. The ranked answers come first: the front
-        runner of a ``SingleBest`` order, or a top-N order's ranked solvers.
-        The unranked answers follow, lowest energy first, then earliest.
+        Each entry is ``{"solver", "ranked_energy_milli", "energy_milli",
+        "submitted_at", "num_solutions"}``, energies in milli Ising units as
+        the chain computed them. ``ranked_energy_milli`` is the energy the
+        chain ranked the solver at, ``None`` for an unranked answer.
+        ``energy_milli`` is the best energy stored with the solver's answer,
+        which a later resubmission can overwrite, so it can differ from the
+        ranked one. The ranked answers come first: the front runner of a
+        ``SingleBest`` order, or a top-N order's ranked solvers. The unranked
+        answers follow, lowest stored energy first, then earliest.
         """
         answers = {answer["solver"]: answer for answer in self._client._fetch_solutions(self._order_id)}
-        ranked = [entry["solver"] for entry in self._ranking() if entry["solver"] in answers]
+        ranked = {
+            entry["solver"]: int(entry["energy_milli"]) for entry in self._ranking() if entry["solver"] in answers
+        }
         rest = sorted(
             (answer for solver, answer in answers.items() if solver not in ranked),
             key=lambda answer: (int(answer["best_energy_milli"]), answer.get("submitted_at") or 0),
         )
-        return [_solver_entry(answer) for answer in [answers[solver] for solver in ranked] + rest]
+        return [_solver_entry(answer, ranked.get(answer["solver"])) for answer in [answers[s] for s in ranked] + rest]
 
     def raw_solutions(self, solver: Any = None) -> dict[Any, Any]:
         """Return the spin vectors each solver answered with, as the chain stores them.
@@ -447,9 +453,10 @@ def _solution_count(order: Mapping[str, Any]) -> int:
     return int(order.get("solution_count", 0) or 0)
 
 
-def _solver_entry(answer: Mapping[str, Any]) -> dict[str, Any]:
+def _solver_entry(answer: Mapping[str, Any], ranked_energy_milli: int | None) -> dict[str, Any]:
     return {
         "solver": answer["solver"],
+        "ranked_energy_milli": ranked_energy_milli,
         "energy_milli": int(answer["best_energy_milli"]),
         "submitted_at": answer.get("submitted_at"),
         "num_solutions": len(answer["solutions"]),

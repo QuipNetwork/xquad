@@ -423,7 +423,26 @@ class TestJobOrderReceiptSolvers:
     def test_entry_shape(self, monkeypatch) -> None:
         answers = [_answer("0xA", 100, 5, vectors=[(1, -1), (-1, 1)])]
         receipt = _receipt_for(monkeypatch, answers=answers)
-        assert receipt.solvers() == [{"solver": "0xA", "energy_milli": 100, "submitted_at": 5, "num_solutions": 2}]
+        assert receipt.solvers() == [
+            {"solver": "0xA", "ranked_energy_milli": None, "energy_milli": 100, "submitted_at": 5, "num_solutions": 2}
+        ]
+
+    def test_ranked_energy_survives_an_overwritten_store(self, monkeypatch) -> None:
+        # QUI-1408: the leader resubmitted a worse answer, overwriting its stored
+        # best; the chain still ranks it at the energy it led with.
+        answers = [_answer("0xA", 500, 5), _answer("0xB", 200, 6)]
+        receipt = _receipt_for(monkeypatch, answers=answers, front={"solver": "0xA", "energy_milli": 100})
+        assert [(e["solver"], e["ranked_energy_milli"], e["energy_milli"]) for e in receipt.solvers()] == [
+            ("0xA", 100, 500),
+            ("0xB", None, 200),
+        ]
+        assert list(receipt.solvers()[0]) == [
+            "solver",
+            "ranked_energy_milli",
+            "energy_milli",
+            "submitted_at",
+            "num_solutions",
+        ]
 
     def test_top_n_ranking_leads(self, monkeypatch) -> None:
         answers = [_answer("0xA", 100, 5), _answer("0xB", 50, 1), _answer("0xC", 300, 2)]
