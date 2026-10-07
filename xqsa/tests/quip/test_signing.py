@@ -115,6 +115,8 @@ class FakeIface:
         self.block: dict | None = None
         self.events: list = []
         self.unwatched: list = []
+        # RPC method (or "get_events") -> exception that call raises.
+        self.raises: dict[str, Exception] = {}
 
     # --- assembly reads ---
 
@@ -132,6 +134,8 @@ class FakeIface:
     # --- submission ---
 
     def rpc_request(self, method, params, result_handler=None):
+        if method in self.raises:
+            raise self.raises[method]
         if method == "state_getRuntimeVersion":
             return {"result": {"specVersion": self.spec_version, "transactionVersion": self.tx_version}}
         if method == "author_submitExtrinsic":
@@ -148,6 +152,8 @@ class FakeIface:
         return self.block
 
     def get_events(self, block_hash):
+        if "get_events" in self.raises:
+            raise self.raises["get_events"]
         return self.events
 
 
@@ -663,6 +669,58 @@ class TestSubmitAndWatch:
         with pytest.raises(QuipSigningError) as info:
             submit_and_watch(iface, b"\x01\x02", "0x" + "cd" * 32, wait_for="inblock")
         assert isinstance(info.value, SendOutcomeUnknown) is uncertain
+
+    @pytest.mark.parametrize(
+        ("code", "uncertain"),
+        [(1010, False), (1014, False), (1012, True), (1013, True)],
+    )
+    @pytest.mark.parametrize("wait_for", ["sent", "inblock"])
+    def test_node_refusal_is_a_signing_error(self, code, uncertain, wait_for) -> None:
+        # substrate-interface raises a refusal of the request itself as
+        # SubstrateRequestException; only "already seen" codes may still land.
+        from substrateinterface.exceptions import SubstrateRequestException
+
+        method = "author_submitExtrinsic" if wait_for == "sent" else "author_submitAndWatchExtrinsic"
+        iface = FakeIface()
+        iface.raises[method] = SubstrateRequestException({"code": code, "message": "Invalid Transaction"})
+        with pytest.raises(QuipSigningError, match="rejected the extrinsic") as info:
+            submit_and_watch(iface, b"\x01\x02", "0x" + "cd" * 32, wait_for=wait_for)
+        assert isinstance(info.value, SendOutcomeUnknown) is uncertain
+
+    def test_request_failure_without_an_error_object_propagates(self) -> None:
+        # An HTTP-status failure carries a plain string: the node may have taken it.
+        from substrateinterface.exceptions import SubstrateRequestException
+
+        iface = FakeIface()
+        iface.raises["author_submitAndWatchExtrinsic"] = SubstrateRequestException("HTTP status code 502")
+        with pytest.raises(SubstrateRequestException):
+            submit_and_watch(iface, b"\x01\x02", "0x" + "cd" * 32, wait_for="inblock")
+
+    def test_unwatch_failure_keeps_the_inclusion(self) -> None:
+        from substrateinterface.exceptions import SubstrateRequestException
+
+        ext_hash = "0x" + "cd" * 32
+        block_hash = "0x" + "ef" * 32
+        iface = FakeIface()
+        iface.watch_message = {"params": {"result": {"inBlock": block_hash}}}
+        iface.block = _block_with_extrinsic(ext_hash)
+        iface.events = [_event(0, "ExtrinsicSuccess")]
+        iface.raises["author_unwatchExtrinsic"] = SubstrateRequestException({"code": -32602, "message": "gone"})
+        receipt = submit_and_watch(iface, b"\x01\x02", ext_hash, wait_for="inblock")
+        assert receipt.block_hash == block_hash
+        assert receipt.is_success is True
+
+    def test_event_read_failure_keeps_the_block(self) -> None:
+        ext_hash = "0x" + "cd" * 32
+        block_hash = "0x" + "ef" * 32
+        iface = FakeIface()
+        iface.watch_message = {"params": {"result": {"inBlock": block_hash}}}
+        iface.block = _block_with_extrinsic(ext_hash)
+        iface.raises["get_events"] = TimeoutError("websocket timed out")
+        receipt = submit_and_watch(iface, b"\x01\x02", ext_hash, wait_for="inblock")
+        assert receipt.block_hash == block_hash
+        assert receipt.is_unverified
+        assert "get_events failed" in receipt.error
 
     def test_unverified_receipt_is_flagged(self) -> None:
         unverified = ExtrinsicReceipt(
