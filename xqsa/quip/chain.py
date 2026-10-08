@@ -28,10 +28,17 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from xqsa.quip.codec import _as_hex, _as_int_or_none, _canonical_hex, _event_ids, effective_expiry, is_final
-from xqsa.quip.errors import QuipConnectionError, QuipMetadataError, QuipSubmissionError
+from xqsa.quip.errors import (
+    QuipConnectionError,
+    QuipError,
+    QuipMetadataError,
+    QuipSubmissionError,
+    QuipUnconfirmedError,
+)
 
 # The same logger as the client, so the fee-fallback warning keeps its record name.
 logger = logging.getLogger("xqsa.quip")
@@ -80,6 +87,57 @@ def read_constant(iface: Any, name: str) -> Any | None:
     except Exception as exc:  # noqa: BLE001 -- a fault, not a genuine absence.
         raise QuipConnectionError(f"could not read the {MEMPOOL_PALLET}.{name} constant: {exc}") from exc
     return getattr(const, "value", None)
+
+
+@dataclass(frozen=True)
+class ChainLimits:
+    """The ``QuantumComputeMempool`` order bounds, read once per client.
+
+    Each field is ``None`` when the runtime does not expose that constant; a
+    missing bound is not checked.
+    """
+
+    min_reward: int | None
+    max_deadline_blocks: int | None
+    max_block_wait: int | None
+    max_solutions: int | None
+
+
+def read_limits(iface: Any) -> ChainLimits:
+    """Read the mempool's order bounds into a :class:`ChainLimits`.
+
+    Raises:
+        QuipConnectionError: if reading a constant fails.
+        QuipMetadataError: propagated unchanged from the constant reads.
+    """
+
+    def read(name: str) -> int | None:
+        value = read_constant(iface, name)
+        return None if value is None else int(value)
+
+    return ChainLimits(
+        min_reward=read("MinReward"),
+        max_deadline_blocks=read("MaxDeadlineBlocks"),
+        max_block_wait=read("MaxBlockWait"),
+        max_solutions=read("MaxSolutions"),
+    )
+
+
+def genesis_hash(iface: Any) -> str:
+    """Return the chain's genesis block hash as ``0x`` hex.
+
+    Raises:
+        QuipConnectionError: if the hash cannot be read.
+    """
+    try:
+        raw = iface.get_block_hash(0)
+    except QuipMetadataError:
+        raise  # undecodable metadata, not a missing genesis block.
+    except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
+        raise QuipConnectionError(f"could not read the genesis block hash: {exc}") from exc
+    if not raw:
+        raise QuipConnectionError("the node returned no genesis block hash")
+    return _as_hex(raw)
 
 
 def default_topology(iface: Any) -> str | None:
@@ -235,6 +293,20 @@ def query_fee(iface: Any, quip_signing: Any, wire: bytes) -> tuple[int, bool]:
         return FEE_HEADROOM_PLANCK, False
 
 
+def ss58_address(iface: Any, account_id: Any) -> str:
+    """Encode ``account_id`` as an SS58 address in the chain's format, or ``0x`` hex if that fails.
+
+    Display only, so an unknown format or a missing ``scalecodec`` never
+    blocks a quote.
+    """
+    try:
+        from scalecodec.utils.ss58 import ss58_encode
+
+        return ss58_encode(bytes(account_id), iface.ss58_format)
+    except Exception:  # noqa: BLE001 -- display only; never block a quote on it.
+        return _as_hex(account_id)
+
+
 def token(iface: Any) -> tuple[str, int]:
     """Return the chain's token symbol and decimals, or ``("planck", 0)`` if unknown."""
     try:
@@ -259,16 +331,51 @@ def wrap_bounded(value: Any) -> Any:
     return (value,)
 
 
+def account_nonce(iface: Any, account_id: Any) -> int:
+    """Return the account's next nonce, counting its transactions pending in the node's pool.
+
+    ``get_account_nonce`` is ``system_accountNextIndex``, which includes the
+    pool, so a transaction this account already sent but that is not yet in a
+    block moves it.
+
+    Raises:
+        QuipConnectionError: if the nonce cannot be read.
+    """
+    address = "0x" + bytes(account_id).hex()
+    try:
+        return int(iface.get_account_nonce(account_address=address))
+    except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
+        raise QuipConnectionError(f"could not read the account nonce of {address}: {exc}") from exc
+
+
+def block_number(iface: Any, block_hash: str) -> int:
+    """Return the height of the block ``block_hash``.
+
+    Reads the header shallowly, as :func:`current_block` does.
+    """
+    header = iface.get_block_header(block_hash=block_hash, ignore_decoding_errors=True)
+    return _coerce_block_number(header["header"]["number"])
+
+
 def build_extrinsic(
-    iface: Any, quip_signing: Any, signer: Any, call_module: str, call_function: str, call_params: dict
+    iface: Any,
+    quip_signing: Any,
+    signer: Any,
+    call_module: str,
+    call_function: str,
+    call_params: dict,
+    nonce: int | None = None,
 ) -> tuple[bytes, str]:
     """Sign an extrinsic via :func:`xqsa.quip.signing.build_signed_extrinsic`: ``(wire, hash)``.
+
+    ``nonce`` signs with that account nonce; ``None`` lets the signing layer
+    read the current one.
 
     Raises:
         QuipSubmissionError: if assembly or signing fails.
     """
     try:
-        return quip_signing.build_signed_extrinsic(iface, signer, call_module, call_function, call_params)
+        return quip_signing.build_signed_extrinsic(iface, signer, call_module, call_function, call_params, nonce=nonce)
     except quip_signing.QuipSigningError as exc:
         raise QuipSubmissionError(f"{call_module}.{call_function} could not be submitted: {exc}") from exc
 
@@ -302,6 +409,54 @@ def submit_built(
             f"{receipt.error or 'unknown dispatch error'}"
         )
     return receipt
+
+
+def send_extrinsic(
+    iface: Any, quip_signing: Any, call_module: str, call_function: str, wire: bytes, ext_hash: str
+) -> Any:
+    """Send built extrinsic bytes and wait for a block, classifying what is known of the outcome.
+
+    Unlike :func:`submit_built`, a receipt with a dispatch error is returned,
+    not raised, so the caller can record the order as failed.
+
+    Raises:
+        QuipSubmissionError: if the extrinsic certainly did not land: the node
+            rejected it outright, or the pool dropped, invalidated or usurped it.
+        QuipUnconfirmedError: if it may have landed: the connection failed while
+            watching, the pool reported ``retracted`` or ``finalityTimeout``, or
+            no inclusion block was reported.
+    """
+    try:
+        receipt = quip_signing.submit_and_watch(iface, wire, ext_hash)
+    except quip_signing.SendOutcomeUnknown as exc:
+        raise _unconfirmed(call_module, call_function, ext_hash, None, str(exc)) from exc
+    except quip_signing.QuipSigningError as exc:
+        raise QuipSubmissionError(f"{call_module}.{call_function} could not be submitted: {exc}") from exc
+    except QuipError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- a transport fault mid-watch leaves the outcome unknown.
+        raise _unconfirmed(call_module, call_function, ext_hash, None, f"the connection failed: {exc}") from exc
+    if not receipt.block_hash:
+        raise _unconfirmed(call_module, call_function, ext_hash, None, "no inclusion block was reported")
+    return receipt
+
+
+def _unconfirmed(
+    call_module: str, call_function: str, ext_hash: str, block_hash: str | None, why: str
+) -> QuipUnconfirmedError:
+    """Build the error for a sent extrinsic whose outcome is unknown."""
+    where = f" in block {block_hash}" if block_hash else ""
+    return QuipUnconfirmedError(
+        ext_hash,
+        block_hash,
+        f"{call_module}.{call_function} {ext_hash} was sent{where} but its outcome is unknown ({why}). "
+        "Do not resubmit: it may already be on chain.",
+    )
+
+
+def unconfirmed_error(ext_hash: str, block_hash: str | None, why: str) -> QuipUnconfirmedError:
+    """Build the :class:`QuipUnconfirmedError` for a sent ``propose_job`` whose outcome is unknown."""
+    return _unconfirmed(MEMPOOL_PALLET, PROPOSE_JOB_CALL, ext_hash, block_hash, why)
 
 
 def read_proposed_order_id(iface: Any, block_hash: str | None) -> int:

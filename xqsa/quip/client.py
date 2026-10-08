@@ -62,12 +62,15 @@ from xqsa.quip.errors import (  # noqa: F401 -- the Quip* errors stay importable
     QuipError,
     QuipJobFailedError,
     QuipMetadataError,
+    QuipOrderOptionError,
     QuipSubmissionError,
     QuipTimeoutError,
     QuipTopologyError,
+    QuipUnconfirmedError,
 )
 from xqsa.quip.faucet import DEFAULT_DRIP_PLANCK, fund_from_faucet
 from xqsa.quip.networks import NETWORKS
+from xqsa.quip.order import JobOrder, _OrderOptions, _Sent, _SignedCall, check_client_defaults, merge_options
 from xqsa.quip.quote import JobQuote, _format_planck
 from xqsa.solver import Solver, SolverResult
 
@@ -123,7 +126,9 @@ class SolverQuip(Solver):
         ImportError: if the ``[quip]`` extra is not installed
             (``pip install xqsa[quip]`` -- provides ``substrate-interface`` and
             the ``quip_signer`` signing extension).
-        ValueError: if no RPC URL is configured.
+        ValueError: if no RPC URL is configured, or ``mode``, ``resolution``
+            or ``delivery`` names a value no order can use yet (checked before
+            connecting).
         QuipConnectionError: if the node is unreachable or the configured Ising
             spec is not registered on-chain.
         QuipMetadataError: if the node's runtime metadata cannot be decoded by
@@ -171,6 +176,7 @@ class SolverQuip(Solver):
         resolved_url = url or os.environ.get("QUIP_RPC_URL")
         if not resolved_url:
             raise ValueError("A Quip RPC URL is required. Pass url= or set QUIP_RPC_URL.")
+        check_client_defaults(mode, resolution, delivery)  # before any network I/O.
 
         self._signer = self._build_signer(quip_signing, seed=seed, keystore=keystore)
 
@@ -211,8 +217,10 @@ class SolverQuip(Solver):
         except Exception as exc:  # noqa: BLE001 -- any connect failure is a connection error.
             raise QuipConnectionError(f"could not connect to the Quip node at {resolved_url}: {exc}") from exc
         self._url = resolved_url
+        self._genesis_hash = chain.genesis_hash(self._iface)
 
         self._spec_id = self._resolve_spec_id(spec_id)
+        self._limits = chain.read_limits(self._iface)
         self._reward = self._resolve_reward(reward)
         self._topology_hash = self._resolve_topology_hash(topology)
 
@@ -389,24 +397,22 @@ class SolverQuip(Solver):
         """Resolve the proposal reward (planck): arg, then ``QUIP_REWARD``, then MinReward.
 
         The reward spends funds, so a chain without ``MinReward`` is an error
-        rather than a silent default.
+        rather than a silent default. ``MinReward`` comes from the limits read
+        at construction, not a second constant read.
 
         Raises:
-            QuipConnectionError: if reading ``MinReward`` fails, or the runtime
-                does not define it.
-            QuipMetadataError: propagated unchanged from the constant read.
+            QuipConnectionError: if the runtime does not define ``MinReward``.
         """
         if reward is not None:
             return int(reward)
         env_reward = os.environ.get("QUIP_REWARD")
         if env_reward:
             return int(env_reward)
-        value = self._read_constant("MinReward")
-        if value is None:
+        if self._limits.min_reward is None:
             raise QuipConnectionError(
                 f"the chain defines no {MEMPOOL_PALLET}.MinReward constant; pass reward= or set QUIP_REWARD"
             )
-        return int(value)
+        return self._limits.min_reward
 
     # ------------------------------------------------------------------
     # Chain reads
@@ -550,8 +556,8 @@ class SolverQuip(Solver):
         """See :func:`xqsa.quip.chain.wrap_bounded`."""
         return chain.wrap_bounded(value)
 
-    def _propose_call_params(self, job: IsingJob) -> dict:
-        """Build the ``QuantumComputeMempool.propose_job`` call params for a placed job."""
+    def _propose_call_params(self, job: IsingJob, options: _OrderOptions) -> dict:
+        """Build the ``QuantumComputeMempool.propose_job`` call params for a placed job and its options."""
         ising_params = {
             "nodes": self._wrap_bounded(list(job.nodes)),
             "edges": self._wrap_bounded([list(edge) for edge in job.edges]),
@@ -565,41 +571,113 @@ class SolverQuip(Solver):
         call_params = {
             "spec_id": self._spec_id,
             "ising_params": ising_params,
-            "reward": self._reward,
+            "reward": options.reward,
             # Unit enum variants encode from their bare variant name (the same
             # form they decode to -- see the miner's _decode_result_delivery).
             # Data-carrying variants (Bid / TopN* / Callback*) are out of v1.
-            "mode": self._mode,
-            "resolution": self._resolution,
-            "deadline_blocks": self._deadline_blocks,
-            "block_wait": self._block_wait,
-            "delivery": self._delivery,
+            "mode": options.mode,
+            "resolution": options.resolution,
+            "deadline_blocks": options.deadline_blocks,
+            "block_wait": options.block_wait,
+            "delivery": options.delivery,
         }
         return call_params
 
-    def _propose_job(self, wire: bytes, ext_hash: str) -> int:
-        """Submit a built ``propose_job`` extrinsic and return the assigned order id.
-
-        Takes the bytes :meth:`_prepare` built and quoted, so the job that was
-        priced is the job that is submitted. The immortal era means those bytes
-        stay valid however long a confirmation prompt takes. Reads the
-        ``JobProposed`` event from the inclusion block for the ``order_id``
-        (the call has no return value -- the id is only emitted as an event).
+    def _sign(self, call_params: dict, nonce: int | None = None) -> _SignedCall:
+        """Sign ``call_params`` as a ``propose_job`` extrinsic with ``nonce``, else the current one.
 
         Raises:
-            QuipSubmissionError: if the extrinsic fails on-chain or no
-                ``JobProposed`` event is found in the inclusion block.
+            QuipSubmissionError: if assembly or signing fails.
+            QuipConnectionError: if the nonce cannot be read.
         """
-        receipt = self._submit_built(MEMPOOL_PALLET, PROPOSE_JOB_CALL, wire, ext_hash)
-        order_id = self._read_proposed_order_id(receipt.block_hash)
+        if nonce is None:
+            nonce = self._account_nonce()
+        wire, ext_hash = self._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, call_params, nonce=nonce)
+        return _SignedCall(wire=wire, ext_hash=ext_hash, nonce=nonce)
+
+    def _propose(self, signed: _SignedCall, call_params: dict, reward: int) -> _Sent:
+        """Send ``signed`` if its nonce is still current, else re-sign once, and report the outcome.
+
+        The nonce is read just before sending. If it moved since ``signed``
+        was signed, another transaction from this account used it, so the
+        call is signed once more with the new nonce and checked again; if it
+        moves a second time nothing is sent. This narrows the race to the gap
+        between the last read and the send, but cannot close it: a node
+        rejects a transaction that reuses a nonce before charging a fee, and
+        that surfaces as a :class:`QuipSubmissionError` from the send.
+
+        Raises:
+            QuipSubmissionError: if the nonce moves twice, signing fails, or the
+                extrinsic certainly did not land. Nothing was placed.
+            QuipUnconfirmedError: if it was sent but its outcome or order id is
+                unknown (see :meth:`_propose_job`).
+            QuipConnectionError: if the nonce cannot be read.
+        """
+        current = self._account_nonce()
+        if current != signed.nonce:
+            logger.info("account nonce moved from %d to %d since signing; signing again", signed.nonce, current)
+            signed = self._sign(call_params, nonce=current)
+            if self._account_nonce() != signed.nonce:
+                raise QuipSubmissionError(
+                    "account nonce moved twice while submitting; another client is sending from this account. "
+                    "Nothing was sent."
+                )
+        return self._propose_job(signed.wire, signed.ext_hash, reward)
+
+    def _propose_job(self, wire: bytes, ext_hash: str, reward: int) -> _Sent:
+        """Send a built ``propose_job`` extrinsic and report what it placed.
+
+        Returns a :class:`_Sent` with the order id when the dispatch succeeded,
+        or with the chain's error when it failed (the fee was paid and no
+        order exists). The id is read from the ``JobProposed`` event in the
+        inclusion block (the call has no return value).
+
+        Raises:
+            QuipSubmissionError: if the extrinsic certainly did not land.
+            QuipUnconfirmedError: if it was sent but may or may not have landed,
+                its dispatch result could not be read, or its order id could
+                not be read from a successful dispatch.
+        """
+        receipt = chain.send_extrinsic(
+            self._iface, self._quip_signing, MEMPOOL_PALLET, PROPOSE_JOB_CALL, wire, ext_hash
+        )
+        block_hash = receipt.block_hash
+        if receipt.is_unverified:
+            raise chain.unconfirmed_error(ext_hash, block_hash, receipt.error)
+        included_block = self._included_block(block_hash)
+        if receipt.error is not None:
+            logger.warning("propose_job %s failed on chain in block %s: %s", ext_hash, block_hash, receipt.error)
+            return _Sent(ext_hash=ext_hash, block_hash=block_hash, included_block=included_block, error=receipt.error)
+        try:
+            order_id = self._read_proposed_order_id(block_hash)
+        except Exception as exc:  # noqa: BLE001 -- the order is on chain; never let it read as unsent.
+            raise chain.unconfirmed_error(ext_hash, block_hash, f"the order id could not be read: {exc}") from exc
         logger.info(
             "proposed Quip job: order_id=%d spec_id=%s reward=%d planck (block %s)",
             order_id,
             self._spec_id,
-            self._reward,
-            receipt.block_hash,
+            reward,
+            block_hash,
         )
-        return order_id
+        return _Sent(ext_hash=ext_hash, block_hash=block_hash, included_block=included_block, order_id=order_id)
+
+    def _included_block(self, block_hash: str | None) -> int | None:
+        """Return the height of the inclusion block, or ``None`` if it cannot be read.
+
+        Display only: the order is already proposed, so a failed read must not
+        lose its id.
+        """
+        if not block_hash:
+            return None
+        try:
+            return chain.block_number(self._iface, block_hash)
+        except Exception as exc:  # noqa: BLE001 -- the order is on chain; never lose its id over a height.
+            logger.warning("could not read the height of inclusion block %s: %s", block_hash, exc)
+            return None
+
+    def _account_nonce(self) -> int:
+        """See :func:`xqsa.quip.chain.account_nonce`."""
+        return chain.account_nonce(self._iface, self._signer.account_id)
 
     def _submit_extrinsic(
         self,
@@ -619,10 +697,12 @@ class SolverQuip(Solver):
         wire, ext_hash = self._build_extrinsic(call_module, call_function, call_params)
         return self._submit_built(call_module, call_function, wire, ext_hash, wait_for=wait_for)
 
-    def _build_extrinsic(self, call_module: str, call_function: str, call_params: dict) -> tuple[bytes, str]:
+    def _build_extrinsic(
+        self, call_module: str, call_function: str, call_params: dict, nonce: int | None = None
+    ) -> tuple[bytes, str]:
         """See :func:`xqsa.quip.chain.build_extrinsic`."""
         return chain.build_extrinsic(
-            self._iface, self._quip_signing, self._signer, call_module, call_function, call_params
+            self._iface, self._quip_signing, self._signer, call_module, call_function, call_params, nonce=nonce
         )
 
     def _submit_built(
@@ -809,7 +889,7 @@ class SolverQuip(Solver):
         In native mode the topology is the model's own coupling graph, so there
         is nothing to fetch and nothing to search, and an explicit ``mapping``
         has no graph to target. Otherwise the registered topology is fetched and
-        the model placed onto it. :meth:`_prepare` and :meth:`query` share this,
+        the model placed onto it. :meth:`_place` and :meth:`query` share this,
         so a recovered order re-derives the job :meth:`solve` submitted.
 
         Raises:
@@ -822,30 +902,106 @@ class SolverQuip(Solver):
             return model_to_ising(model, native_topology, mapping=native_mapping)
         return model_to_ising(model, self._fetch_topology(topology), mapping=mapping)
 
-    def _prepare(self, model: XQMX, kwargs: Mapping[str, Any]) -> tuple[IsingJob, bytes, str, JobQuote]:
-        """Place ``model``, build its ``propose_job`` extrinsic once, and quote it.
+    def _default_options(self) -> _OrderOptions:
+        """Return the client defaults every order starts from."""
+        return _OrderOptions(
+            reward=self._reward,
+            deadline_blocks=self._deadline_blocks,
+            block_wait=self._block_wait,
+            topology=self._topology_hash,
+            mapping=None,
+            mode=self._mode,
+            resolution=self._resolution,
+            delivery=self._delivery,
+        )
 
-        Returns the placed job, the signed wire bytes and their hash, and the
-        quote priced off exactly those bytes, so :meth:`solve` submits what it
-        quoted without paying for a second build.
+    def _settle_topology(self, options: _OrderOptions) -> _OrderOptions:
+        """Normalize ``options.topology``: ``None`` is the client's, ``"native"`` any case, else a checked hash.
+
+        Raises:
+            ValueError: if the topology is not a 32-byte hex hash, or
+                ``mapping`` is combined with a native topology.
         """
-        self._validate_model(model)
-        job = self._job_for(model, kwargs.get("topology"), kwargs.get("mapping"))
+        topology = options.topology or self._topology_hash
+        topology = NATIVE_TOPOLOGY if _is_native(topology) else _require_h256(topology, "topology")
+        self._native_for(topology, options.mapping)
+        return replace(options, topology=topology)
+
+    def _place(self, model: XQMX, options: _OrderOptions) -> IsingJob:
+        """Place ``model`` for ``options`` and emit the one-time coefficient warnings."""
+        job = self._job_for(model, options.topology, options.mapping)
         self._maybe_warn_allowed_values(job)
         self._maybe_warn_quantization(job)
-        wire, ext_hash = self._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, self._propose_call_params(job))
+        return job
+
+    def _create_order(self, model: XQMX, options: Mapping[str, Any], *, strict: bool) -> JobOrder:
+        """Build a draft from the client defaults and ``options``.
+
+        ``strict=False`` is the deprecated ``solve``/``quote`` path: unknown
+        options and raw chain dicts warn instead of raising. QUI-1608 removes it.
+        """
+        self._validate_model(model)
+        merged = merge_options(self._default_options(), options, self._limits, strict=strict, stacklevel=4)
+        merged = self._settle_topology(merged)
+        return JobOrder(self, model, merged, self._place(model, merged), self._genesis_hash)
+
+    def _quote_wire(self, wire: bytes, job: IsingJob, options: _OrderOptions) -> JobQuote:
+        """Price the signed ``wire`` without sending it, reading the balance and head block now.
+
+        :func:`~xqsa.quip.chain.query_fee` disarms a copy of ``wire`` before it
+        leaves this process, so the node never holds a sendable transaction.
+        """
         fee, fee_exact = self._query_fee(wire)
         symbol, decimals = self._token()
-        quote = JobQuote(
+        return JobQuote(
             network=self._network,
-            reward_planck=self._reward,
+            reward_planck=options.reward,
             fee_planck=fee,
             fee_exact=fee_exact,
             balance_planck=self._free_balance(),
             token_symbol=symbol,
             token_decimals=decimals,
+            account=chain.ss58_address(self._iface, self._signer.account_id),
+            quoted_at_block=self._current_block(),
+            num_variables=len(job.mapping),
+            num_spins=job.topology.num_nodes,
+            num_couplings=job.topology.num_edges,
+            placement=options.topology,
         )
-        return job, wire, ext_hash, quote
+
+    def create_order(self, model: XQMX, **options: Any) -> JobOrder:
+        """Return a draft :class:`~xqsa.quip.JobOrder` for ``model``.
+
+        The order inherits this client's defaults; ``options`` override them
+        for this order. The model is validated and placed, and every option is
+        checked against the chain limits read at construction, before anything
+        is signed.
+
+        Keyword args:
+            reward: planck reserved at proposal, at least ``MinReward``.
+            deadline_blocks: 10 up to ``MaxDeadlineBlocks``; under 100 warns.
+            block_wait: 0 up to ``MaxBlockWait``; not below the deadline warns.
+            topology: a registered topology hash, or ``"native"``.
+            mapping: explicit variable -> node placement (else searched); not
+                allowed with ``"native"``.
+
+        Examples:
+            Connects to the network, so it is not run as a doctest::
+
+                order = solver.create_order(model, deadline_blocks=200)
+                print(order.quote())
+                order.submit()
+
+        Raises:
+            TypeError: for an unknown option, a non-integer amount, or a raw
+                chain value, including a dict in the client's ``mode`` or
+                ``resolution``.
+            QuipOrderOptionError: if an option is outside its chain limit.
+            ValueError: if the model cannot be solved, the topology is not a
+                hash, or ``mapping`` is given with ``"native"``.
+            QuipConnectionError: if a chain read faults while placing the model.
+        """
+        return self._create_order(model, options, strict=True)
 
     @staticmethod
     def _display(quote: JobQuote) -> None:
@@ -915,66 +1071,22 @@ class SolverQuip(Solver):
                 raise self._insufficient_error(replace(quote, balance_planck=balance))
             time.sleep(self._poll_interval)
 
-    def quote(self, model: XQMX, **kwargs: Any) -> JobQuote:
-        """Price ``model`` as a job without proposing it.
-
-        Places the model, builds and signs the ``propose_job`` extrinsic that
-        :meth:`solve` would submit, asks the chain for its fee, and reads the
-        account balance. Nothing is submitted and no nonce is consumed.
-
-        Keyword args:
-            topology: override topology hash for this quote, or ``"native"``
-                to submit over the model's own coupling graph.
-            mapping: explicit variable -> node placement (else searched); not
-                allowed with ``"native"``.
-
-        Raises:
-            ValueError: if ``mapping`` is given with ``topology="native"``.
-            QuipConnectionError: if a chain read faults while resolving the
-                topology or the account balance.
-            QuipSubmissionError: if the extrinsic cannot be built.
-        """
-        return self._prepare(model, kwargs)[3]
-
-    def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
-        """Propose ``model`` as a job, await a solution, and decode the best one.
-
-        Encodes the model onto the hardware topology, warns once each about
-        out-of-spec and milli-rounded coefficients, builds the ``propose_job``
-        extrinsic, quotes it (see :meth:`quote`) and shows the quote, passes the
-        consent gates, proposes the job (reserving the reward on-chain), polls
-        for finality by block height, then decodes the winning solution. If the
-        order finalizes with no solutions, the reward is auto-reclaimed and
-        :class:`QuipJobFailedError` is raised.
+    def _clear_gates(self, quote: JobQuote) -> None:
+        """Show ``quote``, refuse what no drip can cover, then ask the gates and fund if short.
 
         The ``autoconfirm`` gate comes first, so the price is accepted before
         funding is considered. Only if the account is short does the
         ``autofund`` gate follow, then a faucet drip and a balance re-read.
-        A drip is not returned if the job fails after it.
-
-        Keyword args:
-            topology: override topology hash for this solve, or ``"native"``
-                to submit over the model's own coupling graph.
-            mapping: explicit variable -> node placement (else searched); not
-                allowed with ``"native"``.
 
         Raises:
-            ValueError: if ``mapping`` is given with ``topology="native"``.
-            QuipConnectionError: if a chain read faults (transport/decode) while
-                resolving the topology, the order, or the account balance.
             QuipSubmissionError: if the account cannot cover the quote and no
                 faucet is configured, the shortfall exceeds one faucet drip, the
                 balance already exceeds the faucet's one-drip ceiling, or the
-                drip does not land; or if proposing the job fails. The first
-                three are raised before either gate is asked.
-            QuipCancelledError: if the ``autoconfirm`` or ``autofund`` gate
-                declines (carries the quote).
+                drip does not land. The first three are raised before either
+                gate is asked.
+            QuipCancelledError: if a gate declines.
             QuipFaucetError: if the faucet refuses or cannot be reached.
-            QuipTimeoutError: if the order does not finalize within ``timeout``
-                (the order id is recoverable via :meth:`query`).
-            QuipJobFailedError: if the order finalizes with no usable solution.
         """
-        job, wire, ext_hash, quote = self._prepare(model, kwargs)
         self._display(quote)
         # A shortfall no drip can cover fails whatever the gates say, so raise
         # it before asking anyone to confirm a job that cannot go out.
@@ -993,15 +1105,74 @@ class SolverQuip(Solver):
                 name="autofund",
                 question=f"Fund {_as_hex(self._signer.account_id)} from {self._faucet}?",
             )
-            # The drip does not touch this account's nonce, so the extrinsic
-            # built above stays valid.
             self._fund(quote)
 
-        start = time.perf_counter()
-        order_id = self._propose_job(wire, ext_hash)
+    def quote(self, model: XQMX, **kwargs: Any) -> JobQuote:
+        """Price ``model`` as a job without proposing it. Deprecated.
+
+        Use ``create_order(model, **options).quote()``. This shortcut keeps
+        working until QUI-1608, accepting what :meth:`solve` accepts.
+
+        Raises:
+            ValueError: if ``mapping`` is given with ``topology="native"``.
+            QuipOrderOptionError: if an option is outside its chain limit.
+            QuipConnectionError: if a chain read faults while resolving the
+                topology or the account balance.
+            QuipSubmissionError: if the extrinsic cannot be built.
+        """
+        warnings.warn(
+            "SolverQuip.quote() is deprecated; use SolverQuip.create_order(model).quote()",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self._create_order(model, kwargs, strict=False).quote()
+
+    def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
+        """Propose ``model`` as a job, await a solution, and decode the best one.
+
+        Builds an order from this client's defaults and ``kwargs`` (see
+        :meth:`create_order`), submits it (see :meth:`JobOrder.submit
+        <xqsa.quip.JobOrder.submit>`: the quote is shown, the consent gates
+        asked, and the job proposed, reserving the reward), polls for finality
+        by block height, then decodes the winning solution. If the order
+        finalizes with no solutions, the reward is auto-reclaimed and
+        :class:`QuipJobFailedError` is raised. A faucet drip is not returned if
+        the job fails after it.
+
+        Unlike :meth:`create_order`, an unknown option or a raw chain dict
+        warns with a ``DeprecationWarning`` instead of raising, until QUI-1608.
+
+        Keyword args:
+            reward, deadline_blocks, block_wait, topology, mapping: as for
+                :meth:`create_order`, for this solve only.
+
+        Raises:
+            ValueError: if ``mapping`` is given with ``topology="native"``.
+            QuipOrderOptionError: if an option is outside its chain limit,
+                before anything is signed.
+            QuipConnectionError: if a chain read faults (transport/decode) while
+                resolving the topology, the order, or the account balance.
+            QuipSubmissionError: if the account cannot cover the quote and no
+                faucet is configured, the shortfall exceeds one faucet drip, the
+                balance already exceeds the faucet's one-drip ceiling, or the
+                drip does not land; if the account nonce moves twice while
+                submitting; or if proposing the job fails.
+            QuipCancelledError: if the ``autoconfirm`` or ``autofund`` gate
+                declines (carries the quote).
+            QuipFaucetError: if the faucet refuses or cannot be reached.
+            QuipTimeoutError: if the order does not finalize within ``timeout``
+                (the order id is recoverable via :meth:`query`).
+            QuipUnconfirmedError: if the job was sent but its outcome or order
+                id is unknown. It may be on chain, so do not solve the same
+                model again on that account without checking.
+            QuipJobFailedError: if the order finalizes with no usable solution.
+        """
+        order = self._create_order(model, kwargs, strict=False).submit()
+        order_id = order._order_id
+        assert order_id is not None and order._submitted_at is not None  # submit() sets both.
         self._await_finality(order_id)
-        elapsed = time.perf_counter() - start
-        return self._collect_result(order_id, job, model, elapsed=elapsed)
+        elapsed = time.perf_counter() - order._submitted_at
+        return self._collect_result(order_id, order._job, model, elapsed=elapsed)
 
     def query(
         self,

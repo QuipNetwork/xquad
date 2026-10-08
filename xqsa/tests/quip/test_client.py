@@ -930,6 +930,8 @@ UNIT = 1_000_000_000_000  # 1 AGLS in planck (chain MinReward default).
 # Stand-in for a deployment's QuantumPow.DefaultTopology. The real hash is
 # per-deployment and read from the chain; nothing is pinned in the codebase.
 DEFAULT_TOPOLOGY_HASH = "0x" + "cb" * 32
+# Stand-in for the chain's genesis block hash, as get_block_hash(0) returns it.
+GENESIS_HASH = "0x" + "9e" * 32
 
 # A topology carrying allowed-value sets, so check_allowed_values has data.
 TOPO_WITH_SETS = Topology.of(
@@ -986,6 +988,9 @@ class FakeSubstrate:
         self.token_decimals = token_decimals
         self.rpc = dict(rpc) if rpc is not None else {"payment_queryInfo": {"result": {"partialFee": "2182560255"}}}
         self.rpc_calls: list[tuple[str, list | None]] = []
+        self.genesis_hash: object = GENESIS_HASH
+        self.ss58_format = 42
+        self.nonce = 0
 
     def rpc_request(self, method: str, params: list | None = None):
         self.rpc_calls.append((method, params))
@@ -1017,6 +1022,13 @@ class FakeSubstrate:
 
     def get_block_header(self, block_hash: str | None = None, ignore_decoding_errors: bool = False):
         return {"header": {"number": self.head}}
+
+    def get_account_nonce(self, account_address: str) -> int:
+        return self.nonce
+
+    def get_block_hash(self, block_id: int | None = None) -> str | None:
+        assert block_id == 0, "only the genesis hash is read"
+        return self.genesis_hash
 
     def get_events(self, block_hash: str | None = None):
         return self.events
@@ -1073,7 +1085,12 @@ def _fake_quip_signer() -> types.ModuleType:
 
 
 def _default_iface(*, with_default_spec_const: bool = False, balance: int | None = None) -> FakeSubstrate:
-    constants: dict = {("QuantumComputeMempool", "MinReward"): UNIT}
+    constants: dict = {
+        ("QuantumComputeMempool", "MinReward"): UNIT,
+        ("QuantumComputeMempool", "MaxDeadlineBlocks"): 1000,
+        ("QuantumComputeMempool", "MaxBlockWait"): 100,
+        ("QuantumComputeMempool", "MaxSolutions"): 20,
+    }
     if with_default_spec_const:
         constants[("QuantumComputeMempool", "DefaultIsingSpecId")] = DEFAULT_ISING_SPEC_ID
     storage: dict = {
@@ -1279,6 +1296,57 @@ class TestSolverQuipConstruction:
         iface = _default_iface()
         del iface.constants[("QuantumComputeMempool", "MinReward")]
         with pytest.raises(QuipConnectionError, match="reward=.*QUIP_REWARD"):
+            _make_solver(monkeypatch, iface=iface)
+
+    def test_limits_read_from_chain_constants(self, monkeypatch) -> None:
+        from xqsa.quip.chain import ChainLimits
+
+        solver = _make_solver(monkeypatch)
+        assert solver._limits == ChainLimits(
+            min_reward=UNIT, max_deadline_blocks=1000, max_block_wait=100, max_solutions=20
+        )
+
+    def test_absent_limits_read_as_none(self, monkeypatch) -> None:
+        iface = _default_iface()
+        for name in ("MaxDeadlineBlocks", "MaxBlockWait", "MaxSolutions"):
+            del iface.constants[("QuantumComputeMempool", name)]
+        limits = _make_solver(monkeypatch, iface=iface)._limits
+        assert (limits.max_deadline_blocks, limits.max_block_wait, limits.max_solutions) == (None, None, None)
+
+    def test_min_reward_read_once_for_the_default_reward(self, monkeypatch) -> None:
+        iface = _default_iface()
+        reads: list[str] = []
+        original = iface.get_constant
+
+        def counting(module: str, name: str):
+            reads.append(name)
+            return original(module, name)
+
+        iface.get_constant = counting
+        _make_solver(monkeypatch, iface=iface, spec_id=DEFAULT_ISING_SPEC_ID)
+        assert reads.count("MinReward") == 1
+
+    def test_genesis_hash_read_at_construction(self, monkeypatch) -> None:
+        assert _make_solver(monkeypatch)._genesis_hash == GENESIS_HASH
+
+    def test_genesis_hash_read_fault_raises_connection_error(self, monkeypatch) -> None:
+        from xqsa.quip import QuipConnectionError
+
+        iface = _default_iface()
+
+        def _boom(block_id=None):
+            raise RuntimeError("socket closed")
+
+        iface.get_block_hash = _boom
+        with pytest.raises(QuipConnectionError, match="genesis block hash: socket closed"):
+            _make_solver(monkeypatch, iface=iface)
+
+    def test_missing_genesis_hash_raises_connection_error(self, monkeypatch) -> None:
+        from xqsa.quip import QuipConnectionError
+
+        iface = _default_iface()
+        iface.genesis_hash = None
+        with pytest.raises(QuipConnectionError, match="no genesis block hash"):
             _make_solver(monkeypatch, iface=iface)
 
     def test_topology_explicit_arg_beats_env(self, monkeypatch) -> None:
@@ -1830,22 +1898,29 @@ def _patch_signing(monkeypatch, solver, *, receipt=None, build_raises: Exception
     so submission tests never touch real crypto or a chain. ``receipt`` may be a
     receipt or a callable ``(call_function) -> receipt`` to vary the outcome per
     call (e.g. a successful propose followed by a failing reclaim). ``captured["builds"]``
-    counts calls into ``build_signed_extrinsic``, so a test can assert an
-    extrinsic was assembled exactly once.
+    counts calls into ``build_signed_extrinsic``; ``captured["nonces"]``,
+    ``captured["params"]`` and ``captured["wires"]`` record each build's explicit
+    nonce (``None`` when the signing layer reads it), call params and distinct
+    wire bytes, and ``captured["sent"]`` the wires that reached the node.
     """
     captured: dict = {"builds": 0}
     qs = solver._quip_signing
 
-    def fake_build(iface, signer, call_module, call_function, call_params):
+    def fake_build(iface, signer, call_module, call_function, call_params, nonce=None):
         captured.update(iface=iface, call_module=call_module, call_function=call_function, call_params=call_params)
         captured["builds"] += 1
+        captured.setdefault("nonces", []).append(nonce)
+        captured.setdefault("params", []).append(call_params)
         if build_raises is not None:
             raise build_raises
-        return b"\x00\x01", "0xext"
+        wire = bytes([0, captured["builds"]])  # b"\x00\x01", then b"\x00\x02", ...: one per build.
+        captured.setdefault("wires", []).append(wire)
+        return wire, "0xext"
 
     def fake_submit(iface, wire_bytes, ext_hash, wait_for="inblock"):
         captured["wait_for"] = wait_for
         captured["submitted_wire"] = wire_bytes
+        captured.setdefault("sent", []).append(wire_bytes)
         return receipt(captured["call_function"]) if callable(receipt) else receipt
 
     monkeypatch.setattr(qs, "build_signed_extrinsic", fake_build)
@@ -1863,9 +1938,8 @@ def _ok_receipt(solver, *, error: str | None = None):
 class TestSolverQuipSubmission:
     """_propose_call_params / _build_extrinsic / _submit_built / _propose_job / _wrap_bounded.
 
-    ``_propose_job`` now takes a prebuilt ``(wire, ext_hash)`` pair rather than
-    building the extrinsic itself: ``solve()`` builds once, via ``_prepare``,
-    then displays the quote before deciding whether to submit that same wire.
+    ``_propose_job`` takes a prebuilt ``(wire, ext_hash)`` pair; ``_propose``
+    signs it with the current nonce after the gates have passed.
     """
 
     @staticmethod
@@ -1883,7 +1957,7 @@ class TestSolverQuipSubmission:
     def test_propose_call_params_composition(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)
         job = self._simple_job()
-        params = solver._propose_call_params(job)
+        params = solver._propose_call_params(job, solver._default_options())
 
         assert params["spec_id"] == solver._spec_id
         assert params["reward"] == solver._reward
@@ -1904,7 +1978,7 @@ class TestSolverQuipSubmission:
     def test_build_extrinsic_returns_wire_and_hash(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)
         captured = _patch_signing(monkeypatch, solver)
-        params = solver._propose_call_params(self._simple_job())
+        params = solver._propose_call_params(self._simple_job(), solver._default_options())
 
         wire, ext_hash = solver._build_extrinsic("QuantumComputeMempool", "propose_job", params)
 
@@ -1944,24 +2018,24 @@ class TestSolverQuipSubmission:
         solver = _make_solver(monkeypatch)
         solver._iface.events = [_job_proposed_event(42)]
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
-        assert solver._propose_job(b"\x00\x01", "0xext") == 42
+        sent = solver._propose_job(b"\x00\x01", "0xext", UNIT)
+        assert (sent.order_id, sent.block_hash, sent.error) == (42, "0xblock", None)
 
-    def test_propose_job_submit_failure_raises(self, monkeypatch) -> None:
-        from xqsa.quip import QuipSubmissionError
-
+    def test_propose_job_dispatch_failure_is_reported_not_raised(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error="System.ExtrinsicFailed: {...}"))
-        with pytest.raises(QuipSubmissionError, match="failed on-chain"):
-            solver._propose_job(b"\x00\x01", "0xext")
+        sent = solver._propose_job(b"\x00\x01", "0xext", UNIT)
+        assert (sent.order_id, sent.error) == (None, "System.ExtrinsicFailed: {...}")
 
-    def test_propose_job_missing_event_raises(self, monkeypatch) -> None:
-        from xqsa.quip import QuipSubmissionError
+    def test_propose_job_missing_event_is_unconfirmed(self, monkeypatch) -> None:
+        from xqsa.quip import QuipUnconfirmedError
 
         solver = _make_solver(monkeypatch)
         solver._iface.events = []  # included, but no JobProposed event.
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
-        with pytest.raises(QuipSubmissionError, match="no JobProposed"):
-            solver._propose_job(b"\x00\x01", "0xext")
+        with pytest.raises(QuipUnconfirmedError, match="no JobProposed") as info:
+            solver._propose_job(b"\x00\x01", "0xext", UNIT)
+        assert (info.value.extrinsic_hash, info.value.block_hash) == ("0xext", "0xblock")
 
     @pytest.mark.parametrize("attrs_form", ["mapping", "params"])
     def test_order_id_extraction_tolerates_attribute_shapes(self, monkeypatch, attrs_form) -> None:
@@ -2310,7 +2384,9 @@ class TestSolverQuipSolve:
         # gate, so "builds" is no longer the signal; submission is.
         assert "wait_for" not in captured  # never reached submission
 
-    def test_solve_builds_extrinsic_exactly_once(self, monkeypatch) -> None:
+    def test_solve_signs_once_and_sends_the_priced_bytes(self, monkeypatch) -> None:
+        # submit() signs once with the current nonce, prices those bytes, and
+        # sends them unchanged when the nonce has not moved.
         iface = _chain_iface(order=_order(), head=200)
         iface.maps[("QuantumPow", "MineableTopologies")] = [(TOPO_HASH, ())]
         solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
@@ -2320,8 +2396,11 @@ class TestSolverQuipSolve:
             (b"solver", _submission("0xSOLVER", [vector], ising_energy_milli(job, vector)))
         ]
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        solver._iface.nonce = 7
         solver.solve(_model())
         assert captured["builds"] == 1
+        assert captured["nonces"] == [7]
+        assert captured["sent"] == captured["wires"]
 
     def test_solve_proceeds_when_topology_is_not_mineable(self, monkeypatch) -> None:
         # Inverted guard. solve() used to reject a registered hash absent from
@@ -2463,7 +2542,7 @@ class TestSolverQuipNativeTopology:
 
         monkeypatch.setattr(solver, "_fetch_topology", _fail)
         _patch_signing(monkeypatch, solver)
-        job = solver._prepare(_k5_model(), {})[0]
+        job = solver.create_order(_k5_model())._job
         assert job.nodes == (0, 1, 2, 3, 4)
         assert len(job.edges) == 10
 
@@ -2495,13 +2574,13 @@ class TestSolverQuipNativeTopology:
         assert calls == [TOPO_HASH]
         assert job.nodes  # a job was actually built against the fetched topology.
 
-    def test_query_native_rederives_the_same_job_prepare_built(self, monkeypatch) -> None:
+    def test_query_native_rederives_the_same_job_an_order_built(self, monkeypatch) -> None:
         iface = _chain_iface(order=_order(), head=200)
         solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
         model = _k5_model()
         _patch_signing(monkeypatch, solver)
 
-        prepared_job, _wire, _hash, _quote = solver._prepare(model, {"topology": "native"})
+        prepared_job = solver.create_order(model, topology="native")._job
 
         captured: dict = {}
 
@@ -2607,6 +2686,19 @@ class TestJobQuote:
         defaults.update(overrides)
         return JobQuote(**defaults)
 
+    @classmethod
+    def _full_quote(cls, **overrides: object):
+        full: dict[str, object] = dict(
+            account="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            quoted_at_block=412301,
+            num_variables=12,
+            num_spins=12,
+            num_couplings=30,
+            placement="0x8f46f3a31321d1d093314fc769c42cbe7a83d71a0b69e6571a0f68e2a04067f0",
+        )
+        full.update(overrides)
+        return cls._quote(**full)
+
     def test_total_is_reward_plus_fee(self) -> None:
         quote = self._quote(reward_planck=1000, fee_planck=200)
         assert quote.total_planck == 1200
@@ -2624,28 +2716,72 @@ class TestJobQuote:
         quote = self._quote(reward_planck=1000, fee_planck=200, balance_planck=500)
         assert quote.shortfall_planck == 700
 
-    def test_str_lines_all_start_with_quip_tag_and_are_ascii(self) -> None:
+    def test_affordable_tracks_the_shortfall(self) -> None:
+        assert self._quote(reward_planck=1000, fee_planck=200, balance_planck=1200).affordable
+        assert not self._quote(reward_planck=1000, fee_planck=200, balance_planck=1199).affordable
+
+    def test_new_fields_default_to_none(self) -> None:
+        quote = self._quote()
+        assert (quote.account, quote.quoted_at_block, quote.placement) == (None, None, None)
+        assert (quote.num_variables, quote.num_spins, quote.num_couplings) == (None, None, None)
+
+    def test_str_is_a_72_column_box(self) -> None:
+        lines = str(self._full_quote()).splitlines()
+        assert lines[0].startswith("╭─ Job quote ")
+        assert lines[-1].startswith("╰")
+        assert {len(line) for line in lines} == {72}
+
+    def test_str_full_box(self) -> None:
+        assert str(self._full_quote()) == "\n".join(
+            [
+                "╭─ Job quote ──────────────────────────────────────────────────────────╮",
+                "│ Network     aglais                                                   │",
+                "│ Account     5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY         │",
+                "│ Quoted at   block 412301                                             │",
+                "├──────────────────────────────────────────────────────────────────────┤",
+                "│ Problem     12 variables -> 12 spins, 30 couplings                   │",
+                "│ Placed on   topology                                                 │",
+                "│             0x8f46f3a31321d1d093314fc769c42cbe7a83d71a0b69e6571a0f68 │",
+                "│             e2a04067f0                                               │",
+                "├──────────────────────────────────────────────────────────────────────┤",
+                "│ Reward       1.000000000000 AGLS  refunded if unanswered             │",
+                "│ Fee          0.002182560255 AGLS  exact                              │",
+                "│ Total        1.002182560255 AGLS                                     │",
+                "╞══════════════════════════════════════════════════════════════════════╡",
+                "│ Balance     20.000000000000 AGLS                                     │",
+                "│ Shortfall    0.000000000000 AGLS                                     │",
+                "│ Affordable  yes                                                      │",
+                "╰──────────────────────────────────────────────────────────────────────╯",
+            ]
+        )
+
+    def test_str_native_placement_on_one_line(self) -> None:
+        assert "│ Placed on   native " in str(self._full_quote(placement="native"))
+
+    def test_str_omits_unknown_rows_and_sections(self) -> None:
         text = str(self._quote())
-        lines = text.splitlines()
-        assert lines
-        assert all(line.startswith("[quip]") for line in lines)
-        assert text.isascii()
+        for absent in ("Account", "Quoted at", "Problem", "Placed on"):
+            assert absent not in text
+        assert {len(line) for line in text.splitlines()} == {72}
 
     def test_str_decimal_points_align_across_amount_lines(self) -> None:
         text = str(self._quote())
-        amount_lines = [line for line in text.splitlines() if "." in line]
+        amount_lines = [line for line in text.splitlines() if "AGLS" in line]
         assert len(amount_lines) == 5  # reward, fee, total, balance, shortfall
         assert len({line.index(".") for line in amount_lines}) == 1
 
-    def test_str_header_names_the_network(self) -> None:
-        assert "network aglais" in str(self._quote(network="aglais"))
+    def test_str_names_the_network(self) -> None:
+        assert "│ Network     aglais " in str(self._quote(network="aglais"))
 
-    def test_str_header_says_custom_endpoint_when_network_is_none(self) -> None:
-        assert "custom endpoint" in str(self._quote(network=None))
+    def test_str_says_custom_endpoint_when_network_is_none(self) -> None:
+        assert "│ Network     custom endpoint " in str(self._quote(network=None))
 
-    def test_str_header_fee_exact_vs_estimated(self) -> None:
-        assert "fee exact" in str(self._quote(fee_exact=True))
-        assert "fee estimated" in str(self._quote(fee_exact=False))
+    def test_str_fee_exact_vs_estimated(self) -> None:
+        assert "AGLS  exact " in str(self._quote(fee_exact=True))
+        assert "AGLS  estimated " in str(self._quote(fee_exact=False))
+
+    def test_str_shows_unaffordable(self) -> None:
+        assert "│ Affordable  no " in str(self._quote(balance_planck=0))
 
     def test_str_has_no_fractional_part_when_decimals_is_zero(self) -> None:
         quote = self._quote(
@@ -2706,6 +2842,37 @@ class TestSolverQuipQuote:
         assert quote.token_decimals == 0
         assert "." not in str(quote)
 
+    def test_quote_describes_account_block_and_placement(self, monkeypatch) -> None:
+        iface = self._iface()
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver)
+        quote = solver.quote(_model())
+        ss58_encode = pytest.importorskip("scalecodec.utils.ss58").ss58_encode
+
+        assert quote.account == ss58_encode(bytes(solver._signer.account_id), 42)
+        assert quote.account.startswith("5")
+        assert quote.quoted_at_block == iface.head
+        assert quote.placement == TOPO_HASH
+        assert (quote.num_spins, quote.num_couplings) == (
+            _job(solver).topology.num_nodes,
+            _job(solver).topology.num_edges,
+        )
+        assert quote.num_variables == 2
+
+    def test_quote_account_falls_back_to_hex(self, monkeypatch) -> None:
+        iface = self._iface()
+        iface.ss58_format = None
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver)
+        assert solver.quote(_model()).account == "0x" + bytes(solver._signer.account_id).hex()
+
+    def test_quote_placement_is_native(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, iface=self._iface(), topology="native")
+        _patch_signing(monkeypatch, solver)
+        quote = solver.quote(_model())
+        assert quote.placement == "native"
+        assert quote.num_spins == quote.num_variables
+
     def test_quote_never_submits(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch, iface=self._iface(), topology=TOPO_HASH)
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
@@ -2730,7 +2897,7 @@ class TestSolverQuipQuote:
         _patch_signing(monkeypatch, solver)
         quote = solver.quote(_model())
         assert quote.network == "aglais"
-        assert "network aglais" in str(quote)
+        assert "│ Network     aglais " in str(quote)
 
 
 class TestSolverQuipInsufficientBalance:
@@ -3247,7 +3414,7 @@ class TestSolveAutofundGate:
         solver.solve(_model())
         shown = "".join(stdout.written)
         assert "Fund 0x" in shown
-        assert "[quip] job quote" in shown
+        assert "╭─ Job quote " in shown
         assert stderr.written == []
 
     def test_no_faucet_raises_before_the_autofund_gate(self, monkeypatch) -> None:

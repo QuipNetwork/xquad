@@ -60,8 +60,7 @@ pytest.importorskip(
 )
 
 from xqsa.quip import (
-    MEMPOOL_PALLET,
-    PROPOSE_JOB_CALL,
+    JobOrder,
     QuipJobFailedError,
     QuipSubmissionError,
     QuipTimeoutError,
@@ -210,10 +209,8 @@ def _miner_solves(tmp_path_factory) -> bool:
     # different hardware nodes and so prove nothing about them: placement is
     # per-model, and whether an order is answered depends on the nodes it lands
     # on. A gate must exercise what it gates, native mode included.
-    job = solver._job_for(_asymmetric_spin_model(), None, None)
     try:
-        wire, ext_hash = solver._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, solver._propose_call_params(job))
-        order_id = solver._propose_job(wire, ext_hash)
+        order_id = solver.create_order(_asymmetric_spin_model()).submit().order_id()
     except Exception:
         return False
 
@@ -451,7 +448,7 @@ class TestSubmitPath:
         assert snap["order_id"] == order_id
         assert snap["status"] in ("Opened", "Expired", "Closed")
 
-    def test_expired_no_solution_auto_reclaims(self, make_solver) -> None:
+    def test_expired_no_solution_auto_reclaims(self, make_solver, monkeypatch) -> None:
         # A 1-block deadline finalizes empty regardless of fleet activity: the
         # order hard-expires at created_at+1, before any solver can land a
         # solution (the miner observes the JobProposed event ~1 block after
@@ -459,7 +456,10 @@ class TestSubmitPath:
         # guard drops sub-margin orders). solve() then auto-reclaims the
         # reserved reward and raises QuipJobFailedError. A longer deadline is
         # unsafe here: once a live solver fleet is active it solves the order
-        # before expiry (a 4-block deadline is beaten in ~1-2 blocks).
+        # before expiry (a 4-block deadline is beaten in ~1-2 blocks). Orders
+        # refuse deadlines under 10 blocks, so the floor is lowered for this
+        # test only: it exercises the reclaim, not the option checks.
+        monkeypatch.setattr("xqsa.quip.order.MIN_DEADLINE_BLOCKS", 1)
         solver = make_solver(deadline_blocks=1, block_wait=1, timeout=150.0)
         account = "0x" + solver._signer.account_id.hex()
 
@@ -491,6 +491,36 @@ class TestSubmitPath:
         # non-release could otherwise cancel against the earlier order's release.
         assert "was reclaimed" in str(excinfo.value)
         assert reserved() <= before
+
+
+class TestJobOrder:
+    def test_create_set_quote_submit_reads_back(self, make_solver) -> None:
+        # One order through its whole draft lifecycle, then read back from
+        # JobOrders: the chain stores the options the order was set to, not
+        # the client defaults. Costs one fee; the 1-unit reward is answered or
+        # reclaimable once the order closes.
+        solver = make_solver()
+        order = solver.create_order(_asymmetric_spin_model())
+        assert isinstance(order, JobOrder)
+        order.set(deadline_blocks=120, block_wait=5)
+
+        quote = order.quote()
+        assert quote.affordable
+        assert quote.reward_planck == order.reward
+        assert quote.account is not None and not quote.account.startswith("0x")  # SS58, not hex.
+        assert {len(line) for line in str(quote).splitlines()} == {72}
+
+        order.submit()
+        assert order.status()["state"] in ("submitted", "finalized")
+        order_id = order.order_id()
+        assert isinstance(order_id, int)
+        assert order._included_block is not None
+
+        stored = solver._fetch_order(order_id)
+        assert int(stored["timing"]["deadline_blocks"]) == 120
+        assert int(stored["timing"]["block_wait"]) == 5
+        with pytest.raises(QuipSubmissionError, match="works only on a draft"):
+            order.set(deadline_blocks=200)
 
 
 # ---------------------------------------------------------------------------

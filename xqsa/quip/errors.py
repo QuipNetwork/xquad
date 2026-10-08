@@ -97,6 +97,35 @@ class QuipSubmissionError(QuipError):
     """Raised when an extrinsic cannot be submitted or is rejected by the chain."""
 
 
+class QuipOrderOptionError(QuipSubmissionError):
+    """Raised when an order option is refused before anything is signed.
+
+    Carries the offending option's name as ``option``. A subclass of
+    :class:`QuipSubmissionError`, which the chain raised for the same values
+    after charging the fee.
+    """
+
+    def __init__(self, option: str, message: str) -> None:
+        self.option = option
+        super().__init__(message)
+
+
+class QuipUnconfirmedError(QuipSubmissionError):
+    """Raised when a ``propose_job`` was sent but its outcome or order id is unknown.
+
+    The order may be on chain: resubmitting it could place a second order,
+    reserving a second reward and paying a second fee. The :class:`~xqsa.quip.JobOrder`
+    moves to ``unconfirmed`` and refuses further submits. Carries
+    ``extrinsic_hash`` and, when the extrinsic was seen in a block,
+    ``block_hash`` (else ``None``).
+    """
+
+    def __init__(self, extrinsic_hash: str, block_hash: str | None, message: str) -> None:
+        self.extrinsic_hash = extrinsic_hash
+        self.block_hash = block_hash
+        super().__init__(message)
+
+
 class QuipTopologyError(QuipError):
     """Retained for compatibility; nothing in :mod:`xqsa.quip` raises it any more.
 

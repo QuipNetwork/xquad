@@ -40,9 +40,27 @@ Configuration is resolved from constructor arguments first, then environment:
     =====================  =======================================================================
 
 A seed wins over a keystore. With neither configured, the keystore at
-``~/.quip/keystore.json`` is loaded, or generated on first use. Every :meth:`SolverQuip.solve` first quotes the job
-(:class:`JobQuote`: reward plus the chain-reported fee, against the balance)
-and passes two consent gates. ``autoconfirm`` decides whether to submit at that
+``~/.quip/keystore.json`` is loaded, or generated on first use.
+
+The order options among them (``reward``, ``deadline_blocks``,
+``block_wait``) are client defaults. :meth:`SolverQuip.create_order` returns a
+draft :class:`JobOrder` that inherits them and may override them; the draft is
+edited with :meth:`JobOrder.set`, priced with :meth:`JobOrder.quote` and
+proposed with :meth:`JobOrder.submit`, after which it is read-only and
+:meth:`JobOrder.status` follows it to ``finalized``::
+
+    order = solver.create_order(model, deadline_blocks=200)
+    print(order.quote())
+    order.submit()
+
+Every option is checked against the chain's limits, read once per client,
+before anything is signed: a reward below ``MinReward``, a deadline outside 10
+to ``MaxDeadlineBlocks`` or a block wait over ``MaxBlockWait`` raises
+:class:`QuipOrderOptionError` without paying a fee. :meth:`SolverQuip.solve` is
+``create_order``, ``submit``, then waiting for the result.
+
+Every submission first quotes the job (:class:`JobQuote`: reward plus the
+chain-reported fee, against the balance) and passes two consent gates. ``autoconfirm`` decides whether to submit at that
 price; ``autofund`` decides whether an account short of it is topped up with
 one faucet drip first. A shortfall larger than one drip is never requested; it
 raises :class:`QuipSubmissionError`, since it is more often a mistyped reward.
@@ -106,25 +124,31 @@ from .errors import (
     QuipFaucetError,
     QuipJobFailedError,
     QuipMetadataError,
+    QuipOrderOptionError,
     QuipSigningError,
     QuipSubmissionError,
     QuipTimeoutError,
     QuipTopologyError,
+    QuipUnconfirmedError,
 )
 from .faucet import fund_from_faucet
 from .networks import NETWORKS
+from .order import JobOrder
 from .quote import JobQuote
 
 __all__ = [
     "SolverQuip",
+    "JobOrder",
     "JobQuote",
     "QuipError",
     "QuipCancelledError",
     "QuipConnectionError",
     "QuipMetadataError",
     "QuipSubmissionError",
+    "QuipOrderOptionError",
     "QuipTimeoutError",
     "QuipTopologyError",
+    "QuipUnconfirmedError",
     "QuipJobFailedError",
     "QuipSigningError",
     "QuipFaucetError",

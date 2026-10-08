@@ -49,6 +49,7 @@ against the chain's own metadata.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import stat
@@ -258,6 +259,11 @@ class ExtrinsicReceipt:
         """True iff the extrinsic reached a block with no dispatch error."""
         return self.block_hash is not None and self.error is None
 
+    @property
+    def is_unverified(self) -> bool:
+        """True when inclusion was reported but its dispatch result could not be read."""
+        return self.error is not None and self.error.startswith(UNCLASSIFIED_PREFIX)
+
 
 def build_signed_extrinsic(
     iface: Any,
@@ -265,8 +271,11 @@ def build_signed_extrinsic(
     call_module: str,
     call_function: str,
     call_params: dict,
+    nonce: int | None = None,
 ) -> tuple[bytes, str]:
     """Assemble a hybrid-signed v4 extrinsic, returning ``(wire_bytes, ext_hash)``.
+
+    ``nonce`` signs with that account nonce; ``None`` reads the current one.
 
     ``iface`` is a connected ``substrate-interface`` ``SubstrateInterface`` used
     only for ``compose_call`` and read-only chain state (nonce, genesis hash,
@@ -301,7 +310,8 @@ def build_signed_extrinsic(
         raise QuipSigningError(f"signer account id is {len(account)} bytes; expected {ACCOUNT_ID_LEN}")
     if len(signer.public_key) != HYBRID_PUBLIC_LEN:
         raise QuipSigningError(f"signer public key is {len(signer.public_key)} bytes; expected {HYBRID_PUBLIC_LEN}")
-    nonce = int(iface.get_account_nonce(account_address="0x" + account.hex()))
+    if nonce is None:
+        nonce = int(iface.get_account_nonce(account_address="0x" + account.hex()))
     genesis_bytes = bytes.fromhex(_strip_0x(iface.get_block_hash(block_id=0)))
     runtime_version = iface.rpc_request("state_getRuntimeVersion", [])["result"]
     spec_version = int(runtime_version["specVersion"])
@@ -351,6 +361,9 @@ def submit_and_watch(
         QuipSigningError: if the node rejects the extrinsic outright or reports
             a terminal transaction-pool status (``dropped`` / ``invalid`` /
             ``usurped`` / ``retracted`` / ``finalityTimeout``).
+        SendOutcomeUnknown: the subclass raised when the extrinsic may still
+            land: the pool reported ``retracted`` or ``finalityTimeout``, or
+            the node refused it as already imported or temporarily banned.
     """
     if wait_for not in _WAIT_STAGES:
         raise QuipSigningError(f"wait_for must be one of {sorted(_WAIT_STAGES)}, got {wait_for!r}")
@@ -358,7 +371,7 @@ def submit_and_watch(
     ext_hex = "0x" + wire_bytes.hex()
 
     if wait_for == "sent":
-        response = iface.rpc_request("author_submitExtrinsic", [ext_hex])
+        response = _submit_rpc(iface, "author_submitExtrinsic", ext_hex)
         if isinstance(response, dict) and "error" in response:
             raise QuipSigningError(f"author_submitExtrinsic rejected the extrinsic: {response['error']}")
         return ExtrinsicReceipt(extrinsic_hash=ext_hash, block_hash=None, is_finalized=False, error=None)
@@ -371,10 +384,10 @@ def submit_and_watch(
         if isinstance(result, dict):
             lowered = {key.lower(): value for key, value in result.items()}
             if want_finalized and "finalized" in lowered:
-                iface.rpc_request("author_unwatchExtrinsic", [subscription_id])
+                _unwatch(iface, subscription_id)
                 return {"block_hash": lowered["finalized"], "finalized": True}
             if not want_finalized and "inblock" in lowered:
-                iface.rpc_request("author_unwatchExtrinsic", [subscription_id])
+                _unwatch(iface, subscription_id)
                 return {"block_hash": lowered["inblock"], "finalized": False}
             # The data-carrying terminal statuses (usurped/retracted/finalityTimeout)
             # arrive as single-key dicts, so they never match the str branch below;
@@ -382,15 +395,17 @@ def submit_and_watch(
             # this subscription has no timeout of its own -- hang forever.
             terminal = lowered.keys() & _TERMINAL_POOL_FAILURES
             if terminal:
-                iface.rpc_request("author_unwatchExtrinsic", [subscription_id])
+                _unwatch(iface, subscription_id)
                 status = sorted(terminal)[0]
-                raise QuipSigningError(f"transaction pool rejected the extrinsic: {status} ({lowered[status]})")
+                error = SendOutcomeUnknown if status in _UNCERTAIN_POOL_FAILURES else QuipSigningError
+                raise error(f"transaction pool rejected the extrinsic: {status} ({lowered[status]})")
         elif isinstance(result, str) and result.lower() in _TERMINAL_POOL_FAILURES:
-            iface.rpc_request("author_unwatchExtrinsic", [subscription_id])
-            raise QuipSigningError(f"transaction pool rejected the extrinsic: {result}")
+            _unwatch(iface, subscription_id)
+            error = SendOutcomeUnknown if result.lower() in _UNCERTAIN_POOL_FAILURES else QuipSigningError
+            raise error(f"transaction pool rejected the extrinsic: {result}")
         return None  # non-terminal status -- keep waiting.
 
-    response = iface.rpc_request("author_submitAndWatchExtrinsic", [ext_hex], result_handler=_result_handler)
+    response = _submit_rpc(iface, "author_submitAndWatchExtrinsic", ext_hex, _result_handler)
     block_hash = response.get("block_hash") if isinstance(response, dict) else None
     error = None
     if block_hash:
@@ -501,6 +516,73 @@ _WAIT_STAGES = frozenset({"sent", "inblock", "finalized"})
 # ``finalitytimeout`` arrive as single-key dicts (``{"usurped": "0x..."}``), so
 # ``_result_handler`` matches this set against both the string and the dict keys.
 _TERMINAL_POOL_FAILURES = frozenset({"dropped", "invalid", "usurped", "retracted", "finalitytimeout"})
+# The terminal statuses after which the extrinsic may still land: ``retracted``
+# means its block left the best chain, and the pool may include it again;
+# ``finalitytimeout`` means it was in a block that did not finalize in time.
+# The rest mean it is out of the pool for good.
+_UNCERTAIN_POOL_FAILURES = frozenset({"retracted", "finalitytimeout"})
+
+# Prefix of a receipt error that means inclusion could not be verified, as
+# opposed to a dispatch error the chain reported.
+UNCLASSIFIED_PREFIX = "unclassified: "
+
+# JSON-RPC error codes with which a node refuses an extrinsic its pool has
+# already seen: 1012 ``TemporarilyBanned`` (recently in the pool, possibly
+# included) and 1013 ``AlreadyImported`` (in the pool now). Either way it may
+# still land. Every other refusal means the pool never took it.
+_UNCERTAIN_REJECTION_CODES = frozenset({1012, 1013})
+
+
+class SendOutcomeUnknown(QuipSigningError):
+    """Raised when the pool reports a status after which the extrinsic may still land.
+
+    A :class:`QuipSigningError`, so callers that treat every pool failure
+    alike keep working; the order path tells it apart, because resending
+    after it can place a second order.
+    """
+
+
+def _submit_rpc(iface: Any, method: str, ext_hex: str, result_handler: Any = None) -> Any:
+    """Call the submission RPC ``method``, raising the node's outright refusal as a signing error.
+
+    substrate-interface raises ``SubstrateRequestException`` carrying the
+    JSON-RPC error object when the node answers the request itself with an
+    error, which it does when the pool refuses the extrinsic. That refusal
+    is certain unless its code is in :data:`_UNCERTAIN_REJECTION_CODES`.
+    Anything else -- a transport fault, or an HTTP-status failure whose
+    payload is a plain string -- propagates unchanged, since the extrinsic
+    may have reached the node.
+    """
+    try:
+        return iface.rpc_request(method, [ext_hex], result_handler=result_handler)
+    except Exception as exc:
+        error = exc.args[0] if exc.args else None
+        if not (_is_request_exception(exc) and isinstance(error, dict)):
+            raise
+        cls = SendOutcomeUnknown if error.get("code") in _UNCERTAIN_REJECTION_CODES else QuipSigningError
+        raise cls(f"{method} rejected the extrinsic: {error}") from exc
+
+
+def _is_request_exception(exc: BaseException) -> bool:
+    """Whether ``exc`` is substrate-interface's ``SubstrateRequestException``.
+
+    Imported lazily, as in :func:`xqsa.quip.chain._is_storage_absent`.
+    """
+    try:
+        from substrateinterface.exceptions import SubstrateRequestException
+    except Exception:  # noqa: BLE001 -- extra not installed / stubbed in tests.
+        return False
+    return isinstance(exc, SubstrateRequestException)
+
+
+def _unwatch(iface: Any, subscription_id: str) -> None:
+    """Close the watch subscription, ignoring any failure.
+
+    Called only once the outcome is known, so a failure here must not replace
+    it: an error escaping the handler after inclusion would read as a refusal.
+    """
+    with contextlib.suppress(Exception):
+        iface.rpc_request("author_unwatchExtrinsic", [subscription_id])
 
 
 def _extension_fields(
@@ -594,9 +676,9 @@ def _fetch_dispatch_error(iface: Any, *, block_hash: str, ext_hash: str) -> str 
     try:
         block = iface.get_block(block_hash=block_hash, include_author=False, ignore_decoding_errors=True)
     except Exception as exc:  # noqa: BLE001 -- surface as a non-success receipt, never crash the caller.
-        return f"unclassified: get_block failed for {block_hash}: {exc}"
+        return f"{UNCLASSIFIED_PREFIX}get_block failed for {block_hash}: {exc}"
     if not block:
-        return f"unclassified: get_block returned no block for {block_hash}"
+        return f"{UNCLASSIFIED_PREFIX}get_block returned no block for {block_hash}"
 
     target = _strip_0x(ext_hash).lower()
     ext_idx: int | None = None
@@ -608,9 +690,13 @@ def _fetch_dispatch_error(iface: Any, *, block_hash: str, ext_hash: str) -> str 
             ext_idx = idx
             break
     if ext_idx is None:
-        return f"unclassified: extrinsic {target[:16]} not found in block {_strip_0x(block_hash)[:16]}"
+        return f"{UNCLASSIFIED_PREFIX}extrinsic {target[:16]} not found in block {_strip_0x(block_hash)[:16]}"
 
-    for event in iface.get_events(block_hash=block_hash) or []:
+    try:
+        events = iface.get_events(block_hash=block_hash) or []
+    except Exception as exc:  # noqa: BLE001 -- keep the known block; never crash the caller.
+        return f"{UNCLASSIFIED_PREFIX}get_events failed for {block_hash}: {exc}"
+    for event in events:
         value = event.value if hasattr(event, "value") else event
         if not isinstance(value, dict):
             continue
