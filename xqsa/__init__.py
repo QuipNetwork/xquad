@@ -29,6 +29,7 @@ from .metal_gpu import SolverMetalGPU
 from .quip import (
     EncodingError,
     JobOrder,
+    JobOrderReceipt,
     JobQuote,
     PlacementError,
     QuipCancelledError,
@@ -58,6 +59,7 @@ __all__ = [
     "SolverMetalGPU",
     "SolverQuip",
     "JobOrder",
+    "JobOrderReceipt",
     "JobQuote",
     "QuipError",
     "QuipCancelledError",

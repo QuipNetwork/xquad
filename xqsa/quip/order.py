@@ -36,9 +36,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, replace
 from typing import TYPE_CHECKING, Any, Literal, Self
 
-from xqsa.quip.display import box
+from xqsa.quip.display import box, terms_rows
 from xqsa.quip.errors import QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
+from xqsa.quip.receipt import JobOrderReceipt
 
 if TYPE_CHECKING:
     from xqsa.quip.chain import ChainLimits
@@ -226,6 +227,10 @@ class JobOrder:
     and :meth:`submit`; :meth:`status` works in every state. Options are read
     through read-only properties and :meth:`options`.
 
+    A submitted order has a :class:`~xqsa.quip.JobOrderReceipt`, returned by
+    :meth:`receipt`. :meth:`wait`, :meth:`solvers`, :meth:`raw_solutions`,
+    :meth:`settlement` and :meth:`reclaim` pass through to it.
+
     States: ``draft``; ``submitted`` once placed with a known order id, then
     ``finalized`` once the chain closes it; ``failed`` when it was included but
     its dispatch failed, so the fee was paid and no order exists; and
@@ -246,7 +251,8 @@ class JobOrder:
             order.set(reward=2 * order.reward)
             print(order.quote())
             order.submit()
-            order.status()
+            order.wait()
+            order.settlement()
     """
 
     def __init__(
@@ -269,6 +275,7 @@ class JobOrder:
         self._block_hash: str | None = None
         self._error: str | None = None
         self._submitted_at: float | None = None
+        self._receipt: JobOrderReceipt | None = None
 
     # -- options ---------------------------------------------------------
 
@@ -394,6 +401,7 @@ class JobOrder:
                 "The fee was paid and no order was placed."
             )
         self._order_id = sent.order_id
+        self._receipt = JobOrderReceipt(self._client, sent.order_id, self._genesis_hash)
         self._state = "submitted"
         return self
 
@@ -425,21 +433,52 @@ class JobOrder:
                 "included_block": self._included_block,
             }
             return sent if self._state == "unconfirmed" else {**sent, "error": self._error}
-        order = self._client._fetch_order(self._order_id)
-        current_block = self._client._current_block()
-        lifecycle = self._client._order_lifecycle(order, current_block)
-        if lifecycle["is_final"]:
-            self._state = "finalized"
-        return {
-            "state": self._state,
-            "order_id": self._order_id,
-            "chain_status": lifecycle["status"],
-            "created_at": lifecycle["created_at"],
-            "first_solution_at": lifecycle["first_solution_at"],
-            "effective_expiry": lifecycle["effective_expiry"],
-            "current_block": current_block,
-            "solution_count": int(order.get("solution_count", 0) or 0),
-        }
+        status = self.receipt().status()
+        self._state = status["state"]
+        return status
+
+    def receipt(self) -> JobOrderReceipt:
+        """Return the order's receipt, its handle on the chain.
+
+        Raises:
+            QuipSubmissionError: if the order has no order id: it is a draft,
+                its dispatch failed, or its outcome is unconfirmed.
+        """
+        if self._receipt is None:
+            why = {
+                "draft": "is a draft; submit() it first",
+                "failed": "failed on chain, so no order was placed",
+                "unconfirmed": "is unconfirmed, so its order id is unknown",
+            }[self._state]
+            raise QuipSubmissionError(f"this order {why}")
+        return self._receipt
+
+    def wait(self) -> Self:
+        """Block until the order is final; see :meth:`JobOrderReceipt.wait <xqsa.quip.JobOrderReceipt.wait>`.
+
+        Raises:
+            QuipSubmissionError: if the order has no receipt; see :meth:`receipt`.
+            QuipTimeoutError: if it is not final within the client's ``timeout``.
+        """
+        self.receipt().wait()
+        self._state = "finalized"
+        return self
+
+    def solvers(self) -> list[dict[str, Any]]:
+        """See :meth:`JobOrderReceipt.solvers <xqsa.quip.JobOrderReceipt.solvers>`."""
+        return self.receipt().solvers()
+
+    def raw_solutions(self, solver: Any = None) -> dict[Any, Any]:
+        """See :meth:`JobOrderReceipt.raw_solutions <xqsa.quip.JobOrderReceipt.raw_solutions>`."""
+        return self.receipt().raw_solutions(solver)
+
+    def settlement(self) -> dict[str, Any]:
+        """See :meth:`JobOrderReceipt.settlement <xqsa.quip.JobOrderReceipt.settlement>`."""
+        return self.receipt().settlement()
+
+    def reclaim(self) -> int:
+        """See :meth:`JobOrderReceipt.reclaim <xqsa.quip.JobOrderReceipt.reclaim>`."""
+        return self.receipt().reclaim()
 
     def _call_params(self) -> dict:
         """Build the ``propose_job`` call params for the current configuration."""
@@ -488,14 +527,13 @@ class JobOrder:
             ),
             ("Placed", placed),
         ]
-        terms = [
-            ("Payout", _variant_text(options.resolution)),
-            ("Access", _variant_text(options.mode)),
-            ("Floors", "none"),
-            ("Deadline", f"{options.deadline_blocks} blocks"),
-            ("Block wait", f"{options.block_wait} blocks"),
-            ("Reward", f"{_format_planck(options.reward, decimals)} {symbol}"),
-        ]
+        terms = terms_rows(
+            resolution=options.resolution,
+            mode=options.mode,
+            deadline_blocks=options.deadline_blocks,
+            block_wait=options.block_wait,
+            reward=f"{_format_planck(options.reward, decimals)} {symbol}",
+        )
         if self._last_quote is None:
             quoted = "not quoted"
         else:
@@ -514,14 +552,13 @@ class JobOrder:
             receipt = f"failed in {block or 'an unknown block'}: {self._error}"
         else:
             receipt = f"order {self._order_id}" + (f", included in {block}" if block else "")
+            try:
+                outcome = self.receipt()._outcome()
+            except Exception:  # noqa: BLE001 -- display only; a read fault keeps the plain row.
+                pass
+            else:
+                leader = f", leader {outcome.leader}" if outcome.leader else ""
+                receipt += f", {outcome.status}{leader}"
         network = [("Network", self._client._network or "custom endpoint")]
         summary = [("Quote", quoted), ("Receipt", receipt)]
         return box(f"Job order ({self._state})", [network, problem, terms, summary])
-
-
-def _variant_text(value: Any) -> str:
-    """Render a unit enum variant as words (``"SingleBest"`` -> ``"single best"``); anything else as ``repr``."""
-    if not isinstance(value, str):
-        return repr(value)
-    words = "".join(f" {char}" if char.isupper() else char for char in value).split()
-    return " ".join(word.lower() for word in words)

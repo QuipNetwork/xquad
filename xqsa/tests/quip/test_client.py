@@ -1014,7 +1014,7 @@ class FakeSubstrate:
             return None
         return _Const(self.constants[(module, name)])
 
-    def query(self, module: str, name: str, params: list | None = None):
+    def query(self, module: str, name: str, params: list | None = None, block_hash: str | None = None):
         return _StorageEntry(self.storage.get((module, name)))
 
     def query_map(self, module: str, name: str, params: list | None = None):
@@ -1139,7 +1139,11 @@ def _make_solver(monkeypatch, *, iface: FakeSubstrate | None = None, **kwargs):
     _clear_quip_env(monkeypatch)
     kwargs.setdefault("url", "ws://fake:9944")
     kwargs.setdefault("seed", VALID_SEED)
-    return SolverQuip(**kwargs)
+    solver = SolverQuip(**kwargs)
+    order = resolved.storage.get(("QuantumComputeMempool", "JobOrders"))
+    if isinstance(order, dict) and order.get("proposer") == SIGNER_ACCOUNT:
+        order["proposer"] = "0x" + bytes(solver._signer.account_id).hex()
+    return solver
 
 
 class TestSolverQuipGuards:
@@ -2103,6 +2107,9 @@ def _spin_vector(job: IsingJob, var_spins: dict[int, int], default: int = 1) -> 
     return vector
 
 
+SIGNER_ACCOUNT = "<signer>"  # placeholder; _make_solver swaps in the real signer account.
+
+
 def _order(
     *,
     status: str = "Opened",
@@ -2111,8 +2118,12 @@ def _order(
     deadline_blocks: int = 100,
     block_wait: int = 10,
     solution_count: int = 1,
+    proposer: str = SIGNER_ACCOUNT,
+    reward: int = UNIT,
 ) -> dict:
     return {
+        "proposer": proposer,
+        "reward": reward,
         "status": status,
         "created_at": created_at,
         "first_solution_at": first_solution_at,
@@ -2132,7 +2143,7 @@ def _submission(solver_id: str, vectors: list[list[int]], best_energy_milli: int
 
 
 def _force_timeout(monkeypatch) -> None:
-    """Patch xqsa.quip's clock so _await_finality's first deadline check trips.
+    """Patch xqsa.quip's clock so a wait's first deadline check trips.
 
     monotonic() returns 0 for the deadline baseline, then 100 for the post-check,
     so a non-final order raises QuipTimeoutError without real sleeping.
@@ -2161,42 +2172,9 @@ def _chain_iface(*, order: dict, head: int, submissions: list[tuple] | None = No
     return iface
 
 
+@pytest.mark.filterwarnings("ignore:SolverQuip.status:DeprecationWarning")
 class TestSolverQuipLifecycle:
-    """_await_finality, _order_lifecycle, and status() against the mocked chain."""
-
-    def test_await_finality_terminal_status_returns_immediately(self, monkeypatch) -> None:
-        # Closed short-circuits regardless of height (head 5 < expiry 100).
-        iface = _chain_iface(order=_order(status="Closed"), head=5)
-        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
-        assert solver._await_finality(1)["status"] == "Closed"
-
-    def test_await_finality_terminal_skips_head_read(self, monkeypatch) -> None:
-        # A terminal status is final regardless of height, so the head-height
-        # RPC must be skipped entirely.
-        iface = _chain_iface(order=_order(status="Closed"), head=5)
-        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
-
-        def _boom() -> int:
-            raise AssertionError("head-height read must be skipped for a terminal order")
-
-        monkeypatch.setattr(solver, "_current_block", _boom)
-        assert solver._await_finality(1)["status"] == "Closed"
-
-    def test_await_finality_by_height(self, monkeypatch) -> None:
-        # Opened but past the hard deadline (head 200 >= expiry 100).
-        iface = _chain_iface(order=_order(status="Opened"), head=200)
-        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
-        assert solver._await_finality(1)["status"] == "Opened"
-
-    def test_await_finality_times_out(self, monkeypatch) -> None:
-        from xqsa.quip import QuipTimeoutError
-
-        iface = _chain_iface(order=_order(status="Opened"), head=50)  # 50 < expiry 100 -> never final
-        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH, timeout=0.0)
-        _force_timeout(monkeypatch)
-        with pytest.raises(QuipTimeoutError) as excinfo:
-            solver._await_finality(1)
-        assert excinfo.value.order_id == 1
+    """_order_lifecycle and status() against the mocked chain."""
 
     def test_status_snapshot(self, monkeypatch) -> None:
         iface = _chain_iface(order=_order(status="Opened", solution_count=2), head=150)
@@ -2231,7 +2209,7 @@ class TestSolverQuipCollect:
             (b"solver", _submission("0xSOLVER", [high, low], chain_best))
         ]
 
-        result = solver._collect_result(1, job, model, elapsed=1.5)
+        result = solver._collect_result(solver.get_receipt(1), job, model, elapsed=1.5)
         assert result.energy == 0  # the lower-energy vector wins
         assert result.timing == 1.5
         assert result.metadata["order_id"] == 1
@@ -2252,7 +2230,7 @@ class TestSolverQuipCollect:
             (b"a", _submission("0xLOSER", [loser], ising_energy_milli(job, loser))),
             (b"b", _submission("0xWINNER", [winner], ising_energy_milli(job, winner))),
         ]
-        result = solver._collect_result(1, job, model, elapsed=0.0)
+        result = solver._collect_result(solver.get_receipt(1), job, model, elapsed=0.0)
         assert result.metadata["solver"] == "0xWINNER"
         assert result.energy == 0
 
@@ -2265,7 +2243,7 @@ class TestSolverQuipCollect:
         solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [
             (b"solver", _submission("0xSOLVER", [vector], wrong))
         ]
-        result = solver._collect_result(1, job, model, elapsed=0.0)
+        result = solver._collect_result(solver.get_receipt(1), job, model, elapsed=0.0)
         assert result.metadata["energy_matches_chain"] is False
 
     def test_missing_pallet_field_raises_typed_error(self, monkeypatch) -> None:
@@ -2280,7 +2258,7 @@ class TestSolverQuipCollect:
         del broken["best_energy_milli"]  # simulate a renamed/absent field
         solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [(b"solver", broken)]
         with pytest.raises(QuipJobFailedError, match="field layout"):
-            solver._collect_result(1, job, _model(), elapsed=0.0)
+            solver._collect_result(solver.get_receipt(1), job, _model(), elapsed=0.0)
 
     def test_no_solutions_auto_reclaims_then_fails(self, monkeypatch) -> None:
         from xqsa.quip import QuipJobFailedError
@@ -2290,21 +2268,29 @@ class TestSolverQuipCollect:
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         job = _job(solver)
         with pytest.raises(QuipJobFailedError) as excinfo:
-            solver._collect_result(1, job, _model(), elapsed=0.0)
+            solver._collect_result(solver.get_receipt(1), job, _model(), elapsed=0.0)
         assert excinfo.value.order_id == 1
         assert "reclaimed" in str(excinfo.value)
         assert captured["call_function"] == "reclaim_order"
         assert captured["call_params"] == {"order_id": 1}
 
-    def test_reclaim_failure_is_tolerated(self, monkeypatch) -> None:
+    @pytest.mark.parametrize(
+        ("order", "error"),
+        [
+            pytest.param(_order(solution_count=0), "System.ExtrinsicFailed: NotProposer", id="chain-dispatch-failure"),
+            pytest.param(_order(solution_count=0, proposer="0x" + "11" * 32), None, id="local-refusal"),
+        ],
+    )
+    def test_reclaim_failure_is_tolerated(self, monkeypatch, order, error) -> None:
         from xqsa.quip import QuipJobFailedError
 
-        iface = _chain_iface(order=_order(solution_count=0), head=200, submissions=[])
+        iface = _chain_iface(order=order, head=200, submissions=[])
         solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
-        # reclaim_order dispatch fails (e.g. not proposer); _reclaim swallows it.
-        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error="System.ExtrinsicFailed: NotProposer"))
-        with pytest.raises(QuipJobFailedError, match="remain reserved"):
-            solver._collect_result(1, _job(solver), _model(), elapsed=0.0)
+        # The reclaim is refused, locally or on chain; _try_reclaim swallows it.
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error=error))
+        with pytest.raises(QuipJobFailedError, match="remain reserved") as excinfo:
+            solver._collect_result(solver.get_receipt(1), _job(solver), _model(), elapsed=0.0)
+        assert "get_receipt(1).reclaim()" in str(excinfo.value)
 
 
 class TestSolverQuipSolve:
@@ -2359,6 +2345,7 @@ class TestSolverQuipSolve:
         with pytest.raises(QuipTimeoutError) as excinfo:
             solver.solve(_model())
         assert excinfo.value.order_id == 1
+        assert excinfo.value.receipt.order_id == 1
 
     def test_solve_no_solutions_reclaims_and_fails(self, monkeypatch) -> None:
         from xqsa.quip import QuipJobFailedError
@@ -2438,8 +2425,22 @@ class TestSolverQuipSolve:
         assert solver.solve(_model()).metadata["order_id"] == 1
 
 
+@pytest.mark.filterwarnings("ignore:SolverQuip.query:DeprecationWarning")
 class TestSolverQuipQuery:
     """query() finality gating and result recovery."""
+
+    def test_query_warns_deprecated(self, monkeypatch) -> None:
+        iface = _chain_iface(order=_order(status="Opened"), head=50)
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        with pytest.warns(DeprecationWarning, match=r"query\(\) is deprecated; use SolverQuip.get_receipt"):
+            solver.query(1, _model())
+
+    def test_status_warns_deprecated_and_keeps_its_keys(self, monkeypatch) -> None:
+        iface = _chain_iface(order=_order(status="Opened"), head=50)
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        with pytest.warns(DeprecationWarning, match=r"get_receipt\(order_id\).status\(\)"):
+            snap = solver.status(1)
+        assert {"status", "is_final"} <= snap.keys()
 
     def test_query_returns_none_when_not_final(self, monkeypatch) -> None:
         iface = _chain_iface(order=_order(status="Opened"), head=50)  # 50 < expiry 100
@@ -2469,6 +2470,7 @@ class TestSolverQuipQuery:
         assert captured["call_function"] == "reclaim_order"
 
 
+@pytest.mark.filterwarnings("ignore:SolverQuip.query:DeprecationWarning")
 class TestSolverQuipNativeTopology:
     """topology="native" / QUIP_TOPOLOGY=native: submit over the model's own coupling graph."""
 
@@ -2584,7 +2586,7 @@ class TestSolverQuipNativeTopology:
 
         captured: dict = {}
 
-        def _fake_collect(order_id, job, model_arg, *, elapsed):
+        def _fake_collect(receipt, job, model_arg, *, elapsed):
             captured["job"] = job
             return SolverResult(sample=model_arg, energy=0, timing=elapsed, metadata={})
 

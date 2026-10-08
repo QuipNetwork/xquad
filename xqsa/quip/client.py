@@ -27,7 +27,7 @@ import warnings
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 from xqsa.quip import chain
 from xqsa.quip import metadata as quip_metadata
@@ -43,7 +43,6 @@ from xqsa.quip.chain import (  # noqa: F401 -- FEE_HEADROOM_PLANCK and the palle
     _status_str,
 )
 from xqsa.quip.codec import (
-    _TERMINAL_STATUSES,
     DEFAULT_ISING_SPEC_ID,
     QUIP_COEFFICIENTS_DOC_URL,
     Topology,
@@ -72,6 +71,7 @@ from xqsa.quip.faucet import DEFAULT_DRIP_PLANCK, fund_from_faucet
 from xqsa.quip.networks import NETWORKS
 from xqsa.quip.order import JobOrder, _OrderOptions, _Sent, _SignedCall, check_client_defaults, merge_options
 from xqsa.quip.quote import JobQuote, _format_planck
+from xqsa.quip.receipt import JobOrderReceipt
 from xqsa.solver import Solver, SolverResult
 
 if TYPE_CHECKING:
@@ -93,6 +93,10 @@ DEFAULT_TIMEOUT = 600.0
 # faucet answers only once the drip is on chain, so this covers a lagging RPC
 # node, not block time.
 FUND_WAIT_SECONDS = 30.0
+
+# The most order ids list_orders() returns, newest first. Fixed on purpose;
+# see the warning it raises past it.
+LIST_ORDERS_LIMIT = 32
 
 # Keystore used when no seed or keystore is configured; created on first use.
 DEFAULT_KEYSTORE = "~/.quip/keystore.json"
@@ -738,38 +742,12 @@ class SolverQuip(Solver):
         """See :func:`xqsa.quip.chain.order_lifecycle`."""
         return chain.order_lifecycle(order, current_block)
 
-    def _await_finality(self, order_id: int) -> Mapping[str, Any]:
-        """Poll the order until it is final by block height, returning it.
-
-        The lazy lifecycle means an order can be past its expiry while still
-        reported ``Opened``, so finality is decided by height
-        (:func:`~xqsa.quip.codec.is_final`), never by waiting for ``OrderClosed``.
-
-        Raises:
-            QuipTimeoutError: if the order does not finalize within ``timeout``
-                (carries ``order_id`` so the result is recoverable via
-                :meth:`query`).
-        """
-        deadline = time.monotonic() + self._timeout
-        while True:
-            order = self._fetch_order(order_id)
-            # A terminal chain status is final regardless of height, so skip the
-            # extra head-height read on the terminal check (and on every poll of
-            # an already-closed order via query()).
-            if _status_str(order["status"]) in _TERMINAL_STATUSES:
-                return order
-            if self._order_lifecycle(order, self._current_block())["is_final"]:
-                return order
-            if time.monotonic() >= deadline:
-                raise QuipTimeoutError(order_id)
-            time.sleep(self._poll_interval)
-
     def _fetch_solutions(self, order_id: int) -> list[Mapping[str, Any]]:
         """See :func:`xqsa.quip.chain.fetch_solutions`."""
         return chain.fetch_solutions(self._iface, order_id)
 
-    def _collect_result(self, order_id: int, job: IsingJob, model: Any, *, elapsed: float) -> SolverResult:
-        """Decode the best on-chain solution for ``order_id`` into a result.
+    def _collect_result(self, receipt: JobOrderReceipt, job: IsingJob, model: Any, *, elapsed: float) -> SolverResult:
+        """Decode the best on-chain solution for the receipt's order into a result.
 
         Selects the submission with the lowest chain ``best_energy_milli``,
         decodes every spin vector in it, and keeps the one with the best
@@ -783,14 +761,14 @@ class SolverQuip(Solver):
                 (the reward is auto-reclaimed first; the message notes the
                 refund outcome).
         """
+        order_id = receipt.order_id
         submissions = self._fetch_solutions(order_id)
         if not submissions:
-            reclaimed = self._reclaim(order_id)
             refund = (
                 "the reserved reward was reclaimed"
-                if reclaimed
+                if self._try_reclaim(receipt)
                 else "the reward reclaim failed (see warnings); funds remain reserved -- "
-                "retry SolverQuip.query(order_id, model) or reclaim manually"
+                f"retry with SolverQuip.get_receipt({order_id}).reclaim()"
             )
             raise QuipJobFailedError(order_id, f"order {order_id} finalized with no solutions; {refund}")
 
@@ -825,20 +803,25 @@ class SolverQuip(Solver):
             },
         )
 
-    def _reclaim(self, order_id: int) -> bool:
-        """Best-effort ``reclaim_order`` to unreserve the reward; never raises.
+    @staticmethod
+    def _try_reclaim(receipt: JobOrderReceipt) -> bool:
+        """Best-effort :meth:`JobOrderReceipt.reclaim <xqsa.quip.JobOrderReceipt.reclaim>`; never raises.
 
-        Valid only for the proposer once the order is Expired with zero accepted
-        solutions (the pallet flips Opened->Expired by height as a side effect).
-        Any failure (not proposer, not yet expired, RPC error) is logged and
-        swallowed -- reclaim is a courtesy on the failure path, not a guarantee.
+        The failure path of :meth:`solve` and :meth:`query` calls it, so any
+        failure is logged and swallowed: the refund must never hide the
+        error that led to it.
         """
         try:
-            self._submit_extrinsic(MEMPOOL_PALLET, RECLAIM_ORDER_CALL, {"order_id": order_id})
+            refunded = receipt.reclaim()
         except Exception as exc:  # noqa: BLE001 -- reclaim must never mask the original failure.
-            logger.warning("could not reclaim the reward for order %d: %s", order_id, exc)
+            logger.warning(
+                "could not reclaim the reward for order %d: %s; retry with get_receipt(%d).reclaim()",
+                receipt.order_id,
+                exc,
+                receipt.order_id,
+            )
             return False
-        logger.info("reclaimed the reserved reward for order %d", order_id)
+        logger.info("reclaimed %d planck reserved for order %d", refunded, receipt.order_id)
         return True
 
     # ------------------------------------------------------------------
@@ -1161,18 +1144,17 @@ class SolverQuip(Solver):
                 declines (carries the quote).
             QuipFaucetError: if the faucet refuses or cannot be reached.
             QuipTimeoutError: if the order does not finalize within ``timeout``
-                (the order id is recoverable via :meth:`query`).
+                (it carries the order's receipt; :meth:`get_receipt` rebuilds
+                it from the order id).
             QuipUnconfirmedError: if the job was sent but its outcome or order
                 id is unknown. It may be on chain, so do not solve the same
                 model again on that account without checking.
             QuipJobFailedError: if the order finalizes with no usable solution.
         """
-        order = self._create_order(model, kwargs, strict=False).submit()
-        order_id = order._order_id
-        assert order_id is not None and order._submitted_at is not None  # submit() sets both.
-        self._await_finality(order_id)
+        order = self._create_order(model, kwargs, strict=False).submit().wait()
+        assert order._submitted_at is not None  # submit() sets it.
         elapsed = time.perf_counter() - order._submitted_at
-        return self._collect_result(order_id, order._job, model, elapsed=elapsed)
+        return self._collect_result(order.receipt(), order._job, model, elapsed=elapsed)
 
     def query(
         self,
@@ -1182,7 +1164,11 @@ class SolverQuip(Solver):
         mapping: Mapping[int, int] | None = None,
         topology: str | None = None,
     ) -> SolverResult | None:
-        """Recover the result of an already-proposed order.
+        """Recover the result of an already-proposed order. Deprecated.
+
+        Use :meth:`get_receipt` to follow an order without its model; decoding
+        a receipt's answers onto a model is QUI-1609. This keeps working, with
+        a ``DeprecationWarning``, until QUI-1608 removes it.
 
         Returns ``None`` if the order is not yet final (poll again later). Once
         final, re-derives the deterministic placement from ``model`` and decodes
@@ -1198,20 +1184,85 @@ class SolverQuip(Solver):
         Raises:
             ValueError: if ``mapping`` is given with ``topology="native"``.
         """
+        warnings.warn(
+            "SolverQuip.query() is deprecated; use SolverQuip.get_receipt(order_id) to follow the order",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._validate_model(model)
         self._native_for(topology, mapping)  # reject native + mapping= before any chain read.
-        order = self._fetch_order(order_id)
-        if not self._order_lifecycle(order, self._current_block())["is_final"]:
+        receipt = self.get_receipt(order_id)
+        if receipt.status()["state"] != "finalized":
             return None
         job = self._job_for(model, topology, mapping)
-        return self._collect_result(order_id, job, model, elapsed=0.0)
+        return self._collect_result(receipt, job, model, elapsed=0.0)
+
+    def get_receipt(self, order_id: int) -> JobOrderReceipt:
+        """Return the receipt of the order ``order_id`` on this client's chain.
+
+        Works in any session: the receipt reads everything from the chain, so
+        it needs neither the order object nor the model.
+
+        Raises:
+            QuipConnectionError: if no such order exists on chain.
+        """
+        self._fetch_order(order_id)
+        return JobOrderReceipt(self, order_id, self._genesis_hash)
+
+    def list_orders(self, state: Literal["submitted", "finalized"] | None = None, account: Any = None) -> list[int]:
+        """Return the ids of an account's orders, newest first.
+
+        Reads the chain's per-account order list, so it includes orders
+        placed from any session. ``state`` keeps only the orders still open
+        (``"submitted"``) or final (``"finalized"``), at one more read per
+        order. ``account`` lists another account's orders instead of this
+        client's signer, as SS58 text, ``0x`` hex or bytes.
+
+        At most :data:`LIST_ORDERS_LIMIT` (32) ids are returned; past that it
+        warns and returns the newest 32.
+
+        Raises:
+            ValueError: if ``state`` is not ``"submitted"`` or ``"finalized"``,
+                or ``account`` cannot be read as an account.
+            QuipConnectionError: if an order or the head block cannot be read.
+        """
+        if state not in (None, "submitted", "finalized"):
+            raise ValueError(f"state={state!r}; expected 'submitted', 'finalized' or None")
+        owner = self._signer.account_id if account is None else chain.account_bytes(account)
+        order_ids = chain.proposer_orders(self._iface, owner)[::-1]
+        if state is not None:
+            current_block = self._current_block()
+            order_ids = [
+                order_id
+                for order_id in order_ids
+                if self._order_lifecycle(self._fetch_order(order_id), current_block)["is_final"]
+                == (state == "finalized")
+            ]
+        if len(order_ids) > LIST_ORDERS_LIMIT:
+            warnings.warn(
+                f"showing {LIST_ORDERS_LIMIT} of {len(order_ids)} orders on this account. This "
+                f"{LIST_ORDERS_LIMIT}-order page limit was imposed for the old protocol cap of 32 orders per "
+                "account; please flag it to the xquad team so it can be lifted.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return order_ids[:LIST_ORDERS_LIMIT]
 
     def status(self, order_id: int) -> dict[str, Any]:
-        """Return a lightweight lifecycle snapshot of an order (no solution decode).
+        """Return a lightweight lifecycle snapshot of an order (no solution decode). Deprecated.
+
+        Use ``get_receipt(order_id).status()``, whose keys follow
+        :meth:`JobOrder.status <xqsa.quip.JobOrder.status>`. This keeps its
+        old keys, with a ``DeprecationWarning``, until QUI-1608 removes it.
 
         One ``JobOrders`` read plus the chain head: status, key block heights,
         the computed ``effective_expiry``, and whether the order ``is_final``.
         """
+        warnings.warn(
+            "SolverQuip.status() is deprecated; use SolverQuip.get_receipt(order_id).status()",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         order = self._fetch_order(order_id)
         current_block = self._current_block()
         lifecycle = self._order_lifecycle(order, current_block)

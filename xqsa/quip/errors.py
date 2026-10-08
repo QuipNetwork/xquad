@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from xqsa.quip.quote import JobQuote
+    from xqsa.quip.receipt import JobOrderReceipt
 
 
 class QuipError(Exception):
@@ -143,13 +144,21 @@ class QuipTopologyError(QuipError):
 class QuipTimeoutError(QuipError):
     """Raised when an order does not reach finality before the configured timeout.
 
-    Carries ``order_id`` so the caller can later recover the result via
-    :meth:`~xqsa.quip.SolverQuip.query` once the order finalizes.
+    Carries ``order_id`` and, when raised by a wait, the order's ``receipt``,
+    so the caller can wait again or read the order once it is final. In
+    another session, :meth:`~xqsa.quip.SolverQuip.get_receipt` rebuilds the
+    receipt from the id.
     """
 
-    def __init__(self, order_id: int, message: str | None = None) -> None:
+    def __init__(self, order_id: int, message: str | None = None, *, receipt: JobOrderReceipt | None = None) -> None:
         self.order_id = order_id
+        self.receipt = receipt
         super().__init__(message or f"order {order_id} did not reach finality before the timeout")
+
+    def __reduce__(self) -> tuple:
+        """Pickle without the receipt, whose client holds a live connection; ``receipt`` comes back ``None``."""
+        state = {name: value for name, value in self.__dict__.items() if name != "receipt"}
+        return (type(self), (self.order_id, str(self)), state)
 
 
 class QuipJobFailedError(QuipError):

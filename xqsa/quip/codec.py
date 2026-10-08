@@ -893,6 +893,23 @@ def _as_int_or_none(value: object) -> int | None:
         return None
 
 
+def _phase_extrinsic_index(phase: object) -> int | None:
+    """Extract the extrinsic index from a SCALE-decoded event ``phase`` field."""
+    if isinstance(phase, dict):
+        applied = phase.get("ApplyExtrinsic")
+        if applied is None:
+            return None
+        if isinstance(applied, dict):
+            index = applied.get("extrinsic_idx")
+            if index is None:
+                index = applied.get("index")
+            return _as_int_or_none(index)
+        return _as_int_or_none(applied)
+    if isinstance(phase, (int, str)):
+        return _as_int_or_none(phase)
+    return None
+
+
 def _event_ids(inner: Mapping[str, object]) -> tuple[object, object]:
     """Extract ``(module_id, event_id)`` from a decoded event mapping.
 

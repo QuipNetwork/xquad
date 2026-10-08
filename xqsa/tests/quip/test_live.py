@@ -32,7 +32,8 @@ Two tiers:
   parts of SolverQuip that do not need a returned solution: connectivity, the
   live ``propose_job`` SCALE/extras contract (a clean submission with no
   ``System.ExtrinsicFailed``), the topology fetch, the balance pre-check, the
-  timeout path, and expired-no-solution auto-reclaim.
+  timeout path, expired-no-solution auto-reclaim, and reclaiming an
+  unanswered order through its receipt.
 * END-TO-END tests need the miner to actually return a solution. They are
   guarded by the ``solving_miner`` fixture, which probes the fleet once and
   skips them when no solution comes back within the probe window. They run
@@ -444,9 +445,10 @@ class TestSubmitPath:
             solver.solve(_asymmetric_spin_model())
         order_id = excinfo.value.order_id
         assert isinstance(order_id, int)
-        snap = solver.status(order_id)
+        assert excinfo.value.receipt.order_id == order_id
+        snap = solver.get_receipt(order_id).status()
         assert snap["order_id"] == order_id
-        assert snap["status"] in ("Opened", "Expired", "Closed")
+        assert snap["chain_status"] in ("Opened", "Expired", "Closed")
 
     def test_expired_no_solution_auto_reclaims(self, make_solver, monkeypatch) -> None:
         # A 1-block deadline finalizes empty regardless of fleet activity: the
@@ -474,10 +476,10 @@ class TestSubmitPath:
         # The order finalized with no solutions, which is the precondition that
         # triggers auto-reclaim. Confirm it directly on the order (account-
         # independent, so unaffected by state left by other session tests).
-        snap = solver.status(excinfo.value.order_id)
+        snap = solver.get_receipt(excinfo.value.order_id).status()
         assert snap["solution_count"] == 0
-        assert snap["status"] in ("Expired", "Closed")
-        assert snap["is_final"] is True
+        assert snap["chain_status"] in ("Expired", "Closed")
+        assert snap["state"] == "finalized"
 
         # This order's reward was reserved at propose and released on reclaim, so
         # the reserved balance does not GROW across the solve. The reclaim itself
@@ -521,6 +523,41 @@ class TestJobOrder:
         assert int(stored["timing"]["block_wait"]) == 5
         with pytest.raises(QuipSubmissionError, match="works only on a draft"):
             order.set(deadline_blocks=200)
+
+
+class TestReceipt:
+    def test_unanswered_order_reclaims_through_its_receipt(self, make_solver, monkeypatch) -> None:
+        # The 1-block deadline of test_expired_no_solution_auto_reclaims, so the
+        # order finalizes unanswered whatever the fleet does. Here nothing
+        # reclaims on its own: the receipt does it, and its display, the
+        # account's order list and a repeated reclaim all read the result back.
+        monkeypatch.setattr("xqsa.quip.order.MIN_DEADLINE_BLOCKS", 1)
+        solver = make_solver(deadline_blocks=1, block_wait=1, timeout=150.0)
+        account = "0x" + solver._signer.account_id.hex()
+
+        def reserved() -> int:
+            return solver._iface.query("System", "Account", [account]).value["data"]["reserved"]
+
+        order = solver.create_order(_asymmetric_spin_model()).submit().wait()
+        receipt = order.receipt()
+        snap = receipt.status()
+        assert (snap["state"], snap["solution_count"]) == ("finalized", 0)
+        assert solver.list_orders()[0] == order.order_id()
+        assert order.order_id() in solver.list_orders(state="finalized")
+
+        before = reserved()
+        assert receipt.reclaim() == order.reward
+        assert before - reserved() >= order.reward
+        assert receipt.status()["chain_status"] == "Closed"
+        assert receipt.settlement() == {"claimed": False, "winners": []}
+        with pytest.raises(QuipSubmissionError, match="is already closed"):
+            receipt.reclaim()
+
+        text = str(receipt)
+        assert {len(line) for line in text.splitlines()} == {72}
+        assert "│ Reward      reclaimed " in text
+        assert "unknown" not in text  # the fee and submission time were read from the chain.
+        assert receipt._genesis_hash not in text
 
 
 # ---------------------------------------------------------------------------
@@ -575,15 +612,48 @@ class TestEndToEnd:
         assert result.metadata["num_solutions"] >= 1
         assert _feasible(result.sample, model.size, {-1, 1})
 
+    def test_receipt_rebuilt_in_a_fresh_session(self, make_solver, solving_miner) -> None:
+        """A receipt rebuilt by id on another client reports what the submitting order's receipt does."""
+        solver = make_solver()
+        order = solver.create_order(_asymmetric_spin_model()).submit()
+        with pytest.raises(QuipSubmissionError, match="is open until block"):
+            order.reclaim()  # refused locally, before signing.
+
+        rebuilt = make_solver().get_receipt(order.order_id())
+        rebuilt.wait()
+        if not rebuilt.status()["solution_count"]:
+            assert rebuilt.reclaim() == order.reward  # through the rebuilt receipt; nothing stays reserved.
+            pytest.skip("no solver answered this order; the comparison needs an answer")
+
+        # Only what final orders keep: a winner's claim may still close the
+        # order, moving chain_status and claimed, between the paired reads.
+        stable = ("state", "order_id", "created_at", "first_solution_at", "effective_expiry", "solution_count")
+        original = order.receipt()
+        assert rebuilt._genesis_hash == original._genesis_hash
+        assert [rebuilt.status()[key] for key in stable] == [original.status()[key] for key in stable]
+        assert rebuilt.solvers() == original.solvers()
+        winners = rebuilt.settlement()["winners"]
+        assert winners == original.settlement()["winners"]
+        assert rebuilt.solvers()[0]["solver"] == winners[0]["solver"]
+        with pytest.raises(QuipSubmissionError, match="was answered by|is already closed"):
+            rebuilt.reclaim()
+        text = str(rebuilt)
+        assert {len(line) for line in text.splitlines()} == {72}
+        assert "unknown" not in text
+        assert rebuilt._genesis_hash not in text
+
     def test_query_and_status_after_solve(self, make_solver, solving_miner) -> None:
+        # The deprecated pair keeps working until QUI-1608.
         model = _asymmetric_spin_model()
         solver = make_solver()
         result = solver.solve(model)
         order_id = result.metadata["order_id"]
 
-        snap = solver.status(order_id)
+        with pytest.warns(DeprecationWarning):
+            snap = solver.status(order_id)
         assert snap["is_final"] is True
 
-        recovered = solver.query(order_id, model)
+        with pytest.warns(DeprecationWarning):
+            recovered = solver.query(order_id, model)
         assert recovered is not None
         assert recovered.energy == result.energy

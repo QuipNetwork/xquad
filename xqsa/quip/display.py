@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import textwrap
 from collections.abc import Sequence
+from typing import Any
 
 WIDTH = 72
 LABEL_WIDTH = 12
@@ -47,6 +48,26 @@ def box(title: str, sections: Sequence[Sequence[Row]], *, double_before: int | N
                 lines.append(f"│ {(label if offset == 0 else ''):<{LABEL_WIDTH}}{chunk:<{_VALUE_WIDTH}} │")
     lines.append("╰" + "─" * (WIDTH - 2) + "╯")
     return "\n".join(lines)
+
+
+def terms_rows(*, resolution: Any, mode: Any, deadline_blocks: int, block_wait: int, reward: str) -> list[Row]:
+    """Return the Terms section an order and its receipt both show; ``reward`` comes formatted."""
+    return [
+        ("Payout", variant_text(resolution)),
+        ("Access", variant_text(mode)),
+        ("Floors", "none"),
+        ("Deadline", f"{deadline_blocks} blocks"),
+        ("Block wait", f"{block_wait} blocks"),
+        ("Reward", reward),
+    ]
+
+
+def variant_text(value: Any) -> str:
+    """Render a unit enum variant as words (``"SingleBest"`` -> ``"single best"``); anything else as ``repr``."""
+    if not isinstance(value, str):
+        return repr(value)
+    words = "".join(f" {char}" if char.isupper() else char for char in value).split()
+    return " ".join(word.lower() for word in words)
 
 
 def _wrap(value: str) -> list[str]:
