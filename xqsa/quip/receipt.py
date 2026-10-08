@@ -40,7 +40,7 @@ from xqsa.quip import chain
 from xqsa.quip.chain import MEMPOOL_PALLET, RECLAIM_ORDER_CALL, _coerce_block_number, _status_str
 from xqsa.quip.codec import _TERMINAL_STATUSES, ORDER_STATUS_CLOSED
 from xqsa.quip.display import box, terms_rows
-from xqsa.quip.errors import QuipSubmissionError, QuipTimeoutError
+from xqsa.quip.errors import QuipReclaimRefusedError, QuipSubmissionError, QuipTimeoutError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
 
 if TYPE_CHECKING:
@@ -175,19 +175,25 @@ class JobOrderReceipt:
     def solvers(self) -> list[dict[str, Any]]:
         """Return who answered, in the chain's ranking order.
 
-        Each entry is ``{"solver", "energy_milli", "submitted_at",
-        "num_solutions"}``, with the solver's best energy in milli Ising units
-        as the chain computed it. The ranked answers come first: the front
-        runner of a ``SingleBest`` order, or a top-N order's ranked solvers.
-        The unranked answers follow, lowest energy first, then earliest.
+        Each entry is ``{"solver", "ranked_energy_milli", "energy_milli",
+        "submitted_at", "num_solutions"}``, energies in milli Ising units as
+        the chain computed them. ``ranked_energy_milli`` is the energy the
+        chain ranked the solver at, ``None`` for an unranked answer.
+        ``energy_milli`` is the best energy stored with the solver's answer,
+        which a later resubmission can overwrite, so it can differ from the
+        ranked one. The ranked answers come first: the front runner of a
+        ``SingleBest`` order, or a top-N order's ranked solvers. The unranked
+        answers follow, lowest stored energy first, then earliest.
         """
         answers = {answer["solver"]: answer for answer in self._client._fetch_solutions(self._order_id)}
-        ranked = [entry["solver"] for entry in self._ranking() if entry["solver"] in answers]
+        ranked = {
+            entry["solver"]: int(entry["energy_milli"]) for entry in self._ranking() if entry["solver"] in answers
+        }
         rest = sorted(
             (answer for solver, answer in answers.items() if solver not in ranked),
             key=lambda answer: (int(answer["best_energy_milli"]), answer.get("submitted_at") or 0),
         )
-        return [_solver_entry(answer) for answer in [answers[solver] for solver in ranked] + rest]
+        return [_solver_entry(answer, ranked.get(answer["solver"])) for answer in [answers[s] for s in ranked] + rest]
 
     def raw_solutions(self, solver: Any = None) -> dict[Any, Any]:
         """Return the spin vectors each solver answered with, as the chain stores them.
@@ -256,12 +262,15 @@ class JobOrderReceipt:
         Nothing reclaims on its own.
 
         Raises:
-            QuipSubmissionError: if this account did not propose the order,
+            QuipReclaimRefusedError: if this account did not propose the order,
                 the order is already closed, it is still open, or it was
-                answered; or if the chain refuses the reclaim.
+                answered; or if the chain refuses the reclaim at dispatch, which
+                charges the fee. Sending it again cannot succeed.
+            QuipSubmissionError: if the node did not take the reclaim, or took
+                it and its outcome is unknown. The reward may still be
+                reserved, and calling this again is safe: a reclaim that landed
+                is refused here as already closed, before anything is signed.
             QuipConnectionError: if the order or the head block cannot be read.
-            QuipUnconfirmedError: if the reclaim was sent but its outcome is
-                unknown.
         """
         client = self._client
         order_id = self._order_id
@@ -274,24 +283,45 @@ class JobOrderReceipt:
         proposer = chain.account_bytes(order["proposer"])
         if proposer != bytes(client._signer.account_id):
             proposed_by = chain.ss58_address(client._iface, proposer)
-            raise QuipSubmissionError(f"order {order_id} was proposed by {proposed_by}, not by this account")
+            raise QuipReclaimRefusedError(f"order {order_id} was proposed by {proposed_by}, not by this account")
         if lifecycle["status"] == ORDER_STATUS_CLOSED:
-            raise QuipSubmissionError(f"order {order_id} is already closed (reclaimed or settled)")
+            raise QuipReclaimRefusedError(f"order {order_id} is already closed (reclaimed or settled)")
         expiry = lifecycle["effective_expiry"]
         # The reclaim executes in a later block than the head read here, so an
         # order one block short of expiry is already reclaimable on chain.
         if not (lifecycle["is_final"] or self._final_seen) and current_block + 1 < expiry:
             about = _minutes_until(expiry - current_block - 1, chain.block_time_ms(client._iface))
-            raise QuipSubmissionError(f"order {order_id} is open until block {expiry}{about}; reclaim after it closes")
+            raise QuipReclaimRefusedError(
+                f"order {order_id} is open until block {expiry}{about}; reclaim after it closes"
+            )
         answers = _solution_count(order)
         if answers:
             solvers = "solver" if answers == 1 else "solvers"
-            raise QuipSubmissionError(
+            raise QuipReclaimRefusedError(
                 f"order {order_id} was answered by {answers} {solvers}; its reward awaits the winner's claim "
                 "and cannot be reclaimed"
             )
 
-        client._submit_extrinsic(MEMPOOL_PALLET, RECLAIM_ORDER_CALL, {"order_id": order_id})
+        # Sent, not submitted: a dispatch error comes back on the receipt rather
+        # than raised, and it is the one refusal the checks above cannot see.
+        try:
+            sent = client._send_extrinsic(MEMPOOL_PALLET, RECLAIM_ORDER_CALL, {"order_id": order_id})
+        except QuipUnconfirmedError as exc:
+            # Its message warns against resubmitting, which holds for a
+            # proposal; a reclaim is safe to resend, so state the outcome only.
+            raise QuipSubmissionError(
+                f"the reclaim of order {order_id} ({exc.extrinsic_hash}) was sent but its outcome is unknown"
+            ) from exc
+        if sent.is_unverified:
+            raise QuipSubmissionError(
+                f"the reclaim of order {order_id} ({sent.extrinsic_hash}) reached block {sent.block_hash} "
+                f"but its result could not be read: {sent.error}"
+            )
+        if sent.error is not None:
+            raise QuipReclaimRefusedError(
+                f"the chain refused the reclaim of order {order_id} in block {sent.block_hash} "
+                f"and charged the fee: {sent.error}"
+            )
         return int(order["reward"])
 
     def _fetch_order(self) -> Mapping[str, Any]:
@@ -447,9 +477,10 @@ def _solution_count(order: Mapping[str, Any]) -> int:
     return int(order.get("solution_count", 0) or 0)
 
 
-def _solver_entry(answer: Mapping[str, Any]) -> dict[str, Any]:
+def _solver_entry(answer: Mapping[str, Any], ranked_energy_milli: int | None) -> dict[str, Any]:
     return {
         "solver": answer["solver"],
+        "ranked_energy_milli": ranked_energy_milli,
         "energy_milli": int(answer["best_energy_milli"]),
         "submitted_at": answer.get("submitted_at"),
         "num_solutions": len(answer["solutions"]),

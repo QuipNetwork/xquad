@@ -40,6 +40,7 @@ from xqsa.quip.display import box, terms_rows
 from xqsa.quip.errors import QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
+from xqsa.quip.solution import Solution, decode_answers, pick_best
 
 if TYPE_CHECKING:
     from xqsa.quip.chain import ChainLimits
@@ -471,6 +472,38 @@ class JobOrder:
     def raw_solutions(self, solver: Any = None) -> dict[Any, Any]:
         """See :meth:`JobOrderReceipt.raw_solutions <xqsa.quip.JobOrderReceipt.raw_solutions>`."""
         return self.receipt().raw_solutions(solver)
+
+    def best(self) -> Solution:
+        """Return the answer the chain pays for, decoded onto this order's model.
+
+        That is the best vector, by energy recomputed on the model, of the
+        solver the chain ranks first. It is the best vector any solver stored
+        instead, with ``leader`` false, when the ranking cannot be read or
+        names no answer, or when the leader's stored vectors do not reach the
+        energy it was ranked at; the latter is logged with both energies.
+        Reads the chain now, so an order that is still open can return a
+        different answer later. Never reclaims.
+
+        Raises:
+            QuipSubmissionError: if the order has no receipt; see :meth:`receipt`.
+            QuipJobFailedError: if nobody answered the order (reclaim its
+                reward with :meth:`reclaim` once it is final), or the chosen
+                answer carries no vectors.
+        """
+        return pick_best(self.receipt(), self._job, self._model).solution
+
+    def solutions(self, solver: Any = None) -> list[Solution]:
+        """Return every stored answer, decoded onto this order's model, best first.
+
+        Ordered by energy recomputed on the model, the leader's vectors first
+        on ties. With ``solver``, returns that solver's vectors alone. An
+        unanswered order returns an empty list.
+
+        Raises:
+            QuipSubmissionError: if the order has no receipt; see :meth:`receipt`.
+            KeyError: if ``solver`` did not answer the order.
+        """
+        return decode_answers(self.receipt(), self._job, self._model, solver)
 
     def settlement(self) -> dict[str, Any]:
         """See :meth:`JobOrderReceipt.settlement <xqsa.quip.JobOrderReceipt.settlement>`."""

@@ -111,6 +111,17 @@ class QuipOrderOptionError(QuipSubmissionError):
         super().__init__(message)
 
 
+class QuipReclaimRefusedError(QuipSubmissionError):
+    """Raised when the chain refuses a reclaim, so sending it again cannot succeed.
+
+    The order was proposed by another account, is already closed, is still
+    open, or was answered, whether found before anything is signed or by the
+    chain at dispatch. A subclass of :class:`QuipSubmissionError`; every
+    other reclaim failure is a fault after which the reward may still be
+    reserved and a retry may refund it.
+    """
+
+
 class QuipUnconfirmedError(QuipSubmissionError):
     """Raised when a ``propose_job`` was sent but its outcome or order id is unknown.
 
@@ -164,10 +175,12 @@ class QuipTimeoutError(QuipError):
 class QuipJobFailedError(QuipError):
     """Raised when a final order yielded no usable solution.
 
-    Carries ``order_id``. Auto-reclaim of the reserved reward is best-effort and
-    applies only on the no-submissions path (there the message notes the refund
-    outcome); the other paths -- a winning submission with no solution vectors,
-    or a missing result field -- raise without reclaiming.
+    Carries ``order_id``. :meth:`SolverQuip.solve <xqsa.quip.SolverQuip.solve>`
+    auto-reclaims the reserved reward of an unanswered order, best-effort, and
+    the message says whether the reward was reclaimed or why the reclaim was
+    refused. :meth:`JobOrder.best <xqsa.quip.JobOrder.best>` never reclaims.
+    The other paths -- a winning submission with no solution vectors, or a
+    missing result field -- raise without reclaiming.
     """
 
     def __init__(self, order_id: int, message: str | None = None) -> None:

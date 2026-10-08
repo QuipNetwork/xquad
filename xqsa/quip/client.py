@@ -49,8 +49,6 @@ from xqsa.quip.codec import (
     _as_hex,
     _require_h256,
     check_allowed_values,
-    decode_solution,
-    ising_energy_milli,
     model_to_ising,
     native_placement,
 )
@@ -62,6 +60,7 @@ from xqsa.quip.errors import (  # noqa: F401 -- the Quip* errors stay importable
     QuipJobFailedError,
     QuipMetadataError,
     QuipOrderOptionError,
+    QuipReclaimRefusedError,
     QuipSubmissionError,
     QuipTimeoutError,
     QuipTopologyError,
@@ -72,6 +71,7 @@ from xqsa.quip.networks import NETWORKS
 from xqsa.quip.order import JobOrder, _OrderOptions, _Sent, _SignedCall, check_client_defaults, merge_options
 from xqsa.quip.quote import JobQuote, _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
+from xqsa.quip.solution import pick_best
 from xqsa.solver import Solver, SolverResult
 
 if TYPE_CHECKING:
@@ -701,6 +701,18 @@ class SolverQuip(Solver):
         wire, ext_hash = self._build_extrinsic(call_module, call_function, call_params)
         return self._submit_built(call_module, call_function, wire, ext_hash, wait_for=wait_for)
 
+    def _send_extrinsic(self, call_module: str, call_function: str, call_params: dict) -> Any:
+        """Sign and send an extrinsic, returning its receipt even when the dispatch failed.
+
+        :meth:`_build_extrinsic` then :func:`xqsa.quip.chain.send_extrinsic`.
+
+        Raises:
+            QuipSubmissionError: if the extrinsic certainly did not land.
+            QuipUnconfirmedError: if it was sent but may or may not have landed.
+        """
+        wire, ext_hash = self._build_extrinsic(call_module, call_function, call_params)
+        return chain.send_extrinsic(self._iface, self._quip_signing, call_module, call_function, wire, ext_hash)
+
     def _build_extrinsic(
         self, call_module: str, call_function: str, call_params: dict, nonce: int | None = None
     ) -> tuple[bytes, str]:
@@ -747,82 +759,70 @@ class SolverQuip(Solver):
         return chain.fetch_solutions(self._iface, order_id)
 
     def _collect_result(self, receipt: JobOrderReceipt, job: IsingJob, model: Any, *, elapsed: float) -> SolverResult:
-        """Decode the best on-chain solution for the receipt's order into a result.
+        """Decode the answer the chain pays for on the receipt's order into a result.
 
-        Selects the submission with the lowest chain ``best_energy_milli``,
-        decodes every spin vector in it, and keeps the one with the best
-        locally-recomputed (authoritative) energy on the original model. On a
-        rounded job (``quantization_error > 0``) the submission ranking uses the
-        chain's energies on the rounded model. With no submissions, auto-reclaims
-        the reserved reward and raises.
+        Picks with :func:`~xqsa.quip.solution.pick_best`: the best vector, by
+        energy recomputed on the original model, of the solver the chain ranks
+        first. It returns the best vector any solver stored instead when the
+        ranking cannot be read (``leader_read`` false) or the leader's vectors
+        do not reach its ranked energy (``energy_matches_chain`` false);
+        ``leader`` says whether the sample is the leader's. With no answers,
+        auto-reclaims the reserved reward and raises.
 
         Raises:
-            QuipJobFailedError: if the order finalized with no usable solution
-                (the reward is auto-reclaimed first; the message notes the
-                refund outcome).
+            QuipJobFailedError: if the order finalized with no usable solution.
+                With no answers at all, the reward is auto-reclaimed first and
+                the message gives the outcome: why the reclaim was refused, or
+                how to retry it when it failed for another reason.
         """
         order_id = receipt.order_id
-        submissions = self._fetch_solutions(order_id)
-        if not submissions:
-            refund = (
-                "the reserved reward was reclaimed"
-                if self._try_reclaim(receipt)
-                else "the reward reclaim failed (see warnings); funds remain reserved -- "
-                f"retry with SolverQuip.get_receipt({order_id}).reclaim()"
-            )
+        if not self._fetch_solutions(order_id):
+            refund = self._try_reclaim(receipt)
             raise QuipJobFailedError(order_id, f"order {order_id} finalized with no solutions; {refund}")
 
-        chosen = min(submissions, key=lambda submission: int(_require(submission, "best_energy_milli", order_id)))
-        chosen_solutions = _require(chosen, "solutions", order_id)
-        best: tuple[int, XQMX, list[int]] | None = None
-        for vector in chosen_solutions:
-            spin_vector = [int(spin) for spin in vector]
-            sample = decode_solution(job, spin_vector, model)
-            energy = self._recompute_energy(model, sample)
-            if best is None or energy < best[0]:
-                best = (energy, sample, spin_vector)
-        if best is None:
-            raise QuipJobFailedError(order_id, f"order {order_id}'s winning submission carried no solution vectors")
-
-        energy, best_sample, best_vector = best
-        chain_best_milli = int(_require(chosen, "best_energy_milli", order_id))
+        pick = pick_best(receipt, job, model)
         return SolverResult(
-            sample=best_sample,
-            energy=energy,
+            sample=pick.solution.sample,
+            energy=pick.solution.energy,
             timing=elapsed,
             metadata={
                 "order_id": order_id,
-                "solver": chosen.get("solver"),
-                "best_energy_milli": chain_best_milli,
+                "solver": pick.solution.solver,
+                "best_energy_milli": pick.energy_milli,
                 # Canary: our milli recompute from the returned spins must equal
-                # the chain's reported best, confirming index alignment + encoding.
-                "energy_matches_chain": ising_energy_milli(job, best_vector) == chain_best_milli,
-                "num_submissions": len(submissions),
-                "num_solutions": len(chosen_solutions),
+                # the chain's energy, confirming index alignment + encoding.
+                "energy_matches_chain": pick.energy_matches_chain,
+                "leader_read": pick.leader_read,
+                "leader": pick.solution.leader,
+                "num_submissions": pick.num_submissions,
+                "num_solutions": pick.num_solutions,
                 "quantization_error": job.quantization_error,
             },
         )
 
     @staticmethod
-    def _try_reclaim(receipt: JobOrderReceipt) -> bool:
+    def _try_reclaim(receipt: JobOrderReceipt) -> str:
         """Best-effort :meth:`JobOrderReceipt.reclaim <xqsa.quip.JobOrderReceipt.reclaim>`; never raises.
 
-        The failure path of :meth:`solve` and :meth:`query` calls it, so any
-        failure is logged and swallowed: the refund must never hide the
-        error that led to it.
+        Returns what became of the reward, for the error message. A
+        :class:`QuipReclaimRefusedError` gives only its reason, since sending
+        the reclaim again cannot succeed; any other failure leaves the reward
+        possibly reserved, so the retry is named. The failure path of
+        :meth:`solve` and :meth:`query` calls it, so any failure is logged and
+        swallowed: the refund must never hide the error that led to it.
         """
+        order_id = receipt.order_id
         try:
             refunded = receipt.reclaim()
+        except QuipReclaimRefusedError as exc:
+            logger.warning("the reward for order %d was not reclaimed: %s", order_id, exc)
+            return f"the reward was not reclaimed: {exc}"
         except Exception as exc:  # noqa: BLE001 -- reclaim must never mask the original failure.
-            logger.warning(
-                "could not reclaim the reward for order %d: %s; retry with get_receipt(%d).reclaim()",
-                receipt.order_id,
-                exc,
-                receipt.order_id,
-            )
-            return False
-        logger.info("reclaimed %d planck reserved for order %d", refunded, receipt.order_id)
-        return True
+            retry = f"it may still be reserved -- retry with SolverQuip.get_receipt({order_id}).reclaim()"
+            logger.warning("the reward for order %d was not reclaimed: %s; %s", order_id, exc, retry)
+            return f"the reward was not reclaimed: {exc}; {retry}"
+        logger.info("reclaimed %d planck reserved for order %d", refunded, order_id)
+        return "the reserved reward was reclaimed"
 
     # ------------------------------------------------------------------
     # Public surface
@@ -1117,10 +1117,12 @@ class SolverQuip(Solver):
         :meth:`create_order`), submits it (see :meth:`JobOrder.submit
         <xqsa.quip.JobOrder.submit>`: the quote is shown, the consent gates
         asked, and the job proposed, reserving the reward), polls for finality
-        by block height, then decodes the winning solution. If the order
-        finalizes with no solutions, the reward is auto-reclaimed and
-        :class:`QuipJobFailedError` is raised. A faucet drip is not returned if
-        the job fails after it.
+        by block height, then decodes the answer the chain pays for: the best
+        vector of the solver it ranks first (see :meth:`JobOrder.best
+        <xqsa.quip.JobOrder.best>`). If the order finalizes with no solutions,
+        the reward is auto-reclaimed and :class:`QuipJobFailedError` is raised,
+        saying why if the reclaim was refused, or how to retry it if it failed.
+        A faucet drip is not returned if the job fails after it.
 
         Unlike :meth:`create_order`, an unknown option or a raw chain dict
         warns with a ``DeprecationWarning`` instead of raising, until QUI-1608.
@@ -1313,19 +1315,3 @@ def _resolve_gate(gate: object, name: str, env: str) -> bool | Callable[[JobQuot
     if isinstance(gate, bool) or callable(gate):
         return gate  # type: ignore[return-value]
     raise TypeError(f"{name} must be a bool or a callable taking a JobQuote, not {type(gate).__name__}")
-
-
-def _require(mapping: Mapping[str, Any], key: str, order_id: int) -> Any:
-    """Read ``key`` from a decoded pallet mapping, or raise a typed error.
-
-    The pre-release ``QuantumComputeMempool`` field layout can change between
-    releases; a missing field surfaces as a ``QuipJobFailedError`` (inside the
-    ``QuipError`` hierarchy) with context, rather than a bare ``KeyError``.
-    """
-    if key not in mapping:
-        raise QuipJobFailedError(
-            order_id,
-            f"solution field {key!r} is absent (present: {sorted(mapping)}); "
-            "the pre-release pallet field layout may have changed",
-        )
-    return mapping[key]

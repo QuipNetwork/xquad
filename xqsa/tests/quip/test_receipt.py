@@ -24,7 +24,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from xqsa.quip import QuipConnectionError, QuipMetadataError, QuipSubmissionError, QuipTimeoutError, chain
+from xqsa.quip import (
+    QuipConnectionError,
+    QuipMetadataError,
+    QuipReclaimRefusedError,
+    QuipSubmissionError,
+    QuipTimeoutError,
+    QuipUnconfirmedError,
+    chain,
+)
 from xqsa.quip.chain import (
     _attribute,
     account_bytes,
@@ -423,7 +431,26 @@ class TestJobOrderReceiptSolvers:
     def test_entry_shape(self, monkeypatch) -> None:
         answers = [_answer("0xA", 100, 5, vectors=[(1, -1), (-1, 1)])]
         receipt = _receipt_for(monkeypatch, answers=answers)
-        assert receipt.solvers() == [{"solver": "0xA", "energy_milli": 100, "submitted_at": 5, "num_solutions": 2}]
+        assert receipt.solvers() == [
+            {"solver": "0xA", "ranked_energy_milli": None, "energy_milli": 100, "submitted_at": 5, "num_solutions": 2}
+        ]
+
+    def test_ranked_energy_survives_an_overwritten_store(self, monkeypatch) -> None:
+        # QUI-1408: the leader resubmitted a worse answer, overwriting its stored
+        # best; the chain still ranks it at the energy it led with.
+        answers = [_answer("0xA", 500, 5), _answer("0xB", 200, 6)]
+        receipt = _receipt_for(monkeypatch, answers=answers, front={"solver": "0xA", "energy_milli": 100})
+        assert [(e["solver"], e["ranked_energy_milli"], e["energy_milli"]) for e in receipt.solvers()] == [
+            ("0xA", 100, 500),
+            ("0xB", None, 200),
+        ]
+        assert list(receipt.solvers()[0]) == [
+            "solver",
+            "ranked_energy_milli",
+            "energy_milli",
+            "submitted_at",
+            "num_solutions",
+        ]
 
     def test_top_n_ranking_leads(self, monkeypatch) -> None:
         answers = [_answer("0xA", 100, 5), _answer("0xB", 50, 1), _answer("0xC", 300, 2)]
@@ -513,7 +540,8 @@ def _reclaimable(monkeypatch, *, block_time: int | None = None, head: int = 200,
     if block_time is not None:
         client._iface.constants[BLOCK_TIME] = block_time
     calls: list[tuple] = []
-    monkeypatch.setattr(client, "_submit_extrinsic", lambda *args: calls.append(args))
+    sent = client._quip_signing.ExtrinsicReceipt(extrinsic_hash="0xext", block_hash="0xblock", is_finalized=False)
+    monkeypatch.setattr(client, "_send_extrinsic", lambda *args: calls.append(args) or sent)
     return receipt, calls
 
 
@@ -590,9 +618,50 @@ class TestJobOrderReceiptReclaim:
     )
     def test_local_refusals_never_submit(self, monkeypatch, order_kw, head, block_time, match) -> None:
         receipt, calls = _reclaimable(monkeypatch, block_time=block_time, head=head, **order_kw)
-        with pytest.raises(QuipSubmissionError, match=match):
+        with pytest.raises(QuipReclaimRefusedError, match=match):
             receipt.reclaim()
         assert calls == []
+
+    def test_a_dispatch_failure_is_a_refusal(self, monkeypatch) -> None:
+        receipt, _ = _reclaimable(monkeypatch)
+        client = receipt._client
+        failed = client._quip_signing.ExtrinsicReceipt(
+            extrinsic_hash="0xext",
+            block_hash="0xblock",
+            is_finalized=False,
+            error="System.ExtrinsicFailed: NotProposer",
+        )
+        monkeypatch.setattr(client, "_send_extrinsic", lambda *args: failed)
+        with pytest.raises(
+            QuipReclaimRefusedError, match=r"refused the reclaim of order 1 .+ charged the fee: .+NotProposer"
+        ):
+            receipt.reclaim()
+
+    def test_an_unreadable_dispatch_result_is_not_a_refusal(self, monkeypatch) -> None:
+        receipt, _ = _reclaimable(monkeypatch)
+        client = receipt._client
+        qs = client._quip_signing
+        unread = qs.ExtrinsicReceipt(
+            extrinsic_hash="0xext", block_hash="0xblock", is_finalized=False, error=f"{qs.UNCLASSIFIED_PREFIX}timeout"
+        )
+        monkeypatch.setattr(client, "_send_extrinsic", lambda *args: unread)
+        with pytest.raises(QuipSubmissionError, match="result could not be read") as excinfo:
+            receipt.reclaim()
+        assert not isinstance(excinfo.value, QuipReclaimRefusedError)
+
+    def test_an_unknown_outcome_is_not_a_refusal_and_allows_a_resend(self, monkeypatch) -> None:
+        receipt, _ = _reclaimable(monkeypatch)
+        client = receipt._client
+
+        def unknown(*args):
+            raise QuipUnconfirmedError("0xext", None, "Do not resubmit: it may already be on chain.")
+
+        monkeypatch.setattr(client, "_send_extrinsic", unknown)
+        with pytest.raises(
+            QuipSubmissionError, match=r"^the reclaim of order 1 \(0xext\) was sent but its outcome is unknown$"
+        ) as excinfo:
+            receipt.reclaim()
+        assert not isinstance(excinfo.value, (QuipReclaimRefusedError, QuipUnconfirmedError))
 
     def test_open_rounds_up_to_whole_minutes(self, monkeypatch) -> None:
         # 50 blocks at 7000 ms is 5.83 min.

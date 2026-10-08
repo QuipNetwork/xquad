@@ -27,6 +27,7 @@ import pytest
 from xqsa.quip import (
     QuipCancelledError,
     QuipConnectionError,
+    QuipJobFailedError,
     QuipOrderOptionError,
     QuipSubmissionError,
     QuipUnconfirmedError,
@@ -44,6 +45,8 @@ from .test_client import (
     _ok_receipt,
     _patch_signing,
     _solve_ready,
+    _spin_vector,
+    _submission,
 )
 
 LIMITS = ChainLimits(min_reward=UNIT, max_deadline_blocks=1000, max_block_wait=100, max_solutions=20)
@@ -750,3 +753,58 @@ class TestJobOrderDisplay:
         text = str(solver.create_order(_model()).quote())
         assert f"│ Account     {ss58_encode(bytes(solver._signer.account_id), 42)} " in text
         assert {len(line) for line in text.splitlines()} == {72}
+
+
+MEMPOOL = "QuantumComputeMempool"
+# Energies of _model() by (s0, s1): (-1, 1) -> -4, (1, 1) -> 0, (1, -1) and (-1, -1) -> +2.
+BEST, MID, HIGH, HIGH2 = (-1, 1), (1, 1), (1, -1), (-1, -1)
+
+
+def _answer(job, solver_id: str, spins: list[tuple[int, int]], energy_milli: int, submitted_at: int = 0) -> tuple:
+    """One ``OrderSolutions`` entry holding ``spins`` as vectors."""
+    vectors = [_spin_vector(job, {0: s0, 1: s1}) for s0, s1 in spins]
+    return solver_id.encode(), {**_submission(solver_id, vectors, energy_milli), "submitted_at": submitted_at}
+
+
+class TestJobOrderSolutions:
+    def test_best_follows_the_front_runner_on_a_tie(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model()).submit()
+        solver._iface.maps[(MEMPOOL, "OrderSolutions")] = [
+            _answer(order._job, "0xA", [BEST], -4000, 0),
+            _answer(order._job, "0xB", [BEST], -4000, 1),
+        ]
+        solver._iface.storage[(MEMPOOL, "OrderFrontRunner")] = {"solver": "0xB", "energy_milli": -4000}
+        best = order.best()
+        assert (best.solver, best.leader, best.energy) == ("0xB", True, -4)
+
+    def test_solutions_lists_every_vector_best_first(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model()).submit()
+        solver._iface.maps[(MEMPOOL, "OrderSolutions")] = [_answer(order._job, "0xA", [HIGH, MID, BEST, HIGH2], -4000)]
+        solutions = order.solutions()
+        assert [s.energy for s in solutions] == [-4, 0, 2, 2]
+        assert {s.solver for s in solutions} == {"0xA"}
+
+    def test_solutions_for_a_solver_that_did_not_answer(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model()).submit()
+        with pytest.raises(KeyError, match="0xZ did not answer order"):
+            order.solutions("0xZ")
+
+    @pytest.mark.parametrize("method", ["best", "solutions"])
+    def test_draft_has_no_receipt(self, monkeypatch, method) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        with pytest.raises(QuipSubmissionError, match=r"submit\(\) it first"):
+            getattr(order, method)()
+
+    def test_best_on_an_unanswered_order_does_not_reclaim(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        order = solver.create_order(_model()).submit()
+        solver._iface.maps[(MEMPOOL, "OrderSolutions")] = []
+        builds = captured["builds"]
+        with pytest.raises(QuipJobFailedError):
+            order.best()
+        assert captured["builds"] == builds
+        assert captured["call_function"] == "propose_job"  # the submit; nothing was signed since.
