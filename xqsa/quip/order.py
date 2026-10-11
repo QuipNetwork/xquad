@@ -30,6 +30,7 @@ fee to fail on chain.
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 import warnings
@@ -38,6 +39,7 @@ from dataclasses import dataclass, field, fields, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Self
 
+from xqsa.quip import chain
 from xqsa.quip.access import Access, AccessAllow, coerce_access
 from xqsa.quip.access import from_chain as access_from_chain
 from xqsa.quip.codec import MILLI_SCALE, _to_milli, energy_ceiling_milli
@@ -62,6 +64,8 @@ if TYPE_CHECKING:
     from xqsa.quip.codec import IsingJob
     from xqsa.quip.quote import JobQuote
     from xqvm_py.xqmx import XQMX
+
+logger = logging.getLogger("xqsa.quip")
 
 OrderState = Literal["draft", "submitted", "unconfirmed", "failed", "finalized"]
 
@@ -134,9 +138,18 @@ def check_client_defaults(access: Any, delivery: Any) -> None:
 
 
 def merge_options(
-    current: _OrderOptions, updates: Mapping[str, Any], limits: ChainLimits, *, strict: bool, stacklevel: int = 2
+    current: _OrderOptions,
+    updates: Mapping[str, Any],
+    limits: ChainLimits,
+    *,
+    strict: bool,
+    stacklevel: int = 2,
+    iface: Any = None,
 ) -> _OrderOptions:
     """Apply ``updates`` to ``current`` and check the whole result.
+
+    With ``iface``, an allowlist's accounts are also looked up in the chain's
+    ``Solvers``; see :func:`_check_access`.
 
     The strict path (``create_order``, ``set``) refuses unknown keywords and
     raw chain dicts with ``TypeError``. The lenient path, used only by the
@@ -165,7 +178,7 @@ def merge_options(
                 raise QuipOrderOptionError(name, str(exc)) from None
     merged = replace(current, **known)
     _check_raw_values(merged, strict=strict, stacklevel=stacklevel + 1)
-    _check_limits(merged, limits, stacklevel=stacklevel + 1)
+    _check_limits(merged, limits, stacklevel=stacklevel + 1, iface=iface)
     return merged
 
 
@@ -183,7 +196,7 @@ def _check_raw_values(options: _OrderOptions, *, strict: bool, stacklevel: int) 
         )
 
 
-def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: int) -> None:
+def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: int, iface: Any = None) -> None:
     """Check every option against the others and the chain limits, short of the placed model.
 
     The floor checks that need the placed model are in :func:`_check_floors`.
@@ -206,7 +219,7 @@ def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: in
     if block_wait < 0 or (max_wait is not None and block_wait > max_wait):
         upper = f" and at most MaxBlockWait ({max_wait})" if max_wait is not None else ""
         raise QuipOrderOptionError("block_wait", f"block_wait={block_wait} must be at least 0{upper}")
-    _check_access(options.access, limits)
+    _check_access(options.access, limits, iface, stacklevel=stacklevel + 1)
     _check_resolution(options.resolution, limits, block_wait, stacklevel=stacklevel + 1)
     if options.max_energy is not None:
         energy = _require_real(options.max_energy, "max_energy")
@@ -236,13 +249,17 @@ def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: in
         )
 
 
-def _check_access(access: Any, limits: ChainLimits) -> None:
+def _check_access(access: Any, limits: ChainLimits, iface: Any, *, stacklevel: int) -> None:
     """Refuse an allowlist the chain cannot take: over ``MaxBidMiners`` accounts, or an unknown solver type.
 
     An over-cap list traps the runtime with no fee and no readable error, and
     an unknown type fails to encode, so both are refused here. A raw chain
     dict is read as the rule it names and checked the same way; one that names
     no rule passes unchecked. A bound the runtime does not expose is not checked.
+
+    With ``iface``, each listed account that is not a registered solver warns
+    once. It never raises: the chain does not check registration, and an
+    operator may register after the order is posted.
     """
     if isinstance(access, Mapping):
         try:
@@ -262,6 +279,19 @@ def _check_access(access: Any, limits: ChainLimits) -> None:
         raise QuipOrderOptionError(
             "access",
             f"AccessAllow: unknown solver type {', '.join(map(repr, unknown))}; the chain has {', '.join(known)}",
+        )
+    if iface is None or not access.accounts:
+        return
+    try:
+        missing = chain.unregistered_solvers(iface, access.accounts)
+    except Exception as exc:  # noqa: BLE001 -- an advisory check never blocks the order.
+        logger.warning("could not check whether the allowlisted accounts are registered solvers: %s", exc)
+        return
+    for account in missing:
+        warnings.warn(
+            f"access: {account} is not a registered solver, so it cannot answer until it registers",
+            UserWarning,
+            stacklevel=stacklevel,
         )
 
 
@@ -583,7 +613,9 @@ class JobOrder:
             ValueError: if ``mapping`` is combined with a native topology.
         """
         self._require_draft("set")
-        merged = merge_options(self._options, options, self._client._limits, strict=True, stacklevel=3)
+        # Look the allowlist up again only when it changes.
+        iface = self._client._iface if "access" in options else None
+        merged = merge_options(self._options, options, self._client._limits, strict=True, stacklevel=3, iface=iface)
         merged = self._client._settle_topology(merged)
         job = self._job
         if (merged.topology, merged.mapping) != (self._options.topology, self._options.mapping):

@@ -951,7 +951,9 @@ class SolverQuip(Solver):
         options and raw chain dicts warn instead of raising. QUI-1608 removes it.
         """
         self._validate_model(model)
-        merged = merge_options(self._default_options(), options, self._limits, strict=strict, stacklevel=4)
+        merged = merge_options(
+            self._default_options(), options, self._limits, strict=strict, stacklevel=4, iface=self._iface
+        )
         merged = self._settle_topology(merged)
         job = self._place(model, merged)
         _check_floors(merged, job, stacklevel=4)

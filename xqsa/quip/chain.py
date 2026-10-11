@@ -27,7 +27,7 @@ private methods.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -71,6 +71,7 @@ ORDER_SOLUTIONS_STORAGE = "OrderSolutions"
 ORDER_FRONT_RUNNER_STORAGE = "OrderFrontRunner"
 ORDER_TOP_SOLVERS_STORAGE = "OrderTopSolvers"
 PROPOSER_ORDERS_STORAGE = "ProposerOrders"
+SOLVERS_STORAGE = "Solvers"
 REGISTER_SOLVER_CALL = "register_solver"
 
 # The fee a signed extrinsic paid, emitted in the same phase as its own events.
@@ -616,6 +617,19 @@ def proposer_orders(iface: Any, account_id: Any) -> list[int]:
     """
     entry = iface.query(MEMPOOL_PALLET, PROPOSER_ORDERS_STORAGE, [account_id])
     return [int(order_id) for order_id in getattr(entry, "value", None) or []]
+
+
+def unregistered_solvers(iface: Any, accounts: Sequence[str]) -> list[str]:
+    """Return the ``accounts`` with no ``Solvers`` entry, in the order given.
+
+    One read per account: an allowlist holds at most ``MaxBidMiners`` (16 on
+    aglais), so batching would save little.
+    """
+    return [
+        account
+        for account in accounts
+        if getattr(iface.query(MEMPOOL_PALLET, SOLVERS_STORAGE, [account]), "value", None) is None
+    ]
 
 
 def front_runner(iface: Any, order_id: int) -> Mapping[str, Any] | None:

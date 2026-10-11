@@ -22,6 +22,7 @@ from __future__ import annotations
 import math
 import warnings
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -35,7 +36,7 @@ from xqsa.quip import (
     QuipUnconfirmedError,
 )
 from xqsa.quip.access import AccessAllow, AccessOpen
-from xqsa.quip.chain import ChainLimits
+from xqsa.quip.chain import ChainLimits, unregistered_solvers
 from xqsa.quip.order import JobOrder, _OrderOptions, check_client_defaults, merge_options
 from xqsa.quip.resolution import ResolutionSingleBest, ResolutionTopNEqual, ResolutionTopNWeighted
 from xqsa.solver import SolverResult
@@ -552,6 +553,68 @@ class TestClientDefaults:
 
 ALICE_HEX = "0x" + "d4" * 32
 BOB_HEX = "0x" + "8e" * 32
+CAROL_HEX = "0x" + "90" * 32
+
+
+class _SolversIface:
+    """Answers ``Solvers`` reads from ``registered``, recording each account read."""
+
+    def __init__(self, registered=(), *, raises: Exception | None = None) -> None:
+        self.registered = set(registered)
+        self.raises = raises
+        self.reads: list[str] = []
+
+    def query(self, module, name, params=None):
+        assert (module, name) == ("QuantumComputeMempool", "Solvers")
+        if self.raises is not None:
+            raise self.raises
+        self.reads.append(params[0])
+        return SimpleNamespace(value={"solver_type": "Cpu"} if params[0] in self.registered else None)
+
+
+class TestUnregisteredSolvers:
+    RULE = AccessAllow(accounts=[ALICE_HEX, BOB_HEX, CAROL_HEX], types=["Cpu"])
+
+    def test_lists_the_unregistered_in_order(self) -> None:
+        iface = _SolversIface([BOB_HEX])
+        assert unregistered_solvers(iface, [ALICE_HEX, BOB_HEX, CAROL_HEX]) == [ALICE_HEX, CAROL_HEX]
+        assert iface.reads == [ALICE_HEX, BOB_HEX, CAROL_HEX]
+
+    def test_warns_once_per_unregistered_account(self) -> None:
+        with pytest.warns(UserWarning, match="is not a registered solver") as record:
+            merged = merge_options(BASE, {"access": self.RULE}, LIMITS, strict=True, iface=_SolversIface([BOB_HEX]))
+        assert merged.access == self.RULE
+        assert [str(w.message).split()[1] for w in record] == [ALICE_HEX, CAROL_HEX]
+
+    def test_all_registered_is_silent(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            iface = _SolversIface([ALICE_HEX, BOB_HEX, CAROL_HEX])
+            merge_options(BASE, {"access": self.RULE}, LIMITS, strict=True, iface=iface)
+
+    def test_types_only_reads_nothing(self) -> None:
+        iface = _SolversIface()
+        merge_options(BASE, {"access": AccessAllow(types=["Cpu"])}, LIMITS, strict=True, iface=iface)
+        assert iface.reads == []
+
+    def test_read_fault_does_not_raise(self, caplog) -> None:
+        iface = _SolversIface(raises=RuntimeError("socket closed"))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            merged = merge_options(BASE, {"access": self.RULE}, LIMITS, strict=True, iface=iface)
+        assert merged.access == self.RULE
+        assert "could not check whether the allowlisted accounts are registered" in caplog.text
+
+    def test_create_order_warns_and_set_rechecks_only_a_new_list(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with pytest.warns(UserWarning, match=f"{ALICE_HEX} is not a registered solver") as record:
+            order = solver.create_order(_model(), access=AccessAllow(accounts=[ALICE_HEX]))
+        assert record[0].filename == __file__
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            order.set(reward=2 * UNIT)
+        with pytest.warns(UserWarning, match=f"{BOB_HEX} is not a registered solver"):
+            order.set(access=AccessAllow(accounts=[BOB_HEX]))
 
 
 class TestAccess:
@@ -592,7 +655,8 @@ class TestAccess:
     def test_create_order_encodes_the_allowlist(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
         rule = AccessAllow(accounts=[ALICE_HEX, BOB_HEX], types=["QpuDwave"])
-        order = solver.create_order(_model(), access=rule)
+        with pytest.warns(UserWarning, match="not a registered solver"):  # the fake chain has no solvers.
+            order = solver.create_order(_model(), access=rule)
         assert order.access == order.options()["access"] == rule
         assert "allowlist (accounts " in str(order)
         assert order._call_params()["mode"] == {
