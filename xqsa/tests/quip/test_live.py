@@ -372,13 +372,6 @@ def _register(solver: SolverQuip) -> str:
     return account
 
 
-def _module_error(solver: SolverQuip, name: str) -> str:
-    """Return how an undecoded ``QuantumComputeMempool`` error ``name`` reads in a dispatch error."""
-    pallet = next(p for p in solver._iface.metadata.pallets if p.name == "QuantumComputeMempool")
-    index = [error.name for error in pallet.errors].index(name)
-    return f"'index': {pallet['index'].value}, 'error': '0x{index:02x}000000'"
-
-
 def _claim(solver: SolverQuip, order_id: int) -> None:
     """Claim a self-answered order's reward back, best-effort, so the test leaves nothing reserved."""
     try:
@@ -915,10 +908,8 @@ class TestAccess:
         job = first.create_order(model)._job
         ground = [_model_vector(job, _by_energy(model)[0])]
         order_id = _self_solve(first, model, ground, access=rule)
-        with pytest.raises(QuipSubmissionError) as info:
+        with pytest.raises(QuipSubmissionError, match="QuantumComputeMempool.NotEligibleSolver"):
             _answer(second, order_id, ground)
-        # Inside batch_all the module error arrives undecoded, as the pallet and error indices.
-        assert "NotEligibleSolver" in str(info.value) or _module_error(first, "NotEligibleSolver") in str(info.value)
         first.get_receipt(order_id).wait()
         _claim(first, order_id)
 

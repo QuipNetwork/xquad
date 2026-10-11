@@ -663,6 +663,36 @@ def _compose_call_bytes(iface: Any, call_module: str, call_function: str, call_p
     return bytes(raw)
 
 
+def _dispatch_error_text(iface: Any, attrs: Any) -> str:
+    """Name the ``DispatchError`` in ``ExtrinsicFailed`` attributes, or return them as ``repr`` if it cannot be named.
+
+    A module error arrives as pallet and error indices (``{'index': 9,
+    'error': '0x06000000'}``, the error index in the first byte), so it is
+    looked up in the runtime metadata: ``QuantumComputeMempool.NotEligibleSolver``
+    with its doc line. Any other variant (``BadOrigin``, ``Token``, ...) is
+    rendered as its name and value.
+    """
+    error = attrs.get("dispatch_error") if isinstance(attrs, dict) else None
+    if isinstance(error, str):
+        return error
+    if not isinstance(error, dict) or len(error) != 1:
+        return repr(attrs)
+    [(variant, value)] = error.items()
+    if variant != "Module":
+        return f"{variant}: {value}" if value is not None else variant
+    try:
+        # Older builds decode the indices as a tuple.
+        module_index, error_index = value[:2] if isinstance(value, tuple) else (value["index"], value["error"])
+        if isinstance(error_index, str):
+            error_index = bytes.fromhex(_strip_0x(error_index))[0]
+        pallet = iface.metadata.get_pallet_by_index(int(module_index)).name
+        entry = iface.metadata.get_module_error(module_index=int(module_index), error_index=int(error_index))
+        name, docs = entry.name, " ".join(entry.docs).strip()
+    except Exception:  # noqa: BLE001 -- an unnamed error still reads as the raw value, never hides it.
+        return repr(attrs)
+    return f"{pallet}.{name}" + (f" ({docs})" if docs else "")
+
+
 def _fetch_dispatch_error(iface: Any, *, block_hash: str, ext_hash: str) -> str | None:
     """Return a description if the chain rejected dispatch, else ``None``.
 
@@ -716,7 +746,7 @@ def _fetch_dispatch_error(iface: Any, *, block_hash: str, ext_hash: str) -> str 
         module_id, event_id = _event_ids(inner)
         if module_id == "System" and event_id == "ExtrinsicFailed":
             attrs = inner.get("attributes") or inner.get("fields") or {}
-            return f"System.ExtrinsicFailed: {attrs!r}"
+            return f"System.ExtrinsicFailed: {_dispatch_error_text(iface, attrs)}"
         if module_id == "System" and event_id == "ExtrinsicSuccess":
             return None
     # Extrinsic located, but no phase-matched ExtrinsicSuccess/Failed was seen

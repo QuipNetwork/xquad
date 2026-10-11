@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import stat
+from types import SimpleNamespace
 
 import pytest
 
@@ -50,6 +51,7 @@ from xqsa.quip.signing import (
     ExtrinsicReceipt,
     QuipSigningError,
     SendOutcomeUnknown,
+    _dispatch_error_text,
     build_signed_extrinsic,
     encode_compact_u32,
     encode_compact_u128,
@@ -551,6 +553,59 @@ def _event(idx: int, event_id: str) -> dict:
     }
 
 
+class _FakeMetadata:
+    """Runtime metadata with one pallet, index 9, with errors ``OrderNotOpen`` (5) and ``NotEligibleSolver`` (6)."""
+
+    ERRORS = {5: ("OrderNotOpen", []), 6: ("NotEligibleSolver", ["Not on the list."])}
+
+    def get_pallet_by_index(self, index: int):
+        if index != 9:
+            raise ValueError(f'Pallet for index "{index}" not found')
+        return SimpleNamespace(name="QuantumComputeMempool")
+
+    def get_module_error(self, module_index: int, error_index: int):
+        name, docs = self.ERRORS[error_index]
+        return SimpleNamespace(name=name, docs=docs)
+
+
+NOT_ELIGIBLE = "QuantumComputeMempool.NotEligibleSolver (Not on the list.)"
+
+
+class TestDispatchErrorText:
+    IFACE = SimpleNamespace(metadata=_FakeMetadata())
+
+    @pytest.mark.parametrize(
+        ("error", "text"),
+        [
+            ({"Module": {"index": 9, "error": "0x06000000"}}, NOT_ELIGIBLE),
+            ({"Module": {"index": 9, "error": 5}}, "QuantumComputeMempool.OrderNotOpen"),
+            ({"Module": (9, 6)}, NOT_ELIGIBLE),
+            ("BadOrigin", "BadOrigin"),
+            ({"Token": "FundsUnavailable"}, "Token: FundsUnavailable"),
+            ({"Other": None}, "Other"),
+        ],
+    )
+    def test_named(self, error, text) -> None:
+        assert _dispatch_error_text(self.IFACE, {"dispatch_error": error, "dispatch_info": {}}) == text
+
+    @pytest.mark.parametrize(
+        "attrs",
+        [
+            {"dispatch_error": {"Module": {"index": 99, "error": "0x00000000"}}},  # unknown pallet
+            {"dispatch_error": {"Module": {"index": 9, "error": "0x07000000"}}},  # unknown error
+            {"dispatch_error": {"Module": {"index": 9}}},  # malformed
+            {"weight": 1},  # no dispatch error at all
+            [1, 2],
+        ],
+    )
+    def test_unnamed_falls_back_to_the_raw_value(self, attrs) -> None:
+        assert _dispatch_error_text(self.IFACE, attrs) == repr(attrs)
+
+    def test_no_metadata_falls_back(self) -> None:
+        attrs = {"dispatch_error": {"Module": {"index": 9, "error": "0x06000000"}}}
+        assert _dispatch_error_text(SimpleNamespace(), attrs) == repr(attrs)
+
+
 def _event_str_phase(idx: int, event_id: str) -> dict:
     """An event as newer substrate-interface decodes it: ``phase`` is the bare
     enum name ("ApplyExtrinsic", index dropped) and the applied-extrinsic index
@@ -610,6 +665,19 @@ class TestSubmitAndWatch:
         assert receipt.error is not None
         assert "ExtrinsicFailed" in receipt.error
         assert receipt.is_success is False
+
+    def test_inblock_module_error_is_named(self) -> None:
+        ext_hash = "0x" + "cd" * 32
+        iface = FakeIface()
+        iface.watch_message = {"params": {"result": {"inBlock": "0x" + "ef" * 32}}}
+        iface.block = _block_with_extrinsic(ext_hash)
+        iface.metadata = _FakeMetadata()
+        failed = _event(0, "ExtrinsicFailed")
+        failed["event"]["attributes"] = {"dispatch_error": {"Module": {"index": 9, "error": "0x06000000"}}}
+        iface.events = [failed]
+        receipt = submit_and_watch(iface, b"\x01\x02", ext_hash, wait_for="inblock")
+        assert receipt.error == "System.ExtrinsicFailed: QuantumComputeMempool.NotEligibleSolver (Not on the list.)"
+        assert receipt.is_unverified is False
 
     def test_inblock_extrinsic_not_found_is_non_success(self) -> None:
         ext_hash = "0x" + "cd" * 32
