@@ -183,8 +183,14 @@ def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: in
     if block_wait < 0 or (max_wait is not None and block_wait > max_wait):
         upper = f" and at most MaxBlockWait ({max_wait})" if max_wait is not None else ""
         raise QuipOrderOptionError("block_wait", f"block_wait={block_wait} must be at least 0{upper}")
-    if options.max_energy is not None and not math.isfinite(_require_real(options.max_energy, "max_energy")):
-        raise QuipOrderOptionError("max_energy", f"max_energy={options.max_energy} must be finite")
+    if options.max_energy is not None:
+        energy = _require_real(options.max_energy, "max_energy")
+        try:
+            finite = math.isfinite(energy)
+        except OverflowError:  # an int beyond float range, maybe too long to str()
+            raise QuipOrderOptionError("max_energy", "max_energy is too large to convert to a float") from None
+        if not finite:
+            raise QuipOrderOptionError("max_energy", f"max_energy={energy} must be finite")
     if options.min_solutions is not None:
         _check_min_solutions(_require_int(options.min_solutions, "min_solutions"), limits, stacklevel=stacklevel + 1)
     if options.min_diversity is not None:

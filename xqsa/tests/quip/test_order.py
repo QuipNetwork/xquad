@@ -165,6 +165,12 @@ class TestCeilingOption:
             _merge(max_energy=value)
         assert info.value.option == "max_energy"
 
+    @pytest.mark.parametrize("value", [10**400, -(10**400), 10**5000], ids=["huge", "huge-negative", "past-str-limit"])
+    def test_int_beyond_float_range_refused(self, value) -> None:
+        with pytest.raises(QuipOrderOptionError, match="too large to convert to a float") as info:
+            _merge(max_energy=value)
+        assert info.value.option == "max_energy"
+
 
 def _rounded_model() -> XQMX:
     """A SPIN model whose 0.0012 field rounds to milli 1."""
