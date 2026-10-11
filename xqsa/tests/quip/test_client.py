@@ -492,6 +492,27 @@ class TestModelToIsing:
         assert all(isinstance(v, int) for v in job.j_values)
         assert any(v != 0 for v in job.j_values)
 
+    def test_spin_offset_is_zero(self) -> None:
+        model = XQMX.spin_model(2)
+        model.set_linear(0, 1)
+        model.set_quadratic(0, 1, -1)
+        assert model_to_ising(model, PATH5).offset == 0.0
+
+    def test_binary_offset_is_kept(self) -> None:
+        """E = -2*x0 + x0*x1 folds to h = (-0.75, 0.25), J = 0.25 and offset -0.75."""
+        model = XQMX.binary_model(2)
+        model.set_linear(0, -2)
+        model.set_quadratic(0, 1, 1)
+        job = model_to_ising(model, PATH5, mapping={0: 0, 1: 1})
+
+        assert job.h_values == (-750, 250)
+        assert job.j_values == (250,)
+        assert job.offset == -0.75
+        # Model energy is the spin energy plus the offset, for every assignment.
+        for x0, x1 in itertools.product((0, 1), repeat=2):
+            spins = [2 * x0 - 1, 2 * x1 - 1]
+            assert ising_energy_milli(job, spins) / MILLI_SCALE + job.offset == -2 * x0 + x0 * x1
+
     def test_explicit_mapping_threaded_through(self) -> None:
         """A caller mapping reaches placement and drives the scatter positions."""
         model = XQMX.spin_model(2)
