@@ -52,6 +52,10 @@ def test_identity_reexports():
     assert sa.JobQuote is _xqsa.JobQuote
     assert sa.JobOrder is _xqsa.JobOrder
     assert sa.JobOrderReceipt is _xqsa.JobOrderReceipt
+    assert sa.Resolution is _xqsa.Resolution
+    assert sa.ResolutionSingleBest is _xqsa.ResolutionSingleBest
+    assert sa.ResolutionTopNEqual is _xqsa.ResolutionTopNEqual
+    assert sa.ResolutionTopNWeighted is _xqsa.ResolutionTopNWeighted
     assert sa.QuipOrderOptionError is _xqsa.QuipOrderOptionError
     assert sa.QuipReclaimRefusedError is _xqsa.QuipReclaimRefusedError
     assert sa.QuipUnconfirmedError is _xqsa.QuipUnconfirmedError

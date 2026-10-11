@@ -57,9 +57,17 @@ lists an account's order ids::
     order.submit().wait()
     print(order.receipt())
 
+The payout rule is the ``resolution`` option: ``"SingleBest"`` (the default)
+or one of :class:`ResolutionSingleBest`, :class:`ResolutionTopNEqual` and
+:class:`ResolutionTopNWeighted`, which split the reward across the best ``n``
+solvers evenly or by rank::
+
+    order = solver.create_order(model, resolution=ResolutionTopNEqual(3))
+
 Every option is checked against the chain's limits, read once per client,
 before anything is signed: a reward below ``MinReward``, a deadline outside 10
-to ``MaxDeadlineBlocks`` or a block wait over ``MaxBlockWait`` raises
+to ``MaxDeadlineBlocks``, a block wait over ``MaxBlockWait`` or
+``ResolutionTopNWeighted`` on a runtime older than 119 raises
 :class:`QuipOrderOptionError` without paying a fee. :meth:`SolverQuip.solve` is
 ``create_order``, ``submit``, then waiting for the result.
 
@@ -141,6 +149,12 @@ from .networks import NETWORKS
 from .order import JobOrder
 from .quote import JobQuote
 from .receipt import JobOrderReceipt
+from .resolution import (
+    Resolution,
+    ResolutionSingleBest,
+    ResolutionTopNEqual,
+    ResolutionTopNWeighted,
+)
 from .solution import Solution
 
 __all__ = [
@@ -148,6 +162,10 @@ __all__ = [
     "JobOrder",
     "JobOrderReceipt",
     "JobQuote",
+    "Resolution",
+    "ResolutionSingleBest",
+    "ResolutionTopNEqual",
+    "ResolutionTopNWeighted",
     "Solution",
     "QuipError",
     "QuipCancelledError",
