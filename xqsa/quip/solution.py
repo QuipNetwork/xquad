@@ -104,7 +104,18 @@ def decode_answers(receipt: JobOrderReceipt, job: IsingJob, model: XQMX, solver:
     return _decode_all(job, model, answers, None if ranked is None else ranked["solver"])
 
 
-def pick_best(receipt: JobOrderReceipt, job: IsingJob, model: XQMX) -> Pick:
+def no_answer_note(floors: str | None) -> str:
+    """Name the order's quality floors in a no-answer error, or return ``""`` when it has none.
+
+    ``floors`` is :func:`~xqsa.quip.display.floors_text` output; ``None`` means
+    the floors could not be read.
+    """
+    if floors is None or floors == "none":
+        return ""
+    return f" under its quality floors ({floors}), which solvers may have been unable to meet"
+
+
+def pick_best(receipt: JobOrderReceipt, job: IsingJob, model: XQMX, floors: str | None = None) -> Pick:
     """Pick the answer the chain pays for: the leader's best vector.
 
     The leader is the solver the chain ranks first, and its best vector is
@@ -121,6 +132,9 @@ def pick_best(receipt: JobOrderReceipt, job: IsingJob, model: XQMX) -> Pick:
       order's ``min_solutions`` subset can leave the best vector out
       (QUI-1675).
 
+    ``floors`` is the order's quality floors as text, named by the no-answer
+    error when any are set.
+
     Raises:
         QuipJobFailedError: if the order has no answers, its answers carry no
             vectors, or a stored answer lacks a field this client reads.
@@ -129,7 +143,9 @@ def pick_best(receipt: JobOrderReceipt, job: IsingJob, model: XQMX) -> Pick:
     answers = _answers(receipt)
     if not answers:
         raise QuipJobFailedError(
-            order_id, f"order {order_id} has no answers; once it is final, reclaim its reward with order.reclaim()"
+            order_id,
+            f"order {order_id} has no answers{no_answer_note(floors)}; once it is final, reclaim its reward "
+            "with order.reclaim()",
         )
     ranked = _ranked(receipt)
     leader = ranked["solver"] if ranked is not None and ranked["solver"] in answers else None

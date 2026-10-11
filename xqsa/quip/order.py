@@ -630,10 +630,11 @@ class JobOrder:
         Raises:
             QuipSubmissionError: if the order has no receipt; see :meth:`receipt`.
             QuipJobFailedError: if nobody answered the order (reclaim its
-                reward with :meth:`reclaim` once it is final), or the chosen
+                reward with :meth:`reclaim` once it is final; the message
+                names the order's quality floors, if any), or the chosen
                 answer carries no vectors.
         """
-        return pick_best(self.receipt(), self._job, self._model).solution
+        return pick_best(self.receipt(), self._job, self._model, self._floors_text()).solution
 
     def solutions(self, solver: Any = None) -> list[Solution]:
         """Return every stored answer, decoded onto this order's model, best first.
@@ -655,6 +656,10 @@ class JobOrder:
     def reclaim(self) -> int:
         """See :meth:`JobOrderReceipt.reclaim <xqsa.quip.JobOrderReceipt.reclaim>`."""
         return self.receipt().reclaim()
+
+    def _floors_text(self) -> str:
+        """The order's quality floors in model units, with the chain value where the offset moves it."""
+        return floors_text(*_chain_floors(self._options, self._job), model_ceiling=self._options.max_energy)
 
     def _call_params(self) -> dict:
         """Build the ``propose_job`` call params for the current configuration."""
@@ -706,7 +711,7 @@ class JobOrder:
         terms = terms_rows(
             resolution=options.resolution,
             mode=options.mode,
-            floors=floors_text(*_chain_floors(options, self._job), model_ceiling=options.max_energy),
+            floors=self._floors_text(),
             deadline_blocks=options.deadline_blocks,
             block_wait=options.block_wait,
             reward=f"{_format_planck(options.reward, decimals)} {symbol}",

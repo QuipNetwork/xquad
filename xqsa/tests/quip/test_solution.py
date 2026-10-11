@@ -24,7 +24,7 @@ import logging
 import pytest
 
 from xqsa.quip import QuipJobFailedError
-from xqsa.quip.solution import decode_answers, pick_best
+from xqsa.quip.solution import decode_answers, no_answer_note, pick_best
 
 from .test_client import _job, _model, _spin_vector
 from .test_receipt import TOP_N, _answer, _receipt_for, _receipt_order
@@ -147,6 +147,15 @@ class TestPickBest:
         receipt, job = _setup(monkeypatch, [])
         with pytest.raises(QuipJobFailedError, match=r"has no answers; once it is final, .* order\.reclaim\(\)"):
             pick_best(receipt, job, _model())
+
+    def test_unanswered_names_the_floors(self, monkeypatch) -> None:
+        receipt, job = _setup(monkeypatch, [])
+        with pytest.raises(QuipJobFailedError, match=r"has no answers under its quality floors \(2 solutions\), "):
+            pick_best(receipt, job, _model(), floors="2 solutions")
+
+    @pytest.mark.parametrize("floors", [None, "none"])
+    def test_no_floors_add_no_note(self, floors) -> None:
+        assert no_answer_note(floors) == ""
 
     def test_answers_without_vectors_raise(self, monkeypatch) -> None:
         receipt, job = _setup(monkeypatch, [("0xA", [], 0)], front={"solver": "0xA", "energy_milli": 0})

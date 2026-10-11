@@ -1041,6 +1041,15 @@ class TestJobOrderSolutions:
         with pytest.raises(QuipSubmissionError, match=r"submit\(\) it first"):
             getattr(order, method)()
 
+    def test_best_on_an_unanswered_order_names_its_floors(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model(), max_energy=-3, min_solutions=2).submit()
+        solver._iface.maps[(MEMPOOL, "OrderSolutions")] = []
+        with pytest.raises(
+            QuipJobFailedError, match=r"no answers under its quality floors \(energy <= -3, 2 solutions\)"
+        ):
+            order.best()
+
     def test_best_on_an_unanswered_order_does_not_reclaim(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)
         order = solver.create_order(_model()).submit()

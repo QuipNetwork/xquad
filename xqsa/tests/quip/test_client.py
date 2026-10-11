@@ -2457,6 +2457,39 @@ class TestSolverQuipCollect:
         assert captured["call_params"] == {"order_id": 1}
 
     @pytest.mark.parametrize(
+        ("floors", "note"),
+        [
+            ({}, "finalized with no solutions; "),
+            (
+                {"min_energy_milli": -2000, "min_solutions": 5, "min_diversity_milli": None},
+                "finalized with no solutions under its quality floors (energy <= -2, 5 solutions), which solvers "
+                "may have been unable to meet; ",
+            ),
+        ],
+    )
+    def test_no_solutions_names_the_floors_on_chain(self, monkeypatch, floors, note) -> None:
+        from xqsa.quip import QuipJobFailedError
+
+        order = {**_order(solution_count=0), "ising_params": {"nodes": [0, 1], "edges": [[0, 1]], **floors}}
+        iface = _chain_iface(order=order, head=200, submissions=[])
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipJobFailedError) as excinfo:
+            solver._collect_result(solver.get_receipt(1), _job(solver), _model(), elapsed=0.0)
+        assert note in str(excinfo.value)
+
+    def test_no_solutions_survives_an_unreadable_order(self, monkeypatch) -> None:
+        from xqsa.quip import QuipJobFailedError
+
+        iface = _chain_iface(order=_order(solution_count=0), head=200, submissions=[])
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        receipt = solver.get_receipt(1)
+        monkeypatch.setattr(receipt, "_fetch_order", lambda: {})  # no ising_params to read.
+        with pytest.raises(QuipJobFailedError, match="finalized with no solutions; "):
+            solver._collect_result(receipt, _job(solver), _model(), elapsed=0.0)
+
+    @pytest.mark.parametrize(
         ("order", "error", "reason"),
         [
             pytest.param(

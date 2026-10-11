@@ -357,10 +357,7 @@ class JobOrderReceipt:
             resolution=order["resolution"],
             deadline_blocks=int(timing["deadline_blocks"]),
             block_wait=int(timing["block_wait"]),
-            # The ceiling's field is min_energy_milli until QUI-1612 renames it max_energy_milli.
-            max_energy_milli=_optional_int(params.get("max_energy_milli", params.get("min_energy_milli"))),
-            min_solutions=_optional_int(params.get("min_solutions")),
-            min_diversity_milli=_optional_int(params.get("min_diversity_milli")),
+            **_floors_of(params),
             created_at=created_at,
             submitted_ms=submitted_ms,
             fee=fee,
@@ -368,6 +365,14 @@ class JobOrderReceipt:
         if submitted_ms is not None and fee is not None:
             self._facts_cache = facts
         return facts
+
+    def _floors_text(self) -> str | None:
+        """The order's quality floors in chain units, or ``None`` if the order cannot be read.
+
+        For error messages, so a read fault never hides the error they explain.
+        """
+        floors = self._best_effort("the quality floors", lambda: _floors_of(self._fetch_order()["ising_params"]))
+        return None if floors is None else floors_text(*floors.values())
 
     def _best_effort(self, what: str, read: Any) -> Any:
         """Return ``read()``, or ``None`` with a warning if it faults; for display-only facts."""
@@ -480,6 +485,16 @@ def _minutes_until(blocks: int, block_time_ms: int | None) -> str:
     if not block_time_ms:
         return ""
     return f" (about {max(1, math.ceil(blocks * block_time_ms / 60_000))} min)"
+
+
+def _floors_of(params: Mapping[str, Any]) -> dict[str, int | None]:
+    """Read the quality floors from an order's ``ising_params``, in ``floors_text`` order."""
+    return {
+        # The ceiling's field is min_energy_milli until QUI-1612 renames it max_energy_milli.
+        "max_energy_milli": _optional_int(params.get("max_energy_milli", params.get("min_energy_milli"))),
+        "min_solutions": _optional_int(params.get("min_solutions")),
+        "min_diversity_milli": _optional_int(params.get("min_diversity_milli")),
+    }
 
 
 def _optional_int(value: Any) -> int | None:

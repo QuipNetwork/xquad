@@ -80,7 +80,7 @@ from xqsa.quip.order import (
 )
 from xqsa.quip.quote import JobQuote, _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
-from xqsa.quip.solution import pick_best
+from xqsa.quip.solution import no_answer_note, pick_best
 from xqsa.solver import Solver, SolverResult
 
 if TYPE_CHECKING:
@@ -786,12 +786,14 @@ class SolverQuip(Solver):
             QuipJobFailedError: if the order finalized with no usable solution.
                 With no answers at all, the reward is auto-reclaimed first and
                 the message gives the outcome: why the reclaim was refused, or
-                how to retry it when it failed for another reason.
+                how to retry it when it failed for another reason. It also
+                names the order's quality floors, read from the chain, if any.
         """
         order_id = receipt.order_id
         if not self._fetch_solutions(order_id):
             refund = self._try_reclaim(receipt)
-            raise QuipJobFailedError(order_id, f"order {order_id} finalized with no solutions; {refund}")
+            floors = no_answer_note(receipt._floors_text())
+            raise QuipJobFailedError(order_id, f"order {order_id} finalized with no solutions{floors}; {refund}")
 
         pick = pick_best(receipt, job, model)
         return SolverResult(
