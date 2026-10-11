@@ -38,6 +38,8 @@ from dataclasses import dataclass, field, fields, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Self
 
+from xqsa.quip.access import AccessAllow, coerce_access
+from xqsa.quip.access import from_chain as access_from_chain
 from xqsa.quip.codec import MILLI_SCALE, _to_milli, energy_ceiling_milli
 from xqsa.quip.display import Floors, _decimal_text, box, floors_text, terms_rows
 from xqsa.quip.errors import EncodingError, QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
@@ -63,10 +65,11 @@ if TYPE_CHECKING:
 
 OrderState = Literal["draft", "submitted", "unconfirmed", "failed", "finalized"]
 
-# The options an order accepts; ``mode`` and ``delivery`` are client defaults only.
+# The options an order accepts; ``delivery`` is a client default only.
 ORDER_OPTIONS = frozenset(
     {
         "reward",
+        "access",
         "deadline_blocks",
         "block_wait",
         "topology",
@@ -89,7 +92,6 @@ MAX_DIVERSITY = 0.5
 MIN_DEADLINE_BLOCKS = 10
 RELIABLE_DEADLINE_BLOCKS = 100
 
-_SUPPORTED_MODE = "Open"
 _SUPPORTED_DELIVERY = "OnChainOnly"
 
 
@@ -102,7 +104,7 @@ class _OrderOptions:
     block_wait: int
     topology: str | None
     mapping: Mapping[int, int] | None
-    mode: Any
+    access: Any
     resolution: Any
     delivery: Any
     # Quality floors: per-order only, never client defaults.
@@ -111,19 +113,19 @@ class _OrderOptions:
     min_diversity: float | None = None
 
 
-def check_client_defaults(mode: Any, delivery: Any) -> None:
-    """Refuse the ``mode`` and ``delivery`` values no order can use yet.
+def check_client_defaults(access: Any, delivery: Any) -> None:
+    """Refuse the ``access`` and ``delivery`` values no order can use yet.
 
-    A bare ``mode`` string is checked here. A raw chain dict passes, so the
-    deprecated ``solve()`` path keeps working; ``create_order`` refuses it.
-    ``delivery`` accepts only ``"OnChainOnly"``. The client's ``resolution``
-    is checked by :func:`~xqsa.quip.resolution.coerce_resolution`.
+    ``access`` takes ``"Open"`` or an :class:`~xqsa.quip.Access`. A raw chain
+    dict passes, so the deprecated ``solve()`` path keeps working;
+    ``create_order`` refuses it. ``delivery`` accepts only ``"OnChainOnly"``.
+    The client's ``resolution`` is checked by
+    :func:`~xqsa.quip.resolution.coerce_resolution`.
 
     Raises:
         ValueError: naming the unsupported value.
     """
-    if isinstance(mode, str) and mode != _SUPPORTED_MODE:
-        raise ValueError(f"mode={mode!r} is not supported yet; only {_SUPPORTED_MODE!r} orders are (QUI-1607)")
+    coerce_access(access)
     if delivery != _SUPPORTED_DELIVERY:
         raise ValueError(
             f"delivery={delivery!r}: result delivery is not supported yet: ResultReady only fires on a claim, "
@@ -155,11 +157,12 @@ def merge_options(
             warnings.warn(f"ignoring unknown SolverQuip option {name!r}", DeprecationWarning, stacklevel=stacklevel)
             continue
         known[name] = value
-    if "resolution" in known:
-        try:
-            known["resolution"] = coerce_resolution(known["resolution"])
-        except ValueError as exc:
-            raise QuipOrderOptionError("resolution", str(exc)) from None
+    for name, coerce in (("access", coerce_access), ("resolution", coerce_resolution)):
+        if name in known:
+            try:
+                known[name] = coerce(known[name])
+            except ValueError as exc:
+                raise QuipOrderOptionError(name, str(exc)) from None
     merged = replace(current, **known)
     _check_raw_values(merged, strict=strict, stacklevel=stacklevel + 1)
     _check_limits(merged, limits, stacklevel=stacklevel + 1)
@@ -203,6 +206,7 @@ def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: in
     if block_wait < 0 or (max_wait is not None and block_wait > max_wait):
         upper = f" and at most MaxBlockWait ({max_wait})" if max_wait is not None else ""
         raise QuipOrderOptionError("block_wait", f"block_wait={block_wait} must be at least 0{upper}")
+    _check_access(options.access, limits)
     _check_resolution(options.resolution, limits, block_wait, stacklevel=stacklevel + 1)
     if options.max_energy is not None:
         energy = _require_real(options.max_energy, "max_energy")
@@ -229,6 +233,35 @@ def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: in
             "before the wait for better answers can",
             UserWarning,
             stacklevel=stacklevel,
+        )
+
+
+def _check_access(access: Any, limits: ChainLimits) -> None:
+    """Refuse an allowlist the chain cannot take: over ``MaxBidMiners`` accounts, or an unknown solver type.
+
+    An over-cap list traps the runtime with no fee and no readable error, and
+    an unknown type fails to encode, so both are refused here. A raw chain
+    dict is read as the rule it names and checked the same way; one that names
+    no rule passes unchecked. A bound the runtime does not expose is not checked.
+    """
+    if isinstance(access, Mapping):
+        try:
+            access = access_from_chain(access)
+        except ValueError:
+            return
+    if not isinstance(access, AccessAllow):
+        return
+    cap = limits.max_bid_miners
+    if cap is not None and len(access.accounts) > cap:
+        raise QuipOrderOptionError(
+            "access", f"AccessAllow lists {len(access.accounts)} accounts; the chain's MaxBidMiners is {cap}"
+        )
+    known = limits.solver_types
+    unknown = [name for name in access.types if known is not None and name not in known]
+    if unknown:
+        raise QuipOrderOptionError(
+            "access",
+            f"AccessAllow: unknown solver type {', '.join(map(repr, unknown))}; the chain has {', '.join(known)}",
         )
 
 
@@ -787,7 +820,7 @@ class JobOrder:
         ]
         terms = terms_rows(
             resolution=options.resolution,
-            mode=options.mode,
+            access=options.access,
             floors=self._floors_text(),
             deadline_blocks=options.deadline_blocks,
             block_wait=options.block_wait,

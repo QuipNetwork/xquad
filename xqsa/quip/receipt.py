@@ -478,7 +478,7 @@ class JobOrderReceipt:
         problem = [("Problem", f"{facts.num_spins} spins, {facts.num_couplings} couplings"), ("Spec", facts.spec_id)]
         terms = terms_rows(
             resolution=facts.resolution,
-            mode=facts.mode,
+            access=facts.mode,
             floors=floors_text(facts.floors),
             deadline_blocks=facts.deadline_blocks,
             block_wait=facts.block_wait,

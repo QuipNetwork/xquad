@@ -24,6 +24,7 @@ from collections.abc import Sequence
 from decimal import Decimal
 from typing import Any, NamedTuple
 
+from xqsa.quip.access import Access
 from xqsa.quip.resolution import Resolution
 
 WIDTH = 72
@@ -54,12 +55,12 @@ def box(title: str, sections: Sequence[Sequence[Row]], *, double_before: int | N
 
 
 def terms_rows(
-    *, resolution: Any, mode: Any, floors: str, deadline_blocks: int, block_wait: int, reward: str
+    *, resolution: Any, access: Any, floors: str, deadline_blocks: int, block_wait: int, reward: str
 ) -> list[Row]:
     """Return the Terms section an order and its receipt both show; ``floors`` and ``reward`` come formatted."""
     return [
         ("Payout", variant_text(resolution)),
-        ("Access", variant_text(mode)),
+        ("Access", variant_text(access)),
         ("Floors", floors),
         ("Deadline", f"{deadline_blocks} blocks"),
         ("Block wait", f"{block_wait} blocks"),
@@ -104,11 +105,11 @@ def _decimal_text(value: Decimal) -> str:
 
 
 def variant_text(value: Any) -> str:
-    """Render a unit enum variant as words (``"SingleBest"`` -> ``"single best"``), a payout rule with ``str``.
+    """Render a unit enum variant as words (``"SingleBest"`` -> ``"single best"``), a rule with ``str``.
 
     Anything else renders as ``repr``.
     """
-    if isinstance(value, Resolution):
+    if isinstance(value, (Access, Resolution)):
         return str(value)
     if not isinstance(value, str):
         return repr(value)

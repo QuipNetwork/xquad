@@ -35,6 +35,7 @@ from xqsa.quip import (
     QuipUnconfirmedError,
     chain,
 )
+from xqsa.quip.access import AccessAllow, AccessOpen
 from xqsa.quip.chain import (
     _attribute,
     account_bytes,
@@ -1078,6 +1079,8 @@ class TestDisplayHelpers:
             ("Open", "open"),
             ({"TopNEqual": {"n": 3}}, "{'TopNEqual': {'n': 3}}"),
             (ResolutionTopNEqual(3), "top 3, equal split"),
+            (AccessOpen(), "open"),
+            (AccessAllow(types=["QpuDwave"]), "allowlist (types QpuDwave)"),
         ],
     )
     def test_variant_text(self, value, text) -> None:
@@ -1086,7 +1089,7 @@ class TestDisplayHelpers:
     def test_terms_rows(self) -> None:
         rows = terms_rows(
             resolution="SingleBest",
-            mode="Open",
+            access="Open",
             floors="2 solutions",
             deadline_blocks=100,
             block_wait=10,

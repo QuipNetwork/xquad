@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Literal, Self
 
 from xqsa.quip import chain
 from xqsa.quip import metadata as quip_metadata
+from xqsa.quip.access import Access, AccessOpen, coerce_access
 from xqsa.quip.chain import (  # noqa: F401 -- FEE_HEADROOM_PLANCK and the pallet names stay importable from here.
     FEE_HEADROOM_PLANCK,
     JOB_ORDERS_STORAGE,
@@ -140,9 +141,10 @@ class SolverQuip(Solver):
         ImportError: if the ``[quip]`` extra is not installed
             (``pip install xqsa[quip]`` -- provides ``substrate-interface`` and
             the ``quip_signer`` signing extension).
-        ValueError: if no RPC URL is configured, or ``mode``, ``resolution``
+        ValueError: if no RPC URL is configured, or ``access``, ``resolution``
             or ``delivery`` names a value no order can use yet (checked before
             connecting).
+        TypeError: if both ``access`` and the deprecated ``mode`` are given.
         QuipConnectionError: if the node is unreachable or the configured Ising
             spec is not registered on-chain.
         QuipMetadataError: if the node's runtime metadata cannot be decoded by
@@ -161,7 +163,8 @@ class SolverQuip(Solver):
         *,
         spec_id: str | None = None,
         topology: str | None = None,
-        mode: str = "Open",
+        access: str | Access | None = None,
+        mode: Any = None,
         resolution: str | Resolution = "SingleBest",
         delivery: str = "OnChainOnly",
         deadline_blocks: int = DEFAULT_DEADLINE_BLOCKS,
@@ -190,13 +193,16 @@ class SolverQuip(Solver):
         resolved_url = url or os.environ.get("QUIP_RPC_URL")
         if not resolved_url:
             raise ValueError("A Quip RPC URL is required. Pass url= or set QUIP_RPC_URL.")
+        access = _take_mode(access, mode, stacklevel=2)
+        if access is None:
+            access = AccessOpen()
         # Both before any network I/O.
-        check_client_defaults(mode, delivery)
+        check_client_defaults(access, delivery)
         self._resolution = coerce_resolution(resolution)
 
         self._signer = self._build_signer(quip_signing, seed=seed, keystore=keystore)
 
-        self._mode = mode
+        self._access = coerce_access(access)
         self._delivery = delivery
         self._deadline_blocks = deadline_blocks
         self._block_wait = block_wait
@@ -593,10 +599,10 @@ class SolverQuip(Solver):
             "reward": options.reward,
             # Unit enum variants encode from their bare variant name (the same
             # form they decode to -- see the miner's _decode_result_delivery),
-            # payout rules through Resolution.to_chain(). A raw dict from the
-            # deprecated solve() path goes out as given. Bid and Callback* are
+            # access and payout rules through to_chain(). A raw dict from the
+            # deprecated solve() path goes out as given. Callback* delivery is
             # not supported.
-            "mode": options.mode,
+            "mode": options.access.to_chain() if isinstance(options.access, Access) else options.access,
             "resolution": (
                 options.resolution.to_chain() if isinstance(options.resolution, Resolution) else options.resolution
             ),
@@ -914,7 +920,7 @@ class SolverQuip(Solver):
             block_wait=self._block_wait,
             topology=self._topology_hash,
             mapping=None,
-            mode=self._mode,
+            access=self._access,
             resolution=self._resolution,
             delivery=self._delivery,
         )
@@ -987,6 +993,10 @@ class SolverQuip(Solver):
             reward: planck reserved at proposal, at least ``MinReward``.
             deadline_blocks: 10 up to ``MaxDeadlineBlocks``; under 100 warns.
             block_wait: 0 up to ``MaxBlockWait``; not below the deadline warns.
+            access: who may answer: ``"Open"``, ``AccessOpen()``, or
+                ``AccessAllow(accounts=[...], types=[...])``. An allowlist
+                over ``MaxBidMiners`` accounts or naming an unknown solver type
+                is refused.
             resolution: the payout rule: ``"SingleBest"`` or a
                 :class:`~xqsa.quip.Resolution`, such as
                 ``ResolutionTopNEqual(3)``. ``ResolutionTopNWeighted`` is
@@ -1018,7 +1028,7 @@ class SolverQuip(Solver):
 
         Raises:
             TypeError: for an unknown option, a non-integer amount, or a raw
-                chain value, including a dict in the client's ``mode`` or
+                chain value, including a dict in the client's ``access`` or
                 ``resolution``.
             QuipOrderOptionError: if an option is outside its chain limit.
             ValueError: if the model cannot be solved, the topology is not a
@@ -1169,11 +1179,13 @@ class SolverQuip(Solver):
         warns with a ``DeprecationWarning`` instead of raising, until QUI-1608.
 
         Keyword args:
-            reward, deadline_blocks, block_wait, topology, mapping, max_energy,
-                min_solutions, min_diversity: as for :meth:`create_order`, for
-                this solve only.
+            reward, deadline_blocks, block_wait, topology, mapping, access,
+                resolution, max_energy, min_solutions, min_diversity: as for
+                :meth:`create_order`, for this solve only.
+            mode: deprecated name of ``access``; warns until QUI-1608.
 
         Raises:
+            TypeError: if both ``access`` and the deprecated ``mode`` are given.
             ValueError: if ``mapping`` is given with ``topology="native"``.
             QuipOrderOptionError: if an option is outside its chain limit,
                 before anything is signed.
@@ -1195,6 +1207,8 @@ class SolverQuip(Solver):
                 model again on that account without checking.
             QuipJobFailedError: if the order finalizes with no usable solution.
         """
+        if "mode" in kwargs:
+            kwargs["access"] = _take_mode(kwargs.pop("access", None), kwargs.pop("mode"), stacklevel=2)
         order = self._create_order(model, kwargs, strict=False).submit().wait()
         assert order._submitted_at is not None  # submit() sets it.
         elapsed = time.perf_counter() - order._submitted_at
@@ -1342,6 +1356,23 @@ def _env_flag(name: str) -> bool | None:
     if raw in _FALSE_FLAGS:
         return False
     raise ValueError(f"{name}={raw!r} is not a boolean; use one of 1/true/yes/on or 0/false/no/off")
+
+
+def _take_mode(access: Any, mode: Any, *, stacklevel: int) -> Any:
+    """Return ``access``, or the deprecated ``mode`` in its place with a ``DeprecationWarning``.
+
+    QUI-1608 removes ``mode=``.
+
+    Raises:
+        TypeError: if both are given.
+    """
+    if mode is None:
+        return access
+    if access is not None:
+        raise TypeError("pass access= or the deprecated mode=, not both")
+    message = "mode= is deprecated, use access= (removed in QUI-1608)"
+    warnings.warn(message, DeprecationWarning, stacklevel=stacklevel + 1)
+    return mode
 
 
 def _resolve_gate(gate: object, name: str, env: str) -> bool | Callable[[JobQuote], bool]:
