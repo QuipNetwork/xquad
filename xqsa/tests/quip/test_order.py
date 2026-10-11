@@ -264,6 +264,109 @@ class TestCeilingAgainstThePlacedModel:
         assert captured["call_params"]["ising_params"]["min_energy_milli"] == -2000
 
 
+class TestSolutionFloorOptions:
+    """``min_solutions`` and ``min_diversity`` checks that need no placed model."""
+
+    @pytest.mark.parametrize("count", [2, 20])
+    def test_solutions_in_range_pass(self, count) -> None:
+        assert _quiet_merge(min_solutions=count).min_solutions == count
+
+    @pytest.mark.parametrize("count", [-1, 0, 21])
+    def test_solutions_out_of_range_refused(self, count) -> None:
+        with pytest.raises(QuipOrderOptionError, match=r"at least 1 and at most MaxSolutions \(20\)") as info:
+            _merge(min_solutions=count)
+        assert info.value.option == "min_solutions"
+
+    def test_one_solution_warns(self) -> None:
+        with pytest.warns(UserWarning, match="stores only the first vector"):
+            _merge(min_solutions=1)
+
+    def test_absent_max_solutions_not_checked(self) -> None:
+        assert _merge(limits=NO_LIMITS, min_solutions=500).min_solutions == 500
+
+    @pytest.mark.parametrize("name", ["min_solutions", "min_diversity"])
+    def test_wrong_type_refused(self, name) -> None:
+        with pytest.raises(TypeError, match=name):
+            _merge(**{name: "2"})
+        with pytest.raises(TypeError, match=name):
+            _merge(**{name: True})
+
+    @pytest.mark.parametrize("diversity", [0, 0.001, 0.3, 0.4, 0.5])
+    def test_diversity_in_range_passes(self, diversity) -> None:
+        assert _quiet_merge(min_diversity=diversity).min_diversity == diversity
+
+    @pytest.mark.parametrize("diversity", [-0.001, 0.501, 1, math.nan])
+    def test_diversity_out_of_range_refused(self, diversity) -> None:
+        with pytest.raises(QuipOrderOptionError, match="from 0 to 0.5") as info:
+            _merge(min_diversity=diversity)
+        assert info.value.option == "min_diversity"
+
+    def test_diversity_off_the_milli_grid_refused(self) -> None:
+        with pytest.raises(QuipOrderOptionError, match="whole number of thousandths"):
+            _merge(min_diversity=0.4005)
+
+    def test_diversity_with_one_solution_refused(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(QuipOrderOptionError, match="InvalidDiversityConfig"):
+                _merge(min_solutions=1, min_diversity=0.4)
+            assert _merge(min_solutions=1, min_diversity=0).min_diversity == 0
+
+    def test_whole_configuration_rechecked(self) -> None:
+        current = _quiet_merge(min_diversity=0.4)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(QuipOrderOptionError, match="InvalidDiversityConfig"):
+                _merge(current, min_solutions=1)
+
+
+def _path3_model() -> XQMX:
+    """A 3-spin SPIN chain, so floor(3/2)/3 caps diversity at 1/3."""
+    model = XQMX.spin_model(3)
+    model.set_quadratic(0, 1, 1)
+    model.set_quadratic(1, 2, 1)
+    return model
+
+
+class TestSolutionFloorsAgainstThePlacedModel:
+    def test_diversity_cap_follows_the_placed_spins(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        assert solver.create_order(_path3_model(), topology="native", min_diversity=0.333).min_diversity == 0.333
+        with pytest.raises(QuipOrderOptionError, match="above 1/3, the most diversity 3 placed spins") as info:
+            solver.create_order(_path3_model(), topology="native", min_diversity=0.334)
+        assert info.value.option == "min_diversity"
+
+    def test_two_spins_allow_one_half(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        assert solver.create_order(_model(), min_diversity=0.5).min_diversity == 0.5
+
+    def test_set_rechecks_the_cap(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_path3_model(), topology="native")
+        with pytest.raises(QuipOrderOptionError, match="min_diversity"):
+            order.set(min_diversity=0.4)
+        assert order.min_diversity is None
+
+    def test_floors_reach_the_call_params(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model(), min_solutions=5, min_diversity=0.3)
+        ising = order._call_params()["ising_params"]
+        assert (ising["min_solutions"], ising["min_diversity_milli"]) == (5, 300)
+        assert order.options()["min_solutions"] == 5
+
+    @pytest.mark.parametrize("diversity", [None, 0])
+    def test_no_diversity_floor_is_none(self, monkeypatch, diversity) -> None:
+        solver, _ = _ready(monkeypatch)
+        ising = solver.create_order(_model(), min_diversity=diversity)._call_params()["ising_params"]
+        assert (ising["min_solutions"], ising["min_diversity_milli"]) == (None, None)
+
+    def test_solve_passes_the_floors(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        solver.solve(_model(), min_solutions=2, min_diversity=0.5)
+        ising = captured["call_params"]["ising_params"]
+        assert (ising["min_solutions"], ising["min_diversity_milli"]) == (2, 500)
+
+
 class TestOrderOptionStrictness:
     def test_unknown_option_strict_raises(self) -> None:
         with pytest.raises(TypeError, match="unknown order option 'colour'"):
@@ -357,6 +460,8 @@ class TestJobOrderLifecycle:
             "topology": TOPO_HASH,
             "mapping": None,
             "max_energy": None,
+            "min_solutions": None,
+            "min_diversity": None,
         }
 
     def test_create_order_overrides_defaults(self, monkeypatch) -> None:

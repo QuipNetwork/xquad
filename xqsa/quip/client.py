@@ -48,6 +48,7 @@ from xqsa.quip.codec import (
     Topology,
     _as_hex,
     _require_h256,
+    _to_milli,
     check_allowed_values,
     energy_ceiling_milli,
     model_to_ising,
@@ -572,6 +573,8 @@ class SolverQuip(Solver):
     def _propose_call_params(self, job: IsingJob, options: _OrderOptions) -> dict:
         """Build the ``QuantumComputeMempool.propose_job`` call params for a placed job and its options."""
         ceiling = None if options.max_energy is None else energy_ceiling_milli(options.max_energy, job.offset)
+        # A zero diversity floor is no floor; the chain takes it as None.
+        diversity = _to_milli(options.min_diversity, "min_diversity")[0] if options.min_diversity else None
         ising_params = {
             "nodes": self._wrap_bounded(list(job.nodes)),
             "edges": self._wrap_bounded([list(edge) for edge in job.edges]),
@@ -582,8 +585,8 @@ class SolverQuip(Solver):
             # QUI-1612 renames min_energy_milli to max_energy_milli (QUI-1674).
             "min_energy_milli": ceiling,
             "max_energy_milli": ceiling,
-            "min_diversity_milli": None,
-            "min_solutions": None,
+            "min_diversity_milli": diversity,
+            "min_solutions": options.min_solutions,
         }
         call_params = {
             "spec_id": self._spec_id,
@@ -987,6 +990,14 @@ class SolverQuip(Solver):
                 left fails. Refused below the lowest energy the placed model
                 can reach; warns at or above the highest, and on a model whose
                 coefficients were rounded to milli.
+            min_solutions: vectors each answer must store, 1 up to
+                ``MaxSolutions``; 1 warns. Solvers must find this many distinct
+                solutions, counting a solution and its full flip once, so a
+                small model may go unanswered.
+            min_diversity: the average share of spins, from 0 to 0.5 in
+                thousandths, on which each answer's stored vectors must differ.
+                At most floor(n/2)/n for n placed spins, and not with
+                ``min_solutions=1``. 0 is no floor.
 
         Examples:
             Connects to the network, so it is not run as a doctest::
@@ -1148,8 +1159,9 @@ class SolverQuip(Solver):
         warns with a ``DeprecationWarning`` instead of raising, until QUI-1608.
 
         Keyword args:
-            reward, deadline_blocks, block_wait, topology, mapping, max_energy:
-                as for :meth:`create_order`, for this solve only.
+            reward, deadline_blocks, block_wait, topology, mapping, max_energy,
+                min_solutions, min_diversity: as for :meth:`create_order`, for
+                this solve only.
 
         Raises:
             ValueError: if ``mapping`` is given with ``topology="native"``.

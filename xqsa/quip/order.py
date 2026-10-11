@@ -37,7 +37,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, replace
 from typing import TYPE_CHECKING, Any, Literal, Self
 
-from xqsa.quip.codec import MILLI_SCALE, energy_ceiling_milli
+from xqsa.quip.codec import MILLI_SCALE, _to_milli, energy_ceiling_milli
 from xqsa.quip.display import box, terms_rows
 from xqsa.quip.errors import EncodingError, QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
@@ -55,7 +55,13 @@ OrderState = Literal["draft", "submitted", "unconfirmed", "failed", "finalized"]
 
 # The options an order accepts; ``mode``, ``resolution`` and ``delivery`` are
 # client defaults only.
-ORDER_OPTIONS = frozenset({"reward", "deadline_blocks", "block_wait", "topology", "mapping", "max_energy"})
+ORDER_OPTIONS = frozenset(
+    {"reward", "deadline_blocks", "block_wait", "topology", "mapping", "max_energy", "min_solutions", "min_diversity"}
+)
+
+# The largest diversity floor: a vector and its full flip count as identical,
+# so no set of vectors averages more than floor(n/2)/n, at most one half.
+MAX_DIVERSITY = 0.5
 
 # The shortest deadline worth proposing, and the one below which orders often
 # go unanswered. On aglais a 1-block deadline was solved 0 of 11 times, 30
@@ -83,6 +89,8 @@ class _OrderOptions:
     delivery: Any
     # Quality floors: per-order only, never client defaults.
     max_energy: float | None = None
+    min_solutions: int | None = None
+    min_diversity: float | None = None
 
 
 def check_client_defaults(mode: Any, resolution: Any, delivery: Any) -> None:
@@ -153,7 +161,10 @@ def _check_raw_values(options: _OrderOptions, *, strict: bool, stacklevel: int) 
 
 
 def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: int) -> None:
-    """Check reward, deadline and block wait against each other and the chain limits."""
+    """Check every option against the others and the chain limits, short of the placed model.
+
+    The floor checks that need the placed model are in :func:`_check_floors`.
+    """
     reward = _require_int(options.reward, "reward")
     deadline = _require_int(options.deadline_blocks, "deadline_blocks")
     block_wait = _require_int(options.block_wait, "block_wait")
@@ -174,6 +185,10 @@ def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: in
         raise QuipOrderOptionError("block_wait", f"block_wait={block_wait} must be at least 0{upper}")
     if options.max_energy is not None and not math.isfinite(_require_real(options.max_energy, "max_energy")):
         raise QuipOrderOptionError("max_energy", f"max_energy={options.max_energy} must be finite")
+    if options.min_solutions is not None:
+        _check_min_solutions(_require_int(options.min_solutions, "min_solutions"), limits, stacklevel=stacklevel + 1)
+    if options.min_diversity is not None:
+        _check_min_diversity(_require_real(options.min_diversity, "min_diversity"), options.min_solutions)
 
     if deadline < RELIABLE_DEADLINE_BLOCKS:
         warnings.warn(
@@ -187,6 +202,37 @@ def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: in
             "before the wait for better answers can",
             UserWarning,
             stacklevel=stacklevel,
+        )
+
+
+def _check_min_solutions(count: int, limits: ChainLimits, *, stacklevel: int) -> None:
+    """Refuse a solution floor below 1 or above ``MaxSolutions``, and warn at 1."""
+    upper = limits.max_solutions
+    if count < 1 or (upper is not None and count > upper):
+        bound = f" and at most MaxSolutions ({upper})" if upper is not None else ""
+        raise QuipOrderOptionError("min_solutions", f"min_solutions={count} must be at least 1{bound}")
+    if count == 1:
+        warnings.warn(
+            "min_solutions=1: the chain stores only the first vector of each answer, but ranks the answer by "
+            "its best vector",
+            UserWarning,
+            stacklevel=stacklevel,
+        )
+
+
+def _check_min_diversity(diversity: float, min_solutions: int | None) -> None:
+    """Refuse a diversity floor outside 0 to 0.5, off the milli grid, or paired with one solution."""
+    if not 0 <= diversity <= MAX_DIVERSITY:
+        raise QuipOrderOptionError("min_diversity", f"min_diversity={diversity} must be from 0 to {MAX_DIVERSITY}")
+    if _to_milli(diversity, "min_diversity")[1]:
+        raise QuipOrderOptionError(
+            "min_diversity", f"min_diversity={diversity} is not a whole number of thousandths, which the chain needs"
+        )
+    if diversity > 0 and min_solutions == 1:
+        raise QuipOrderOptionError(
+            "min_diversity",
+            f"min_diversity={diversity} needs min_solutions of at least 2 or unset; one solution has no diversity "
+            "(the chain's InvalidDiversityConfig)",
         )
 
 
@@ -208,7 +254,8 @@ def _check_floors(options: _OrderOptions, job: IsingJob, *, stacklevel: int) -> 
     """Check the quality floors against the placed model.
 
     Runs after every placement and every ``set()``: a re-placed model moves
-    the bounds. The ceiling is refused below the lowest energy the placed
+    the bounds. The diversity floor is refused above floor(n/2)/n for n
+    placed spins. The ceiling is refused below the lowest energy the placed
     model can reach, -(sum |h| + sum |J|) plus the offset, and warns at or
     above the highest, where it filters nothing. A ceiling on a model whose
     coefficients were rounded also warns, since the chain judges the rounded
@@ -217,6 +264,15 @@ def _check_floors(options: _OrderOptions, job: IsingJob, *, stacklevel: int) -> 
     Raises:
         QuipOrderOptionError: if a floor cannot be met by the placed model.
     """
+    spins = job.topology.num_nodes
+    diversity = None if options.min_diversity is None else _to_milli(options.min_diversity, "min_diversity")[0]
+    # In whole milli, so a cap such as 12/25 compares exactly.
+    if diversity is not None and diversity * spins > spins // 2 * MILLI_SCALE:
+        raise QuipOrderOptionError(
+            "min_diversity",
+            f"min_diversity={options.min_diversity} is above {spins // 2}/{spins}, the most diversity "
+            f"{spins} placed spins allow, since a vector and its full flip count as one",
+        )
     if options.max_energy is None:
         return
     try:
@@ -365,6 +421,16 @@ class JobOrder:
         """The energy ceiling in the model's own units, or ``None`` for no ceiling."""
         return self._options.max_energy
 
+    @property
+    def min_solutions(self) -> int | None:
+        """The number of vectors each answer must store, or ``None`` for no floor."""
+        return self._options.min_solutions
+
+    @property
+    def min_diversity(self) -> float | None:
+        """The diversity each answer's vectors must reach, from 0 to 0.5, or ``None`` for no floor."""
+        return self._options.min_diversity
+
     def options(self) -> dict[str, Any]:
         """Return the order's options as a plain dict."""
         mapping = self._options.mapping
@@ -375,6 +441,8 @@ class JobOrder:
             "topology": self.topology,
             "mapping": None if mapping is None else dict(mapping),
             "max_energy": self.max_energy,
+            "min_solutions": self.min_solutions,
+            "min_diversity": self.min_diversity,
         }
 
     def set(self, **options: Any) -> Self:
