@@ -27,6 +27,9 @@ from .dwave_cpu import SolverDWaveCPU
 from .dwave_qpu import SolverDWaveQPU
 from .metal_gpu import SolverMetalGPU
 from .quip import (
+    Access,
+    AccessAllow,
+    AccessOpen,
     EncodingError,
     JobOrder,
     JobOrderReceipt,
@@ -66,6 +69,9 @@ __all__ = [
     "JobOrder",
     "JobOrderReceipt",
     "JobQuote",
+    "Access",
+    "AccessAllow",
+    "AccessOpen",
     "Resolution",
     "ResolutionSingleBest",
     "ResolutionTopNEqual",

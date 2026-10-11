@@ -64,9 +64,17 @@ solvers evenly or by rank::
 
     order = solver.create_order(model, resolution=ResolutionTopNEqual(3))
 
+Who may answer is the ``access`` option: ``"Open"`` or :class:`AccessOpen` (the
+default) lets any registered solver answer, and :class:`AccessAllow` restricts
+the order to listed accounts or solver types. The protocol does not verify
+solver types: each solver declares its own when it registers::
+
+    order = solver.create_order(model, access=AccessAllow(accounts=[operator], types=["QpuDwave"]))
+
 Every option is checked against the chain's limits, read once per client,
 before anything is signed: a reward below ``MinReward``, a deadline outside 10
-to ``MaxDeadlineBlocks``, a block wait over ``MaxBlockWait`` or
+to ``MaxDeadlineBlocks``, a block wait over ``MaxBlockWait``, an allowlist over
+``MaxBidMiners`` accounts or naming an unknown solver type, or
 ``ResolutionTopNWeighted`` on a runtime older than 119 raises
 :class:`QuipOrderOptionError` without paying a fee. :meth:`SolverQuip.solve` is
 ``create_order``, ``submit``, then waiting for the result.
@@ -107,6 +115,7 @@ the signed-extension layout, and economic parameters can change between
 releases; pin a node image and re-validate after upgrades.
 """
 
+from .access import Access, AccessAllow, AccessOpen
 from .chain import (
     FEE_HEADROOM_PLANCK,
     JOB_ORDERS_STORAGE,
@@ -162,6 +171,9 @@ __all__ = [
     "JobOrder",
     "JobOrderReceipt",
     "JobQuote",
+    "Access",
+    "AccessAllow",
+    "AccessOpen",
     "Resolution",
     "ResolutionSingleBest",
     "ResolutionTopNEqual",
