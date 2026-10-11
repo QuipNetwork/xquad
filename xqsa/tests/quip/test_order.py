@@ -1331,6 +1331,15 @@ class TestJobOrderSolutions:
         monkeypatch.setattr(JobOrder, "_floors_text", lambda self: pytest.fail("floors note built for an answer"))
         assert order.best().energy == -4
 
+    def test_best_on_an_unanswered_order_names_its_allowlist(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model(), access=AccessAllow(types=["Gpu"])).submit()
+        solver._iface.maps[(MEMPOOL, "OrderSolutions")] = []
+        with pytest.raises(
+            QuipJobFailedError, match=r"only allowlisted solvers could answer \(types Gpu\) and none did"
+        ):
+            order.best()
+
     def test_best_on_an_unanswered_order_does_not_reclaim(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)
         order = solver.create_order(_model()).submit()

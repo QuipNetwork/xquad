@@ -2569,6 +2569,20 @@ class TestSolverQuipCollect:
             solver._collect_result(solver.get_receipt(1), _job(solver), _model(), elapsed=0.0)
         assert note in str(excinfo.value)
 
+    def test_no_solutions_names_the_allowlist(self, monkeypatch) -> None:
+        from xqsa.quip import QuipJobFailedError
+
+        order = {**_order(solution_count=0), "mode": {"Bid": {"miners": None, "miner_types": ["QpuDwave"]}}}
+        iface = _chain_iface(order=order, head=200, submissions=[])
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipJobFailedError) as excinfo:
+            solver._collect_result(solver.get_receipt(1), _job(solver), _model(), elapsed=0.0)
+        assert str(excinfo.value) == (
+            "order 1 finalized with no solutions; only allowlisted solvers could answer (types QpuDwave) and none "
+            "did; the reserved reward was reclaimed"
+        )
+
     def test_no_solutions_survives_an_unreadable_order(self, monkeypatch) -> None:
         from xqsa.quip import QuipJobFailedError
 

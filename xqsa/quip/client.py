@@ -804,8 +804,8 @@ class SolverQuip(Solver):
         order_id = receipt.order_id
         if not self._fetch_solutions(order_id):
             refund = self._try_reclaim(receipt)
-            floors = no_answer_note(receipt._floors_text())
-            raise QuipJobFailedError(order_id, f"order {order_id} finalized with no solutions{floors}; {refund}")
+            note = no_answer_note(receipt._floors_text(), receipt._access_rule())
+            raise QuipJobFailedError(order_id, f"order {order_id} finalized with no solutions{note}; {refund}")
 
         pick = pick_best(receipt, job, model)
         return SolverResult(

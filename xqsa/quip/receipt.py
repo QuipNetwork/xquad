@@ -391,6 +391,10 @@ class JobOrderReceipt:
         floors = self._best_effort("the quality floors", lambda: _floors_of(self._fetch_order()["ising_params"]))
         return None if floors is None else floors_text(floors)
 
+    def _access_rule(self) -> Access | None:
+        """The order's access rule, or ``None`` if the order cannot be read; for error messages, as above."""
+        return self._best_effort("the access rule", lambda: access_from_chain(self._fetch_order()["mode"]))
+
     def _best_effort(self, what: str, read: Any) -> Any:
         """Return ``read()``, or ``None`` with a warning if it faults; for display-only facts."""
         try:

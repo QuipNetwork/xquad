@@ -34,6 +34,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from xqsa.quip.access import AccessAllow
 from xqsa.quip.codec import decode_solution, ising_energy_milli
 from xqsa.quip.errors import QuipJobFailedError
 from xqvm_py.xqmx import XQMX, compute_energy
@@ -104,19 +105,27 @@ def decode_answers(receipt: JobOrderReceipt, job: IsingJob, model: XQMX, solver:
     return _decode_all(job, model, answers, None if ranked is None else ranked["solver"])
 
 
-def no_answer_note(floors: str | None) -> str:
-    """Name the order's quality floors in a no-answer error, or return ``""`` when it has none.
+def no_answer_note(floors: str | None, access: Any = None) -> str:
+    """Name the order's quality floors and allowlist in a no-answer error, or return ``""`` when it has neither.
 
     ``floors`` is :func:`~xqsa.quip.display.floors_text` output; ``None`` means
-    the floors could not be read.
+    the floors could not be read. ``access`` is the order's access rule, named
+    when it is an :class:`~xqsa.quip.AccessAllow`; ``None`` means open or unread.
     """
-    if floors is None or floors == "none":
-        return ""
-    return f" under its quality floors ({floors}), which solvers may have been unable to meet"
+    note = ""
+    if floors is not None and floors != "none":
+        note = f" under its quality floors ({floors}), which solvers may have been unable to meet"
+    if isinstance(access, AccessAllow):
+        note += f"; only allowlisted solvers could answer {str(access).removeprefix('allowlist ')} and none did"
+    return note
 
 
 def pick_best(
-    receipt: JobOrderReceipt, job: IsingJob, model: XQMX, floors: Callable[[], str | None] | None = None
+    receipt: JobOrderReceipt,
+    job: IsingJob,
+    model: XQMX,
+    floors: Callable[[], str | None] | None = None,
+    access: Any = None,
 ) -> Pick:
     """Pick the answer the chain pays for: the leader's best vector.
 
@@ -136,7 +145,8 @@ def pick_best(
 
     ``floors`` returns the order's quality floors as text, named by the
     no-answer error when any are set. It is called on that path only, so an
-    answered order never pays for it.
+    answered order never pays for it. ``access`` is the order's access rule;
+    the no-answer error names the allowlist when there is one.
 
     Raises:
         QuipJobFailedError: if the order has no answers, its answers carry no
@@ -145,7 +155,7 @@ def pick_best(
     order_id = receipt.order_id
     answers = _answers(receipt)
     if not answers:
-        note = no_answer_note(floors() if floors else None)
+        note = no_answer_note(floors() if floors else None, access)
         raise QuipJobFailedError(
             order_id,
             f"order {order_id} has no answers{note}; once it is final, reclaim its reward with order.reclaim()",

@@ -776,10 +776,10 @@ class JobOrder:
             QuipSubmissionError: if the order has no receipt; see :meth:`receipt`.
             QuipJobFailedError: if nobody answered the order (reclaim its
                 reward with :meth:`reclaim` once it is final; the message
-                names the order's quality floors, if any), or the chosen
+                names the order's quality floors and allowlist, if any), or the chosen
                 answer carries no vectors.
         """
-        return pick_best(self.receipt(), self._job, self._model, self._floors_text).solution
+        return pick_best(self.receipt(), self._job, self._model, self._floors_text, self.access).solution
 
     def solutions(self, solver: Any = None) -> list[Solution]:
         """Return every stored answer, decoded onto this order's model, best first.
