@@ -44,6 +44,7 @@ from xqsa.quip.errors import EncodingError, QuipOrderOptionError, QuipSubmission
 from xqsa.quip.quote import _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
 from xqsa.quip.resolution import (
+    Resolution,
     ResolutionTopNEqual,
     ResolutionTopNWeighted,
     check_rank_weighting,
@@ -481,6 +482,11 @@ class JobOrder:
         return self._options.mapping
 
     @property
+    def resolution(self) -> Resolution | Mapping[str, Any]:
+        """The payout rule; a raw chain dict only on the deprecated ``solve()`` path."""
+        return self._options.resolution
+
+    @property
     def max_energy(self) -> float | None:
         """The energy ceiling in the model's own units, or ``None`` for no ceiling."""
         return self._options.max_energy
@@ -504,6 +510,7 @@ class JobOrder:
             "block_wait": self.block_wait,
             "topology": self.topology,
             "mapping": None if mapping is None else dict(mapping),
+            "resolution": self.resolution,
             "max_energy": self.max_energy,
             "min_solutions": self.min_solutions,
             "min_diversity": self.min_diversity,

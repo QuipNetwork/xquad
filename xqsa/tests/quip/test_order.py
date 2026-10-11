@@ -437,8 +437,9 @@ class TestResolutionOption:
     def test_create_order_takes_equal(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
         order = solver.create_order(_model(), topology="native", resolution=ResolutionTopNEqual(2))
-        assert order._options.resolution == ResolutionTopNEqual(2)
+        assert order.resolution == order.options()["resolution"] == ResolutionTopNEqual(2)
         assert "top 2, equal split" in str(order)
+        assert order.set(resolution="SingleBest").resolution == ResolutionSingleBest()
 
 
 class TestOrderOptionStrictness:
@@ -537,6 +538,7 @@ class TestJobOrderLifecycle:
             "block_wait": 20,
             "topology": TOPO_HASH,
             "mapping": None,
+            "resolution": ResolutionSingleBest(),
             "max_energy": None,
             "min_solutions": None,
             "min_diversity": None,
