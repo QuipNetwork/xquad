@@ -24,6 +24,8 @@ from collections.abc import Sequence
 from decimal import Decimal
 from typing import Any, NamedTuple
 
+from xqsa.quip.resolution import Resolution
+
 WIDTH = 72
 LABEL_WIDTH = 12
 _INNER = WIDTH - 4  # "│ " and " │"
@@ -102,7 +104,12 @@ def _decimal_text(value: Decimal) -> str:
 
 
 def variant_text(value: Any) -> str:
-    """Render a unit enum variant as words (``"SingleBest"`` -> ``"single best"``); anything else as ``repr``."""
+    """Render a unit enum variant as words (``"SingleBest"`` -> ``"single best"``), a payout rule with ``str``.
+
+    Anything else renders as ``repr``.
+    """
+    if isinstance(value, Resolution):
+        return str(value)
     if not isinstance(value, str):
         return repr(value)
     words = "".join(f" {char}" if char.isupper() else char for char in value).split()

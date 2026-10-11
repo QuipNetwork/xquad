@@ -108,21 +108,24 @@ def read_constant(iface: Any, name: str) -> Any | None:
 class ChainLimits:
     """The ``QuantumComputeMempool`` order bounds, read once per client.
 
-    Each field is ``None`` when the runtime does not expose that constant; a
-    missing bound is not checked.
+    Each bound is ``None`` when the runtime does not expose that constant; a
+    missing bound is not checked. ``spec_version`` is the runtime's
+    ``specVersion`` at client creation, ``None`` when unknown; a client that
+    stays connected across a runtime upgrade keeps the old value.
     """
 
     min_reward: int | None
     max_deadline_blocks: int | None
     max_block_wait: int | None
     max_solutions: int | None
+    spec_version: int | None = None
 
 
 def read_limits(iface: Any) -> ChainLimits:
-    """Read the mempool's order bounds into a :class:`ChainLimits`.
+    """Read the mempool's order bounds and the runtime's ``specVersion`` into a :class:`ChainLimits`.
 
     Raises:
-        QuipConnectionError: if reading a constant fails.
+        QuipConnectionError: if reading a constant or the runtime version fails.
         QuipMetadataError: propagated unchanged from the constant reads.
     """
 
@@ -130,11 +133,16 @@ def read_limits(iface: Any) -> ChainLimits:
         value = read_constant(iface, name)
         return None if value is None else int(value)
 
+    try:
+        spec_version = int(iface.rpc_request("state_getRuntimeVersion", [])["result"]["specVersion"])
+    except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
+        raise QuipConnectionError(f"could not read the runtime version: {exc}") from exc
     return ChainLimits(
         min_reward=read("MinReward"),
         max_deadline_blocks=read("MaxDeadlineBlocks"),
         max_block_wait=read("MaxBlockWait"),
         max_solutions=read("MaxSolutions"),
+        spec_version=spec_version,
     )
 
 
