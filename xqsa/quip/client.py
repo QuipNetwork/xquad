@@ -568,7 +568,11 @@ class SolverQuip(Solver):
             "h_values": self._wrap_bounded(list(job.h_values)),
             "j_values": self._wrap_bounded(list(job.j_values)),
             # Quality floors are advisory and unset in v1 (Option::None).
+            # The ceiling goes under both names: the struct encoder takes only
+            # the field the runtime lists, so this proposes before and after
+            # QUI-1612 renames min_energy_milli to max_energy_milli (QUI-1674).
             "min_energy_milli": None,
+            "max_energy_milli": None,
             "min_diversity_milli": None,
             "min_solutions": None,
         }

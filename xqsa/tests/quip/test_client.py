@@ -1977,7 +1977,50 @@ class TestSolverQuipSubmission:
         assert ising["h_values"] == (list(job.h_values),)
         assert ising["j_values"] == (list(job.j_values),)
         assert ising["min_energy_milli"] is None
+        assert ising["max_energy_milli"] is None
         assert ising["min_solutions"] is None
+
+    @pytest.mark.parametrize("ceiling", [None, -1250])
+    def test_ceiling_keys_encode_as_the_runtime_field(self, monkeypatch, ceiling) -> None:
+        """Both ceiling keys encode byte-identical to the one key the runtime lists.
+
+        The struct below mirrors aglais's ``IsingParams`` (spec 118), which lists
+        ``min_energy_milli`` only; a runtime with QUI-1612 lists
+        ``max_energy_milli`` instead and takes the other key the same way.
+        """
+        base = pytest.importorskip("scalecodec.base", reason="scalecodec not installed ([quip] extra)")
+        presets = pytest.importorskip("scalecodec.type_registry")
+        config = base.RuntimeConfigurationObject()
+        config.update_type_registry(presets.load_type_registry_preset("core"))
+        config.update_type_registry(
+            {
+                "types": {
+                    "BoundedU32": {"type": "struct", "type_mapping": [["0", "Vec<u32>"]]},
+                    "BoundedEdges": {"type": "struct", "type_mapping": [["0", "Vec<(u32, u32)>"]]},
+                    "BoundedI32": {"type": "struct", "type_mapping": [["0", "Vec<i32>"]]},
+                    "IsingParams": {
+                        "type": "struct",
+                        "type_mapping": [
+                            ["nodes", "BoundedU32"],
+                            ["edges", "BoundedEdges"],
+                            ["h_values", "BoundedI32"],
+                            ["j_values", "BoundedI32"],
+                            ["min_energy_milli", "Option<i64>"],
+                            ["min_diversity_milli", "Option<u32>"],
+                            ["min_solutions", "Option<u32>"],
+                        ],
+                    },
+                }
+            }
+        )
+        solver = _make_solver(monkeypatch)
+        ising = solver._propose_call_params(self._simple_job(), solver._default_options())["ising_params"]
+        ising = {**ising, "min_energy_milli": ceiling, "max_energy_milli": ceiling}
+        single = {key: value for key, value in ising.items() if key != "max_energy_milli"}
+
+        both = config.create_scale_object("IsingParams").encode(ising)
+
+        assert both == config.create_scale_object("IsingParams").encode(single)
 
     def test_build_extrinsic_returns_wire_and_hash(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)
