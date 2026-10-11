@@ -38,7 +38,7 @@ from dataclasses import dataclass, field, fields, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Self
 
-from xqsa.quip.access import AccessAllow, coerce_access
+from xqsa.quip.access import Access, AccessAllow, coerce_access
 from xqsa.quip.access import from_chain as access_from_chain
 from xqsa.quip.codec import MILLI_SCALE, _to_milli, energy_ceiling_milli
 from xqsa.quip.display import Floors, _decimal_text, box, floors_text, terms_rows
@@ -529,6 +529,11 @@ class JobOrder:
         return self._options.mapping
 
     @property
+    def access(self) -> Access | Mapping[str, Any]:
+        """Who may answer; a raw chain dict only on the deprecated ``solve()`` path."""
+        return self._options.access
+
+    @property
     def resolution(self) -> Resolution | Mapping[str, Any]:
         """The payout rule; a raw chain dict only on the deprecated ``solve()`` path."""
         return self._options.resolution
@@ -557,6 +562,7 @@ class JobOrder:
             "block_wait": self.block_wait,
             "topology": self.topology,
             "mapping": None if mapping is None else dict(mapping),
+            "access": self.access,
             "resolution": self.resolution,
             "max_energy": self.max_energy,
             "min_solutions": self.min_solutions,

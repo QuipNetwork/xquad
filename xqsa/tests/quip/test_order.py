@@ -593,6 +593,8 @@ class TestAccess:
         solver, _ = _ready(monkeypatch)
         rule = AccessAllow(accounts=[ALICE_HEX, BOB_HEX], types=["QpuDwave"])
         order = solver.create_order(_model(), access=rule)
+        assert order.access == order.options()["access"] == rule
+        assert "allowlist (accounts " in str(order)
         assert order._call_params()["mode"] == {
             "Bid": {"miners": ([ALICE_HEX, BOB_HEX],), "miner_types": (["QpuDwave"],)}
         }
@@ -665,6 +667,7 @@ class TestJobOrderLifecycle:
             "block_wait": 20,
             "topology": TOPO_HASH,
             "mapping": None,
+            "access": AccessOpen(),
             "resolution": ResolutionSingleBest(),
             "max_energy": None,
             "min_solutions": None,

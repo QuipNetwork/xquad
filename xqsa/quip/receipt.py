@@ -37,6 +37,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Self
 
 from xqsa.quip import chain
+from xqsa.quip.access import Access
+from xqsa.quip.access import from_chain as access_from_chain
 from xqsa.quip.chain import MEMPOOL_PALLET, RECLAIM_ORDER_CALL, _coerce_block_number, _status_str
 from xqsa.quip.codec import _TERMINAL_STATUSES, ORDER_STATUS_CLOSED
 from xqsa.quip.display import Floors, box, floors_text, terms_rows
@@ -70,7 +72,7 @@ class _Facts:
     num_spins: int
     num_couplings: int
     reward: int
-    mode: Any
+    access: Access | Any  # the raw value when this client cannot read it
     resolution: Resolution | Any  # the raw value when this client cannot read it
     deadline_blocks: int
     block_wait: int
@@ -365,7 +367,7 @@ class JobOrderReceipt:
             num_spins=len(params["nodes"]),
             num_couplings=len(params["edges"]),
             reward=int(order["reward"]),
-            mode=order["mode"],
+            access=_decoded_or_raw(access_from_chain, order["mode"]),
             resolution=_decoded_or_raw(from_chain, order["resolution"]),
             deadline_blocks=int(timing["deadline_blocks"]),
             block_wait=int(timing["block_wait"]),
@@ -478,7 +480,7 @@ class JobOrderReceipt:
         problem = [("Problem", f"{facts.num_spins} spins, {facts.num_couplings} couplings"), ("Spec", facts.spec_id)]
         terms = terms_rows(
             resolution=facts.resolution,
-            access=facts.mode,
+            access=facts.access,
             floors=floors_text(facts.floors),
             deadline_blocks=facts.deadline_blocks,
             block_wait=facts.block_wait,

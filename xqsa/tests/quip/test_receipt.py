@@ -295,13 +295,14 @@ TOP_N = {"TopNEqual": {"n": 3}}
 
 
 def _receipt_order(**kw) -> dict:
-    """``_order`` plus what a receipt reads: ``reward``, ``resolution`` and the fields its display shows."""
+    """``_order`` plus what a receipt reads: ``reward``, ``resolution``, ``mode`` and the fields its display shows."""
     resolution = kw.pop("resolution", "SingleBest")
+    mode = kw.pop("mode", "Open")
     return {
         **_order(**kw),
         "reward": REWARD,
         "resolution": resolution,
-        "mode": "Open",
+        "mode": mode,
         "spec_id": "0x" + "ab" * 32,
         "ising_params": {"nodes": [0, 1, 2], "edges": [[0, 1], [1, 2]]},
     }
@@ -952,6 +953,16 @@ class TestJobOrderReceiptDisplay:
             "Winner      2.500000000000 AGLS, claimed",
             "Winner      2.500000000000 AGLS, claimed",
         ]
+
+    def test_access_read_back(self, monkeypatch) -> None:
+        assert _display_for(monkeypatch)._facts().access == AccessOpen()
+
+    def test_allowlist_read_back(self, monkeypatch) -> None:
+        miner = "0x" + "d4" * 32
+        mode = {"Bid": {"miners": [miner], "miner_types": ["QpuDwave"]}}
+        receipt = _display_for(monkeypatch, order=_receipt_order(proposer=PROPOSER, mode=mode))
+        assert receipt._facts().access == AccessAllow(accounts=[miner], types=["QpuDwave"])
+        assert any(row.startswith("Access      allowlist (accounts ") for row in _rows(str(receipt)))
 
     def test_top_n_weighted_rows(self, monkeypatch) -> None:
         order = _receipt_order(proposer=PROPOSER, resolution={"TopNWeighted": {"n": 2}})
