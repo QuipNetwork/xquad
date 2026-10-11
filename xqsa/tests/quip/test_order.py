@@ -902,6 +902,10 @@ class TestSolverQuipCompatibility:
         assert captured["builds"] == 0
 
 
+def _box_rows(text: str) -> list[str]:
+    return [line[2:-2].rstrip() for line in text.splitlines() if line.startswith("│")]
+
+
 class TestJobOrderDisplay:
     def test_draft_box(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
@@ -926,6 +930,19 @@ class TestJobOrderDisplay:
                 "╰──────────────────────────────────────────────────────────────────────╯",
             ]
         )
+
+    def test_floors_row_in_model_units(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(
+            _binary_model(), topology="native", max_energy=-2, min_solutions=5, min_diversity=0.4
+        )
+        rows = _box_rows(str(order))
+        start = rows.index("Floors      energy <= -2 (chain -1.25), 5 solutions, diversity >=")
+        assert rows[start + 1] == "            0.4"  # wrapped onto a blank-label line.
+
+    def test_spin_floors_row_has_no_chain_value(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        assert "Floors      energy <= -3" in _box_rows(str(solver.create_order(_model(), max_energy=-3)))
 
     def test_quoted_and_submitted_rows(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)

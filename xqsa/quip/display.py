@@ -21,7 +21,10 @@ from __future__ import annotations
 
 import textwrap
 from collections.abc import Sequence
+from decimal import Decimal
 from typing import Any
+
+from xqsa.quip.codec import energy_ceiling_milli
 
 WIDTH = 72
 LABEL_WIDTH = 12
@@ -50,16 +53,52 @@ def box(title: str, sections: Sequence[Sequence[Row]], *, double_before: int | N
     return "\n".join(lines)
 
 
-def terms_rows(*, resolution: Any, mode: Any, deadline_blocks: int, block_wait: int, reward: str) -> list[Row]:
-    """Return the Terms section an order and its receipt both show; ``reward`` comes formatted."""
+def terms_rows(
+    *, resolution: Any, mode: Any, floors: str, deadline_blocks: int, block_wait: int, reward: str
+) -> list[Row]:
+    """Return the Terms section an order and its receipt both show; ``floors`` and ``reward`` come formatted."""
     return [
         ("Payout", variant_text(resolution)),
         ("Access", variant_text(mode)),
-        ("Floors", "none"),
+        ("Floors", floors),
         ("Deadline", f"{deadline_blocks} blocks"),
         ("Block wait", f"{block_wait} blocks"),
         ("Reward", reward),
     ]
+
+
+def floors_text(
+    ceiling_milli: int | None,
+    min_solutions: int | None,
+    diversity_milli: int | None,
+    model_ceiling: float | None = None,
+) -> str:
+    """Render the quality floors as the chain holds them, or ``"none"``.
+
+    ``model_ceiling`` is the ceiling in the model's own units, known only to
+    the client that placed the order. When given, it leads, and the chain's
+    spin-unit value follows when the offset moves it: ``energy <= -2 (chain
+    -1.25)`` for a BINARY model whose offset is -0.75.
+    """
+    parts = []
+    if ceiling_milli is not None:
+        chain = Decimal(ceiling_milli) / 1000
+        if model_ceiling is None:
+            parts.append(f"energy <= {_decimal_text(chain)}")
+        else:
+            moved = energy_ceiling_milli(model_ceiling) != ceiling_milli
+            differs = f" (chain {_decimal_text(chain)})" if moved else ""
+            parts.append(f"energy <= {_decimal_text(Decimal(repr(model_ceiling)))}{differs}")
+    if min_solutions is not None:
+        parts.append(f"{min_solutions} solution{'' if min_solutions == 1 else 's'}")
+    if diversity_milli is not None:
+        parts.append(f"diversity >= {_decimal_text(Decimal(diversity_milli) / 1000)}")
+    return ", ".join(parts) or "none"
+
+
+def _decimal_text(value: Decimal) -> str:
+    """Render ``value`` in plain notation without trailing zeros (``-4.0`` -> ``-4``)."""
+    return format(value.normalize(), "f")
 
 
 def variant_text(value: Any) -> str:

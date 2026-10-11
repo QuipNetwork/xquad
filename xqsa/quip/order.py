@@ -38,7 +38,7 @@ from dataclasses import dataclass, field, fields, replace
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 from xqsa.quip.codec import MILLI_SCALE, _to_milli, energy_ceiling_milli
-from xqsa.quip.display import box, terms_rows
+from xqsa.quip.display import box, floors_text, terms_rows
 from xqsa.quip.errors import EncodingError, QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
@@ -300,6 +300,17 @@ def _check_floors(options: _OrderOptions, job: IsingJob, *, stacklevel: int) -> 
             UserWarning,
             stacklevel=stacklevel,
         )
+
+
+def _chain_floors(options: _OrderOptions, job: IsingJob) -> tuple[int | None, int | None, int | None]:
+    """Return the floors as the chain takes them: ``(ceiling_milli, min_solutions, diversity_milli)``.
+
+    The ceiling is in milli spin energy, offset included. A zero diversity
+    floor is no floor, so it goes out as ``None``.
+    """
+    ceiling = None if options.max_energy is None else energy_ceiling_milli(options.max_energy, job.offset)
+    diversity = _to_milli(options.min_diversity, "min_diversity")[0] if options.min_diversity else None
+    return ceiling, options.min_solutions, diversity
 
 
 @dataclass(frozen=True)
@@ -695,6 +706,7 @@ class JobOrder:
         terms = terms_rows(
             resolution=options.resolution,
             mode=options.mode,
+            floors=floors_text(*_chain_floors(options, self._job), model_ceiling=options.max_energy),
             deadline_blocks=options.deadline_blocks,
             block_wait=options.block_wait,
             reward=f"{_format_planck(options.reward, decimals)} {symbol}",

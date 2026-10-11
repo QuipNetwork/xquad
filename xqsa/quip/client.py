@@ -48,9 +48,7 @@ from xqsa.quip.codec import (
     Topology,
     _as_hex,
     _require_h256,
-    _to_milli,
     check_allowed_values,
-    energy_ceiling_milli,
     model_to_ising,
     native_placement,
 )
@@ -72,6 +70,7 @@ from xqsa.quip.faucet import DEFAULT_DRIP_PLANCK, fund_from_faucet
 from xqsa.quip.networks import NETWORKS
 from xqsa.quip.order import (
     JobOrder,
+    _chain_floors,
     _check_floors,
     _OrderOptions,
     _Sent,
@@ -572,9 +571,7 @@ class SolverQuip(Solver):
 
     def _propose_call_params(self, job: IsingJob, options: _OrderOptions) -> dict:
         """Build the ``QuantumComputeMempool.propose_job`` call params for a placed job and its options."""
-        ceiling = None if options.max_energy is None else energy_ceiling_milli(options.max_energy, job.offset)
-        # A zero diversity floor is no floor; the chain takes it as None.
-        diversity = _to_milli(options.min_diversity, "min_diversity")[0] if options.min_diversity else None
+        ceiling, min_solutions, diversity = _chain_floors(options, job)
         ising_params = {
             "nodes": self._wrap_bounded(list(job.nodes)),
             "edges": self._wrap_bounded([list(edge) for edge in job.edges]),
@@ -586,7 +583,7 @@ class SolverQuip(Solver):
             "min_energy_milli": ceiling,
             "max_energy_milli": ceiling,
             "min_diversity_milli": diversity,
-            "min_solutions": options.min_solutions,
+            "min_solutions": min_solutions,
         }
         call_params = {
             "spec_id": self._spec_id,
