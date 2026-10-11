@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import math
 import sys
 import types
 import warnings
@@ -40,6 +41,7 @@ from xqsa.quip.codec import (
     DEFAULT_ISING_SPEC_ID,
     I32_MAX,
     I32_MIN,
+    I64_MAX,
     MAX_NATURAL_COEFFICIENT,
     MILLI_SCALE,
     QUIP_COEFFICIENTS_DOC_URL,
@@ -51,6 +53,7 @@ from xqsa.quip.codec import (
     check_allowed_values,
     decode_solution,
     effective_expiry,
+    energy_ceiling_milli,
     find_placement,
     is_final,
     ising_energy_milli,
@@ -521,6 +524,42 @@ class TestModelToIsing:
         assert job.mapping == {0: 3, 1: 4}
         assert job.nodes == (3, 4)
         assert job.j_values[job.topology.edge_index(3, 4)] == MILLI_SCALE
+
+
+class TestEnergyCeilingMilli:
+    """Model-unit ceilings convert to the chain's milli spin energy."""
+
+    def test_spin_scales(self) -> None:
+        assert energy_ceiling_milli(-4) == -4000
+
+    def test_binary_subtracts_the_offset(self) -> None:
+        """E = -2*x0 + x0*x1 has offset -0.75, so a ceiling of -2 is spin energy -1.25."""
+        model = XQMX.binary_model(2)
+        model.set_linear(0, -2)
+        model.set_quadratic(0, 1, 1)
+        job = model_to_ising(model, PATH5)
+        assert energy_ceiling_milli(-2, job.offset) == -1250
+
+    def test_off_grid_floors(self) -> None:
+        # Chain energy is whole milli, so <= -1234.5 and <= -1235 accept the same vectors.
+        assert energy_ceiling_milli(-1.2345) == -1235
+        assert energy_ceiling_milli(1.2345) == 1234
+
+    def test_float_noise_snaps_to_the_grid(self) -> None:
+        # -(0.1 + 0.2) * 1000 is -300.00000000000006; flooring it would give -301.
+        assert energy_ceiling_milli(-(0.1 + 0.2)) == -300
+
+    @pytest.mark.parametrize("energy", [math.inf, -math.inf, math.nan])
+    def test_non_finite_refused(self, energy) -> None:
+        with pytest.raises(EncodingError, match="not finite"):
+            energy_ceiling_milli(energy)
+
+    def test_i64_bounds(self) -> None:
+        assert energy_ceiling_milli(9.2e15) == 9_200_000_000_000_000_000 <= I64_MAX
+        with pytest.raises(EncodingError, match="outside i64"):
+            energy_ceiling_milli(9.3e15)
+        with pytest.raises(EncodingError, match="outside i64"):
+            energy_ceiling_milli(-9.3e15)
 
 
 # ---------------------------------------------------------------------------

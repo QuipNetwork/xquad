@@ -49,6 +49,7 @@ from xqsa.quip.codec import (
     _as_hex,
     _require_h256,
     check_allowed_values,
+    energy_ceiling_milli,
     model_to_ising,
     native_placement,
 )
@@ -68,7 +69,15 @@ from xqsa.quip.errors import (  # noqa: F401 -- the Quip* errors stay importable
 )
 from xqsa.quip.faucet import DEFAULT_DRIP_PLANCK, fund_from_faucet
 from xqsa.quip.networks import NETWORKS
-from xqsa.quip.order import JobOrder, _OrderOptions, _Sent, _SignedCall, check_client_defaults, merge_options
+from xqsa.quip.order import (
+    JobOrder,
+    _check_floors,
+    _OrderOptions,
+    _Sent,
+    _SignedCall,
+    check_client_defaults,
+    merge_options,
+)
 from xqsa.quip.quote import JobQuote, _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
 from xqsa.quip.solution import pick_best
@@ -562,17 +571,17 @@ class SolverQuip(Solver):
 
     def _propose_call_params(self, job: IsingJob, options: _OrderOptions) -> dict:
         """Build the ``QuantumComputeMempool.propose_job`` call params for a placed job and its options."""
+        ceiling = None if options.max_energy is None else energy_ceiling_milli(options.max_energy, job.offset)
         ising_params = {
             "nodes": self._wrap_bounded(list(job.nodes)),
             "edges": self._wrap_bounded([list(edge) for edge in job.edges]),
             "h_values": self._wrap_bounded(list(job.h_values)),
             "j_values": self._wrap_bounded(list(job.j_values)),
-            # Quality floors are advisory and unset in v1 (Option::None).
             # The ceiling goes under both names: the struct encoder takes only
             # the field the runtime lists, so this proposes before and after
             # QUI-1612 renames min_energy_milli to max_energy_milli (QUI-1674).
-            "min_energy_milli": None,
-            "max_energy_milli": None,
+            "min_energy_milli": ceiling,
+            "max_energy_milli": ceiling,
             "min_diversity_milli": None,
             "min_solutions": None,
         }
@@ -930,7 +939,9 @@ class SolverQuip(Solver):
         self._validate_model(model)
         merged = merge_options(self._default_options(), options, self._limits, strict=strict, stacklevel=4)
         merged = self._settle_topology(merged)
-        return JobOrder(self, model, merged, self._place(model, merged), self._genesis_hash)
+        job = self._place(model, merged)
+        _check_floors(merged, job, stacklevel=4)
+        return JobOrder(self, model, merged, job, self._genesis_hash)
 
     def _quote_wire(self, wire: bytes, job: IsingJob, options: _OrderOptions) -> JobQuote:
         """Price the signed ``wire`` without sending it, reading the balance and head block now.
@@ -971,6 +982,11 @@ class SolverQuip(Solver):
             topology: a registered topology hash, or ``"native"``.
             mapping: explicit variable -> node placement (else searched); not
                 allowed with ``"native"``.
+            max_energy: an energy ceiling in the model's own units. The chain
+                drops every answer vector above it, and an answer with none
+                left fails. Refused below the lowest energy the placed model
+                can reach; warns at or above the highest, and on a model whose
+                coefficients were rounded to milli.
 
         Examples:
             Connects to the network, so it is not run as a doctest::
@@ -1132,8 +1148,8 @@ class SolverQuip(Solver):
         warns with a ``DeprecationWarning`` instead of raising, until QUI-1608.
 
         Keyword args:
-            reward, deadline_blocks, block_wait, topology, mapping: as for
-                :meth:`create_order`, for this solve only.
+            reward, deadline_blocks, block_wait, topology, mapping, max_energy:
+                as for :meth:`create_order`, for this solve only.
 
         Raises:
             ValueError: if ``mapping`` is given with ``topology="native"``.

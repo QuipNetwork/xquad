@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import math
 import warnings
 from dataclasses import replace
 
@@ -35,6 +36,7 @@ from xqsa.quip import (
 from xqsa.quip.chain import ChainLimits
 from xqsa.quip.order import JobOrder, _OrderOptions, check_client_defaults, merge_options
 from xqsa.solver import SolverResult
+from xqvm_py.xqmx import XQMX
 
 from .test_client import (
     GENESIS_HASH,
@@ -145,6 +147,123 @@ class TestOrderOptionLimits:
             _merge(**{name: value})
 
 
+class TestCeilingOption:
+    """``max_energy`` checks that need no placed model."""
+
+    @pytest.mark.parametrize("value", [-4, -2.5, 0])
+    def test_real_numbers_pass(self, value) -> None:
+        assert _quiet_merge(max_energy=value).max_energy == value
+
+    @pytest.mark.parametrize("value", [True, "-4"])
+    def test_non_real_refused(self, value) -> None:
+        with pytest.raises(TypeError, match="max_energy must be a real number"):
+            _merge(max_energy=value)
+
+    @pytest.mark.parametrize("value", [math.inf, -math.inf, math.nan])
+    def test_non_finite_refused(self, value) -> None:
+        with pytest.raises(QuipOrderOptionError, match="must be finite") as info:
+            _merge(max_energy=value)
+        assert info.value.option == "max_energy"
+
+
+def _rounded_model() -> XQMX:
+    """A SPIN model whose 0.0012 field rounds to milli 1."""
+    model = XQMX.spin_model(2)
+    model.set_linear(0, 0.0012)
+    model.set_quadratic(0, 1, 1)
+    return model
+
+
+def _binary_model() -> XQMX:
+    """E = -2*x0 + x0*x1: spin h = (-0.75, 0.25), J = 0.25, offset -0.75; energies -2 to 0."""
+    model = XQMX.binary_model(2)
+    model.set_linear(0, -2)
+    model.set_quadratic(0, 1, 1)
+    return model
+
+
+class TestCeilingAgainstThePlacedModel:
+    """``_check_floors``: _model() reaches spin energies -4 to +4."""
+
+    def test_reachable_ceiling_passes_quietly(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            order = solver.create_order(_model(), max_energy=-4)
+        assert order.max_energy == -4
+        assert order.options()["max_energy"] == -4
+
+    def test_below_the_lowest_energy_refused(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with pytest.raises(QuipOrderOptionError, match="below -4, the lowest energy") as info:
+            solver.create_order(_model(), max_energy=-4.001)
+        assert info.value.option == "max_energy"
+
+    def test_at_the_highest_energy_warns(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with pytest.warns(UserWarning, match="at or above 4, the highest energy") as record:
+            solver.create_order(_model(), max_energy=4)
+        assert record[0].filename == __file__
+
+    def test_binary_bounds_include_the_offset(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        # Spin reach is 1.25, so the model reaches -1.25 - 0.75 = -2 at the lowest.
+        solver.create_order(_binary_model(), topology="native", max_energy=-2)
+        with pytest.raises(QuipOrderOptionError, match="below -2"):
+            solver.create_order(_binary_model(), topology="native", max_energy=-2.001)
+
+    def test_i64_overflow_refused(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with pytest.raises(QuipOrderOptionError, match="outside i64"):
+            solver.create_order(_model(), max_energy=-1e19)
+
+    def test_rounded_model_warns(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            solver.create_order(_rounded_model(), topology="native", max_energy=-1)
+        assert any("chain applies the ceiling to the rounded model" in str(w.message) for w in caught)
+
+    def test_rounded_model_without_ceiling_does_not_warn_about_it(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            solver.create_order(_rounded_model(), topology="native")
+        assert not any("ceiling" in str(w.message) for w in caught)
+
+    def test_set_rechecks_and_a_refusal_keeps_the_order(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model(), max_energy=-3)
+        job = order._job
+        with pytest.raises(QuipOrderOptionError, match="max_energy"):
+            order.set(max_energy=-5)
+        assert (order.max_energy, order._job) == (-3, job)
+
+    def test_set_rechecks_after_replacing(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_binary_model(), topology="native", max_energy=-2)
+        with pytest.raises(QuipOrderOptionError, match="below"):
+            order.set(topology=TOPO_HASH, mapping={0: 0, 1: 1}, max_energy=-2.5)
+        assert order.topology == "native"
+
+    def test_set_warning_points_at_the_caller(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        with pytest.warns(UserWarning, match="filters nothing") as record:
+            order.set(max_energy=10)
+        assert record[0].filename == __file__
+
+    def test_ceiling_goes_under_both_keys(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        ising = solver.create_order(_binary_model(), topology="native", max_energy=-2)._call_params()["ising_params"]
+        assert ising["min_energy_milli"] == ising["max_energy_milli"] == -1250
+
+    def test_solve_passes_the_ceiling(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        solver.solve(_model(), max_energy=-2)
+        assert captured["call_params"]["ising_params"]["min_energy_milli"] == -2000
+
+
 class TestOrderOptionStrictness:
     def test_unknown_option_strict_raises(self) -> None:
         with pytest.raises(TypeError, match="unknown order option 'colour'"):
@@ -237,6 +356,7 @@ class TestJobOrderLifecycle:
             "block_wait": 20,
             "topology": TOPO_HASH,
             "mapping": None,
+            "max_energy": None,
         }
 
     def test_create_order_overrides_defaults(self, monkeypatch) -> None:

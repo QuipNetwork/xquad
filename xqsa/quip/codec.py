@@ -79,6 +79,10 @@ MILLI_SCALE = 1000
 I32_MIN = -(2**31)
 I32_MAX = 2**31 - 1
 
+# The energy ceiling is a SCALE ``Option<i64>`` in milli.
+I64_MIN = -(2**63)
+I64_MAX = 2**63 - 1
+
 # Largest natural-scale coefficient that still fits ``i32`` after scaling by
 # ``MILLI_SCALE`` (``2_147_483 * 1000 = 2_147_483_000 <= I32_MAX``).
 MAX_NATURAL_COEFFICIENT = I32_MAX // MILLI_SCALE
@@ -545,6 +549,29 @@ def _to_milli(value: float, label: str) -> tuple[int, float]:
         )
     gap = abs(scaled - milli)
     return milli, (0.0 if gap <= _MILLI_GRID_TOLERANCE else gap / MILLI_SCALE)
+
+
+def energy_ceiling_milli(energy: float, offset: float = 0.0) -> int:
+    """Convert a model-unit energy ceiling to the chain's milli spin energy.
+
+    The chain compares a vector's spin energy, a whole number of milli, with
+    the ceiling, so ``floor((energy - offset) * 1000)`` accepts exactly the
+    vectors whose model energy is at or below ``energy``. A value within
+    :data:`_MILLI_GRID_TOLERANCE` milli of the grid snaps to it first, so float
+    noise cannot floor a round ceiling one milli too low.
+
+    Raises:
+        EncodingError: if the converted ceiling is not finite or does not fit
+            ``i64``.
+    """
+    scaled = (energy - offset) * MILLI_SCALE
+    if not math.isfinite(scaled):
+        raise EncodingError(f"energy ceiling {energy} is not finite in milli")
+    nearest = round(scaled)
+    milli = nearest if abs(scaled - nearest) <= _MILLI_GRID_TOLERANCE else math.floor(scaled)
+    if not (I64_MIN <= milli <= I64_MAX):
+        raise EncodingError(f"energy ceiling {energy} is milli {milli}, outside i64 [{I64_MIN}, {I64_MAX}]")
+    return milli
 
 
 def _range_bounds(inner: object) -> tuple[int, int] | None:

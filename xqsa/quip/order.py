@@ -30,14 +30,16 @@ fee to fail on chain.
 
 from __future__ import annotations
 
+import math
 import time
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, replace
 from typing import TYPE_CHECKING, Any, Literal, Self
 
+from xqsa.quip.codec import MILLI_SCALE, energy_ceiling_milli
 from xqsa.quip.display import box, terms_rows
-from xqsa.quip.errors import QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
+from xqsa.quip.errors import EncodingError, QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
 from xqsa.quip.solution import Solution, decode_answers, pick_best
@@ -53,7 +55,7 @@ OrderState = Literal["draft", "submitted", "unconfirmed", "failed", "finalized"]
 
 # The options an order accepts; ``mode``, ``resolution`` and ``delivery`` are
 # client defaults only.
-ORDER_OPTIONS = frozenset({"reward", "deadline_blocks", "block_wait", "topology", "mapping"})
+ORDER_OPTIONS = frozenset({"reward", "deadline_blocks", "block_wait", "topology", "mapping", "max_energy"})
 
 # The shortest deadline worth proposing, and the one below which orders often
 # go unanswered. On aglais a 1-block deadline was solved 0 of 11 times, 30
@@ -79,6 +81,8 @@ class _OrderOptions:
     mode: Any
     resolution: Any
     delivery: Any
+    # Quality floors: per-order only, never client defaults.
+    max_energy: float | None = None
 
 
 def check_client_defaults(mode: Any, resolution: Any, delivery: Any) -> None:
@@ -168,6 +172,8 @@ def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: in
     if block_wait < 0 or (max_wait is not None and block_wait > max_wait):
         upper = f" and at most MaxBlockWait ({max_wait})" if max_wait is not None else ""
         raise QuipOrderOptionError("block_wait", f"block_wait={block_wait} must be at least 0{upper}")
+    if options.max_energy is not None and not math.isfinite(_require_real(options.max_energy, "max_energy")):
+        raise QuipOrderOptionError("max_energy", f"max_energy={options.max_energy} must be finite")
 
     if deadline < RELIABLE_DEADLINE_BLOCKS:
         warnings.warn(
@@ -189,6 +195,55 @@ def _require_int(value: Any, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an int, not {type(value).__name__}")
     return value
+
+
+def _require_real(value: Any, name: str) -> float:
+    """Return ``value`` if it is an ``int`` or ``float`` (not a ``bool``), else raise ``TypeError``."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{name} must be a real number, not {type(value).__name__}")
+    return value
+
+
+def _check_floors(options: _OrderOptions, job: IsingJob, *, stacklevel: int) -> None:
+    """Check the quality floors against the placed model.
+
+    Runs after every placement and every ``set()``: a re-placed model moves
+    the bounds. The ceiling is refused below the lowest energy the placed
+    model can reach, -(sum |h| + sum |J|) plus the offset, and warns at or
+    above the highest, where it filters nothing. A ceiling on a model whose
+    coefficients were rounded also warns, since the chain judges the rounded
+    model. ``stacklevel`` is as for :func:`merge_options`.
+
+    Raises:
+        QuipOrderOptionError: if a floor cannot be met by the placed model.
+    """
+    if options.max_energy is None:
+        return
+    try:
+        ceiling = energy_ceiling_milli(options.max_energy, job.offset)
+    except EncodingError as exc:
+        raise QuipOrderOptionError("max_energy", f"max_energy={options.max_energy}: {exc}") from exc
+    reach = sum(map(abs, job.h_values)) + sum(map(abs, job.j_values))
+    if ceiling < -reach:
+        raise QuipOrderOptionError(
+            "max_energy",
+            f"max_energy={options.max_energy} is below {-reach / MILLI_SCALE + job.offset:g}, the lowest "
+            "energy the placed model can reach, so no answer could meet it",
+        )
+    if ceiling >= reach:
+        warnings.warn(
+            f"max_energy={options.max_energy} is at or above {reach / MILLI_SCALE + job.offset:g}, the highest "
+            "energy the placed model can reach, so it filters nothing",
+            UserWarning,
+            stacklevel=stacklevel,
+        )
+    if job.quantization_error > 0:
+        warnings.warn(
+            f"max_energy={options.max_energy}: the model's coefficients were rounded to the chain's milli grid, "
+            "and the chain applies the ceiling to the rounded model, so answers near it can land on either side",
+            UserWarning,
+            stacklevel=stacklevel,
+        )
 
 
 @dataclass(frozen=True)
@@ -305,6 +360,11 @@ class JobOrder:
         """The explicit variable to node placement, or ``None`` when it was searched."""
         return self._options.mapping
 
+    @property
+    def max_energy(self) -> float | None:
+        """The energy ceiling in the model's own units, or ``None`` for no ceiling."""
+        return self._options.max_energy
+
     def options(self) -> dict[str, Any]:
         """Return the order's options as a plain dict."""
         mapping = self._options.mapping
@@ -314,13 +374,15 @@ class JobOrder:
             "block_wait": self.block_wait,
             "topology": self.topology,
             "mapping": None if mapping is None else dict(mapping),
+            "max_energy": self.max_energy,
         }
 
     def set(self, **options: Any) -> Self:
         """Change options on a draft and recheck the whole configuration.
 
-        Re-places the model only when ``topology`` or ``mapping`` changed, and
-        drops any cached quote.
+        Re-places the model only when ``topology`` or ``mapping`` changed,
+        rechecks the quality floors against the placed model, and drops any
+        cached quote. A refused change leaves the order as it was.
 
         Raises:
             QuipSubmissionError: if the order is no longer a draft.
@@ -331,9 +393,11 @@ class JobOrder:
         self._require_draft("set")
         merged = merge_options(self._options, options, self._client._limits, strict=True, stacklevel=3)
         merged = self._client._settle_topology(merged)
+        job = self._job
         if (merged.topology, merged.mapping) != (self._options.topology, self._options.mapping):
-            self._job = self._client._place(self._model, merged)
-        self._options = merged
+            job = self._client._place(self._model, merged)
+        _check_floors(merged, job, stacklevel=3)
+        self._job, self._options = job, merged
         self._signed = None
         return self
 
