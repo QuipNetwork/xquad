@@ -407,6 +407,17 @@ class TestResolutionOption:
         with pytest.raises(TypeError, match="resolution: raw chain values"):
             _merge(resolution={"TopNEqual": {"n": 2}})
 
+    def test_raw_weighted_dict_gated_on_the_lenient_path(self) -> None:
+        raw = {"TopNWeighted": {"n": 2}}
+        with pytest.warns(DeprecationWarning), pytest.raises(QuipOrderOptionError, match="runtime 118"):
+            _merge(limits=replace(LIMITS, spec_version=118), strict=False, resolution=raw)
+        with pytest.warns(DeprecationWarning):
+            assert _merge(limits=replace(LIMITS, spec_version=119), strict=False, resolution=raw).resolution is raw
+
+    def test_raw_dict_naming_no_rule_passes_the_lenient_path(self) -> None:
+        with pytest.warns(DeprecationWarning):
+            assert _merge(strict=False, resolution={"TopNEqual": 3}).resolution == {"TopNEqual": 3}
+
     def test_equal_passes(self) -> None:
         assert _quiet_merge(resolution=ResolutionTopNEqual(3)).resolution == ResolutionTopNEqual(3)
 

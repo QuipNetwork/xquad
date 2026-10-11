@@ -49,6 +49,7 @@ from xqsa.quip.resolution import (
     ResolutionTopNWeighted,
     check_rank_weighting,
     coerce_resolution,
+    from_chain,
 )
 from xqsa.quip.solution import Solution, decode_answers, pick_best
 
@@ -232,7 +233,17 @@ def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: in
 
 
 def _check_resolution(resolution: Any, limits: ChainLimits, block_wait: int, *, stacklevel: int) -> None:
-    """Refuse a payout rule the runtime cannot honour, and warn when a top-N order can have one winner only."""
+    """Refuse a payout rule the runtime cannot honour, and warn when a top-N order can have one winner only.
+
+    A raw chain dict, which only the deprecated ``solve()`` path lets through,
+    is read as the rule it names and checked the same way; one that names no
+    rule passes unchecked.
+    """
+    if isinstance(resolution, Mapping):
+        try:
+            resolution = from_chain(resolution)
+        except ValueError:
+            return
     try:
         check_rank_weighting(resolution, limits.spec_version)
     except ValueError as exc:
