@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -47,6 +48,7 @@ from xqsa.quip.chain import (
 )
 from xqsa.quip.display import Floors, floors_text, terms_rows, variant_text
 from xqsa.quip.receipt import JobOrderReceipt
+from xqsa.quip.resolution import ResolutionTopNEqual
 
 from .test_client import (
     GENESIS_HASH,
@@ -518,10 +520,48 @@ class TestJobOrderReceiptSettlement:
     def test_single_best(self, monkeypatch, order, front, expected) -> None:
         assert _receipt_for(monkeypatch, order=order, front=front).settlement() == expected
 
-    def test_top_n_not_supported(self, monkeypatch) -> None:
-        receipt = _receipt_for(monkeypatch, order=_receipt_order(resolution=TOP_N))
-        with pytest.raises(NotImplementedError, match="QUI-1606"):
+    RANKED = [
+        {"solver": "0xC", "energy_milli": -900},
+        {"solver": "0xA", "energy_milli": -900},  # a tie: the earlier submitter ranks first, as stored.
+        {"solver": "0xB", "energy_milli": -100},
+    ]
+
+    @staticmethod
+    def _top_n(monkeypatch, resolution, ranked, *, reward=REWARD, spec_version=118, **order_kw):
+        order = {**_receipt_order(resolution=resolution, **order_kw), "reward": reward}
+        receipt = _receipt_for(monkeypatch, order=order, top=ranked)
+        receipt._client._limits = replace(receipt._client._limits, spec_version=spec_version)
+        return receipt
+
+    def test_top_n_equal(self, monkeypatch) -> None:
+        receipt = self._top_n(monkeypatch, TOP_N, self.RANKED, reward=10, status="Closed")
+        assert receipt.settlement() == {
+            "claimed": True,
+            "winners": [
+                {"solver": "0xC", "energy_milli": -900, "allocation_planck": 4},
+                {"solver": "0xA", "energy_milli": -900, "allocation_planck": 3},
+                {"solver": "0xB", "energy_milli": -100, "allocation_planck": 3},
+            ],
+        }
+
+    def test_top_n_equal_aglais_order_239(self, monkeypatch) -> None:
+        # Two answers at the same energy; the chain paid 500000000001 and 500000000000.
+        ranked = [{"solver": "0xA", "energy_milli": -1000}, {"solver": "0xB", "energy_milli": -1000}]
+        receipt = self._top_n(monkeypatch, {"TopNEqual": {"n": 2}}, ranked, reward=UNIT + 1)
+        assert [w["allocation_planck"] for w in receipt.settlement()["winners"]] == [500000000001, 500000000000]
+
+    def test_top_n_weighted_fewer_answers_than_n(self, monkeypatch) -> None:
+        receipt = self._top_n(monkeypatch, {"TopNWeighted": {"n": 5}}, self.RANKED[:2], reward=10, spec_version=119)
+        assert [w["allocation_planck"] for w in receipt.settlement()["winners"]] == [7, 3]
+
+    def test_top_n_weighted_refused_below_119(self, monkeypatch) -> None:
+        receipt = self._top_n(monkeypatch, {"TopNWeighted": {"n": 3}}, self.RANKED)
+        with pytest.raises(NotImplementedError, match="order 1 cannot be computed.*runtime 118"):
             receipt.settlement()
+
+    def test_top_n_unanswered(self, monkeypatch) -> None:
+        receipt = self._top_n(monkeypatch, TOP_N, [], solution_count=0)
+        assert receipt.settlement() == {"claimed": False, "winners": []}
 
 
 OTHER_ACCOUNT = b"\x11" * 32
@@ -887,11 +927,34 @@ class TestJobOrderReceiptDisplay:
         assert f"Status      {status}" in rows
         assert money in rows
 
-    def test_top_n_with_answers_shows_the_unsupported_settlement(self, monkeypatch) -> None:
-        order = _receipt_order(proposer=PROPOSER, resolution=TOP_N)
-        text = str(_display_for(monkeypatch, order=order))
-        assert "QUI-1606" in text
-        assert "│ Reward      " in text.split("╞")[1]
+    TOP_TWO = [{"solver": SOLVER, "energy_milli": -1500}, {"solver": SOLVER, "energy_milli": -500}]
+
+    def test_top_n_equal_rows(self, monkeypatch) -> None:
+        order = _receipt_order(proposer=PROPOSER, resolution={"TopNEqual": {"n": 2}}, status="Closed")
+        rows = _rows(str(_display_for(monkeypatch, order=order, top=self.TOP_TWO)))
+        assert "Payout      top 2, equal split" in rows
+        assert [row for row in rows if row.startswith("Winner")] == [
+            "Winner      2.500000000000 AGLS, claimed",
+            "Winner      2.500000000000 AGLS, claimed",
+        ]
+
+    def test_top_n_weighted_rows(self, monkeypatch) -> None:
+        order = _receipt_order(proposer=PROPOSER, resolution={"TopNWeighted": {"n": 2}})
+        receipt = _display_for(monkeypatch, order=order, top=self.TOP_TWO)
+        receipt._client._limits = replace(receipt._client._limits, spec_version=119)
+        rows = _rows(str(receipt))
+        assert "Payout      top 2, weighted by rank" in rows
+        assert [row for row in rows if row.startswith("Winner")] == [
+            "Winner      3.333333333334 AGLS, awaiting claim",
+            "Winner      1.666666666666 AGLS, awaiting claim",
+        ]
+
+    def test_top_n_weighted_below_119_shows_the_refusal(self, monkeypatch) -> None:
+        order = _receipt_order(proposer=PROPOSER, resolution={"TopNWeighted": {"n": 2}})
+        text = str(_display_for(monkeypatch, order=order, top=self.TOP_TWO))
+        money = text.split("╞")[-1]
+        assert "│ Reward      settlement of order 1 cannot be computed" in money
+        assert "Winner" not in money
         assert {len(line) for line in text.splitlines()} == {72}
 
     def test_missing_fee_reads_unknown_and_warns(self, monkeypatch, caplog) -> None:
@@ -971,7 +1034,12 @@ class TestJobOrderReceiptDisplay:
 class TestDisplayHelpers:
     @pytest.mark.parametrize(
         ("value", "text"),
-        [("SingleBest", "single best"), ("Open", "open"), ({"TopNEqual": {"n": 3}}, "{'TopNEqual': {'n': 3}}")],
+        [
+            ("SingleBest", "single best"),
+            ("Open", "open"),
+            ({"TopNEqual": {"n": 3}}, "{'TopNEqual': {'n': 3}}"),
+            (ResolutionTopNEqual(3), "top 3, equal split"),
+        ],
     )
     def test_variant_text(self, value, text) -> None:
         assert variant_text(value) == text

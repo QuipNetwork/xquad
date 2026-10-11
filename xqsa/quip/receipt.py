@@ -42,13 +42,12 @@ from xqsa.quip.codec import _TERMINAL_STATUSES, ORDER_STATUS_CLOSED
 from xqsa.quip.display import Floors, box, floors_text, terms_rows
 from xqsa.quip.errors import QuipReclaimRefusedError, QuipSubmissionError, QuipTimeoutError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
+from xqsa.quip.resolution import Resolution, check_rank_weighting, from_chain
 
 if TYPE_CHECKING:
     from xqsa.quip.client import SolverQuip
 
 logger = logging.getLogger("xqsa.quip")
-
-_SINGLE_BEST = "SingleBest"
 
 
 @dataclass(frozen=True)
@@ -65,7 +64,7 @@ class _Facts:
     num_couplings: int
     reward: int
     mode: Any
-    resolution: Any
+    resolution: Resolution
     deadline_blocks: int
     block_wait: int
     floors: Floors
@@ -225,31 +224,30 @@ class JobOrderReceipt:
         """Return who the reward goes to and whether it was claimed.
 
         ``{"claimed": bool, "winners": [{"solver", "energy_milli",
-        "allocation_planck"}]}``. A ``SingleBest`` order's front runner takes
-        the whole reward. The chain stores no allocations; it computes them
-        when the winner claims, which closes the order, so ``claimed`` means
-        the order is closed with answers. An unanswered order has no winners.
+        "allocation_planck"}]}``, best first. A ``SingleBest`` order's front
+        runner takes the whole reward; a top-N order's ranked solvers split it
+        by the order's rule, and fewer answers than ``n`` means fewer winners.
+        The chain stores no allocations; it computes them when the reward is
+        claimed, which closes the order and pays every winner at once, so
+        ``claimed`` means the order is closed with answers. The allocations
+        here repeat the chain's arithmetic. An unanswered order has no winners.
 
         Raises:
-            NotImplementedError: for a top-N order, whose split lands with
-                QUI-1606.
+            NotImplementedError: for a ``TopNWeighted`` order read from a
+                runtime older than 119, which weights by absolute energy
+                rather than rank, so its split cannot be repeated here.
         """
         order = self._fetch_order()
-        resolution = _status_str(order["resolution"])
-        if resolution != _SINGLE_BEST:
-            raise NotImplementedError(f"settlement of a {resolution} order is not supported yet (QUI-1606)")
-        leader = chain.front_runner(self._client._iface, self._order_id)
-        winners = (
-            []
-            if leader is None
-            else [
-                {
-                    "solver": leader["solver"],
-                    "energy_milli": int(leader["energy_milli"]),
-                    "allocation_planck": int(order["reward"]),
-                }
-            ]
-        )
+        rule = from_chain(order["resolution"])
+        try:
+            check_rank_weighting(rule, self._client._limits.spec_version)
+        except ValueError as exc:
+            raise NotImplementedError(f"settlement of order {self._order_id} cannot be computed: {exc}") from None
+        ranked = self._ranking()
+        winners = [
+            {"solver": entry["solver"], "energy_milli": int(entry["energy_milli"]), "allocation_planck": share}
+            for entry, share in zip(ranked, rule.payouts(ranked, int(order["reward"])), strict=True)
+        ]
         claimed = _status_str(order["status"]) == ORDER_STATUS_CLOSED and _solution_count(order) > 0
         return {"claimed": claimed, "winners": winners}
 
@@ -352,7 +350,7 @@ class JobOrderReceipt:
             num_couplings=len(params["edges"]),
             reward=int(order["reward"]),
             mode=order["mode"],
-            resolution=order["resolution"],
+            resolution=from_chain(order["resolution"]),
             deadline_blocks=int(timing["deadline_blocks"]),
             block_wait=int(timing["block_wait"]),
             floors=_floors_of(params),
