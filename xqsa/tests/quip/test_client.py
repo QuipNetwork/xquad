@@ -993,6 +993,8 @@ UNIT = 1_000_000_000_000  # 1 AGLS in planck (chain MinReward default).
 DEFAULT_TOPOLOGY_HASH = "0x" + "cb" * 32
 # Stand-in for the chain's genesis block hash, as get_block_hash(0) returns it.
 GENESIS_HASH = "0x" + "9e" * 32
+# aglais's MinerType variants, as register_solver's metadata names them.
+SOLVER_TYPES = ("Cpu", "Gpu", "QpuDwave", "QpuIbm", "QpuIonq", "QpuPasqal", "Asic")
 
 # A topology carrying allowed-value sets, so check_allowed_values has data.
 TOPO_WITH_SETS = Topology.of(
@@ -1088,6 +1090,11 @@ class FakeSubstrate:
     def query(self, module: str, name: str, params: list | None = None, block_hash: str | None = None):
         return _StorageEntry(self.storage.get((module, name)))
 
+    def get_metadata_call_function(self, module: str, name: str):
+        # Only register_solver is introspected, for the solver type names.
+        assert (module, name) == ("QuantumComputeMempool", "register_solver")
+        return types.SimpleNamespace(get_param_info=lambda: {"solver_type": SOLVER_TYPES})
+
     def query_map(self, module: str, name: str, params: list | None = None):
         return list(self.maps.get((module, name), []))
 
@@ -1161,6 +1168,7 @@ def _default_iface(*, with_default_spec_const: bool = False, balance: int | None
         ("QuantumComputeMempool", "MaxDeadlineBlocks"): 1000,
         ("QuantumComputeMempool", "MaxBlockWait"): 100,
         ("QuantumComputeMempool", "MaxSolutions"): 20,
+        ("QuantumComputeMempool", "MaxBidMiners"): 16,
     }
     if with_default_spec_const:
         constants[("QuantumComputeMempool", "DefaultIsingSpecId")] = DEFAULT_ISING_SPEC_ID
@@ -1393,8 +1401,19 @@ class TestSolverQuipConstruction:
 
         solver = _make_solver(monkeypatch)
         assert solver._limits == ChainLimits(
-            min_reward=UNIT, max_deadline_blocks=1000, max_block_wait=100, max_solutions=20, spec_version=118
+            min_reward=UNIT,
+            max_deadline_blocks=1000,
+            max_block_wait=100,
+            max_solutions=20,
+            spec_version=118,
+            max_bid_miners=16,
+            solver_types=SOLVER_TYPES,
         )
+
+    def test_solver_types_unreadable_read_as_none(self, monkeypatch) -> None:
+        iface = _default_iface()
+        iface.get_metadata_call_function = lambda module, name: None  # no such call: None.get_param_info fails.
+        assert _make_solver(monkeypatch, iface=iface)._limits.solver_types is None
 
     def test_spec_version_read_without_an_rpc(self, monkeypatch) -> None:
         iface = _default_iface()

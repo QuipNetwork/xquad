@@ -71,6 +71,7 @@ ORDER_SOLUTIONS_STORAGE = "OrderSolutions"
 ORDER_FRONT_RUNNER_STORAGE = "OrderFrontRunner"
 ORDER_TOP_SOLVERS_STORAGE = "OrderTopSolvers"
 PROPOSER_ORDERS_STORAGE = "ProposerOrders"
+REGISTER_SOLVER_CALL = "register_solver"
 
 # The fee a signed extrinsic paid, emitted in the same phase as its own events.
 TRANSACTION_PAYMENT_PALLET = "TransactionPayment"
@@ -112,6 +113,8 @@ class ChainLimits:
     missing bound is not checked. ``spec_version`` is the runtime's
     ``specVersion`` at client creation, ``None`` when unknown; a client that
     stays connected across a runtime upgrade keeps the old value.
+    ``solver_types`` are the runtime's solver type names, ``None`` when the
+    metadata does not say.
     """
 
     min_reward: int | None
@@ -119,6 +122,8 @@ class ChainLimits:
     max_block_wait: int | None
     max_solutions: int | None
     spec_version: int | None = None
+    max_bid_miners: int | None = None
+    solver_types: tuple[str, ...] | None = None
 
 
 def read_limits(iface: Any) -> ChainLimits:
@@ -141,7 +146,26 @@ def read_limits(iface: Any) -> ChainLimits:
         max_block_wait=read("MaxBlockWait"),
         max_solutions=read("MaxSolutions"),
         spec_version=spec_version,
+        max_bid_miners=read("MaxBidMiners"),
+        solver_types=solver_types(iface),
     )
+
+
+def solver_types(iface: Any) -> tuple[str, ...] | None:
+    """Return the runtime's solver type names (``MinerType``), or ``None`` if the metadata does not say.
+
+    Read from ``register_solver``'s ``solver_type`` argument, which has the
+    same type as a ``JobMode::Bid`` order's ``miner_types`` entries. Used only
+    to name an unknown type before signing, so any failure reads as unknown.
+    """
+    try:
+        call = iface.get_metadata_call_function(MEMPOOL_PALLET, REGISTER_SOLVER_CALL)
+        names = call.get_param_info()["solver_type"]
+    except Exception:  # noqa: BLE001 -- a pre-signing check; the chain still refuses a bad type.
+        return None
+    if not isinstance(names, (tuple, list)) or not all(isinstance(name, str) for name in names):
+        return None
+    return tuple(names)
 
 
 def genesis_hash(iface: Any) -> str:
