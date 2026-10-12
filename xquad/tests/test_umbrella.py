@@ -73,18 +73,20 @@ def test_quip_subpackage_reexports():
     assert sa.quip is quip
 
 
+@pytest.mark.parametrize(("flat", "home"), [(_xqsa, _xqsa_quip), (sa, sa.quip)], ids=["xqsa", "xquad.sa"])
 @pytest.mark.parametrize("name", sorted(FLAT_QUIP_NAMES))
-def test_flat_quip_name_warns_at_caller(name):
-    """A flat `xquad.sa` Quip name warns at the caller's line and is the `xquad.sa.quip` object."""
+def test_flat_quip_name_warns_at_caller(flat, home, name):
+    """A flat Quip name on `xqsa` or `xquad.sa` warns at the caller's line and is the `.quip` object."""
     with pytest.warns(DeprecationWarning) as record:
         line = sys._getframe().f_lineno + 1
-        obj = getattr(sa, name)
-    assert obj is getattr(sa.quip, name)
+        obj = getattr(flat, name)
+    assert obj is getattr(home, name)
     assert [str(w.message) for w in record] == [
-        f"xquad.sa.{name} is deprecated; import it from xquad.sa.quip (removed in v0.5.0)"
+        f"{flat.__name__}.{name} is deprecated; import it from {home.__name__} (removed in v0.5.0)"
     ]
     assert (record[0].filename, record[0].lineno) == (__file__, line)
-    assert name not in sa.__all__
+    assert name not in flat.__all__
+    assert name in dir(flat)
 
 
 def test_top_level_namespace():

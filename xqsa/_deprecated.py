@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import importlib
+import sys
 import warnings
 from collections.abc import Callable
 
@@ -74,3 +75,16 @@ def flat_quip_getattr(flat: str, home: str) -> Callable[[str], object]:
         return getattr(importlib.import_module(home), name)
 
     return __getattr__
+
+
+def flat_quip_dir(flat: str) -> Callable[[], list[str]]:
+    """Return a module ``__dir__`` (PEP 562) that lists the flat Quip names of ``flat`` beside its globals.
+
+    Keeps the deprecated names in REPL and IDE completion for the deprecation window;
+    only access warns.
+    """
+
+    def __dir__() -> list[str]:
+        return sorted(vars(sys.modules[flat]).keys() | FLAT_QUIP_NAMES)
+
+    return __dir__

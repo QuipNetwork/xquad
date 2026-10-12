@@ -28,7 +28,7 @@ from xqsa import (
     SolverResult,
     build_solver,
 )
-from xqsa._deprecated import flat_quip_getattr
+from xqsa._deprecated import flat_quip_dir, flat_quip_getattr
 from xquad.sa import quip as quip
 
 __all__ = [
@@ -45,3 +45,4 @@ __all__ = [
 
 # The Quip names live in xquad.sa.quip; the flat ones warn until v0.5.0 (QUI-1608).
 __getattr__ = flat_quip_getattr(__name__, "xquad.sa.quip")
+__dir__ = flat_quip_dir(__name__)

@@ -23,7 +23,7 @@ optimized samples. The first solver wraps DWave's CPU simulated annealer.
 """
 
 from . import quip as quip
-from ._deprecated import flat_quip_getattr
+from ._deprecated import flat_quip_dir, flat_quip_getattr
 from .cuda_gpu import SolverCudaGPU
 from .dwave_cpu import SolverDWaveCPU
 from .dwave_qpu import SolverDWaveQPU
@@ -45,3 +45,4 @@ __all__ = [
 
 # The Quip names live in xqsa.quip; the flat ones warn until v0.5.0 (QUI-1608).
 __getattr__ = flat_quip_getattr(__name__, "xqsa.quip")
+__dir__ = flat_quip_dir(__name__)
