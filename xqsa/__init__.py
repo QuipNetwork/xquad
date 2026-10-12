@@ -22,39 +22,11 @@ Provides pluggable solvers that take XQMX models and return
 optimized samples. The first solver wraps DWave's CPU simulated annealer.
 """
 
+from ._deprecated import flat_quip_getattr
 from .cuda_gpu import SolverCudaGPU
 from .dwave_cpu import SolverDWaveCPU
 from .dwave_qpu import SolverDWaveQPU
 from .metal_gpu import SolverMetalGPU
-from .quip import (
-    Access,
-    AccessAllow,
-    AccessOpen,
-    EncodingError,
-    JobOrder,
-    JobOrderReceipt,
-    JobQuote,
-    PlacementError,
-    QuipCancelledError,
-    QuipConnectionError,
-    QuipError,
-    QuipFaucetError,
-    QuipJobFailedError,
-    QuipMetadataError,
-    QuipOrderOptionError,
-    QuipReclaimRefusedError,
-    QuipSigningError,
-    QuipSubmissionError,
-    QuipTimeoutError,
-    QuipTopologyError,
-    QuipUnconfirmedError,
-    Resolution,
-    ResolutionSingleBest,
-    ResolutionTopNEqual,
-    ResolutionTopNWeighted,
-    SolverQuip,
-    fund_from_faucet,
-)
 from .registry import DEFAULT_SOLVER, SOLVERS, build_solver
 from .solver import Solver, SolverResult
 
@@ -65,34 +37,10 @@ __all__ = [
     "SolverDWaveCPU",
     "SolverDWaveQPU",
     "SolverMetalGPU",
-    "SolverQuip",
-    "JobOrder",
-    "JobOrderReceipt",
-    "JobQuote",
-    "Access",
-    "AccessAllow",
-    "AccessOpen",
-    "Resolution",
-    "ResolutionSingleBest",
-    "ResolutionTopNEqual",
-    "ResolutionTopNWeighted",
-    "QuipError",
-    "QuipCancelledError",
-    "QuipConnectionError",
-    "QuipMetadataError",
-    "QuipSubmissionError",
-    "QuipOrderOptionError",
-    "QuipReclaimRefusedError",
-    "QuipTimeoutError",
-    "QuipTopologyError",
-    "QuipUnconfirmedError",
-    "QuipJobFailedError",
-    "QuipSigningError",
-    "QuipFaucetError",
-    "PlacementError",
-    "EncodingError",
     "SOLVERS",
     "DEFAULT_SOLVER",
     "build_solver",
-    "fund_from_faucet",
 ]
+
+# The Quip names live in xqsa.quip; the flat ones warn until v0.5.0 (QUI-1608).
+__getattr__ = flat_quip_getattr(__name__, "xqsa.quip")

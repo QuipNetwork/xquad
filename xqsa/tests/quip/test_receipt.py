@@ -26,6 +26,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from xqsa._deprecated import FLAT_QUIP_NAMES
 from xqsa.quip import (
     QuipConnectionError,
     QuipMetadataError,
@@ -1197,7 +1198,31 @@ class TestDeprecations:
         assert not [w for w in recwarn if issubclass(w.category, DeprecationWarning)]
 
     def test_receipt_is_exported(self) -> None:
+        import xqsa.quip
+
+        assert xqsa.quip.JobOrderReceipt is JobOrderReceipt
+
+    @pytest.mark.parametrize("name", sorted(FLAT_QUIP_NAMES))
+    def test_flat_name_warns_at_caller(self, name) -> None:
+        import sys
+
         import xqsa
         import xqsa.quip
 
-        assert xqsa.JobOrderReceipt is xqsa.quip.JobOrderReceipt is JobOrderReceipt
+        with pytest.warns(DeprecationWarning) as record:
+            line = sys._getframe().f_lineno + 1
+            obj = getattr(xqsa, name)
+        assert obj is getattr(xqsa.quip, name)
+        assert [str(w.message) for w in record] == [
+            f"xqsa.{name} is deprecated; import it from xqsa.quip (removed in v0.5.0)"
+        ]
+        assert (record[0].filename, record[0].lineno) == (__file__, line)
+
+    def test_flat_names_left_all(self, recwarn) -> None:
+        import xqsa
+
+        assert not FLAT_QUIP_NAMES & set(xqsa.__all__)
+        exec("from xqsa import *", {})
+        assert not [w for w in recwarn if issubclass(w.category, DeprecationWarning)]
+        with pytest.raises(AttributeError, match="no attribute 'Missing'"):
+            _ = xqsa.Missing
