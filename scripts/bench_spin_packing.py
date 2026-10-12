@@ -16,7 +16,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-QUI-704 benchmark: dense int32 vs bit-packed spin storage for SolverCudaGPU.
+QUI-704 benchmark: dense int32 vs bit-packed spin storage for SolverGPU(engine="cuda").
 
 Runs the shipped solver and a bench-local bit-packed variant of the same
 CUDA kernel on identical seeded instances with an identical RNG stream and
@@ -43,7 +43,7 @@ from typing import Any
 import numpy as np
 
 from xqffi.vm import XqmxModel
-from xqsa.cuda_gpu import SolverCudaGPU
+from xqsa import SolverGPU
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -60,7 +60,7 @@ def build_instance(n: int, seed: int) -> tuple[XqmxModel, np.ndarray, np.ndarray
     """Seeded spin instance: each node couples to its next COUPLINGS_PER_NODE
     neighbours with random +/-1. Returns the XqmxModel (for the stock solver) and
     the matching dense (h, J) arrays (for the packed prototype). J is stored
-    symmetric-full, mirroring the layout SolverCudaGPU builds internally —
+    symmetric-full, mirroring the layout SolverGPU(engine="cuda") builds internally —
     verified end-to-end by Task 2's exact-trajectory check."""
     rng = random.Random(seed)
     model = XqmxModel.spin(n)
@@ -83,11 +83,11 @@ def _mempool_peak(cupy) -> int:
 
 
 def run_stock(model: XqmxModel, n: int) -> dict:
-    """Run the shipped SolverCudaGPU REPS times; record wall times, the
+    """Run the shipped SolverGPU(engine="cuda") REPS times; record wall times, the
     (deterministic) best energy/sample, and the mempool peak."""
     import cupy
 
-    solver = SolverCudaGPU(num_reads=NUM_READS, num_sweeps=NUM_SWEEPS, beta_range=BETA_RANGE, seed=SEED)
+    solver = SolverGPU(engine="cuda", num_reads=NUM_READS, num_sweeps=NUM_SWEEPS, beta_range=BETA_RANGE, seed=SEED)
     cupy.get_default_memory_pool().free_all_blocks()
     walls: list[float] = []
     result = None

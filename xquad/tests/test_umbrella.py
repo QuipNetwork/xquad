@@ -49,9 +49,9 @@ def test_identity_reexports():
     """xquad re-exports the identical symbols from the peer packages."""
     assert cp.Problem is _xqcp.Problem
     assert cp.Types is _xqcp.Types
-    assert sa.SolverDWaveCPU is _xqsa.SolverDWaveCPU
-    assert sa.SolverCudaGPU is _xqsa.SolverCudaGPU
-    assert sa.SolverMetalGPU is _xqsa.SolverMetalGPU
+    assert sa.SolverCPU is _xqsa.SolverCPU
+    assert sa.SolverGPU is _xqsa.SolverGPU
+    assert sa.SolverDWave is _xqsa.SolverDWave
     assert sa.Solver is _xqsa.Solver
     assert sa.SolverResult is _xqsa.SolverResult
     for name in types.__all__:

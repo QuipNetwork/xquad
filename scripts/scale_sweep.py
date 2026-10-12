@@ -49,8 +49,8 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-CPU_SOLVER = "dwave-cpu"
-GPU_SOLVER = "cuda-gpu"
+CPU_SOLVER = "cpu"
+GPU_SOLVER = "cuda"
 SEEDS = (42, 43, 44)
 
 
@@ -451,7 +451,7 @@ def render_report(records: list[dict]) -> str:
     if deltas:
         lines += [
             "",
-            "## Energy delta: cuda-gpu minus dwave-cpu (negative = GPU better)",
+            "## Energy delta: cuda minus cpu (negative = GPU better)",
             "",
             "| problem | n | seed | delta |",
             "|---|---|---|---|",
@@ -474,7 +474,7 @@ def _orchestrate(args: argparse.Namespace) -> int:
     if cuda_available():
         solvers.append(GPU_SOLVER)
     else:
-        print("skip cuda-gpu lanes: no cupy / CUDA device")
+        print("skip cuda lanes: no cupy / CUDA device")
     lanes = build_matrix(adapters, solvers, args.smoke)
     seeds = SEEDS[:1] if args.smoke else SEEDS
 

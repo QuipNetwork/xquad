@@ -18,7 +18,7 @@
 """
 Solver registry and factory for selecting an XQSA backend by name.
 
-Maps short, CLI-friendly names to solver classes so example runners and the
+Maps short, CLI-friendly names to solver factories so example runners and the
 smoke harness can pick a backend with a single ``--solver`` flag instead of
 hard-coding a class. Importing the classes is cheap and dependency-free; the
 optional deps (cupy, Metal, dwave-system, substrate-interface/quip_signer) are
@@ -33,38 +33,39 @@ plus a signer; see :mod:`xqsa.quip`), takes no RNG ``seed``, and requires the
 
 from __future__ import annotations
 
-from xqsa.cuda_gpu import SolverCudaGPU
-from xqsa.dwave_cpu import SolverDWaveCPU
-from xqsa.dwave_qpu import SolverDWaveQPU
-from xqsa.metal_gpu import SolverMetalGPU
+from collections.abc import Callable
+from functools import partial
+
 from xqsa.quip import SolverQuip
 from xqsa.solver import Solver
+from xqsa.solvers import SolverCPU, SolverDWave, SolverGPU
 
-# CLI name -> solver class. ``dwave-cpu`` is the default everywhere: it needs
-# no extra deps or hardware, so it is the reproducible baseline against which
-# the hardware backends are compared. ``quip`` is env-driven (no seed); see the
-# module docstring.
-SOLVERS: dict[str, type[Solver]] = {
-    "dwave-cpu": SolverDWaveCPU,
-    "dwave-qpu": SolverDWaveQPU,
-    "cuda-gpu": SolverCudaGPU,
-    "metal-gpu": SolverMetalGPU,
+# CLI name -> solver factory. ``cpu`` is the default everywhere: it needs no
+# extra deps or hardware, so it is the reproducible baseline against which
+# the hardware backends are compared. ``cuda`` and ``metal`` both build
+# :class:`SolverGPU`. ``quip`` is env-driven (no seed); see the module
+# docstring.
+SOLVERS: dict[str, Callable[..., Solver]] = {
+    "cpu": SolverCPU,
+    "cuda": partial(SolverGPU, engine="cuda"),
+    "metal": partial(SolverGPU, engine="metal"),
+    "dwave": SolverDWave,
     "quip": SolverQuip,
 }
 
-DEFAULT_SOLVER = "dwave-cpu"
+DEFAULT_SOLVER = "cpu"
 
 # Solvers whose constructor accepts a `seed`. The classical SA family is
 # seedable for reproducibility; the D-Wave QPU is physical hardware with no
 # seed, so it is deliberately excluded.
-_SEEDED: frozenset[str] = frozenset({"dwave-cpu", "cuda-gpu", "metal-gpu"})
+_SEEDED: frozenset[str] = frozenset({"cpu", "cuda", "metal"})
 
 
 def build_solver(name: str, *, seed: int | None = None) -> Solver:
     """Construct a solver by registry name.
 
     Args:
-        name: A key in :data:`SOLVERS` (e.g. ``"dwave-cpu"``, ``"cuda-gpu"``).
+        name: A key in :data:`SOLVERS` (e.g. ``"cpu"``, ``"cuda"``).
         seed: Seed for reproducibility, forwarded only to solvers whose
             constructor accepts it. The D-Wave QPU is physical hardware and
             takes no seed; ``quip`` is env-configured and takes no seed -- both
@@ -81,9 +82,9 @@ def build_solver(name: str, *, seed: int | None = None) -> Solver:
     """
     if name not in SOLVERS:
         raise ValueError(f"Unknown solver {name!r}. Choose one of: {', '.join(sorted(SOLVERS))}.")
-    cls = SOLVERS[name]
-    if name in ("cuda-gpu", "metal-gpu"):
-        return cls(num_reads=200, num_sweeps=2000, seed=seed)
+    factory = SOLVERS[name]
+    if name in ("cuda", "metal"):
+        return factory(num_reads=200, num_sweeps=2000, seed=seed)
     if name in _SEEDED:
-        return cls(seed=seed)
-    return cls()
+        return factory(seed=seed)
+    return factory()

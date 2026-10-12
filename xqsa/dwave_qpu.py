@@ -16,11 +16,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-D-Wave Advantage QPU solver.
+In-process D-Wave Advantage QPU implementation.
 
 Submits XQMX quadratic models to a D-Wave Advantage QPU via the D-Wave Leap
 cloud API. Uses EmbeddingComposite for automatic minor embedding onto the
-Pegasus qubit topology.
+Pegasus qubit topology. :class:`xqsa.SolverDWave` runs it.
 
 Requires the optional ``dwave`` extra::
 
@@ -33,42 +33,29 @@ Credentials are resolved from constructor arguments first, then from the
 from __future__ import annotations
 
 import os
-import time
 from typing import Any
 
 from xqffi.vm import XqmxModel
 
-from .solver import Solver, SolverResult
+from .solver import Implementation, RunOutput, model_to_bqm, sample_to_xqmx
+
+# Ocean sampling parameters forwarded to ``sampler.sample`` when set. Anything
+# else is rejected rather than passed through unchecked.
+_OCEAN_PARAMS = ("chain_strength", "auto_scale")
 
 
-class SolverDWaveQPU(Solver):
-    """D-Wave Advantage QPU solver via D-Wave Leap cloud API.
+class InProcessDWave(Implementation):
+    """D-Wave Advantage QPU sampling via D-Wave Leap cloud API.
 
     Wraps ``dwave.system.DWaveSampler`` with ``EmbeddingComposite`` to handle
     automatic minor embedding onto the physical Pegasus qubit topology.
-
-    Examples:
-
-    ```python
-    import os
-    os.environ["DWAVE_API_TOKEN"] = "your-leap-token"
-
-    from xqsa import SolverDWaveQPU
-    from xquad.types import XqmxModel
-
-    model = XqmxModel.binary(4)
-    model.set_linear(0, -1)
-    model.set_quad(0, 1, 2)
-
-    solver = SolverDWaveQPU()
-    result = solver.solve(model)
-    print(result.energy, result.metadata["qpu_timing"])
-    ```
 
     Raises:
         ImportError: if ``dwave-system`` is not installed.
         ValueError: if no API token is available.
     """
+
+    accepts = frozenset({"num_reads", "annealing_time", *_OCEAN_PARAMS})
 
     def __init__(
         self,
@@ -77,6 +64,8 @@ class SolverDWaveQPU(Solver):
         solver: str | None = None,
         num_reads: int = 100,
         annealing_time: int = 20,
+        chain_strength: float | None = None,
+        auto_scale: bool | None = None,
     ) -> None:
         try:
             import dwave.system as _dwave_system
@@ -91,6 +80,8 @@ class SolverDWaveQPU(Solver):
 
         self.num_reads = num_reads
         self.annealing_time = annealing_time
+        self.chain_strength = chain_strength
+        self.auto_scale = auto_scale
 
         solver_filter: str | dict[str, str] = solver if solver is not None else {"topology__type": "pegasus"}
 
@@ -105,44 +96,31 @@ class SolverDWaveQPU(Solver):
         self._sampler = _dwave_system.EmbeddingComposite(raw)
         self._solver_name: str = raw.solver.id
 
-    def solve(self, model: XqmxModel, **kwargs: Any) -> SolverResult:
-        """Solve using D-Wave Advantage QPU via EmbeddingComposite.
+    def run(self, model: XqmxModel, **kwargs: Any) -> RunOutput:
+        """Sample on the D-Wave Advantage QPU via EmbeddingComposite."""
+        num_reads = kwargs.get("num_reads", self.num_reads)
+        annealing_time = kwargs.get("annealing_time", self.annealing_time)
+        ocean = {key: value for key in _OCEAN_PARAMS if (value := kwargs.get(key, getattr(self, key))) is not None}
 
-        Raises:
-            ValueError: if the model is not in BINARY or SPIN domain.
-        """
-        self._validate_model(model)
-
-        num_reads = kwargs.pop("num_reads", self.num_reads)
-        annealing_time = kwargs.pop("annealing_time", self.annealing_time)
-
-        bqm = self._model_to_bqm(model)
-
-        t0 = time.perf_counter()
         result = self._sampler.sample(
-            bqm,
+            model_to_bqm(model),
             num_reads=num_reads,
             annealing_time=annealing_time,
-            **kwargs,
+            **ocean,
         )
-        elapsed = time.perf_counter() - t0
-
         best = result.first
-        sample = self._sample_to_xqmx(model, dict(best.sample))
-
         qpu_timing: dict[str, Any] | None = result.info.get("timing") if hasattr(result, "info") else None
 
-        return SolverResult(
-            sample=sample,
-            energy=self._recompute_energy(model, sample),
-            timing=elapsed,
-            metadata={
-                "reads": num_reads,
+        return RunOutput(
+            sample=sample_to_xqmx(model, dict(best.sample)),
+            seed=None,
+            reads=num_reads,
+            params={
+                "mode": "qpu",
                 "solver": self._solver_name,
                 "qpu_timing": qpu_timing,
-                "params": {
-                    "annealing_time": annealing_time,
-                    "raw_energy": float(best.energy),
-                },
+                "annealing_time": annealing_time,
+                **ocean,
+                "raw_energy": float(best.energy),
             },
         )

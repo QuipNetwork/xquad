@@ -225,7 +225,7 @@ hardware:qpu:
         # not a new failure mode, only an earlier and clearer one: with no
         # token this job was already red, because test_qpu_live.py's
         # skip_no_token deliberately does not skip when CI is set, so every
-        # test ran and died constructing SolverDWaveQPU. The probe replaces a
+        # test ran and died constructing SolverDWave. The probe replaces a
         # D-Wave client traceback with one line.
         #
         # No before_script: `extends: .hardware` supplies exactly the uv

@@ -21,10 +21,9 @@ from xqsa import (
     DEFAULT_SOLVER,
     SOLVERS,
     Solver,
-    SolverCudaGPU,
-    SolverDWaveCPU,
-    SolverDWaveQPU,
-    SolverMetalGPU,
+    SolverCPU,
+    SolverDWave,
+    SolverGPU,
     SolverResult,
     build_solver,
 )
@@ -33,10 +32,9 @@ from xquad.sa import quip as quip
 
 __all__ = [
     "Solver",
-    "SolverCudaGPU",
-    "SolverDWaveCPU",
-    "SolverDWaveQPU",
-    "SolverMetalGPU",
+    "SolverCPU",
+    "SolverDWave",
+    "SolverGPU",
     "SolverResult",
     "SOLVERS",
     "DEFAULT_SOLVER",

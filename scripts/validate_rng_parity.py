@@ -15,7 +15,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""QUI-705 RNG-swap validation: energy-distribution parity for SolverCudaGPU.
+"""QUI-705 RNG-swap validation: energy-distribution parity for SolverGPU(engine="cuda").
 
 Swapping the acceptance RNG (pre-generated float64 buffer -> on-device
 xorshift64) changes the sampling stream, so trajectories cannot match
@@ -56,7 +56,7 @@ from _scriptio import (  # noqa: E402
     require_key,
     require_mapping,
 )
-from xqsa.cuda_gpu import SolverCudaGPU  # noqa: E402
+from xqsa import SolverGPU  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -87,7 +87,8 @@ def run(out_path: Path, smoke: bool) -> int:
             model, _h, _j = build_instance(n, iseed)
             energies = [
                 float(
-                    SolverCudaGPU(
+                    SolverGPU(
+                        engine="cuda",
                         num_reads=NUM_READS,
                         num_sweeps=NUM_SWEEPS,
                         beta_range=BETA_RANGE,

@@ -16,17 +16,18 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Metal GPU solver for XQMX quadratic models.
+In-process Metal GPU implementation for XQMX quadratic models.
 
-Custom Metal compute shaders for simulated annealing (``strategy="sa"``)
-and block Gibbs sampling (``strategy="gibbs"``) on Apple Silicon GPUs.
-macOS-only; bypasses the D-Wave SDK entirely.
+Custom Metal compute shaders for simulated annealing (``algorithm="sa"``)
+and block Gibbs sampling (``algorithm="gibbs"``) on Apple Silicon GPUs.
+macOS-only; bypasses the D-Wave SDK entirely. Run through
+:class:`xqsa.SolverGPU` with ``engine="metal"``.
 
 The kernels are adapted from the quip-protocol ``MetalMiner``
 (``GPU/metal_kernels.metal``, ``GPU/metal_gibbs.metal``), simplified for
 XQMX models: float32 coefficients, dense topology, single-model dispatch.
 
-This solver intentionally mirrors :class:`xqsa.cuda_gpu.SolverCudaGPU`. Two
+This implementation intentionally mirrors :class:`xqsa.cuda_gpu.InProcessCuda`. Two
 deliberate divergences from the protocol simplify the port and match the
 CUDA solver's representation:
 
@@ -45,20 +46,26 @@ Requires the optional ``metal`` extra::
 from __future__ import annotations
 
 import functools
-import time
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from xqffi.vm import Domain, XqmxModel
 
-from .solver import Solver, SolverResult
+from .solver import (
+    Implementation,
+    RunOutput,
+    _check_algorithm,
+    _check_anneal_params,
+    _check_beta_schedule,
+    sample_to_xqmx,
+)
 
 if TYPE_CHECKING:
     import numpy.typing as npt
 
-_SUPPORTED_STRATEGIES = frozenset({"sa", "gibbs"})
-_SUPPORTED_SCHEDULES = frozenset({"geometric", "linear"})
+_SUPPORTED_ALGORITHMS = frozenset({"sa", "gibbs"})
+
 
 # Threadgroup width for the sa pipeline's cooperative local-field reduction
 # (QUI-852). Clamped at dispatch to the largest power of two that the
@@ -254,15 +261,15 @@ def _error_text(error: Any) -> str:
     return str(described()) if callable(described) else str(error)
 
 
-class SolverMetalGPU(Solver):
-    """Simulated annealing / Gibbs solver using custom Metal shaders.
+class InProcessMetal(Implementation):
+    """Simulated annealing / Gibbs sampling using custom Metal shaders.
 
     Runs parallel-replica sampling on an Apple Silicon GPU. Each replica
     (controlled by ``num_reads``) executes independently in its own
     threadgroup. Within a threadgroup, ``_SA_THREADGROUP_WIDTH`` threads
     cooperate on the local-field reduction while spin updates remain
     sequential (QUI-852); the gibbs pipeline is out of scope and stays
-    single-threaded per replica. ``strategy`` selects the kernel:
+    single-threaded per replica. ``algorithm`` selects the kernel:
 
     * ``"sa"`` -- simulated annealing with Metropolis acceptance.
     * ``"gibbs"`` -- block Gibbs sampling over a greedy graph colouring.
@@ -273,33 +280,20 @@ class SolverMetalGPU(Solver):
     (``num_sweeps`` must be divisible by it). The default of 1 keeps one beta
     per sweep, bit-identical to the previous behaviour. A single temperature
     level (``num_sweeps_per_beta == num_sweeps``) runs a cold greedy quench at
-    ``beta_range[-1]``, matching ``SolverDWaveCPU``; the GPU backends align on
+    ``beta_range[-1]``, matching ``InProcessCPU``; the GPU backends align on
     this in QUI-854.
-
-    Examples:
-
-    ```python
-    from xqsa import SolverMetalGPU
-    from xquad.types import XqmxModel
-
-    model = XqmxModel.binary(4)
-    model.set_linear(0, -1)
-    model.set_quad(0, 1, 2)
-
-    solver = SolverMetalGPU(strategy="sa")
-    result = solver.solve(model)
-    print(result.energy, result.timing)
-    ```
 
     Raises:
         ImportError: if ``pyobjc-framework-Metal`` is not installed.
         RuntimeError: if no Metal GPU is detected.
-        ValueError: if ``strategy`` or ``beta_schedule_type`` is unsupported.
+        ValueError: if ``algorithm`` or ``beta_schedule_type`` is unsupported.
     """
+
+    accepts = frozenset({"num_reads", "num_sweeps", "num_sweeps_per_beta", "beta_range", "beta_schedule_type", "seed"})
 
     def __init__(
         self,
-        strategy: str = "sa",
+        algorithm: str = "sa",
         num_reads: int = 100,
         num_sweeps: int = 1000,
         num_sweeps_per_beta: int = 1,
@@ -307,6 +301,9 @@ class SolverMetalGPU(Solver):
         beta_schedule_type: str = "geometric",
         seed: int | None = None,
     ) -> None:
+        _check_algorithm(algorithm, _SUPPORTED_ALGORITHMS, "the Metal engine")
+        _check_beta_schedule(beta_schedule_type)
+
         try:
             import Metal as _metal
         except ImportError as exc:
@@ -314,18 +311,11 @@ class SolverMetalGPU(Solver):
 
         device = _metal.MTLCreateSystemDefaultDevice()
         if device is None:
-            raise RuntimeError("No Metal GPU detected. SolverMetalGPU requires a Mac with an Apple Metal GPU.")
-
-        if strategy not in _SUPPORTED_STRATEGIES:
-            raise ValueError(f"Unsupported strategy {strategy!r}. Supported: {sorted(_SUPPORTED_STRATEGIES)}")
-        if beta_schedule_type not in _SUPPORTED_SCHEDULES:
-            raise ValueError(
-                f"Unsupported beta_schedule_type {beta_schedule_type!r}. Supported: {sorted(_SUPPORTED_SCHEDULES)}"
-            )
+            raise RuntimeError("No Metal GPU detected. The Metal engine requires a Mac with an Apple Metal GPU.")
 
         self._metal = _metal
         self._device = device
-        self.strategy = strategy
+        self.algorithm = algorithm
         self.num_reads = num_reads
         self.num_sweeps = num_sweeps
         self.num_sweeps_per_beta = num_sweeps_per_beta
@@ -360,16 +350,12 @@ class SolverMetalGPU(Solver):
 
     # -- public API -------------------------------------------------------
 
-    def solve(self, model: XqmxModel, **kwargs: Any) -> SolverResult:
-        """Solve using parallel-replica SA or Gibbs sampling on the GPU.
+    def run(self, model: XqmxModel, **kwargs: Any) -> RunOutput:
+        """Sample using parallel-replica SA or Gibbs sampling on the GPU.
 
         Raises:
-            ValueError: if the model is not in BINARY or SPIN domain, or if
-                parameter values are invalid.
+            ValueError: if parameter values are invalid.
         """
-        self._validate_model(model)
-
-        strategy = kwargs.get("strategy", self.strategy)
         num_reads = kwargs.get("num_reads", self.num_reads)
         num_sweeps = kwargs.get("num_sweeps", self.num_sweeps)
         num_sweeps_per_beta = kwargs.get("num_sweeps_per_beta", self.num_sweeps_per_beta)
@@ -377,25 +363,8 @@ class SolverMetalGPU(Solver):
         beta_schedule_type = kwargs.get("beta_schedule_type", self.beta_schedule_type)
         seed = kwargs.get("seed", self.seed)
 
-        if strategy not in _SUPPORTED_STRATEGIES:
-            raise ValueError(f"Unsupported strategy {strategy!r}. Supported: {sorted(_SUPPORTED_STRATEGIES)}")
-        if beta_schedule_type not in _SUPPORTED_SCHEDULES:
-            raise ValueError(
-                f"Unsupported beta_schedule_type {beta_schedule_type!r}. Supported: {sorted(_SUPPORTED_SCHEDULES)}"
-            )
-        if num_reads < 1:
-            raise ValueError(f"num_reads must be >= 1, got {num_reads}")
-        if num_sweeps < 1:
-            raise ValueError(f"num_sweeps must be >= 1, got {num_sweeps}")
-        if not isinstance(num_sweeps_per_beta, int):
-            raise ValueError(f"num_sweeps_per_beta must be an int, got {type(num_sweeps_per_beta).__name__}")
-        if num_sweeps_per_beta < 1:
-            raise ValueError(f"num_sweeps_per_beta must be >= 1, got {num_sweeps_per_beta}")
-        num_betas, rem = divmod(num_sweeps, num_sweeps_per_beta)
-        if rem != 0:
-            raise ValueError(
-                f"num_sweeps ({num_sweeps}) must be divisible by num_sweeps_per_beta ({num_sweeps_per_beta})"
-            )
+        _check_beta_schedule(beta_schedule_type)
+        num_betas = _check_anneal_params(num_reads, num_sweeps, num_sweeps_per_beta)
 
         h, j_matrix = self._to_dense_arrays(model)
         if beta_range is None:
@@ -408,8 +377,7 @@ class SolverMetalGPU(Solver):
         rng = np.random.default_rng(seed)
         samples = self._init_samples(rng, num_reads, model.size, is_spin)
 
-        t0 = time.perf_counter()
-        if strategy == "sa":
+        if self.algorithm == "sa":
             best_sample_dict, raw_energy = self._run_sa(
                 model, h, j_matrix, beta_schedule, samples, num_sweeps, base_seed, is_spin
             )
@@ -417,26 +385,20 @@ class SolverMetalGPU(Solver):
             best_sample_dict, raw_energy = self._run_gibbs(
                 model, h, j_matrix, beta_schedule, samples, num_sweeps, base_seed, is_spin
             )
-        elapsed = time.perf_counter() - t0
 
-        sample = self._sample_to_xqmx(model, best_sample_dict)
-
-        return SolverResult(
-            sample=sample,
-            energy=self._recompute_energy(model, sample),
-            timing=elapsed,
-            metadata={
-                "seed": seed,
-                "reads": num_reads,
-                "params": {
-                    "strategy": strategy,
-                    "num_sweeps": num_sweeps,
-                    "num_sweeps_per_beta": num_sweeps_per_beta,
-                    "num_betas": num_betas,
-                    "beta_range": beta_range,
-                    "beta_schedule_type": beta_schedule_type,
-                    "raw_energy": raw_energy,
-                },
+        return RunOutput(
+            sample=sample_to_xqmx(model, best_sample_dict),
+            seed=seed,
+            reads=num_reads,
+            params={
+                "algorithm": self.algorithm,
+                "engine": "metal",
+                "num_sweeps": num_sweeps,
+                "num_sweeps_per_beta": num_sweeps_per_beta,
+                "num_betas": num_betas,
+                "beta_range": beta_range,
+                "beta_schedule_type": beta_schedule_type,
+                "raw_energy": raw_energy,
             },
         )
 
@@ -600,7 +562,7 @@ class SolverMetalGPU(Solver):
         if command_buffer.status() == self._metal.MTLCommandBufferStatusError:
             raise RuntimeError(f"Metal command buffer failed: {_error_text(command_buffer.error())}")
 
-    # -- strategy dispatch ------------------------------------------------
+    # -- algorithm dispatch -----------------------------------------------
 
     def _run_sa(
         self,
