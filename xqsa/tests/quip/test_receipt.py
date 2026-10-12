@@ -563,6 +563,20 @@ class TestJobOrderReceiptSettlement:
         receipt = self._top_n(monkeypatch, TOP_N, [], solution_count=0)
         assert receipt.settlement() == {"claimed": False, "winners": []}
 
+    def test_top_n_pays_at_most_n(self, monkeypatch) -> None:
+        receipt = self._top_n(monkeypatch, {"TopNEqual": {"n": 2}}, self.RANKED, reward=10, status="Closed")
+        assert [w["solver"] for w in receipt.settlement()["winners"]] == ["0xC", "0xA"]
+
+    def test_single_best_reads_only_the_front_runner(self, monkeypatch) -> None:
+        receipt = self._top_n(monkeypatch, "SingleBest", self.RANKED, status="Closed")
+        assert receipt.settlement()["winners"] == []
+
+    @pytest.mark.parametrize("raw", [{"TopNEqual": 2}, {"FutureRule": {"k": 1}}])
+    def test_unknown_rule_not_implemented(self, monkeypatch, raw) -> None:
+        receipt = self._top_n(monkeypatch, raw, self.RANKED, status="Closed")
+        with pytest.raises(NotImplementedError, match="order 1 cannot be computed.*unknown RewardResolution"):
+            receipt.settlement()
+
 
 OTHER_ACCOUNT = b"\x11" * 32
 BLOCK_TIME = ("Babe", "ExpectedBlockTime")
@@ -956,6 +970,31 @@ class TestJobOrderReceiptDisplay:
         assert "│ Reward      settlement of order 1 cannot be computed" in money
         assert "Winner" not in money
         assert {len(line) for line in text.splitlines()} == {72}
+
+    def test_unknown_rule_renders_raw(self, monkeypatch) -> None:
+        order = _receipt_order(proposer=PROPOSER, resolution={"TopNEqual": 2}, status="Closed")
+        text = str(_display_for(monkeypatch, order=order, top=self.TOP_TWO))
+        assert "could not be read" not in text
+        assert "Payout      {'TopNEqual': 2}" in _rows(text)
+        assert "│ Reward      settlement of order 1 cannot be computed" in text.split("╞")[-1]
+
+    def test_render_reads_the_order_and_ranking_once(self, monkeypatch) -> None:
+        order = _receipt_order(proposer=PROPOSER, resolution={"TopNEqual": {"n": 2}}, status="Closed")
+        receipt = _display_for(monkeypatch, order=order, top=self.TOP_TWO)
+        iface = receipt._client._iface
+        reads: list[str] = []
+        query = iface.query
+
+        def counting(module, name, params=None, block_hash=None):
+            reads.append(name)
+            return query(module, name, params, block_hash)
+
+        monkeypatch.setattr(iface, "query", counting)
+        assert "Winner" in str(receipt)
+        assert [name for name in reads if name in {"JobOrders", "OrderFrontRunner", "OrderTopSolvers"}] == [
+            "JobOrders",
+            "OrderTopSolvers",
+        ]
 
     def test_missing_fee_reads_unknown_and_warns(self, monkeypatch, caplog) -> None:
         receipt = _display_for(monkeypatch, fee=None)

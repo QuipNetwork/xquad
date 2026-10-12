@@ -2298,6 +2298,7 @@ def _order(
     return {
         "proposer": proposer,
         "reward": reward,
+        "resolution": "SingleBest",
         "status": status,
         "created_at": created_at,
         "first_solution_at": first_solution_at,
