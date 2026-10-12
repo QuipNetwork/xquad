@@ -18,4 +18,6 @@
 """`xquad.sa.quip` -- re-export of `xqsa.quip` (the Quip Network solver and its job orders)."""
 
 from xqsa.quip import *  # noqa: F403
-from xqsa.quip import __all__  # noqa: F401
+from xqsa.quip import __all__ as _xqsa_quip_all
+
+__all__ = list(_xqsa_quip_all)

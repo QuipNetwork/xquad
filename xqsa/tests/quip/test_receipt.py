@@ -1222,6 +1222,7 @@ class TestDeprecations:
         import xqsa
 
         assert not FLAT_QUIP_NAMES & set(xqsa.__all__)
+        assert "quip" in vars(xqsa)
         exec("from xqsa import *", {})
         assert not [w for w in recwarn if issubclass(w.category, DeprecationWarning)]
         with pytest.raises(AttributeError, match="no attribute 'Missing'"):
