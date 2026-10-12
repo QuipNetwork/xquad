@@ -54,7 +54,7 @@ model = vm.outputs()[0]
 ```
 
 `model.size` comes back `10`: six item variables plus four slack bits,
-`S = floor(log2(12)) + 1 = 4`. Solving with `SolverDWaveCPU` and decoding:
+`S = floor(log2(12)) + 1 = 4`. Solving with `SolverCPU` and decoding:
 
 ```text
 selection [0, 0, 0, 1, 0, 1] weight 12 capacity 12 feasible True value 18 energy -14418

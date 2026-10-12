@@ -69,7 +69,7 @@ def run_case(sigma):
     vm.set_output_slots(1)
     vm.run(programs.encoder)
     model = vm.outputs()[0]
-    result = build_solver("dwave-cpu", seed=42).solve(model, num_reads=200)
+    result = build_solver("cpu", seed=42).solve(model, num_reads=200)
     ...  # decode via programs.decoder and print, as below
 ```
 

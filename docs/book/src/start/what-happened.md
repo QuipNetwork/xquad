@@ -17,7 +17,7 @@ pipeline, if a picture is what you want first.
    [step by step](../concepts/three-programs.md#a-concrete-run).
 2. **The encoder ran and built a model.** [Quadratic Models](../concepts/quadratic-models.md)
    covers the Hamiltonian it built, specialised to this graph's weights.
-3. **A solver minimised it.** `dwave-cpu`, the default backend, ran
+3. **A solver minimised it.** `cpu`, the default backend, ran
    simulated annealing over the model and returned a sample.
    [Backends](../concepts/backends.md) covers the other four solvers this
    same model could have gone to instead, unchanged.

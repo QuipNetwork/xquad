@@ -194,7 +194,7 @@ both at `H = -107`. `penalty = 1` is the exact boundary the table predicts,
 not an approximation of it.
 
 A tie at the boundary is not a tie a sampler breaks the same way every
-seed. Sampling this exact model at `penalty = 1` with `SolverDWaveCPU`
+seed. Sampling this exact model at `penalty = 1` with `SolverCPU`
 (200 reads) across eight seeds returns the infeasible
 `{0, 2}` on two of the eight, at the identical energy, `-58`, as every
 feasible seed; the other six split across the two feasible ties. A single

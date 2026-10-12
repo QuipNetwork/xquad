@@ -37,7 +37,7 @@ $ uv run python examples/maxcut/runner.py --seed 42
 ```
 
 No flags beyond `--seed` are required: `--n` defaults to `5`, and
-`--solver` defaults to `dwave-cpu`, the baseline that needs no hardware or
+`--solver` defaults to `cpu`, the baseline that needs no hardware or
 credentials.
 
 ## Reading the Result

@@ -50,7 +50,7 @@ uv run python examples/bin_packing/runner.py --n 5 --bins 4
 |------|---------|-------------|
 | `--n` | `4` | Number of items |
 | `--bins` | `3` | Number of bins |
-| `--solver` | `dwave-cpu` | Solver backend (see Choosing a solver) |
+| `--solver` | `cpu` | Solver backend (see Choosing a solver) |
 | `--seed` | `42` | Random seed |
 | `-o` | stdout | Write JSON result to file |
 
@@ -58,10 +58,10 @@ uv run python examples/bin_packing/runner.py --n 5 --bins 4
 
 | Name | Hardware | Install |
 |------|----------|---------|
-| `dwave-cpu` | CPU (default) | `pip install xquad` |
-| `dwave-qpu` | D-Wave Leap account | `pip install xquad[dwave]` |
-| `cuda-gpu` | NVIDIA CUDA GPU | `pip install xquad[cuda]` |
-| `metal-gpu` | Apple Silicon (macOS) | `pip install xquad[metal]` |
+| `cpu` | CPU (default) | `pip install xquad` |
+| `dwave` | D-Wave Leap account | `pip install xquad[dwave]` |
+| `cuda` | NVIDIA CUDA GPU | `pip install xquad[cuda]` |
+| `metal` | Apple Silicon (macOS) | `pip install xquad[metal]` |
 | `quip` | Quip Network (remote miner, env-configured) | `pip install xqsa[quip]` |
 
 See [GPU/QPU installation](../../README.md#gpuqpu-support) for driver
@@ -69,10 +69,10 @@ prerequisites and [xqsa solver quick-starts](../../xqsa/README.md) for
 per-solver parameter tuning.
 
 Non-default solvers will not reproduce the canonical output (different
-RNG/hardware). `example-smoke` always runs `dwave-cpu`.
+RNG/hardware). `example-smoke` always runs `cpu`.
 
 ## Canonical output
 
 `example-smoke` validates that the runner produces `valid == 1` with
-`--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
+`--seed 42 --solver cpu`. The smoke test is invariant-based --
 it checks validity, not exact output.

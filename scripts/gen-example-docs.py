@@ -55,7 +55,7 @@ LINK_MAP = {
 SOLVER_SECTION_REPLACEMENT = [
     "Solver selection and install extras are the same for every example: see",
     "[Using the Examples](using-examples.md#running-one) and",
-    "[Solving Overview](../solving/). The default is `dwave-cpu`, and a",
+    "[Solving Overview](../solving/). The default is `cpu`, and a",
     "non-default solver will not reproduce the canonical result.",
 ]
 INLINE_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")

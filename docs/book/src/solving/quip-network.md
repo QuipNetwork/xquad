@@ -406,8 +406,9 @@ correct result look wrong.
 
 `metadata["solver"]` here names the solver account that answered, not a
 piece of hardware -- [D-Wave QPU](dwave-qpu.md#how-a-qpu-result-differs)
-uses the same key for the physical Advantage system that ran the job, so
-the same key names a different kind of thing depending on the backend.
+records the physical Advantage system that ran the job under
+`metadata["params"]["solver"]`, so the same name refers to a different
+kind of thing depending on the backend.
 
 `solve()` returns the leader's best vector, the answer the chain pays
 for, rather than the best vector any solver stored. `leader`,
