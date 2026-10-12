@@ -189,6 +189,13 @@ affordable` after it was submitted.
 
 ## Payout rules
 
+<!-- xquad:defect QUI-1823 -->
+> **Not yet verified on runtime 119.** `ResolutionTopNWeighted` was
+> tested only by its refusal on `aglais` at runtime 118. No network ran
+> runtime 119 when this was written, so an order using it may behave
+> differently there. Report problems at the [issue
+> tracker](https://gitlab.com/quip.network/xquad/-/issues).
+
 The `resolution` option decides how the reward is split:
 
 - `"SingleBest"` or `ResolutionSingleBest()`, the default: the leader,
@@ -229,6 +236,13 @@ first answer: `resolution=top 3, equal split: with block_wait=0 only the
 first answer is accepted, so there can be only one winner`.
 
 ### Settlement
+
+<!-- xquad:defect QUI-1823 -->
+> **Not yet verified on runtime 119.** The `TopNWeighted` split below
+> follows the runtime 119 pallet and has not been checked against a
+> settled order, since no network ran runtime 119 when this was written.
+> Report problems at the [issue
+> tracker](https://gitlab.com/quip.network/xquad/-/issues).
 
 The chain ranks solvers by energy, lowest first, with the earlier
 submitter first on a tie. Winners are the first `n` ranked solvers, so
