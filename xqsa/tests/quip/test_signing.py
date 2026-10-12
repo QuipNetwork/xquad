@@ -587,6 +587,8 @@ class TestDispatchErrorText:
     )
     def test_named(self, error, text) -> None:
         assert _dispatch_error_text(self.IFACE, {"dispatch_error": error, "dispatch_info": {}}) == text
+        assert _dispatch_error_text(self.IFACE, [error, {}]) == text
+        assert _dispatch_error_text(self.IFACE, (error, {})) == text
 
     @pytest.mark.parametrize(
         "attrs",
@@ -595,7 +597,8 @@ class TestDispatchErrorText:
             {"dispatch_error": {"Module": {"index": 9, "error": "0x07000000"}}},  # unknown error
             {"dispatch_error": {"Module": {"index": 9}}},  # malformed
             {"weight": 1},  # no dispatch error at all
-            [1, 2],
+            [1, 2],  # positional, but element 0 is not an error
+            [],
         ],
     )
     def test_unnamed_falls_back_to_the_raw_value(self, attrs) -> None:

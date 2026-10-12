@@ -670,9 +670,13 @@ def _dispatch_error_text(iface: Any, attrs: Any) -> str:
     'error': '0x06000000'}``, the error index in the first byte), so it is
     looked up in the runtime metadata: ``QuantumComputeMempool.NotEligibleSolver``
     with its doc line. Any other variant (``BadOrigin``, ``Token``, ...) is
-    rendered as its name and value.
+    rendered as its name and value. The attributes arrive as a dict, or, on
+    builds that decode them positionally, as ``[dispatch_error, dispatch_info]``.
     """
-    error = attrs.get("dispatch_error") if isinstance(attrs, dict) else None
+    if isinstance(attrs, dict):
+        error = attrs.get("dispatch_error")
+    else:
+        error = attrs[0] if isinstance(attrs, (list, tuple)) and attrs else None
     if isinstance(error, str):
         return error
     if not isinstance(error, dict) or len(error) != 1:
