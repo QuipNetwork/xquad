@@ -54,7 +54,7 @@ def test_deduplicates_across_forms():
     assert AccessAllow(accounts=[ALICE, ALICE_HEX]).accounts == (ALICE_HEX,)
 
 
-@pytest.mark.parametrize("account", ["0x1234", "0xzz", "not-an-address", None, 7])
+@pytest.mark.parametrize("account", ["0x1234", "0xzz", "not-an-address", None, 7, 32, [0] * 32])
 def test_bad_account(account):
     if account == "not-an-address":
         needs_scalecodec()
@@ -126,6 +126,12 @@ def test_from_chain_ss58_as_read_back():
     assert from_chain(decoded) == AccessAllow(accounts=[ALICE_HEX, BOB_HEX], types=["Cpu"])
 
 
+def test_from_chain_reads_its_own_encoding():
+    rule = AccessAllow(accounts=[ALICE_HEX, BOB_HEX], types=["QpuDwave"])
+    assert from_chain(rule.to_chain()) == rule
+    assert from_chain(AccessAllow(types=["Cpu"]).to_chain()) == AccessAllow(types=["Cpu"])
+
+
 @pytest.mark.parametrize("value", ["Bid", {"Bid": 5}, {"Callback": {}}, None])
 def test_from_chain_refuses_unknown(value):
     with pytest.raises(ValueError, match="unknown JobMode"):
@@ -141,6 +147,12 @@ def test_text():
     assert str(AccessAllow(types=["Cpu", "Gpu", "QpuDwave", "QpuIbm", "Asic"])) == (
         "allowlist (types Cpu, Gpu, QpuDwave and 2 more)"
     )
+
+
+@pytest.mark.parametrize("value", [None, 5, ["Open"]])
+def test_coerce_refuses_a_non_rule(value):
+    with pytest.raises(ValueError, match="not an access rule"):
+        coerce_access(value)
 
 
 def test_coerce():

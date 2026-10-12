@@ -957,6 +957,12 @@ class TestJobOrderReceiptDisplay:
     def test_access_read_back(self, monkeypatch) -> None:
         assert _display_for(monkeypatch)._facts().access == AccessOpen()
 
+    def test_unknown_mode_kept_raw(self, monkeypatch) -> None:
+        mode = {"Auction": {"rounds": 3}}  # a variant this client does not know
+        receipt = _display_for(monkeypatch, order=_receipt_order(proposer=PROPOSER, mode=mode))
+        assert receipt._facts().access == mode
+        assert "Access      {'Auction': {'rounds': 3}}" in "\n".join(_rows(str(receipt)))
+
     def test_allowlist_read_back(self, monkeypatch) -> None:
         miner = "0x" + "d4" * 32
         mode = {"Bid": {"miners": [miner], "miner_types": ["QpuDwave"]}}

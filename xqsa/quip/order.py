@@ -264,7 +264,7 @@ def _check_access(access: Any, limits: ChainLimits, iface: Any, *, stacklevel: i
     if isinstance(access, Mapping):
         try:
             access = access_from_chain(access)
-        except ValueError:
+        except (ValueError, TypeError):
             return
     if not isinstance(access, AccessAllow):
         return

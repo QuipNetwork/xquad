@@ -647,10 +647,26 @@ class TestAccess:
         rule = AccessAllow(types=["QpuRigetti"])
         assert _merge(limits=replace(LIMITS, solver_types=None), access=rule).access == rule
 
-    def test_raw_dict_checked_on_the_lenient_path(self) -> None:
-        raw = {"Bid": {"miners": None, "miner_types": ["QpuRigetti"]}}
+    @pytest.mark.parametrize("wrap", [lambda v: v, lambda v: (v,)], ids=["readback", "to_chain"])
+    def test_raw_dict_checked_on_the_lenient_path(self, wrap) -> None:
+        raw = {"Bid": {"miners": None, "miner_types": wrap(["QpuRigetti"])}}
         with pytest.warns(DeprecationWarning), pytest.raises(QuipOrderOptionError, match="unknown solver type"):
             _merge(strict=False, access=raw)
+
+    def test_raw_to_chain_dict_over_cap_refused(self) -> None:
+        raw = AccessAllow(accounts=[f"0x{i:064x}" for i in range(17)]).to_chain()
+        with pytest.warns(DeprecationWarning), pytest.raises(QuipOrderOptionError, match="MaxBidMiners is 16"):
+            _merge(strict=False, access=raw)
+
+    def test_raw_to_chain_dict_passes_on_the_lenient_path(self) -> None:
+        raw = AccessAllow(types=["Cpu"]).to_chain()
+        with pytest.warns(DeprecationWarning, match="raw chain value"):
+            assert _merge(strict=False, access=raw).access == raw
+
+    def test_raw_dict_naming_no_rule_passes_unchecked(self) -> None:
+        raw = {"Bid": {"miners": [7], "miner_types": None}}
+        with pytest.warns(DeprecationWarning):
+            assert _merge(strict=False, access=raw).access == raw
 
     def test_create_order_encodes_the_allowlist(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
@@ -688,6 +704,33 @@ class TestAccess:
             warnings.simplefilter("error")
             solver.solve(_model(), access=AccessAllow(types=["Cpu"]))
         assert captured["call_params"]["mode"] == {"Bid": {"miners": None, "miner_types": (["Cpu"],)}}
+
+    @pytest.mark.parametrize("value", [None, 5, ["Open"]])
+    def test_non_rule_refused(self, monkeypatch, value) -> None:
+        solver, captured = _ready(monkeypatch)
+        with pytest.raises(QuipOrderOptionError, match="not an access rule"):
+            solver.create_order(_model(), access=value)
+        with pytest.raises(ValueError, match="not an access rule"):
+            check_client_defaults(value, "OnChainOnly")
+        assert captured["builds"] == 0
+
+    @pytest.mark.parametrize("kwargs", [{"mode": None}, {"access": None}, {"mode": None, "access": None}])
+    def test_solve_none_is_the_client_default(self, monkeypatch, kwargs) -> None:
+        solver, captured = _ready(monkeypatch)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            solver.solve(_model(), **kwargs)
+        assert captured["call_params"]["mode"] == "Open"
+
+    def test_quote_shortcut_maps_mode(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        with pytest.warns(DeprecationWarning) as record:
+            solver.quote(_model(), mode=AccessAllow(types=["Cpu"]))
+        messages = [str(w.message) for w in record]
+        assert any("mode= is deprecated" in m for m in messages)
+        assert not any("ignoring unknown" in m for m in messages)
+        assert all(w.filename == __file__ for w in record)
+        assert captured["params"][-1]["mode"] == {"Bid": {"miners": None, "miner_types": (["Cpu"],)}}
 
     def test_solve_mode_and_access_refused(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)

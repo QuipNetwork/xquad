@@ -1483,6 +1483,16 @@ class TestSolverQuipConstruction:
         solver = SolverQuip.for_network("aglais", seed=VALID_SEED)
         assert solver._url == NETWORKS["aglais"].rpc
 
+    def test_for_network_mode_is_deprecated_at_the_callers_line(self, monkeypatch) -> None:
+        from xqsa.quip import AccessAllow, SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        with pytest.warns(DeprecationWarning, match="mode= is deprecated") as record:
+            solver = SolverQuip.for_network("aglais", seed=VALID_SEED, mode=AccessAllow(types=["Cpu"]))
+        assert record[0].filename == __file__
+        assert solver._access == AccessAllow(types=["Cpu"])
+
     def test_for_network_beats_env_url(self, monkeypatch) -> None:
         # The preset enters as url=, so an exported QUIP_RPC_URL cannot redirect it.
         from xqsa.quip import SolverQuip

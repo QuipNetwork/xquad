@@ -123,6 +123,8 @@ class AccessAllow(Access):
 
 def _account_hex(account: Any) -> str:
     """Return ``account`` as ``0x`` hex, refusing anything that is not a 32-byte account."""
+    if not isinstance(account, (str, bytes, bytearray, memoryview)):
+        raise ValueError(f"AccessAllow: {account!r} is not an SS58 address, 0x hex or 32 raw bytes")
     try:
         raw = account_bytes(account)
     except (ValueError, TypeError) as exc:
@@ -154,7 +156,8 @@ def from_chain(value: Any) -> Access:
     """Decode a ``JobMode`` as an order reads it back.
 
     Accepts ``"Open"`` (or ``{"Open": None}``) and
-    ``{"Bid": {"miners": [...] or None, "miner_types": [...] or None}}``.
+    ``{"Bid": {"miners": [...] or None, "miner_types": [...] or None}}``,
+    each list also as the 1-tuple :meth:`AccessAllow.to_chain` sends.
 
     Raises:
         ValueError: for any other value.
@@ -168,23 +171,26 @@ def from_chain(value: Any) -> Access:
 
 
 def _entries(value: Any) -> tuple[Any, ...]:
-    """Return a decoded ``Option<BoundedVec>`` as a tuple, ``None`` as empty."""
-    return () if value is None else tuple(value)
+    """Return a decoded ``Option<BoundedVec>`` as a tuple, ``None`` as empty, unwrapping a ``wrap_bounded`` 1-tuple."""
+    if value is None:
+        return ()
+    if isinstance(value, tuple) and len(value) == 1 and isinstance(value[0], (list, tuple)):
+        value = value[0]
+    return tuple(value)
 
 
 def coerce_access(value: Any) -> Any:
     """Return ``value`` as an :class:`Access` where it names one.
 
-    ``"Open"`` becomes :class:`AccessOpen`, and an :class:`Access` passes.
-    Anything that is neither a string nor an :class:`Access`, such as a raw
-    chain dict, passes unchanged for the option checks to judge.
+    ``"Open"`` becomes :class:`AccessOpen`, and an :class:`Access` passes. A
+    raw chain dict passes unchanged for the option checks to judge.
 
     Raises:
-        ValueError: for any other string.
+        ValueError: for anything else, including ``None``.
     """
     if value == "Open":
         return AccessOpen()
-    if isinstance(value, str):
+    if not isinstance(value, (Access, Mapping)):
         raise ValueError(
             f"access={value!r} is not an access rule; pass 'Open' or one of AccessOpen(), "
             "AccessAllow(accounts=[...], types=[...])"

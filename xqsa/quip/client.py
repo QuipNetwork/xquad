@@ -274,6 +274,7 @@ class SolverQuip(Solver):
         logger.info("Quip network %s resolved to %s", name, preset.rpc)
         if not kwargs.get("faucet"):  # an unset faucet must not let QUIP_FAUCET_URL beat the preset.
             kwargs["faucet"] = preset.faucet
+        _pop_mode(kwargs, stacklevel=2)  # here, so the deprecation names the caller's line.
         solver = cls(url=preset.rpc, **kwargs)
         solver._network = name
         return solver
@@ -1161,6 +1162,7 @@ class SolverQuip(Solver):
             DeprecationWarning,
             stacklevel=2,
         )
+        _pop_mode(kwargs, stacklevel=2)
         return self._create_order(model, kwargs, strict=False).quote()
 
     def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
@@ -1209,8 +1211,7 @@ class SolverQuip(Solver):
                 model again on that account without checking.
             QuipJobFailedError: if the order finalizes with no usable solution.
         """
-        if "mode" in kwargs:
-            kwargs["access"] = _take_mode(kwargs.pop("access", None), kwargs.pop("mode"), stacklevel=2)
+        _pop_mode(kwargs, stacklevel=2)
         order = self._create_order(model, kwargs, strict=False).submit().wait()
         assert order._submitted_at is not None  # submit() sets it.
         elapsed = time.perf_counter() - order._submitted_at
@@ -1375,6 +1376,17 @@ def _take_mode(access: Any, mode: Any, *, stacklevel: int) -> Any:
     message = "mode= is deprecated, use access= (removed in QUI-1608)"
     warnings.warn(message, DeprecationWarning, stacklevel=stacklevel + 1)
     return mode
+
+
+def _pop_mode(kwargs: dict[str, Any], *, stacklevel: int) -> None:
+    """Fold a deprecated ``mode`` in ``kwargs`` into ``access``, dropping an ``access`` of ``None`` (the default).
+
+    Raises:
+        TypeError: if both are given.
+    """
+    access = _take_mode(kwargs.pop("access", None), kwargs.pop("mode", None), stacklevel=stacklevel + 1)
+    if access is not None:
+        kwargs["access"] = access
 
 
 def _resolve_gate(gate: object, name: str, env: str) -> bool | Callable[[JobQuote], bool]:

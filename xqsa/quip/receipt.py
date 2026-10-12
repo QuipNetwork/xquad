@@ -391,9 +391,11 @@ class JobOrderReceipt:
         floors = self._best_effort("the quality floors", lambda: _floors_of(self._fetch_order()["ising_params"]))
         return None if floors is None else floors_text(floors)
 
-    def _access_rule(self) -> Access | None:
+    def _access_rule(self) -> Access | Any:
         """The order's access rule, or ``None`` if the order cannot be read; for error messages, as above."""
-        return self._best_effort("the access rule", lambda: access_from_chain(self._fetch_order()["mode"]))
+        return self._best_effort(
+            "the access rule", lambda: _decoded_or_raw(access_from_chain, self._fetch_order()["mode"])
+        )
 
     def _best_effort(self, what: str, read: Any) -> Any:
         """Return ``read()``, or ``None`` with a warning if it faults; for display-only facts."""
@@ -523,7 +525,7 @@ def _decoded_or_raw(decode: Any, value: Any) -> Any:
     """Return ``decode(value)``, or ``value`` itself when this client cannot read it; for display."""
     try:
         return decode(value)
-    except ValueError:
+    except (ValueError, TypeError):  # an access rule with a non-string type raises TypeError.
         return value
 
 
