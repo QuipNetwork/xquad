@@ -37,7 +37,7 @@ brew install vale          # macOS
 # or download the pinned release from https://github.com/errata-ai/vale/releases
 ```
 
-- Python 3.13+ and [uv](https://docs.astral.sh/uv/) -- install the Python workspace in one step:
+- Python 3.13+ and [uv](https://docs.astral.sh/uv/) 0.8.1 or later -- install the Python workspace in one step:
 
 ```sh
 make deps-py
@@ -47,6 +47,9 @@ This runs `uv sync`, giving you editable installs of `xqvm_py`, `xqcp`,
 `xqsa`, `xqffi`, and `xquad` with the `xqffi` cdylib built from the current
 Rust sources. Later `uv sync` and `uv run` calls rebuild it after a Rust edit,
 because `xqffi/pyproject.toml` lists its Rust inputs as uv `cache-keys`.
+The build runs `cargo --locked` from the root `pyproject.toml`'s
+`config-settings-package`, which uv reads from 0.8.1. An older uv warns that it
+failed to parse `pyproject.toml` and builds without `--locked`.
 
 `uv sync` resolves the base dependencies only, so the optional solver backends
 are absent from a fresh workspace. Local GPU or QPU work needs the matching

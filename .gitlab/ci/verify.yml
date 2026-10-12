@@ -299,8 +299,10 @@ verify:parity:
 # (an explicit `maturin develop` after every sync) and enforced nowhere
 # else -- nothing failed if a caller quietly ran against a stale cached
 # wheel instead. Since QUI-1824 every `uv sync` rebuilds the cdylib when a
-# Rust input listed in xqffi/pyproject.toml's `cache-keys` changed, and
-# this job is what proves that list is complete. The one path that would have
+# Rust input listed in xqffi/pyproject.toml's `cache-keys` changed. This
+# job does not prove that list is complete: a fresh clone rebuilds the
+# cdylib whatever the list holds (see below). It proves the rebuilt
+# cdylib satisfies the Python surface. The one path that would have
 # caught a violation sat behind `.hardware`'s protected-ref rule, so it
 # never ran on a merge request -- exactly the blind spot this ticket
 # exists to close. This job is what makes the guarantee systematic

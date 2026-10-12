@@ -419,8 +419,9 @@ deps-wasm:
 # whenever its Rust inputs change: xqffi/pyproject.toml lists them as uv
 # `cache-keys`. No separate `maturin develop` step is needed.
 #
-# That build runs `cargo --locked` (the root pyproject.toml's
-# `config-settings-package`), the same contract every other resolving
+# That build runs `cargo --locked --profile dev` (the root
+# pyproject.toml's `config-settings-package`, which explains the
+# profile). `--locked` is the same contract every other resolving
 # cargo invocation in this file carries (see CONTRIBUTING.md,
 # "Dependencies and Lockfiles"). It is worth naming here because deps-py
 # is the contributor bootstrap: a Cargo.lock that has drifted from the
@@ -740,12 +741,13 @@ test-metal:
 # the fresh-cdylib guarantee QUI-1199 exists to make systematic rather
 # than hand-enforced at each quip/hardware call site.
 #
-# What binds the assertion to *this* tree is the `cache-keys` list in
-# xqffi/pyproject.toml: the sync rebuilds the cdylib when any Rust input
-# changed, and reuses uv's cached build otherwise. A Rust input missing
-# from that list is exactly what this check exists to catch -- the sync
-# would restore a cached build and the import would fail or bind stale
-# symbols. Same two-step shape as test-quip-sign / test-quip-e2e above
+# Locally, what binds the assertion to *this* tree is the `cache-keys`
+# list in xqffi/pyproject.toml: the sync rebuilds the cdylib when a listed
+# Rust input changed, and reuses uv's cached build otherwise. This check
+# does NOT prove that list is complete. A fresh clone (every CI run) gives
+# every file a new modification time, so the sync rebuilds whatever the
+# list holds; a Rust input missing from it only bites a local checkout
+# whose sole change is that file. Same two-step shape as test-quip-sign / test-quip-e2e above
 # and run-hardware-tests.sh: extras-bearing sync, then `--no-sync` on
 # everything after it.
 #
