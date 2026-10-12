@@ -81,7 +81,10 @@ aglais needs no CA export.
   `uv run --no-sync maturin develop --locked --manifest-path xqffi/Cargo.toml`,
   because the sync restores a cached `xqffi` build. The make targets do both
   for you. Run the manual commands below through `uv run --no-sync`; without
-  the flag, the run re-syncs and undoes the rebuild.
+  the flag, the run re-syncs and undoes the rebuild. A plain `uv sync`,
+  including the one in `make deps-py`, `make test-py` and `make repl`, removes
+  the extra again; repeat both steps after any of them, or `SolverQuip` fails
+  with `substrate-interface is not installed`.
 - **Apple Silicon:** `quip-signer` 0.3.0 publishes no macOS wheel, so the first
   sync after the pin moved builds it from the sdist and needs a local Rust
   toolchain. Expect minutes, not seconds. Slow here is expected; a failure is
