@@ -190,12 +190,13 @@ class SolverQuip(Solver):
         resolved_url = url or os.environ.get("QUIP_RPC_URL")
         if not resolved_url:
             raise ValueError("A Quip RPC URL is required. Pass url= or set QUIP_RPC_URL.")
-        check_client_defaults(mode, resolution, delivery)  # before any network I/O.
+        # Both before any network I/O.
+        check_client_defaults(mode, delivery)
+        self._resolution = coerce_resolution(resolution)
 
         self._signer = self._build_signer(quip_signing, seed=seed, keystore=keystore)
 
         self._mode = mode
-        self._resolution = coerce_resolution(resolution)
         self._delivery = delivery
         self._deadline_blocks = deadline_blocks
         self._block_wait = block_wait

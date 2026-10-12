@@ -43,6 +43,7 @@ from xqsa.quip.display import Floors, _decimal_text, box, floors_text, terms_row
 from xqsa.quip.errors import EncodingError, QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
+from xqsa.quip.resolution import VARIANTS as RESOLUTION_VARIANTS
 from xqsa.quip.resolution import (
     Resolution,
     ResolutionTopNEqual,
@@ -110,20 +111,19 @@ class _OrderOptions:
     min_diversity: float | None = None
 
 
-def check_client_defaults(mode: Any, resolution: Any, delivery: Any) -> None:
-    """Refuse the ``mode``, ``resolution`` and ``delivery`` values no order can use yet.
+def check_client_defaults(mode: Any, delivery: Any) -> None:
+    """Refuse the ``mode`` and ``delivery`` values no order can use yet.
 
-    Bare strings are checked here: ``resolution`` takes ``"SingleBest"`` or a
-    :class:`~xqsa.quip.Resolution`. A raw chain dict in ``mode`` or
-    ``resolution`` passes, so the deprecated ``solve()`` path keeps working;
-    ``create_order`` refuses it. ``delivery`` accepts only ``"OnChainOnly"``.
+    A bare ``mode`` string is checked here. A raw chain dict passes, so the
+    deprecated ``solve()`` path keeps working; ``create_order`` refuses it.
+    ``delivery`` accepts only ``"OnChainOnly"``. The client's ``resolution``
+    is checked by :func:`~xqsa.quip.resolution.coerce_resolution`.
 
     Raises:
         ValueError: naming the unsupported value.
     """
     if isinstance(mode, str) and mode != _SUPPORTED_MODE:
         raise ValueError(f"mode={mode!r} is not supported yet; only {_SUPPORTED_MODE!r} orders are (QUI-1607)")
-    coerce_resolution(resolution)
     if delivery != _SUPPORTED_DELIVERY:
         raise ValueError(
             f"delivery={delivery!r}: result delivery is not supported yet: ResultReady only fires on a claim, "
@@ -236,13 +236,16 @@ def _check_resolution(resolution: Any, limits: ChainLimits, block_wait: int, *, 
     """Refuse a payout rule the runtime cannot honour, and warn when a top-N order can have one winner only.
 
     A raw chain dict, which only the deprecated ``solve()`` path lets through,
-    is read as the rule it names and checked the same way; one that names no
-    rule passes unchecked.
+    is read as the rule it names and checked the same way. One that names a
+    rule but cannot be read as it is refused; one that names no rule passes
+    unchecked.
     """
     if isinstance(resolution, Mapping):
         try:
             resolution = from_chain(resolution)
-        except ValueError:
+        except ValueError as exc:
+            if len(resolution) == 1 and next(iter(resolution)) in RESOLUTION_VARIANTS:
+                raise QuipOrderOptionError("resolution", f"{exc}; it cannot be read as a payout rule") from None
             return
     try:
         check_rank_weighting(resolution, limits.spec_version)

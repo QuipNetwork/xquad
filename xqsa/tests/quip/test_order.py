@@ -414,9 +414,24 @@ class TestResolutionOption:
         with pytest.warns(DeprecationWarning):
             assert _merge(limits=replace(LIMITS, spec_version=119), strict=False, resolution=raw).resolution is raw
 
+    @pytest.mark.parametrize("spec_version", [118, 119])
+    @pytest.mark.parametrize(
+        "raw", [{"TopNWeighted": 2}, {"TopNWeighted": {"n": 40}}, {"TopNWeighted": {}}, {"TopNEqual": 3}]
+    )
+    def test_undecodable_raw_rule_refused_on_the_lenient_path(self, raw, spec_version) -> None:
+        with pytest.warns(DeprecationWarning), pytest.raises(QuipOrderOptionError, match="cannot be read") as info:
+            _merge(limits=replace(LIMITS, spec_version=spec_version), strict=False, resolution=raw)
+        assert info.value.option == "resolution"
+
     def test_raw_dict_naming_no_rule_passes_the_lenient_path(self) -> None:
         with pytest.warns(DeprecationWarning):
-            assert _merge(strict=False, resolution={"TopNEqual": 3}).resolution == {"TopNEqual": 3}
+            assert _merge(strict=False, resolution={"FutureRule": 3}).resolution == {"FutureRule": 3}
+
+    @pytest.mark.parametrize("value", [None, 2])
+    def test_non_rule_refused(self, value) -> None:
+        with pytest.raises(QuipOrderOptionError, match="not a payout rule") as info:
+            _merge(resolution=value)
+        assert info.value.option == "resolution"
 
     def test_equal_passes(self) -> None:
         assert _quiet_merge(resolution=ResolutionTopNEqual(3)).resolution == ResolutionTopNEqual(3)
@@ -475,33 +490,25 @@ class TestOrderOptionStrictness:
 
     def test_raw_dict_lenient_warns_and_passes(self) -> None:
         with pytest.warns(DeprecationWarning, match="raw chain value"):
-            merged = _merge(replace_base(resolution={"TopNEqual": 3}), strict=False)
-        assert merged.resolution == {"TopNEqual": 3}
+            merged = _merge(replace_base(resolution={"FutureRule": 3}), strict=False)
+        assert merged.resolution == {"FutureRule": 3}
 
 
 class TestClientDefaults:
     def test_supported_defaults_pass(self) -> None:
-        check_client_defaults("Open", "SingleBest", "OnChainOnly")
+        check_client_defaults("Open", "OnChainOnly")
 
     def test_mode_refused(self) -> None:
         with pytest.raises(ValueError, match="QUI-1607"):
-            check_client_defaults("Whitelist", "SingleBest", "OnChainOnly")
-
-    def test_resolution_string_refused(self) -> None:
-        with pytest.raises(ValueError, match="not a payout rule"):
-            check_client_defaults("Open", "TopNEqual", "OnChainOnly")
-
-    @pytest.mark.parametrize("rule", [ResolutionSingleBest(), ResolutionTopNEqual(2), ResolutionTopNWeighted(2)])
-    def test_resolution_rules_pass(self, rule) -> None:
-        check_client_defaults("Open", rule, "OnChainOnly")
+            check_client_defaults("Whitelist", "OnChainOnly")
 
     @pytest.mark.parametrize("delivery", ["ResultReady", {"Callback": {}}])
     def test_delivery_refused(self, delivery) -> None:
         with pytest.raises(ValueError, match="result delivery is not supported yet"):
-            check_client_defaults("Open", "SingleBest", delivery)
+            check_client_defaults("Open", delivery)
 
     def test_raw_dicts_pass_for_the_lenient_path(self) -> None:
-        check_client_defaults({"Bid": 5}, {"TopNEqual": 3}, "OnChainOnly")
+        check_client_defaults({"Bid": 5}, "OnChainOnly")
 
     def test_constructor_checks_before_connecting(self, monkeypatch) -> None:
         from xqsa.tests.quip.test_client import FakeSubstrate
@@ -981,10 +988,10 @@ class TestSolverQuipCompatibility:
         assert "wait_for" in captured
 
     def test_solve_warns_on_a_raw_client_default_and_submits(self, monkeypatch) -> None:
-        solver, captured = _ready(monkeypatch, resolution={"TopNEqual": 3})
+        solver, captured = _ready(monkeypatch, resolution={"TopNEqual": {"n": 3}})
         with pytest.warns(DeprecationWarning, match="resolution: passing a raw chain value"):
             solver.solve(_model())
-        assert captured["call_params"]["resolution"] == {"TopNEqual": 3}
+        assert captured["call_params"]["resolution"] == {"TopNEqual": {"n": 3}}
 
     def test_solve_refuses_an_out_of_limit_option_before_signing(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)

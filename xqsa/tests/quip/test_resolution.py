@@ -25,9 +25,11 @@ import pytest
 
 from xqsa.quip.resolution import (
     MAX_WINNERS,
+    Resolution,
     ResolutionSingleBest,
     ResolutionTopNEqual,
     ResolutionTopNWeighted,
+    _TopN,
     check_rank_weighting,
     coerce_resolution,
     from_chain,
@@ -109,6 +111,18 @@ def test_coerce():
     assert coerce_resolution(raw) is raw
     with pytest.raises(ValueError, match="ResolutionTopNEqual"):
         coerce_resolution("TopNEqual")
+
+
+@pytest.mark.parametrize("value", [None, 2, 2.5, b"SingleBest"])
+def test_coerce_refuses_what_is_not_a_rule(value):
+    with pytest.raises(ValueError, match="not a payout rule"):
+        coerce_resolution(value)
+
+
+@pytest.mark.parametrize("make", [Resolution, lambda: _TopN(2)])
+def test_abstract_bases_refused(make):
+    with pytest.raises(TypeError, match="abstract"):
+        make()
 
 
 def test_single_best_payouts():

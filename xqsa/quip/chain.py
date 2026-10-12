@@ -125,7 +125,7 @@ def read_limits(iface: Any) -> ChainLimits:
     """Read the mempool's order bounds and the runtime's ``specVersion`` into a :class:`ChainLimits`.
 
     Raises:
-        QuipConnectionError: if reading a constant or the runtime version fails.
+        QuipConnectionError: if reading a constant fails.
         QuipMetadataError: propagated unchanged from the constant reads.
     """
 
@@ -133,10 +133,8 @@ def read_limits(iface: Any) -> ChainLimits:
         value = read_constant(iface, name)
         return None if value is None else int(value)
 
-    try:
-        spec_version = int(iface.rpc_request("state_getRuntimeVersion", [])["result"]["specVersion"])
-    except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
-        raise QuipConnectionError(f"could not read the runtime version: {exc}") from exc
+    # init_runtime() set this at connect, just before; a later query at a past block would move it.
+    spec_version = getattr(iface, "runtime_version", None)
     return ChainLimits(
         min_reward=read("MinReward"),
         max_deadline_blocks=read("MaxDeadlineBlocks"),

@@ -1057,6 +1057,8 @@ class FakeSubstrate:
             }
         )
         self.rpc_calls: list[tuple[str, list | None]] = []
+        # What init_runtime() records: aglais's runtime as of QUI-1606.
+        self.runtime_version: int | None = 118
         self.genesis_hash: object = GENESIS_HASH
         self.ss58_format = 42
         self.nonce = 0
@@ -1258,9 +1260,16 @@ class TestSolverQuipConstruction:
         assert _make_solver(monkeypatch, resolution="SingleBest")._resolution == ResolutionSingleBest()
         assert _make_solver(monkeypatch)._resolution == ResolutionSingleBest()
 
-    def test_unknown_resolution_string_refused(self, monkeypatch) -> None:
+    @pytest.mark.parametrize("value", ["TopNEqual", None])
+    def test_resolution_refused_before_connecting(self, monkeypatch, value) -> None:
+        iface = _default_iface()
         with pytest.raises(ValueError, match="not a payout rule"):
-            _make_solver(monkeypatch, resolution="TopNEqual")
+            _make_solver(monkeypatch, iface=iface, resolution=value)
+        assert iface.rpc_calls == []
+
+    @pytest.mark.parametrize("rule", [ResolutionSingleBest(), ResolutionTopNEqual(2), ResolutionTopNWeighted(2)])
+    def test_resolution_rules_taken(self, monkeypatch, rule) -> None:
+        assert _make_solver(monkeypatch, resolution=rule)._resolution is rule
 
     def test_missing_url_raises(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip
@@ -1387,13 +1396,11 @@ class TestSolverQuipConstruction:
             min_reward=UNIT, max_deadline_blocks=1000, max_block_wait=100, max_solutions=20, spec_version=118
         )
 
-    def test_runtime_version_fault_is_a_connection_error(self, monkeypatch) -> None:
-        from xqsa.quip import QuipConnectionError
-
+    def test_spec_version_read_without_an_rpc(self, monkeypatch) -> None:
         iface = _default_iface()
-        iface.rpc["state_getRuntimeVersion"] = RuntimeError("rpc unavailable")
-        with pytest.raises(QuipConnectionError, match="runtime version"):
-            _make_solver(monkeypatch, iface=iface)
+        iface.runtime_version = 119
+        assert _make_solver(monkeypatch, iface=iface)._limits.spec_version == 119
+        assert not any(method == "state_getRuntimeVersion" for method, _ in iface.rpc_calls)
 
     def test_absent_limits_read_as_none(self, monkeypatch) -> None:
         iface = _default_iface()

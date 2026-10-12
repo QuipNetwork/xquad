@@ -30,6 +30,7 @@ arithmetic to the planck.
 from __future__ import annotations
 
 import warnings
+from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -42,16 +43,20 @@ MAX_WINNERS = 32
 MIN_RANK_WEIGHTED_SPEC = 119
 
 
-class Resolution:
+class Resolution(ABC):
     """Base class of the payout rules; use one of its subclasses."""
 
+    @abstractmethod
     def to_chain(self) -> Any:
         """Return the rule as the ``RewardResolution`` value ``propose_job`` takes."""
-        raise NotImplementedError
 
+    @abstractmethod
     def payouts(self, ranked: Sequence[Any], reward: int) -> list[int]:
         """Return the planck each ranked solver receives, best first, one per entry of ``ranked``."""
-        raise NotImplementedError
+
+    @abstractmethod
+    def __str__(self) -> str:
+        """Name the rule for the order and receipt boxes."""
 
 
 @dataclass(frozen=True)
@@ -128,6 +133,12 @@ class ResolutionTopNWeighted(_TopN):
         return f"top {self.n}, weighted by rank"
 
 
+_TOP_N_VARIANTS: dict[str, type[_TopN]] = {"TopNEqual": ResolutionTopNEqual, "TopNWeighted": ResolutionTopNWeighted}
+
+# Every ``RewardResolution`` variant this client can encode.
+VARIANTS = frozenset({"SingleBest", *_TOP_N_VARIANTS})
+
+
 def from_chain(value: Any) -> Resolution:
     """Decode a ``RewardResolution`` as an order reads it back.
 
@@ -141,7 +152,7 @@ def from_chain(value: Any) -> Resolution:
         return ResolutionSingleBest()
     if isinstance(value, Mapping) and len(value) == 1:
         [(variant, fields)] = value.items()
-        cls = {"TopNEqual": ResolutionTopNEqual, "TopNWeighted": ResolutionTopNWeighted}.get(variant)
+        cls = _TOP_N_VARIANTS.get(variant)
         if cls is not None and isinstance(fields, Mapping) and "n" in fields:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")  # an n = 1 order on chain is a fact, not a choice to warn about.
@@ -149,25 +160,24 @@ def from_chain(value: Any) -> Resolution:
     raise ValueError(f"unknown RewardResolution {value!r}")
 
 
-def coerce_resolution(value: Any) -> Any:
+def coerce_resolution(value: Any) -> Resolution | Mapping[str, Any]:
     """Return ``value`` as a :class:`Resolution` where it names one.
 
     ``"SingleBest"`` becomes :class:`ResolutionSingleBest`, and a
-    :class:`Resolution` passes. Anything that is neither a string nor a
-    :class:`Resolution`, such as a raw chain dict, passes unchanged for the
-    option checks to judge.
+    :class:`Resolution` passes. A raw chain dict, which only the deprecated
+    ``solve()`` path accepts, passes unchanged for the option checks to judge.
 
     Raises:
-        ValueError: for any other string.
+        ValueError: for anything else, such as another string or ``None``.
     """
     if value == "SingleBest":
         return ResolutionSingleBest()
-    if isinstance(value, str):
-        raise ValueError(
-            f"resolution={value!r} is not a payout rule; pass 'SingleBest' or one of ResolutionSingleBest(), "
-            "ResolutionTopNEqual(n), ResolutionTopNWeighted(n)"
-        )
-    return value
+    if isinstance(value, (Resolution, Mapping)):
+        return value
+    raise ValueError(
+        f"resolution={value!r} is not a payout rule; pass 'SingleBest' or one of ResolutionSingleBest(), "
+        "ResolutionTopNEqual(n), ResolutionTopNWeighted(n)"
+    )
 
 
 def check_rank_weighting(resolution: Any, spec_version: int | None) -> None:
