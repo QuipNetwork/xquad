@@ -35,10 +35,11 @@ import time
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, replace
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 from xqsa.quip.codec import MILLI_SCALE, _to_milli, energy_ceiling_milli
-from xqsa.quip.display import box, floors_text, terms_rows
+from xqsa.quip.display import _decimal_text, box, floors_text, terms_rows
 from xqsa.quip.errors import EncodingError, QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
@@ -286,15 +287,18 @@ def _check_floors(options: _OrderOptions, job: IsingJob, *, stacklevel: int) -> 
     except EncodingError as exc:
         raise QuipOrderOptionError("max_energy", f"max_energy={options.max_energy}: {exc}") from exc
     reach = sum(map(abs, job.h_values)) + sum(map(abs, job.j_values))
+    # Exact decimals: a rounded bound can land on the wrong side of the ceiling.
+    offset = Decimal(repr(job.offset))
+    lowest, highest = (_decimal_text(Decimal(bound) / MILLI_SCALE + offset) for bound in (-reach, reach))
     if ceiling < -reach:
         raise QuipOrderOptionError(
             "max_energy",
-            f"max_energy={options.max_energy} is below {-reach / MILLI_SCALE + job.offset:g}, the lowest "
+            f"max_energy={options.max_energy} is below {lowest}, the lowest "
             "energy the placed model can reach, so no answer could meet it",
         )
     if ceiling >= reach:
         warnings.warn(
-            f"max_energy={options.max_energy} is at or above {reach / MILLI_SCALE + job.offset:g}, the highest "
+            f"max_energy={options.max_energy} is at or above {highest}, the highest "
             "energy the placed model can reach, so it filters nothing",
             UserWarning,
             stacklevel=stacklevel,
@@ -640,7 +644,7 @@ class JobOrder:
                 names the order's quality floors, if any), or the chosen
                 answer carries no vectors.
         """
-        return pick_best(self.receipt(), self._job, self._model, self._floors_text()).solution
+        return pick_best(self.receipt(), self._job, self._model, self._floors_text).solution
 
     def solutions(self, solver: Any = None) -> list[Solution]:
         """Return every stored answer, decoded onto this order's model, best first.

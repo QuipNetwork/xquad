@@ -23,6 +23,7 @@ import math
 import warnings
 from dataclasses import replace
 
+import numpy as np
 import pytest
 
 from xqsa.quip import (
@@ -188,6 +189,13 @@ def _binary_model() -> XQMX:
     return model
 
 
+def _wide_model() -> XQMX:
+    """A SPIN model reaching -1234.567 to 1234.567, bounds that 6 significant digits would round."""
+    model = XQMX.spin_model(1)
+    model.set_linear(0, 1234.567)
+    return model
+
+
 class TestCeilingAgainstThePlacedModel:
     """``_check_floors``: _model() reaches spin energies -4 to +4."""
 
@@ -217,6 +225,18 @@ class TestCeilingAgainstThePlacedModel:
         solver.create_order(_binary_model(), topology="native", max_energy=-2)
         with pytest.raises(QuipOrderOptionError, match="below -2"):
             solver.create_order(_binary_model(), topology="native", max_energy=-2.001)
+
+    def test_bounds_are_stated_exactly(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with pytest.raises(QuipOrderOptionError, match=r"below -1234\.567, the lowest"):
+            solver.create_order(_wide_model(), topology="native", max_energy=-1234.568)
+        with pytest.warns(UserWarning, match=r"at or above 1234\.567, the highest"):
+            solver.create_order(_wide_model(), topology="native", max_energy=1234.567)
+
+    def test_numpy_ceiling_shows_on_the_order(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model(), max_energy=np.float64(-2.0))
+        assert "Floors      energy <= -2" in _box_rows(str(order))
 
     def test_i64_overflow_refused(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
@@ -1055,6 +1075,13 @@ class TestJobOrderSolutions:
             QuipJobFailedError, match=r"no answers under its quality floors \(energy <= -3, 2 solutions\)"
         ):
             order.best()
+
+    def test_best_on_an_answered_order_skips_the_floors_note(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model(), max_energy=-3).submit()
+        solver._iface.maps[(MEMPOOL, "OrderSolutions")] = [_answer(order._job, "0xA", [BEST], -4000)]
+        monkeypatch.setattr(JobOrder, "_floors_text", lambda self: pytest.fail("floors note built for an answer"))
+        assert order.best().energy == -4
 
     def test_best_on_an_unanswered_order_does_not_reclaim(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)

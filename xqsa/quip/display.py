@@ -88,7 +88,7 @@ def floors_text(
         else:
             moved = energy_ceiling_milli(model_ceiling) != ceiling_milli
             differs = f" (chain {_decimal_text(chain)})" if moved else ""
-            parts.append(f"energy <= {_decimal_text(Decimal(repr(model_ceiling)))}{differs}")
+            parts.append(f"energy <= {_decimal_text(Decimal(repr(float(model_ceiling))))}{differs}")
     if min_solutions is not None:
         parts.append(f"{min_solutions} solution{'' if min_solutions == 1 else 's'}")
     if diversity_milli is not None:

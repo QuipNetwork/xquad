@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from xqsa.quip import (
@@ -1017,6 +1018,10 @@ class TestFloorsText:
     def test_offset_and_flooring_together(self) -> None:
         # -1.2345 - (-0.75) = -0.4845, floored to -0.485.
         assert floors_text(-485, None, None, model_ceiling=-1.2345) == "energy <= -1.2345 (chain -0.485)"
+
+    def test_numpy_model_ceiling(self) -> None:
+        # NumPy 2 reprs a float64 as "np.float64(-2.0)", which Decimal refuses.
+        assert floors_text(-2000, None, None, model_ceiling=np.float64(-2.0)) == "energy <= -2"
 
 
 class TestReceiptFloors:

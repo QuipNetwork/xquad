@@ -151,7 +151,7 @@ class TestPickBest:
     def test_unanswered_names_the_floors(self, monkeypatch) -> None:
         receipt, job = _setup(monkeypatch, [])
         with pytest.raises(QuipJobFailedError, match=r"has no answers under its quality floors \(2 solutions\), "):
-            pick_best(receipt, job, _model(), floors="2 solutions")
+            pick_best(receipt, job, _model(), floors=lambda: "2 solutions")
 
     @pytest.mark.parametrize("floors", [None, "none"])
     def test_no_floors_add_no_note(self, floors) -> None:
