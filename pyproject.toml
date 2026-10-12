@@ -11,6 +11,15 @@
 [tool.uv.workspace]
 members = [ "xqffi", "xqvm_py", "xqcp", "xqsa", "xquad" ]
 
+# Build xqffi with `cargo --locked` when uv builds it for the workspace, the
+# contract every resolving cargo call carries (CONTRIBUTING.md,
+# "Dependencies and Lockfiles"). Set here, not as `locked = true` under
+# xqffi's `[tool.maturin]`: that table ships in the sdist, whose pruned
+# workspace no longer matches its Cargo.lock, so `--locked` would refuse
+# every build from the sdist.
+[tool.uv]
+config-settings-package = { xqffi = { build-args = "--locked" } }
+
 [dependency-groups]
 dev = [
     "maturin>=1.7,<2",

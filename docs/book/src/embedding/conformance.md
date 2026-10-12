@@ -71,7 +71,7 @@ cargo test -p xquad-conformance --no-default-features --features python
 cargo run -p xquad-conformance -- --filter arithmetic/add_basic --impl both
 ```
 
-The Python runs shell out through `uv run python -m xqvm_py`, so the
+The Python runs shell out through `uv run --no-sync python -m xqvm_py`, so the
 workspace venv is picked up without a manual activation step.
 `XQUAD_CONFORMANCE_PYTHON` overrides the `uv` wrapper command, not the
 interpreter behind it.

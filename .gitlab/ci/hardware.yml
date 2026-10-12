@@ -105,27 +105,20 @@
 #
 #   1. `uv sync --extra <solver>` for the solver-specific optional deps
 #      declared in xqsa/pyproject.toml (cuda / dwave / metal).
-#   2. `uv run --no-sync maturin develop --manifest-path xqffi/Cargo.toml`,
-#      rebuilding xqffi's cdylib from the Rust sources in this commit. Step
-#      1 alone is NOT enough, and this is not belt-and-braces: uv reinstalls
-#      xqffi from its editable-wheel cache, which uv does not invalidate
-#      when only Cargo sources change. That is how all three jobs went red
-#      on main in August 2026 (QUI-1191) -- the last green cuda run and the
-#      first failing one shared cache key `hw-hardware:cuda-<hash>`, both
-#      logged `Installed 21 packages` with no build at all, and pytest
-#      collection then died on `cannot import name 'DEFAULT_STEP_LIMIT'
-#      from 'xqffi.vm'`. The `--no-sync` is itself load-bearing: a bare `uv
-#      run` there would re-sync to the default (no-extras) environment and
-#      uninstall the cupy / dwave-system / pyobjc-Metal step 1 just
-#      installed. The Makefile's `deps-py` carries the same pairing for the
-#      same reason.
-#   3. scripts/_hwprobe.py <kind>, which hard-fails on a missing device or
+#      The sync also rebuilds xqffi's cdylib from the Rust sources in this
+#      commit, because xqffi/pyproject.toml lists them as uv `cache-keys`.
+#      Before QUI-1824 it did not: uv reinstalled xqffi from its cached
+#      build, and that is how all three jobs went red on main in August
+#      2026 (QUI-1191) -- pytest collection died on `cannot import name
+#      'DEFAULT_STEP_LIMIT' from 'xqffi.vm'`. verify:xqffi now guards the
+#      key list on every merge request.
+#   2. scripts/_hwprobe.py <kind>, which hard-fails on a missing device or
 #      an unset DWAVE_API_TOKEN instead of letting the tests skip themselves
 #      into a hollow green.
-#   4. pytest, with exit code 5 ("collected zero tests") promoted to a
+#   3. pytest, with exit code 5 ("collected zero tests") promoted to a
 #      failure.
 #
-# Steps 3 and 4 are why these `script:` lines are no longer bare `uv run
+# Steps 2 and 3 are why these `script:` lines are no longer bare `uv run
 # pytest ... -m <marker>`: called that way, CI had neither guard, and only
 # the local Makefile targets did.
 #
