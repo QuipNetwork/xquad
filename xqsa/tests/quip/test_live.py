@@ -61,6 +61,7 @@ pytest.importorskip(
 )
 
 from xqsa.quip import (
+    AccessAllow,
     JobOrder,
     QuipJobFailedError,
     QuipOrderOptionError,
@@ -360,6 +361,15 @@ def _answer(solver: SolverQuip, order_id: int, vectors: list[list[int]]) -> None
             0, {"call_module": pallet, "call_function": "register_solver", "call_args": {"solver_type": "Cpu"}}
         )
     solver._submit_extrinsic("Utility", "batch_all", {"calls": calls})
+
+
+def _register(solver: SolverQuip) -> str:
+    """Register ``solver``'s account as a ``Cpu`` solver if it is not one; returns the account as ``0x`` hex."""
+    pallet = "QuantumComputeMempool"
+    account = "0x" + bytes(solver._signer.account_id).hex()
+    if solver._iface.query(pallet, "Solvers", [account]).value is None:
+        solver._submit_extrinsic(pallet, "register_solver", {"solver_type": "Cpu"})
+    return account
 
 
 def _claim(solver: SolverQuip, order_id: int) -> None:
@@ -853,6 +863,55 @@ class TestPayoutRules:
             pytest.skip(f"the chain runs runtime {solver._limits.spec_version}; QUI-1674 tests TopNWeighted live")
         with pytest.raises(QuipOrderOptionError, match=f"runtime {solver._limits.spec_version}"):
             solver.create_order(_asymmetric_spin_model(), resolution=ResolutionTopNWeighted(2))
+
+
+class TestAccess:
+    def test_allowlisted_account_answers_and_reads_back(self, make_solver, second_funded_keystore) -> None:
+        """An order listing two of our accounts is answered by one, and its receipt reads the allowlist back."""
+        model = _asymmetric_spin_model()
+        first = make_solver()
+        second = SolverQuip(url=RPC_URL, keystore=second_funded_keystore, **SOLVER_KWARGS)
+        rule = AccessAllow(accounts=[_register(first), _register(second)])
+        job = first.create_order(model, access=rule)._job
+        order_id = _self_solve(first, model, [_model_vector(job, _by_energy(model)[0])], access=rule)
+        receipt = first.get_receipt(order_id).wait()
+
+        assert receipt._facts().access == rule
+        ours = quip_chain.ss58_address(first._iface, bytes(first._signer.account_id))
+        assert receipt.solvers()[0]["solver"] == ours
+        text = str(receipt)
+        print(text)
+        assert "│ Access      allowlist (accounts " in text
+        _claim(first, order_id)
+
+    def test_type_allowlist_admits_by_type(self, make_solver) -> None:
+        """A types-only allowlist, encoded with no account list, admits a solver of a listed type."""
+        model = _asymmetric_spin_model()
+        solver = make_solver()
+        _register(solver)  # as Cpu
+        rule = AccessAllow(types=["Cpu"])
+        job = solver.create_order(model)._job
+        order_id = _self_solve(solver, model, [_model_vector(job, _by_energy(model)[0])], access=rule)
+        receipt = solver.get_receipt(order_id).wait()
+
+        assert receipt._facts().access == rule
+        assert receipt.status()["solution_count"] >= 1
+        _claim(solver, order_id)
+
+    def test_unlisted_solver_is_refused(self, make_solver, second_funded_keystore) -> None:
+        """A registered solver missing from the allowlist fails NotEligibleSolver."""
+        model = _asymmetric_spin_model()
+        first = make_solver()
+        second = SolverQuip(url=RPC_URL, keystore=second_funded_keystore, **SOLVER_KWARGS)
+        _register(second)
+        rule = AccessAllow(accounts=[_register(first)], types=["QpuIonq"])
+        job = first.create_order(model)._job
+        ground = [_model_vector(job, _by_energy(model)[0])]
+        order_id = _self_solve(first, model, ground, access=rule)
+        with pytest.raises(QuipSubmissionError, match="QuantumComputeMempool.NotEligibleSolver"):
+            _answer(second, order_id, ground)
+        first.get_receipt(order_id).wait()
+        _claim(first, order_id)
 
 
 class TestQualityFloors:

@@ -52,6 +52,9 @@ def test_identity_reexports():
     assert sa.JobQuote is _xqsa.JobQuote
     assert sa.JobOrder is _xqsa.JobOrder
     assert sa.JobOrderReceipt is _xqsa.JobOrderReceipt
+    assert sa.Access is _xqsa.Access
+    assert sa.AccessAllow is _xqsa.AccessAllow
+    assert sa.AccessOpen is _xqsa.AccessOpen
     assert sa.Resolution is _xqsa.Resolution
     assert sa.ResolutionSingleBest is _xqsa.ResolutionSingleBest
     assert sa.ResolutionTopNEqual is _xqsa.ResolutionTopNEqual

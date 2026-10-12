@@ -30,6 +30,7 @@ fee to fail on chain.
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 import warnings
@@ -38,6 +39,10 @@ from dataclasses import dataclass, field, fields, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Self
 
+from xqsa.quip import chain
+from xqsa.quip.access import VARIANTS as ACCESS_VARIANTS
+from xqsa.quip.access import Access, AccessAllow, coerce_access
+from xqsa.quip.access import from_chain as access_from_chain
 from xqsa.quip.codec import MILLI_SCALE, _to_milli, energy_ceiling_milli
 from xqsa.quip.display import Floors, _decimal_text, box, floors_text, terms_rows
 from xqsa.quip.errors import EncodingError, QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
@@ -61,12 +66,15 @@ if TYPE_CHECKING:
     from xqsa.quip.quote import JobQuote
     from xqvm_py.xqmx import XQMX
 
+logger = logging.getLogger("xqsa.quip")
+
 OrderState = Literal["draft", "submitted", "unconfirmed", "failed", "finalized"]
 
-# The options an order accepts; ``mode`` and ``delivery`` are client defaults only.
+# The options an order accepts; ``delivery`` is a client default only.
 ORDER_OPTIONS = frozenset(
     {
         "reward",
+        "access",
         "deadline_blocks",
         "block_wait",
         "topology",
@@ -89,7 +97,6 @@ MAX_DIVERSITY = 0.5
 MIN_DEADLINE_BLOCKS = 10
 RELIABLE_DEADLINE_BLOCKS = 100
 
-_SUPPORTED_MODE = "Open"
 _SUPPORTED_DELIVERY = "OnChainOnly"
 
 
@@ -102,7 +109,7 @@ class _OrderOptions:
     block_wait: int
     topology: str | None
     mapping: Mapping[int, int] | None
-    mode: Any
+    access: Any
     resolution: Any
     delivery: Any
     # Quality floors: per-order only, never client defaults.
@@ -111,19 +118,16 @@ class _OrderOptions:
     min_diversity: float | None = None
 
 
-def check_client_defaults(mode: Any, delivery: Any) -> None:
-    """Refuse the ``mode`` and ``delivery`` values no order can use yet.
+def check_client_defaults(delivery: Any) -> None:
+    """Refuse a ``delivery`` value no order can use yet: it accepts only ``"OnChainOnly"``.
 
-    A bare ``mode`` string is checked here. A raw chain dict passes, so the
-    deprecated ``solve()`` path keeps working; ``create_order`` refuses it.
-    ``delivery`` accepts only ``"OnChainOnly"``. The client's ``resolution``
-    is checked by :func:`~xqsa.quip.resolution.coerce_resolution`.
+    The client's ``access`` and ``resolution`` are checked by
+    :func:`~xqsa.quip.access.coerce_access` and
+    :func:`~xqsa.quip.resolution.coerce_resolution`.
 
     Raises:
         ValueError: naming the unsupported value.
     """
-    if isinstance(mode, str) and mode != _SUPPORTED_MODE:
-        raise ValueError(f"mode={mode!r} is not supported yet; only {_SUPPORTED_MODE!r} orders are (QUI-1607)")
     if delivery != _SUPPORTED_DELIVERY:
         raise ValueError(
             f"delivery={delivery!r}: result delivery is not supported yet: ResultReady only fires on a claim, "
@@ -132,9 +136,20 @@ def check_client_defaults(mode: Any, delivery: Any) -> None:
 
 
 def merge_options(
-    current: _OrderOptions, updates: Mapping[str, Any], limits: ChainLimits, *, strict: bool, stacklevel: int = 2
+    current: _OrderOptions,
+    updates: Mapping[str, Any],
+    limits: ChainLimits,
+    *,
+    strict: bool,
+    stacklevel: int = 2,
+    iface: Any = None,
 ) -> _OrderOptions:
     """Apply ``updates`` to ``current`` and check the whole result.
+
+    With ``iface``, an allowlist that differs from ``current``'s has its
+    accounts looked up in the chain's ``Solvers``; see :func:`_check_access`.
+    An unchanged one is not looked up again: ``current`` was checked when it
+    was set, or at construction for the client default.
 
     The strict path (``create_order``, ``set``) refuses unknown keywords and
     raw chain dicts with ``TypeError``. The lenient path, used only by the
@@ -155,14 +170,16 @@ def merge_options(
             warnings.warn(f"ignoring unknown SolverQuip option {name!r}", DeprecationWarning, stacklevel=stacklevel)
             continue
         known[name] = value
-    if "resolution" in known:
-        try:
-            known["resolution"] = coerce_resolution(known["resolution"])
-        except ValueError as exc:
-            raise QuipOrderOptionError("resolution", str(exc)) from None
+    for name, coerce in (("access", coerce_access), ("resolution", coerce_resolution)):
+        if name in known:
+            try:
+                known[name] = coerce(known[name])
+            except ValueError as exc:
+                raise QuipOrderOptionError(name, str(exc)) from None
     merged = replace(current, **known)
     _check_raw_values(merged, strict=strict, stacklevel=stacklevel + 1)
-    _check_limits(merged, limits, stacklevel=stacklevel + 1)
+    changed = merged.access != current.access
+    _check_limits(merged, limits, stacklevel=stacklevel + 1, iface=iface if changed else None)
     return merged
 
 
@@ -174,13 +191,13 @@ def _check_raw_values(options: _OrderOptions, *, strict: bool, stacklevel: int) 
         if strict:
             raise TypeError(f"{option.name}: raw chain values are not accepted")
         warnings.warn(
-            f"{option.name}: passing a raw chain value is deprecated and unchecked",
+            f"{option.name}: passing a raw chain value is deprecated; pass a typed option instead",
             DeprecationWarning,
             stacklevel=stacklevel,
         )
 
 
-def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: int) -> None:
+def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: int, iface: Any = None) -> None:
     """Check every option against the others and the chain limits, short of the placed model.
 
     The floor checks that need the placed model are in :func:`_check_floors`.
@@ -203,6 +220,7 @@ def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: in
     if block_wait < 0 or (max_wait is not None and block_wait > max_wait):
         upper = f" and at most MaxBlockWait ({max_wait})" if max_wait is not None else ""
         raise QuipOrderOptionError("block_wait", f"block_wait={block_wait} must be at least 0{upper}")
+    _check_access(options.access, limits, iface, stacklevel=stacklevel + 1)
     _check_resolution(options.resolution, limits, block_wait, stacklevel=stacklevel + 1)
     if options.max_energy is not None:
         energy = _require_real(options.max_energy, "max_energy")
@@ -227,6 +245,55 @@ def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: in
         warnings.warn(
             f"block_wait={block_wait} is not below deadline_blocks={deadline}; the deadline ends the order "
             "before the wait for better answers can",
+            UserWarning,
+            stacklevel=stacklevel,
+        )
+
+
+def _check_access(access: Any, limits: ChainLimits, iface: Any, *, stacklevel: int) -> None:
+    """Refuse an allowlist the chain cannot take: over ``MaxBidMiners`` accounts, or an unknown solver type.
+
+    An over-cap list traps the runtime with no fee and no readable error, and
+    an unknown type fails to encode, so both are refused here. A raw chain
+    dict is read as the rule it names and checked the same way. One that names
+    a rule but cannot be read as it is refused; one that names no rule passes
+    unchecked. A bound the runtime does not expose is not checked.
+
+    With ``iface``, each listed account that is not a registered solver warns
+    once. It never raises: the chain does not check registration, and an
+    operator may register after the order is posted.
+    """
+    if isinstance(access, Mapping):
+        try:
+            access = access_from_chain(access)
+        except (ValueError, TypeError) as exc:
+            if len(access) == 1 and next(iter(access)) in ACCESS_VARIANTS:
+                raise QuipOrderOptionError("access", f"{exc}; it cannot be read as an access rule") from None
+            return
+    if not isinstance(access, AccessAllow):
+        return
+    cap = limits.max_bid_miners
+    if cap is not None and len(access.accounts) > cap:
+        raise QuipOrderOptionError(
+            "access", f"AccessAllow lists {len(access.accounts)} accounts; the chain's MaxBidMiners is {cap}"
+        )
+    known = limits.solver_types
+    unknown = [name for name in access.types if known is not None and name not in known]
+    if unknown:
+        raise QuipOrderOptionError(
+            "access",
+            f"AccessAllow: unknown solver type {', '.join(map(repr, unknown))}; the chain has {', '.join(known)}",
+        )
+    if iface is None or not access.accounts:
+        return
+    try:
+        missing = chain.unregistered_solvers(iface, access.accounts)
+    except Exception as exc:  # noqa: BLE001 -- an advisory check never blocks the order.
+        logger.warning("could not check whether the allowlisted accounts are registered solvers: %s", exc)
+        return
+    for account in missing:
+        warnings.warn(
+            f"access: {account} is not a registered solver, so it cannot answer until it registers",
             UserWarning,
             stacklevel=stacklevel,
         )
@@ -496,6 +563,11 @@ class JobOrder:
         return self._options.mapping
 
     @property
+    def access(self) -> Access | Mapping[str, Any]:
+        """Who may answer; a raw chain dict only on the deprecated ``solve()`` path."""
+        return self._options.access
+
+    @property
     def resolution(self) -> Resolution | Mapping[str, Any]:
         """The payout rule; a raw chain dict only on the deprecated ``solve()`` path."""
         return self._options.resolution
@@ -524,6 +596,7 @@ class JobOrder:
             "block_wait": self.block_wait,
             "topology": self.topology,
             "mapping": None if mapping is None else dict(mapping),
+            "access": self.access,
             "resolution": self.resolution,
             "max_energy": self.max_energy,
             "min_solutions": self.min_solutions,
@@ -544,7 +617,9 @@ class JobOrder:
             ValueError: if ``mapping`` is combined with a native topology.
         """
         self._require_draft("set")
-        merged = merge_options(self._options, options, self._client._limits, strict=True, stacklevel=3)
+        merged = merge_options(
+            self._options, options, self._client._limits, strict=True, stacklevel=3, iface=self._client._iface
+        )
         merged = self._client._settle_topology(merged)
         job = self._job
         if (merged.topology, merged.mapping) != (self._options.topology, self._options.mapping):
@@ -705,10 +780,10 @@ class JobOrder:
             QuipSubmissionError: if the order has no receipt; see :meth:`receipt`.
             QuipJobFailedError: if nobody answered the order (reclaim its
                 reward with :meth:`reclaim` once it is final; the message
-                names the order's quality floors, if any), or the chosen
+                names the order's quality floors and allowlist, if any), or the chosen
                 answer carries no vectors.
         """
-        return pick_best(self.receipt(), self._job, self._model, self._floors_text).solution
+        return pick_best(self.receipt(), self._job, self._model, self._floors_text, self.access).solution
 
     def solutions(self, solver: Any = None) -> list[Solution]:
         """Return every stored answer, decoded onto this order's model, best first.
@@ -787,7 +862,7 @@ class JobOrder:
         ]
         terms = terms_rows(
             resolution=options.resolution,
-            mode=options.mode,
+            access=options.access,
             floors=self._floors_text(),
             deadline_blocks=options.deadline_blocks,
             block_wait=options.block_wait,

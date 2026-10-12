@@ -24,6 +24,7 @@ import logging
 import pytest
 
 from xqsa.quip import QuipJobFailedError
+from xqsa.quip.access import AccessAllow, AccessOpen
 from xqsa.quip.solution import decode_answers, no_answer_note, pick_best
 
 from .test_client import _job, _model, _spin_vector
@@ -156,6 +157,37 @@ class TestPickBest:
     @pytest.mark.parametrize("floors", [None, "none"])
     def test_no_floors_add_no_note(self, floors) -> None:
         assert no_answer_note(floors) == ""
+
+    @pytest.mark.parametrize("access", [None, AccessOpen(), {"Bid": {"miners": None, "miner_types": ["Cpu"]}}])
+    def test_open_or_unread_access_adds_no_note(self, access) -> None:
+        assert no_answer_note(None, access) == ""
+
+    def test_allowlist_note(self) -> None:
+        access = AccessAllow(accounts=["0x" + "d4" * 32, "0x" + "8e" * 32], types=["QpuDwave"])
+        assert no_answer_note("none", access) == (
+            f"; only allowlisted solvers could answer {str(access).removeprefix('allowlist ')} and none did"
+        )
+        assert no_answer_note("2 solutions", AccessAllow(types=["Cpu"])) == (
+            " under its quality floors (2 solutions), which solvers may have been unable to meet; "
+            "only allowlisted solvers could answer (types Cpu) and none did"
+        )
+
+    def test_allowlist_note_text(self) -> None:
+        pytest.importorskip("scalecodec", reason="SS58 needs the [quip] extra")
+        alice = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+        bob = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
+        note = no_answer_note(None, AccessAllow(accounts=[alice, bob], types=["QpuDwave"]))
+        assert (
+            note
+            == "; only allowlisted solvers could answer (accounts 5Grw..utQY, 5FHn..94ty; types QpuDwave) and none did"
+        )
+
+    def test_unanswered_names_the_allowlist(self, monkeypatch) -> None:
+        receipt, job = _setup(monkeypatch, [])
+        with pytest.raises(
+            QuipJobFailedError, match=r"has no answers; only allowlisted solvers could answer \(types Gpu\)"
+        ):
+            pick_best(receipt, job, _model(), access=AccessAllow(types=["Gpu"]))
 
     def test_answers_without_vectors_raise(self, monkeypatch) -> None:
         receipt, job = _setup(monkeypatch, [("0xA", [], 0)], front={"solver": "0xA", "energy_milli": 0})

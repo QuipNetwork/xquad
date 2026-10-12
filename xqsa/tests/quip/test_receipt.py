@@ -35,6 +35,7 @@ from xqsa.quip import (
     QuipUnconfirmedError,
     chain,
 )
+from xqsa.quip.access import AccessAllow, AccessOpen
 from xqsa.quip.chain import (
     _attribute,
     account_bytes,
@@ -294,13 +295,14 @@ TOP_N = {"TopNEqual": {"n": 3}}
 
 
 def _receipt_order(**kw) -> dict:
-    """``_order`` plus what a receipt reads: ``reward``, ``resolution`` and the fields its display shows."""
+    """``_order`` plus what a receipt reads: ``reward``, ``resolution``, ``mode`` and the fields its display shows."""
     resolution = kw.pop("resolution", "SingleBest")
+    mode = kw.pop("mode", "Open")
     return {
         **_order(**kw),
         "reward": REWARD,
         "resolution": resolution,
-        "mode": "Open",
+        "mode": mode,
         "spec_id": "0x" + "ab" * 32,
         "ising_params": {"nodes": [0, 1, 2], "edges": [[0, 1], [1, 2]]},
     }
@@ -952,6 +954,22 @@ class TestJobOrderReceiptDisplay:
             "Winner      2.500000000000 AGLS, claimed",
         ]
 
+    def test_access_read_back(self, monkeypatch) -> None:
+        assert _display_for(monkeypatch)._facts().access == AccessOpen()
+
+    def test_unknown_mode_kept_raw(self, monkeypatch) -> None:
+        mode = {"Auction": {"rounds": 3}}  # a variant this client does not know
+        receipt = _display_for(monkeypatch, order=_receipt_order(proposer=PROPOSER, mode=mode))
+        assert receipt._facts().access == mode
+        assert "Access      {'Auction': {'rounds': 3}}" in "\n".join(_rows(str(receipt)))
+
+    def test_allowlist_read_back(self, monkeypatch) -> None:
+        miner = "0x" + "d4" * 32
+        mode = {"Bid": {"miners": [miner], "miner_types": ["QpuDwave"]}}
+        receipt = _display_for(monkeypatch, order=_receipt_order(proposer=PROPOSER, mode=mode))
+        assert receipt._facts().access == AccessAllow(accounts=[miner], types=["QpuDwave"])
+        assert any(row.startswith("Access      allowlist (accounts ") for row in _rows(str(receipt)))
+
     def test_top_n_weighted_rows(self, monkeypatch) -> None:
         order = _receipt_order(proposer=PROPOSER, resolution={"TopNWeighted": {"n": 2}})
         receipt = _display_for(monkeypatch, order=order, top=self.TOP_TWO)
@@ -1078,6 +1096,8 @@ class TestDisplayHelpers:
             ("Open", "open"),
             ({"TopNEqual": {"n": 3}}, "{'TopNEqual': {'n': 3}}"),
             (ResolutionTopNEqual(3), "top 3, equal split"),
+            (AccessOpen(), "open"),
+            (AccessAllow(types=["QpuDwave"]), "allowlist (types QpuDwave)"),
         ],
     )
     def test_variant_text(self, value, text) -> None:
@@ -1086,7 +1106,7 @@ class TestDisplayHelpers:
     def test_terms_rows(self) -> None:
         rows = terms_rows(
             resolution="SingleBest",
-            mode="Open",
+            access="Open",
             floors="2 solutions",
             deadline_blocks=100,
             block_wait=10,

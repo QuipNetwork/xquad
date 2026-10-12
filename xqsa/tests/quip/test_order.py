@@ -22,6 +22,7 @@ from __future__ import annotations
 import math
 import warnings
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -34,7 +35,8 @@ from xqsa.quip import (
     QuipSubmissionError,
     QuipUnconfirmedError,
 )
-from xqsa.quip.chain import ChainLimits
+from xqsa.quip.access import AccessAllow, AccessOpen
+from xqsa.quip.chain import ChainLimits, unregistered_solvers
 from xqsa.quip.order import JobOrder, _OrderOptions, check_client_defaults, merge_options
 from xqsa.quip.resolution import ResolutionSingleBest, ResolutionTopNEqual, ResolutionTopNWeighted
 from xqsa.solver import SolverResult
@@ -42,6 +44,7 @@ from xqvm_py.xqmx import XQMX
 
 from .test_client import (
     GENESIS_HASH,
+    SOLVER_TYPES,
     TOPO_HASH,
     UNIT,
     _make_solver,
@@ -53,7 +56,14 @@ from .test_client import (
     _submission,
 )
 
-LIMITS = ChainLimits(min_reward=UNIT, max_deadline_blocks=1000, max_block_wait=100, max_solutions=20)
+LIMITS = ChainLimits(
+    min_reward=UNIT,
+    max_deadline_blocks=1000,
+    max_block_wait=100,
+    max_solutions=20,
+    max_bid_miners=16,
+    solver_types=SOLVER_TYPES,
+)
 NO_LIMITS = ChainLimits(min_reward=None, max_deadline_blocks=None, max_block_wait=None, max_solutions=None)
 BASE = _OrderOptions(
     reward=UNIT,
@@ -61,7 +71,7 @@ BASE = _OrderOptions(
     block_wait=10,
     topology=None,
     mapping=None,
-    mode="Open",
+    access="Open",
     resolution="SingleBest",
     delivery="OnChainOnly",
 )
@@ -474,12 +484,16 @@ class TestOrderOptionStrictness:
             _merge(colour="red")
 
     def test_client_default_is_not_an_order_option(self) -> None:
+        with pytest.raises(TypeError, match="unknown order option 'delivery'"):
+            _merge(delivery="OnChainOnly")
+
+    def test_mode_is_not_an_order_option(self) -> None:
         with pytest.raises(TypeError, match="unknown order option 'mode'"):
             _merge(mode="Open")
 
     def test_raw_dict_strict_raises(self) -> None:
-        with pytest.raises(TypeError, match="raw chain values"):
-            _merge(replace_base(mode={"Bid": 5}))
+        with pytest.raises(TypeError, match="access: raw chain values"):
+            _merge(replace_base(access={"Bid": 5}))
 
     def test_mapping_dict_is_not_a_raw_value(self) -> None:
         assert _quiet_merge(mapping={0: 1}).mapping == {0: 1}
@@ -496,19 +510,12 @@ class TestOrderOptionStrictness:
 
 class TestClientDefaults:
     def test_supported_defaults_pass(self) -> None:
-        check_client_defaults("Open", "OnChainOnly")
-
-    def test_mode_refused(self) -> None:
-        with pytest.raises(ValueError, match="QUI-1607"):
-            check_client_defaults("Whitelist", "OnChainOnly")
+        check_client_defaults("OnChainOnly")
 
     @pytest.mark.parametrize("delivery", ["ResultReady", {"Callback": {}}])
     def test_delivery_refused(self, delivery) -> None:
         with pytest.raises(ValueError, match="result delivery is not supported yet"):
-            check_client_defaults("Open", delivery)
-
-    def test_raw_dicts_pass_for_the_lenient_path(self) -> None:
-        check_client_defaults({"Bid": 5}, "OnChainOnly")
+            check_client_defaults(delivery)
 
     def test_constructor_checks_before_connecting(self, monkeypatch) -> None:
         from xqsa.tests.quip.test_client import FakeSubstrate
@@ -517,8 +524,266 @@ class TestClientDefaults:
             def init_runtime(self, *args, **kwargs):
                 raise AssertionError("must not connect")
 
-        with pytest.raises(ValueError, match="QUI-1607"):
-            _make_solver(monkeypatch, iface=_Unreachable(), mode="Whitelist")
+        with pytest.raises(ValueError, match="not an access rule"):
+            _make_solver(monkeypatch, iface=_Unreachable(), access="Whitelist")
+
+    def test_access_defaults_to_open(self, monkeypatch) -> None:
+        assert _make_solver(monkeypatch)._access == AccessOpen()
+
+    def test_constructor_mode_is_deprecated(self, monkeypatch) -> None:
+        with pytest.warns(DeprecationWarning, match="mode= is deprecated, use access= .*QUI-1608"):
+            solver = _make_solver(monkeypatch, mode="Open")
+        assert solver._access == AccessOpen()
+
+    def test_constructor_mode_and_access_refused(self, monkeypatch) -> None:
+        with pytest.raises(TypeError, match="not both"):
+            _make_solver(monkeypatch, mode="Open", access="Open")
+
+
+ALICE_HEX = "0x" + "d4" * 32
+BOB_HEX = "0x" + "8e" * 32
+CAROL_HEX = "0x" + "90" * 32
+
+
+class _SolversIface:
+    """Answers ``Solvers`` reads from ``registered``, recording each account read."""
+
+    def __init__(self, registered=(), *, raises: Exception | None = None) -> None:
+        self.registered = set(registered)
+        self.raises = raises
+        self.reads: list[str] = []
+
+    def query(self, module, name, params=None):
+        assert (module, name) == ("QuantumComputeMempool", "Solvers")
+        if self.raises is not None:
+            raise self.raises
+        self.reads.append(params[0])
+        return SimpleNamespace(value={"solver_type": "Cpu"} if params[0] in self.registered else None)
+
+
+class TestUnregisteredSolvers:
+    RULE = AccessAllow(accounts=[ALICE_HEX, BOB_HEX, CAROL_HEX], types=["Cpu"])
+
+    def test_lists_the_unregistered_in_order(self) -> None:
+        iface = _SolversIface([BOB_HEX])
+        assert unregistered_solvers(iface, [ALICE_HEX, BOB_HEX, CAROL_HEX]) == [ALICE_HEX, CAROL_HEX]
+        assert iface.reads == [ALICE_HEX, BOB_HEX, CAROL_HEX]
+
+    def test_warns_once_per_unregistered_account(self) -> None:
+        with pytest.warns(UserWarning, match="is not a registered solver") as record:
+            merged = merge_options(BASE, {"access": self.RULE}, LIMITS, strict=True, iface=_SolversIface([BOB_HEX]))
+        assert merged.access == self.RULE
+        assert [str(w.message).split()[1] for w in record] == [ALICE_HEX, CAROL_HEX]
+
+    def test_all_registered_is_silent(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            iface = _SolversIface([ALICE_HEX, BOB_HEX, CAROL_HEX])
+            merge_options(BASE, {"access": self.RULE}, LIMITS, strict=True, iface=iface)
+
+    def test_types_only_reads_nothing(self) -> None:
+        iface = _SolversIface()
+        merge_options(BASE, {"access": AccessAllow(types=["Cpu"])}, LIMITS, strict=True, iface=iface)
+        assert iface.reads == []
+
+    def test_read_fault_does_not_raise(self, caplog) -> None:
+        iface = _SolversIface(raises=RuntimeError("socket closed"))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            merged = merge_options(BASE, {"access": self.RULE}, LIMITS, strict=True, iface=iface)
+        assert merged.access == self.RULE
+        assert "could not check whether the allowlisted accounts are registered" in caplog.text
+
+    def test_create_order_warns_and_set_rechecks_only_a_new_list(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with pytest.warns(UserWarning, match=f"{ALICE_HEX} is not a registered solver") as record:
+            order = solver.create_order(_model(), access=AccessAllow(accounts=[ALICE_HEX]))
+        assert record[0].filename == __file__
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            order.set(reward=2 * UNIT)
+        with pytest.warns(UserWarning, match=f"{BOB_HEX} is not a registered solver"):
+            order.set(access=AccessAllow(accounts=[BOB_HEX]))
+
+    def test_set_with_the_same_allowlist_reads_nothing(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with pytest.warns(UserWarning, match="is not a registered solver"):
+            order = solver.create_order(_model(), access=AccessAllow(accounts=[ALICE_HEX, BOB_HEX]))
+        reads = _count_solvers_reads(solver)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            order.set(access=order.access, reward=2 * UNIT)
+            order.set(**{name: value for name, value in order.options().items() if name != "mapping"})
+        assert reads == []
+
+    def test_client_default_allowlist_is_looked_up_once_at_construction(self, monkeypatch) -> None:
+        with pytest.warns(UserWarning, match="is not a registered solver") as record:
+            solver, _ = _ready(monkeypatch, access=AccessAllow(accounts=[ALICE_HEX, BOB_HEX]))
+        assert [str(w.message).split()[1] for w in record] == [ALICE_HEX, BOB_HEX]
+        reads = _count_solvers_reads(solver)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            for _ in range(3):
+                solver.create_order(_model())
+        assert reads == []
+        with pytest.warns(UserWarning, match=f"{CAROL_HEX} is not a registered solver"):
+            solver.create_order(_model(), access=AccessAllow(accounts=[CAROL_HEX]))
+        assert reads == [CAROL_HEX]
+
+
+def _count_solvers_reads(solver) -> list[str]:
+    """Record the account of every ``Solvers`` read the solver makes from now on."""
+    reads: list[str] = []
+    query = solver._iface.query
+
+    def counted(module, name, params=None, block_hash=None):
+        if name == "Solvers":
+            reads.append(params[0])
+        return query(module, name, params, block_hash)
+
+    solver._iface.query = counted
+    return reads
+
+
+class TestAccess:
+    def test_open_string_coerced(self) -> None:
+        assert _merge(access="Open").access == AccessOpen()
+
+    def test_bad_string_is_an_option_error(self) -> None:
+        with pytest.raises(QuipOrderOptionError, match="not an access rule") as info:
+            _merge(access="Whitelist")
+        assert info.value.option == "access"
+
+    def test_allowlist_within_limits(self) -> None:
+        rule = AccessAllow(accounts=[f"0x{i:064x}" for i in range(16)], types=["QpuDwave"])
+        assert _merge(access=rule).access == rule
+
+    def test_too_many_accounts_refused(self) -> None:
+        rule = AccessAllow(accounts=[f"0x{i:064x}" for i in range(17)])
+        with pytest.raises(QuipOrderOptionError, match="17 accounts; the chain's MaxBidMiners is 16"):
+            _merge(access=rule)
+
+    def test_absent_cap_not_checked(self) -> None:
+        rule = AccessAllow(accounts=[f"0x{i:064x}" for i in range(17)])
+        assert _merge(limits=replace(LIMITS, max_bid_miners=None), access=rule).access == rule
+
+    def test_unknown_type_refused(self) -> None:
+        with pytest.raises(QuipOrderOptionError, match="unknown solver type 'QpuRigetti'; the chain has Cpu, Gpu"):
+            _merge(access=AccessAllow(types=["QpuDwave", "QpuRigetti"]))
+
+    def test_unknown_types_unchecked_without_metadata(self) -> None:
+        rule = AccessAllow(types=["QpuRigetti"])
+        assert _merge(limits=replace(LIMITS, solver_types=None), access=rule).access == rule
+
+    @pytest.mark.parametrize("wrap", [lambda v: v, lambda v: (v,)], ids=["readback", "to_chain"])
+    def test_raw_dict_checked_on_the_lenient_path(self, wrap) -> None:
+        raw = {"Bid": {"miners": None, "miner_types": wrap(["QpuRigetti"])}}
+        with pytest.warns(DeprecationWarning), pytest.raises(QuipOrderOptionError, match="unknown solver type"):
+            _merge(strict=False, access=raw)
+
+    def test_raw_to_chain_dict_over_cap_refused(self) -> None:
+        raw = AccessAllow(accounts=[f"0x{i:064x}" for i in range(17)]).to_chain()
+        with pytest.warns(DeprecationWarning), pytest.raises(QuipOrderOptionError, match="MaxBidMiners is 16"):
+            _merge(strict=False, access=raw)
+
+    def test_raw_to_chain_dict_passes_on_the_lenient_path(self) -> None:
+        raw = AccessAllow(types=["Cpu"]).to_chain()
+        with pytest.warns(DeprecationWarning, match="raw chain value"):
+            assert _merge(strict=False, access=raw).access == raw
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            {"Bid": {"miners": None, "miner_types": [f"Type{i}" for i in range(9)]}},
+            {"Bid": {"miners": ["0x" + "11" * 20], "miner_types": None}},
+            {"Bid": {"miners": [7], "miner_types": None}},
+            {"Bid": {"miners": None, "miner_types": None}},
+            {"Bid": {"miners": None, "miner_types": [1]}},
+            {"Bid": 5},
+            {"Open": 1},
+        ],
+        ids=["nine-types", "20-byte-account", "int-account", "empty", "non-str-type", "not-a-struct", "open-value"],
+    )
+    def test_raw_dict_naming_a_rule_that_does_not_decode_refused(self, raw) -> None:
+        with (
+            pytest.warns(DeprecationWarning),
+            pytest.raises(QuipOrderOptionError, match="it cannot be read as an access rule") as info,
+        ):
+            _merge(strict=False, access=raw)
+        assert info.value.option == "access"
+
+    def test_raw_dict_naming_no_rule_passes_unchecked(self) -> None:
+        with pytest.warns(DeprecationWarning, match="raw chain value is deprecated; pass a typed option") as record:
+            assert _merge(strict=False, access={"FutureRule": 1}).access == {"FutureRule": 1}
+        assert not any("unchecked" in str(w.message) for w in record)
+
+    def test_create_order_encodes_the_allowlist(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        rule = AccessAllow(accounts=[ALICE_HEX, BOB_HEX], types=["QpuDwave"])
+        with pytest.warns(UserWarning, match="not a registered solver"):  # the fake chain has no solvers.
+            order = solver.create_order(_model(), access=rule)
+        assert order.access == order.options()["access"] == rule
+        assert "allowlist (accounts " in str(order)
+        assert order._call_params()["mode"] == {
+            "Bid": {"miners": ([ALICE_HEX, BOB_HEX],), "miner_types": (["QpuDwave"],)}
+        }
+        assert order.set(access="Open")._call_params()["mode"] == "Open"
+
+    def test_client_default_allowlist(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch, access=AccessAllow(types=["Gpu"]))
+        params = solver.create_order(_model())._call_params()
+        assert params["mode"] == {"Bid": {"miners": None, "miner_types": (["Gpu"],)}}
+
+    def test_create_order_refuses_unknown_type_before_signing(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        with pytest.raises(QuipOrderOptionError, match="unknown solver type"):
+            solver.create_order(_model(), access=AccessAllow(types=["Tpu"]))
+        assert captured["builds"] == 0
+
+    def test_solve_mode_is_deprecated(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        with pytest.warns(DeprecationWarning, match="mode= is deprecated") as record:
+            solver.solve(_model(), mode=AccessAllow(types=["Cpu"]))
+        assert record[0].filename == __file__
+        assert captured["call_params"]["mode"] == {"Bid": {"miners": None, "miner_types": (["Cpu"],)}}
+
+    def test_solve_takes_access(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            solver.solve(_model(), access=AccessAllow(types=["Cpu"]))
+        assert captured["call_params"]["mode"] == {"Bid": {"miners": None, "miner_types": (["Cpu"],)}}
+
+    @pytest.mark.parametrize("value", [None, 5, ["Open"]])
+    def test_non_rule_refused(self, monkeypatch, value) -> None:
+        solver, captured = _ready(monkeypatch)
+        with pytest.raises(QuipOrderOptionError, match="not an access rule"):
+            solver.create_order(_model(), access=value)
+        assert captured["builds"] == 0
+
+    @pytest.mark.parametrize("kwargs", [{"mode": None}, {"access": None}, {"mode": None, "access": None}])
+    def test_solve_none_is_the_client_default(self, monkeypatch, kwargs) -> None:
+        solver, captured = _ready(monkeypatch)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            solver.solve(_model(), **kwargs)
+        assert captured["call_params"]["mode"] == "Open"
+
+    def test_quote_shortcut_maps_mode(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        with pytest.warns(DeprecationWarning) as record:
+            solver.quote(_model(), mode=AccessAllow(types=["Cpu"]))
+        messages = [str(w.message) for w in record]
+        assert any("mode= is deprecated" in m for m in messages)
+        assert not any("ignoring unknown" in m for m in messages)
+        assert all(w.filename == __file__ for w in record)
+        assert captured["params"][-1]["mode"] == {"Bid": {"miners": None, "miner_types": (["Cpu"],)}}
+
+    def test_solve_mode_and_access_refused(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        with pytest.raises(TypeError, match="not both"):
+            solver.solve(_model(), mode="Open", access="Open")
+        assert captured["builds"] == 0
 
 
 def _ready(monkeypatch, **solver_kwargs):
@@ -556,6 +821,7 @@ class TestJobOrderLifecycle:
             "block_wait": 20,
             "topology": TOPO_HASH,
             "mapping": None,
+            "access": AccessOpen(),
             "resolution": ResolutionSingleBest(),
             "max_energy": None,
             "min_solutions": None,
@@ -962,9 +1228,13 @@ class TestSolverQuipCompatibility:
             solver.create_order(_model(), colour="red")
 
     def test_create_order_refuses_a_raw_client_default(self, monkeypatch) -> None:
-        solver, _ = _ready(monkeypatch, mode={"Bid": 5})
-        with pytest.raises(TypeError, match="mode: raw chain values"):
+        solver, _ = _ready(monkeypatch, access=AccessAllow(types=["Cpu"]).to_chain())
+        with pytest.raises(TypeError, match="access: raw chain values"):
             solver.create_order(_model())
+
+    def test_constructor_refuses_a_raw_client_default_that_does_not_decode(self, monkeypatch) -> None:
+        with pytest.raises(QuipOrderOptionError, match="it cannot be read as an access rule"):
+            _ready(monkeypatch, access={"Bid": 5})
 
     def test_quote_shortcut_warns_and_prices(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)
@@ -1154,6 +1424,15 @@ class TestJobOrderSolutions:
         solver._iface.maps[(MEMPOOL, "OrderSolutions")] = [_answer(order._job, "0xA", [BEST], -4000)]
         monkeypatch.setattr(JobOrder, "_floors_text", lambda self: pytest.fail("floors note built for an answer"))
         assert order.best().energy == -4
+
+    def test_best_on_an_unanswered_order_names_its_allowlist(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model(), access=AccessAllow(types=["Gpu"])).submit()
+        solver._iface.maps[(MEMPOOL, "OrderSolutions")] = []
+        with pytest.raises(
+            QuipJobFailedError, match=r"only allowlisted solvers could answer \(types Gpu\) and none did"
+        ):
+            order.best()
 
     def test_best_on_an_unanswered_order_does_not_reclaim(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)

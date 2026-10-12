@@ -993,6 +993,8 @@ UNIT = 1_000_000_000_000  # 1 AGLS in planck (chain MinReward default).
 DEFAULT_TOPOLOGY_HASH = "0x" + "cb" * 32
 # Stand-in for the chain's genesis block hash, as get_block_hash(0) returns it.
 GENESIS_HASH = "0x" + "9e" * 32
+# aglais's MinerType variants, as register_solver's metadata names them.
+SOLVER_TYPES = ("Cpu", "Gpu", "QpuDwave", "QpuIbm", "QpuIonq", "QpuPasqal", "Asic")
 
 # A topology carrying allowed-value sets, so check_allowed_values has data.
 TOPO_WITH_SETS = Topology.of(
@@ -1088,6 +1090,11 @@ class FakeSubstrate:
     def query(self, module: str, name: str, params: list | None = None, block_hash: str | None = None):
         return _StorageEntry(self.storage.get((module, name)))
 
+    def get_metadata_call_function(self, module: str, name: str):
+        # Only register_solver is introspected, for the solver type names.
+        assert (module, name) == ("QuantumComputeMempool", "register_solver")
+        return types.SimpleNamespace(get_param_info=lambda: {"solver_type": SOLVER_TYPES})
+
     def query_map(self, module: str, name: str, params: list | None = None):
         return list(self.maps.get((module, name), []))
 
@@ -1161,6 +1168,7 @@ def _default_iface(*, with_default_spec_const: bool = False, balance: int | None
         ("QuantumComputeMempool", "MaxDeadlineBlocks"): 1000,
         ("QuantumComputeMempool", "MaxBlockWait"): 100,
         ("QuantumComputeMempool", "MaxSolutions"): 20,
+        ("QuantumComputeMempool", "MaxBidMiners"): 16,
     }
     if with_default_spec_const:
         constants[("QuantumComputeMempool", "DefaultIsingSpecId")] = DEFAULT_ISING_SPEC_ID
@@ -1393,8 +1401,19 @@ class TestSolverQuipConstruction:
 
         solver = _make_solver(monkeypatch)
         assert solver._limits == ChainLimits(
-            min_reward=UNIT, max_deadline_blocks=1000, max_block_wait=100, max_solutions=20, spec_version=118
+            min_reward=UNIT,
+            max_deadline_blocks=1000,
+            max_block_wait=100,
+            max_solutions=20,
+            spec_version=118,
+            max_bid_miners=16,
+            solver_types=SOLVER_TYPES,
         )
+
+    def test_solver_types_unreadable_read_as_none(self, monkeypatch) -> None:
+        iface = _default_iface()
+        iface.get_metadata_call_function = lambda module, name: None  # no such call: None.get_param_info fails.
+        assert _make_solver(monkeypatch, iface=iface)._limits.solver_types is None
 
     def test_spec_version_read_without_an_rpc(self, monkeypatch) -> None:
         iface = _default_iface()
@@ -1463,6 +1482,16 @@ class TestSolverQuipConstruction:
         _clear_quip_env(monkeypatch)
         solver = SolverQuip.for_network("aglais", seed=VALID_SEED)
         assert solver._url == NETWORKS["aglais"].rpc
+
+    def test_for_network_mode_is_deprecated_at_the_callers_line(self, monkeypatch) -> None:
+        from xqsa.quip import AccessAllow, SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        with pytest.warns(DeprecationWarning, match="mode= is deprecated") as record:
+            solver = SolverQuip.for_network("aglais", seed=VALID_SEED, mode=AccessAllow(types=["Cpu"]))
+        assert record[0].filename == __file__
+        assert solver._access == AccessAllow(types=["Cpu"])
 
     def test_for_network_beats_env_url(self, monkeypatch) -> None:
         # The preset enters as url=, so an exported QUIP_RPC_URL cannot redirect it.
@@ -2549,6 +2578,40 @@ class TestSolverQuipCollect:
         with pytest.raises(QuipJobFailedError) as excinfo:
             solver._collect_result(solver.get_receipt(1), _job(solver), _model(), elapsed=0.0)
         assert note in str(excinfo.value)
+
+    def test_no_solutions_names_the_allowlist(self, monkeypatch) -> None:
+        from xqsa.quip import QuipJobFailedError
+
+        order = {**_order(solution_count=0), "mode": {"Bid": {"miners": None, "miner_types": ["QpuDwave"]}}}
+        iface = _chain_iface(order=order, head=200, submissions=[])
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipJobFailedError) as excinfo:
+            solver._collect_result(solver.get_receipt(1), _job(solver), _model(), elapsed=0.0)
+        assert str(excinfo.value) == (
+            "order 1 finalized with no solutions; only allowlisted solvers could answer (types QpuDwave) and none "
+            "did; the reserved reward was reclaimed"
+        )
+
+    def test_no_solutions_reads_the_order_once_for_its_note(self, monkeypatch) -> None:
+        from xqsa.quip import QuipJobFailedError
+
+        iface = _chain_iface(order=_order(solution_count=0), head=200, submissions=[])
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        receipt = solver.get_receipt(1)
+        reads = []
+        monkeypatch.setattr(solver, "_try_reclaim", lambda receipt: "reclaimed")
+        query = iface.query
+
+        def counted(module, name, params=None, block_hash=None):
+            reads.append(name)
+            return query(module, name, params, block_hash)
+
+        monkeypatch.setattr(iface, "query", counted)
+        with pytest.raises(QuipJobFailedError):
+            solver._collect_result(receipt, _job(solver), _model(), elapsed=0.0)
+        assert reads.count("JobOrders") == 1
 
     def test_no_solutions_survives_an_unreadable_order(self, monkeypatch) -> None:
         from xqsa.quip import QuipJobFailedError

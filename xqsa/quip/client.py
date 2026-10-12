@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Literal, Self
 
 from xqsa.quip import chain
 from xqsa.quip import metadata as quip_metadata
+from xqsa.quip.access import Access, AccessOpen, coerce_access
 from xqsa.quip.chain import (  # noqa: F401 -- FEE_HEADROOM_PLANCK and the pallet names stay importable from here.
     FEE_HEADROOM_PLANCK,
     JOB_ORDERS_STORAGE,
@@ -71,6 +72,7 @@ from xqsa.quip.networks import NETWORKS
 from xqsa.quip.order import (
     JobOrder,
     _chain_floors,
+    _check_access,
     _check_floors,
     _OrderOptions,
     _Sent,
@@ -140,9 +142,13 @@ class SolverQuip(Solver):
         ImportError: if the ``[quip]`` extra is not installed
             (``pip install xqsa[quip]`` -- provides ``substrate-interface`` and
             the ``quip_signer`` signing extension).
-        ValueError: if no RPC URL is configured, or ``mode``, ``resolution``
+        ValueError: if no RPC URL is configured, or ``access``, ``resolution``
             or ``delivery`` names a value no order can use yet (checked before
             connecting).
+        TypeError: if both ``access`` and the deprecated ``mode`` are given.
+        QuipOrderOptionError: if an ``access`` allowlist is outside the
+            chain's limits. Each listed account that is not a registered
+            solver warns once, here rather than on every order.
         QuipConnectionError: if the node is unreachable or the configured Ising
             spec is not registered on-chain.
         QuipMetadataError: if the node's runtime metadata cannot be decoded by
@@ -161,7 +167,8 @@ class SolverQuip(Solver):
         *,
         spec_id: str | None = None,
         topology: str | None = None,
-        mode: str = "Open",
+        access: str | Access | None = None,
+        mode: Any = None,
         resolution: str | Resolution = "SingleBest",
         delivery: str = "OnChainOnly",
         deadline_blocks: int = DEFAULT_DEADLINE_BLOCKS,
@@ -190,13 +197,16 @@ class SolverQuip(Solver):
         resolved_url = url or os.environ.get("QUIP_RPC_URL")
         if not resolved_url:
             raise ValueError("A Quip RPC URL is required. Pass url= or set QUIP_RPC_URL.")
-        # Both before any network I/O.
-        check_client_defaults(mode, delivery)
+        access = _take_mode(access, mode, stacklevel=2)
+        if access is None:
+            access = AccessOpen()
+        # All before any network I/O.
+        check_client_defaults(delivery)
+        self._access = coerce_access(access)
         self._resolution = coerce_resolution(resolution)
 
         self._signer = self._build_signer(quip_signing, seed=seed, keystore=keystore)
 
-        self._mode = mode
         self._delivery = delivery
         self._deadline_blocks = deadline_blocks
         self._block_wait = block_wait
@@ -236,6 +246,8 @@ class SolverQuip(Solver):
 
         self._spec_id = self._resolve_spec_id(spec_id)
         self._limits = chain.read_limits(self._iface)
+        # Checked once here; an order that keeps the default does not look it up again.
+        _check_access(self._access, self._limits, self._iface, stacklevel=3)
         self._reward = self._resolve_reward(reward)
         self._topology_hash = self._resolve_topology_hash(topology)
 
@@ -268,6 +280,7 @@ class SolverQuip(Solver):
         logger.info("Quip network %s resolved to %s", name, preset.rpc)
         if not kwargs.get("faucet"):  # an unset faucet must not let QUIP_FAUCET_URL beat the preset.
             kwargs["faucet"] = preset.faucet
+        _pop_mode(kwargs, stacklevel=2)  # here, so the deprecation names the caller's line.
         solver = cls(url=preset.rpc, **kwargs)
         solver._network = name
         return solver
@@ -593,10 +606,10 @@ class SolverQuip(Solver):
             "reward": options.reward,
             # Unit enum variants encode from their bare variant name (the same
             # form they decode to -- see the miner's _decode_result_delivery),
-            # payout rules through Resolution.to_chain(). A raw dict from the
-            # deprecated solve() path goes out as given. Bid and Callback* are
+            # access and payout rules through to_chain(). A raw dict from the
+            # deprecated solve() path goes out as given. Callback* delivery is
             # not supported.
-            "mode": options.mode,
+            "mode": options.access.to_chain() if isinstance(options.access, Access) else options.access,
             "resolution": (
                 options.resolution.to_chain() if isinstance(options.resolution, Resolution) else options.resolution
             ),
@@ -798,8 +811,8 @@ class SolverQuip(Solver):
         order_id = receipt.order_id
         if not self._fetch_solutions(order_id):
             refund = self._try_reclaim(receipt)
-            floors = no_answer_note(receipt._floors_text())
-            raise QuipJobFailedError(order_id, f"order {order_id} finalized with no solutions{floors}; {refund}")
+            note = no_answer_note(*receipt._no_answer_facts())
+            raise QuipJobFailedError(order_id, f"order {order_id} finalized with no solutions{note}; {refund}")
 
         pick = pick_best(receipt, job, model)
         return SolverResult(
@@ -914,7 +927,7 @@ class SolverQuip(Solver):
             block_wait=self._block_wait,
             topology=self._topology_hash,
             mapping=None,
-            mode=self._mode,
+            access=self._access,
             resolution=self._resolution,
             delivery=self._delivery,
         )
@@ -945,7 +958,9 @@ class SolverQuip(Solver):
         options and raw chain dicts warn instead of raising. QUI-1608 removes it.
         """
         self._validate_model(model)
-        merged = merge_options(self._default_options(), options, self._limits, strict=strict, stacklevel=4)
+        merged = merge_options(
+            self._default_options(), options, self._limits, strict=strict, stacklevel=4, iface=self._iface
+        )
         merged = self._settle_topology(merged)
         job = self._place(model, merged)
         _check_floors(merged, job, stacklevel=4)
@@ -987,6 +1002,10 @@ class SolverQuip(Solver):
             reward: planck reserved at proposal, at least ``MinReward``.
             deadline_blocks: 10 up to ``MaxDeadlineBlocks``; under 100 warns.
             block_wait: 0 up to ``MaxBlockWait``; not below the deadline warns.
+            access: who may answer: ``"Open"``, ``AccessOpen()``, or
+                ``AccessAllow(accounts=[...], types=[...])``. An allowlist
+                over ``MaxBidMiners`` accounts or naming an unknown solver type
+                is refused.
             resolution: the payout rule: ``"SingleBest"`` or a
                 :class:`~xqsa.quip.Resolution`, such as
                 ``ResolutionTopNEqual(3)``. ``ResolutionTopNWeighted`` is
@@ -1018,7 +1037,7 @@ class SolverQuip(Solver):
 
         Raises:
             TypeError: for an unknown option, a non-integer amount, or a raw
-                chain value, including a dict in the client's ``mode`` or
+                chain value, including a dict in the client's ``access`` or
                 ``resolution``.
             QuipOrderOptionError: if an option is outside its chain limit.
             ValueError: if the model cannot be solved, the topology is not a
@@ -1149,6 +1168,7 @@ class SolverQuip(Solver):
             DeprecationWarning,
             stacklevel=2,
         )
+        _pop_mode(kwargs, stacklevel=2)
         return self._create_order(model, kwargs, strict=False).quote()
 
     def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
@@ -1169,11 +1189,13 @@ class SolverQuip(Solver):
         warns with a ``DeprecationWarning`` instead of raising, until QUI-1608.
 
         Keyword args:
-            reward, deadline_blocks, block_wait, topology, mapping, max_energy,
-                min_solutions, min_diversity: as for :meth:`create_order`, for
-                this solve only.
+            reward, deadline_blocks, block_wait, topology, mapping, access,
+                resolution, max_energy, min_solutions, min_diversity: as for
+                :meth:`create_order`, for this solve only.
+            mode: deprecated name of ``access``; warns until QUI-1608.
 
         Raises:
+            TypeError: if both ``access`` and the deprecated ``mode`` are given.
             ValueError: if ``mapping`` is given with ``topology="native"``.
             QuipOrderOptionError: if an option is outside its chain limit,
                 before anything is signed.
@@ -1195,6 +1217,7 @@ class SolverQuip(Solver):
                 model again on that account without checking.
             QuipJobFailedError: if the order finalizes with no usable solution.
         """
+        _pop_mode(kwargs, stacklevel=2)
         order = self._create_order(model, kwargs, strict=False).submit().wait()
         assert order._submitted_at is not None  # submit() sets it.
         elapsed = time.perf_counter() - order._submitted_at
@@ -1342,6 +1365,34 @@ def _env_flag(name: str) -> bool | None:
     if raw in _FALSE_FLAGS:
         return False
     raise ValueError(f"{name}={raw!r} is not a boolean; use one of 1/true/yes/on or 0/false/no/off")
+
+
+def _take_mode(access: Any, mode: Any, *, stacklevel: int) -> Any:
+    """Return ``access``, or the deprecated ``mode`` in its place with a ``DeprecationWarning``.
+
+    QUI-1608 removes ``mode=``.
+
+    Raises:
+        TypeError: if both are given.
+    """
+    if mode is None:
+        return access
+    if access is not None:
+        raise TypeError("pass access= or the deprecated mode=, not both")
+    message = "mode= is deprecated, use access= (removed in QUI-1608)"
+    warnings.warn(message, DeprecationWarning, stacklevel=stacklevel + 1)
+    return mode
+
+
+def _pop_mode(kwargs: dict[str, Any], *, stacklevel: int) -> None:
+    """Fold a deprecated ``mode`` in ``kwargs`` into ``access``, dropping an ``access`` of ``None`` (the default).
+
+    Raises:
+        TypeError: if both are given.
+    """
+    access = _take_mode(kwargs.pop("access", None), kwargs.pop("mode", None), stacklevel=stacklevel + 1)
+    if access is not None:
+        kwargs["access"] = access
 
 
 def _resolve_gate(gate: object, name: str, env: str) -> bool | Callable[[JobQuote], bool]:
