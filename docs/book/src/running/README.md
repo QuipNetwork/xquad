@@ -255,10 +255,12 @@ building your own layer on top of the raw Rust FFI.
 `VM.set_calldata()` applies the same size, grid and index rules to every
 `xquad.types.XQMX` it is given, with the same errors on both backends,
 and applies them again at `run()`, since it keeps your objects rather
-than copying them. A sample value outside its domain is refused on both
-backends too, and only the class differs: `ValueError` on `RUST`, and
-`xqvm_py.errors.SampleOutOfDomain`, a `ValueError` subclass, on
-`PYTHON`.
+than copying them. A sample value outside its domain raises
+`xqvm_py.errors.SampleOutOfDomain`, a `ValueError` subclass, from
+`set_calldata()` on both backends. A sample changed out of its domain
+after `set_calldata()` is caught again at `run()`, where `RUST` raises a
+plain `ValueError` instead.
+
 ## A complete run across three programs
 
 A compiled problem is three independent programs -- see [Three

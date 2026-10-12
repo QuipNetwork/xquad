@@ -230,8 +230,8 @@ before signing:
 QuipOrderOptionError: ResolutionTopNWeighted needs runtime 119 or later, and the chain runs runtime 118; older runtimes weight by absolute energy, so a worse answer can take the larger share
 ```
 
-A top-N rule with `block_wait=0` warns, because the order closes on its
-first answer:
+A top-N rule with `n` above 1 and `block_wait=0` warns, because the
+order closes on its first answer:
 `resolution=top 3, equal split: with block_wait=0 only the first answer is accepted, so there can be only one winner`.
 
 ### Settlement
