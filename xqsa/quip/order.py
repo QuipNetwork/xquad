@@ -30,14 +30,17 @@ fee to fail on chain.
 
 from __future__ import annotations
 
+import math
 import time
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, replace
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Self
 
-from xqsa.quip.display import box, terms_rows
-from xqsa.quip.errors import QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
+from xqsa.quip.codec import MILLI_SCALE, _to_milli, energy_ceiling_milli
+from xqsa.quip.display import Floors, _decimal_text, box, floors_text, terms_rows
+from xqsa.quip.errors import EncodingError, QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
 from xqsa.quip.solution import Solution, decode_answers, pick_best
@@ -53,7 +56,13 @@ OrderState = Literal["draft", "submitted", "unconfirmed", "failed", "finalized"]
 
 # The options an order accepts; ``mode``, ``resolution`` and ``delivery`` are
 # client defaults only.
-ORDER_OPTIONS = frozenset({"reward", "deadline_blocks", "block_wait", "topology", "mapping"})
+ORDER_OPTIONS = frozenset(
+    {"reward", "deadline_blocks", "block_wait", "topology", "mapping", "max_energy", "min_solutions", "min_diversity"}
+)
+
+# The largest diversity floor: a vector and its full flip count as identical,
+# so no set of vectors averages more than floor(n/2)/n, at most one half.
+MAX_DIVERSITY = 0.5
 
 # The shortest deadline worth proposing, and the one below which orders often
 # go unanswered. On aglais a 1-block deadline was solved 0 of 11 times, 30
@@ -79,6 +88,10 @@ class _OrderOptions:
     mode: Any
     resolution: Any
     delivery: Any
+    # Quality floors: per-order only, never client defaults.
+    max_energy: float | None = None
+    min_solutions: int | None = None
+    min_diversity: float | None = None
 
 
 def check_client_defaults(mode: Any, resolution: Any, delivery: Any) -> None:
@@ -149,7 +162,10 @@ def _check_raw_values(options: _OrderOptions, *, strict: bool, stacklevel: int) 
 
 
 def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: int) -> None:
-    """Check reward, deadline and block wait against each other and the chain limits."""
+    """Check every option against the others and the chain limits, short of the placed model.
+
+    The floor checks that need the placed model are in :func:`_check_floors`.
+    """
     reward = _require_int(options.reward, "reward")
     deadline = _require_int(options.deadline_blocks, "deadline_blocks")
     block_wait = _require_int(options.block_wait, "block_wait")
@@ -168,6 +184,18 @@ def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: in
     if block_wait < 0 or (max_wait is not None and block_wait > max_wait):
         upper = f" and at most MaxBlockWait ({max_wait})" if max_wait is not None else ""
         raise QuipOrderOptionError("block_wait", f"block_wait={block_wait} must be at least 0{upper}")
+    if options.max_energy is not None:
+        energy = _require_real(options.max_energy, "max_energy")
+        try:
+            finite = math.isfinite(energy)
+        except OverflowError:  # an int beyond float range, maybe too long to str()
+            raise QuipOrderOptionError("max_energy", "max_energy is too large to convert to a float") from None
+        if not finite:
+            raise QuipOrderOptionError("max_energy", f"max_energy={energy} must be finite")
+    if options.min_solutions is not None:
+        _check_min_solutions(_require_int(options.min_solutions, "min_solutions"), limits, stacklevel=stacklevel + 1)
+    if options.min_diversity is not None:
+        _check_min_diversity(_require_real(options.min_diversity, "min_diversity"), options.min_solutions)
 
     if deadline < RELIABLE_DEADLINE_BLOCKS:
         warnings.warn(
@@ -184,11 +212,125 @@ def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: in
         )
 
 
+def _check_min_solutions(count: int, limits: ChainLimits, *, stacklevel: int) -> None:
+    """Refuse a solution floor below 1 or above ``MaxSolutions``, and warn at 1."""
+    upper = limits.max_solutions
+    if count < 1 or (upper is not None and count > upper):
+        bound = f" and at most MaxSolutions ({upper})" if upper is not None else ""
+        raise QuipOrderOptionError("min_solutions", f"min_solutions={count} must be at least 1{bound}")
+    if count == 1:
+        warnings.warn(
+            "min_solutions=1: the chain stores only the first vector of each answer, but ranks the answer by "
+            "its best vector",
+            UserWarning,
+            stacklevel=stacklevel,
+        )
+
+
+def _check_min_diversity(diversity: float, min_solutions: int | None) -> None:
+    """Refuse a diversity floor outside 0 to 0.5, off the milli grid, or paired with one solution."""
+    if not 0 <= diversity <= MAX_DIVERSITY:
+        raise QuipOrderOptionError("min_diversity", f"min_diversity={diversity} must be from 0 to {MAX_DIVERSITY}")
+    if _to_milli(diversity, "min_diversity")[1]:
+        raise QuipOrderOptionError(
+            "min_diversity", f"min_diversity={diversity} is not a whole number of thousandths, which the chain needs"
+        )
+    # The chain refuses a positive diversity floor only with an explicit
+    # min_solutions below 2; unset keeps every valid vector, so it is accepted.
+    if diversity > 0 and min_solutions == 1:
+        raise QuipOrderOptionError(
+            "min_diversity",
+            f"min_diversity={diversity} needs min_solutions of at least 2 or unset; one solution has no diversity "
+            "(the chain's InvalidDiversityConfig)",
+        )
+
+
 def _require_int(value: Any, name: str) -> int:
     """Return ``value`` if it is an ``int`` (not a ``bool``), else raise ``TypeError``."""
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an int, not {type(value).__name__}")
     return value
+
+
+def _require_real(value: Any, name: str) -> float:
+    """Return ``value`` if it is an ``int`` or ``float`` (not a ``bool``), else raise ``TypeError``."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{name} must be a real number, not {type(value).__name__}")
+    return value
+
+
+def _check_floors(options: _OrderOptions, job: IsingJob, *, stacklevel: int) -> None:
+    """Check the quality floors against the placed model.
+
+    Runs after every placement and every ``set()``: a re-placed model moves
+    the bounds. The diversity floor is refused above floor(n/2)/n for n
+    placed spins. The ceiling is refused below the lowest energy the placed
+    model can reach, -(sum |h| + sum |J|) plus the offset, and warns at or
+    above the highest, where it filters nothing. A ceiling on a model whose
+    coefficients were rounded also warns, since the chain judges the rounded
+    model. ``stacklevel`` is as for :func:`merge_options`.
+
+    Raises:
+        QuipOrderOptionError: if a floor cannot be met by the placed model.
+    """
+    # Checked as the chain takes them. Only the ceiling can fail to encode:
+    # _check_limits has already held the diversity to 0..0.5.
+    try:
+        floors = _chain_floors(options, job)
+    except EncodingError as exc:
+        raise QuipOrderOptionError("max_energy", f"max_energy={options.max_energy}: {exc}") from exc
+    spins = job.topology.num_nodes
+    diversity = floors.min_diversity_milli
+    # In whole milli, so a cap such as 12/25 compares exactly.
+    if diversity is not None and diversity * spins > spins // 2 * MILLI_SCALE:
+        raise QuipOrderOptionError(
+            "min_diversity",
+            f"min_diversity={options.min_diversity} is above {spins // 2}/{spins}, the most diversity "
+            f"{spins} placed spins allow, since a vector and its full flip count as one",
+        )
+    ceiling = floors.max_energy_milli
+    if ceiling is None:
+        return
+    reach = sum(map(abs, job.h_values)) + sum(map(abs, job.j_values))
+    # Exact decimals: a rounded bound can land on the wrong side of the ceiling.
+    offset = Decimal(repr(job.offset))
+    lowest, highest = (_decimal_text(Decimal(bound) / MILLI_SCALE + offset) for bound in (-reach, reach))
+    if ceiling < -reach:
+        raise QuipOrderOptionError(
+            "max_energy",
+            f"max_energy={options.max_energy} is below {lowest}, the lowest "
+            "energy the placed model can reach, so no answer could meet it",
+        )
+    if ceiling >= reach:
+        warnings.warn(
+            f"max_energy={options.max_energy} is at or above {highest}, the highest "
+            "energy the placed model can reach, so it filters nothing",
+            UserWarning,
+            stacklevel=stacklevel,
+        )
+    if job.quantization_error > 0:
+        warnings.warn(
+            f"max_energy={options.max_energy}: the model's coefficients were rounded to the chain's milli grid, "
+            "and the chain applies the ceiling to the rounded model, so answers near it can land on either side",
+            UserWarning,
+            stacklevel=stacklevel,
+        )
+
+
+def _chain_floors(options: _OrderOptions, job: IsingJob) -> Floors:
+    """Return the floors as the chain takes them.
+
+    The ceiling is in milli spin energy, offset included. A zero diversity
+    floor is no floor, so it goes out as ``None``.
+
+    Raises:
+        EncodingError: if the ceiling does not fit the chain's ``i64``.
+    """
+    return Floors(
+        max_energy_milli=None if options.max_energy is None else energy_ceiling_milli(options.max_energy, job.offset),
+        min_solutions=options.min_solutions,
+        min_diversity_milli=_to_milli(options.min_diversity, "min_diversity")[0] if options.min_diversity else None,
+    )
 
 
 @dataclass(frozen=True)
@@ -305,6 +447,21 @@ class JobOrder:
         """The explicit variable to node placement, or ``None`` when it was searched."""
         return self._options.mapping
 
+    @property
+    def max_energy(self) -> float | None:
+        """The energy ceiling in the model's own units, or ``None`` for no ceiling."""
+        return self._options.max_energy
+
+    @property
+    def min_solutions(self) -> int | None:
+        """The number of vectors each answer must store, or ``None`` for no floor."""
+        return self._options.min_solutions
+
+    @property
+    def min_diversity(self) -> float | None:
+        """The diversity each answer's vectors must reach, from 0 to 0.5, or ``None`` for no floor."""
+        return self._options.min_diversity
+
     def options(self) -> dict[str, Any]:
         """Return the order's options as a plain dict."""
         mapping = self._options.mapping
@@ -314,13 +471,17 @@ class JobOrder:
             "block_wait": self.block_wait,
             "topology": self.topology,
             "mapping": None if mapping is None else dict(mapping),
+            "max_energy": self.max_energy,
+            "min_solutions": self.min_solutions,
+            "min_diversity": self.min_diversity,
         }
 
     def set(self, **options: Any) -> Self:
         """Change options on a draft and recheck the whole configuration.
 
-        Re-places the model only when ``topology`` or ``mapping`` changed, and
-        drops any cached quote.
+        Re-places the model only when ``topology`` or ``mapping`` changed,
+        rechecks the quality floors against the placed model, and drops any
+        cached quote. A refused change leaves the order as it was.
 
         Raises:
             QuipSubmissionError: if the order is no longer a draft.
@@ -331,9 +492,11 @@ class JobOrder:
         self._require_draft("set")
         merged = merge_options(self._options, options, self._client._limits, strict=True, stacklevel=3)
         merged = self._client._settle_topology(merged)
+        job = self._job
         if (merged.topology, merged.mapping) != (self._options.topology, self._options.mapping):
-            self._job = self._client._place(self._model, merged)
-        self._options = merged
+            job = self._client._place(self._model, merged)
+        _check_floors(merged, job, stacklevel=3)
+        self._job, self._options = job, merged
         self._signed = None
         return self
 
@@ -487,10 +650,11 @@ class JobOrder:
         Raises:
             QuipSubmissionError: if the order has no receipt; see :meth:`receipt`.
             QuipJobFailedError: if nobody answered the order (reclaim its
-                reward with :meth:`reclaim` once it is final), or the chosen
+                reward with :meth:`reclaim` once it is final; the message
+                names the order's quality floors, if any), or the chosen
                 answer carries no vectors.
         """
-        return pick_best(self.receipt(), self._job, self._model).solution
+        return pick_best(self.receipt(), self._job, self._model, self._floors_text).solution
 
     def solutions(self, solver: Any = None) -> list[Solution]:
         """Return every stored answer, decoded onto this order's model, best first.
@@ -512,6 +676,13 @@ class JobOrder:
     def reclaim(self) -> int:
         """See :meth:`JobOrderReceipt.reclaim <xqsa.quip.JobOrderReceipt.reclaim>`."""
         return self.receipt().reclaim()
+
+    def _floors_text(self) -> str:
+        """The order's quality floors in model units, with the chain value where the offset moves it."""
+        floors, ceiling = _chain_floors(self._options, self._job), self._options.max_energy
+        # Without the offset, the ceiling would convert to the same milli: nothing to add.
+        moved = ceiling is not None and floors.max_energy_milli != energy_ceiling_milli(ceiling)
+        return floors_text(floors, model_ceiling=ceiling, moved=moved)
 
     def _call_params(self) -> dict:
         """Build the ``propose_job`` call params for the current configuration."""
@@ -563,6 +734,7 @@ class JobOrder:
         terms = terms_rows(
             resolution=options.resolution,
             mode=options.mode,
+            floors=self._floors_text(),
             deadline_blocks=options.deadline_blocks,
             block_wait=options.block_wait,
             reward=f"{_format_planck(options.reward, decimals)} {symbol}",

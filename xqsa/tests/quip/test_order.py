@@ -19,9 +19,11 @@
 
 from __future__ import annotations
 
+import math
 import warnings
 from dataclasses import replace
 
+import numpy as np
 import pytest
 
 from xqsa.quip import (
@@ -35,6 +37,7 @@ from xqsa.quip import (
 from xqsa.quip.chain import ChainLimits
 from xqsa.quip.order import JobOrder, _OrderOptions, check_client_defaults, merge_options
 from xqsa.solver import SolverResult
+from xqvm_py.xqmx import XQMX
 
 from .test_client import (
     GENESIS_HASH,
@@ -145,6 +148,251 @@ class TestOrderOptionLimits:
             _merge(**{name: value})
 
 
+class TestCeilingOption:
+    """``max_energy`` checks that need no placed model."""
+
+    @pytest.mark.parametrize("value", [-4, -2.5, 0])
+    def test_real_numbers_pass(self, value) -> None:
+        assert _quiet_merge(max_energy=value).max_energy == value
+
+    @pytest.mark.parametrize("value", [True, "-4"])
+    def test_non_real_refused(self, value) -> None:
+        with pytest.raises(TypeError, match="max_energy must be a real number"):
+            _merge(max_energy=value)
+
+    @pytest.mark.parametrize("value", [math.inf, -math.inf, math.nan])
+    def test_non_finite_refused(self, value) -> None:
+        with pytest.raises(QuipOrderOptionError, match="must be finite") as info:
+            _merge(max_energy=value)
+        assert info.value.option == "max_energy"
+
+    @pytest.mark.parametrize("value", [10**400, -(10**400), 10**5000], ids=["huge", "huge-negative", "past-str-limit"])
+    def test_int_beyond_float_range_refused(self, value) -> None:
+        with pytest.raises(QuipOrderOptionError, match="too large to convert to a float") as info:
+            _merge(max_energy=value)
+        assert info.value.option == "max_energy"
+
+
+def _rounded_model() -> XQMX:
+    """A SPIN model whose 0.0012 field rounds to milli 1."""
+    model = XQMX.spin_model(2)
+    model.set_linear(0, 0.0012)
+    model.set_quadratic(0, 1, 1)
+    return model
+
+
+def _binary_model() -> XQMX:
+    """E = -2*x0 + x0*x1: spin h = (-0.75, 0.25), J = 0.25, offset -0.75; energies -2 to 0."""
+    model = XQMX.binary_model(2)
+    model.set_linear(0, -2)
+    model.set_quadratic(0, 1, 1)
+    return model
+
+
+def _wide_model() -> XQMX:
+    """A SPIN model reaching -1234.567 to 1234.567, bounds that 6 significant digits would round."""
+    model = XQMX.spin_model(1)
+    model.set_linear(0, 1234.567)
+    return model
+
+
+class TestCeilingAgainstThePlacedModel:
+    """``_check_floors``: _model() reaches spin energies -4 to +4."""
+
+    def test_reachable_ceiling_passes_quietly(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            order = solver.create_order(_model(), max_energy=-4)
+        assert order.max_energy == -4
+        assert order.options()["max_energy"] == -4
+
+    def test_below_the_lowest_energy_refused(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with pytest.raises(QuipOrderOptionError, match="below -4, the lowest energy") as info:
+            solver.create_order(_model(), max_energy=-4.001)
+        assert info.value.option == "max_energy"
+
+    def test_at_the_highest_energy_warns(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with pytest.warns(UserWarning, match="at or above 4, the highest energy") as record:
+            solver.create_order(_model(), max_energy=4)
+        assert record[0].filename == __file__
+
+    def test_binary_bounds_include_the_offset(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        # Spin reach is 1.25, so the model reaches -1.25 - 0.75 = -2 at the lowest.
+        solver.create_order(_binary_model(), topology="native", max_energy=-2)
+        with pytest.raises(QuipOrderOptionError, match="below -2"):
+            solver.create_order(_binary_model(), topology="native", max_energy=-2.001)
+
+    def test_bounds_are_stated_exactly(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with pytest.raises(QuipOrderOptionError, match=r"below -1234\.567, the lowest"):
+            solver.create_order(_wide_model(), topology="native", max_energy=-1234.568)
+        with pytest.warns(UserWarning, match=r"at or above 1234\.567, the highest"):
+            solver.create_order(_wide_model(), topology="native", max_energy=1234.567)
+
+    def test_numpy_ceiling_shows_on_the_order(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model(), max_energy=np.float64(-2.0))
+        assert "Floors      energy <= -2" in _box_rows(str(order))
+
+    def test_i64_overflow_refused(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with pytest.raises(QuipOrderOptionError, match="outside i64"):
+            solver.create_order(_model(), max_energy=-1e19)
+
+    def test_rounded_model_warns(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            solver.create_order(_rounded_model(), topology="native", max_energy=-1)
+        assert any("chain applies the ceiling to the rounded model" in str(w.message) for w in caught)
+
+    def test_rounded_model_without_ceiling_does_not_warn_about_it(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            solver.create_order(_rounded_model(), topology="native")
+        assert not any("ceiling" in str(w.message) for w in caught)
+
+    def test_set_rechecks_and_a_refusal_keeps_the_order(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model(), max_energy=-3)
+        job = order._job
+        with pytest.raises(QuipOrderOptionError, match="max_energy"):
+            order.set(max_energy=-5)
+        assert (order.max_energy, order._job) == (-3, job)
+
+    def test_set_rechecks_after_replacing(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_binary_model(), topology="native", max_energy=-2)
+        with pytest.raises(QuipOrderOptionError, match="below"):
+            order.set(topology=TOPO_HASH, mapping={0: 0, 1: 1}, max_energy=-2.5)
+        assert order.topology == "native"
+
+    def test_set_warning_points_at_the_caller(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        with pytest.warns(UserWarning, match="filters nothing") as record:
+            order.set(max_energy=10)
+        assert record[0].filename == __file__
+
+    def test_ceiling_goes_under_both_keys(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        ising = solver.create_order(_binary_model(), topology="native", max_energy=-2)._call_params()["ising_params"]
+        assert ising["min_energy_milli"] == ising["max_energy_milli"] == -1250
+
+    def test_solve_passes_the_ceiling(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        solver.solve(_model(), max_energy=-2)
+        assert captured["call_params"]["ising_params"]["min_energy_milli"] == -2000
+
+
+class TestSolutionFloorOptions:
+    """``min_solutions`` and ``min_diversity`` checks that need no placed model."""
+
+    @pytest.mark.parametrize("count", [2, 20])
+    def test_solutions_in_range_pass(self, count) -> None:
+        assert _quiet_merge(min_solutions=count).min_solutions == count
+
+    @pytest.mark.parametrize("count", [-1, 0, 21])
+    def test_solutions_out_of_range_refused(self, count) -> None:
+        with pytest.raises(QuipOrderOptionError, match=r"at least 1 and at most MaxSolutions \(20\)") as info:
+            _merge(min_solutions=count)
+        assert info.value.option == "min_solutions"
+
+    def test_one_solution_warns(self) -> None:
+        with pytest.warns(UserWarning, match="stores only the first vector"):
+            _merge(min_solutions=1)
+
+    def test_absent_max_solutions_not_checked(self) -> None:
+        assert _merge(limits=NO_LIMITS, min_solutions=500).min_solutions == 500
+
+    @pytest.mark.parametrize("name", ["min_solutions", "min_diversity"])
+    def test_wrong_type_refused(self, name) -> None:
+        with pytest.raises(TypeError, match=name):
+            _merge(**{name: "2"})
+        with pytest.raises(TypeError, match=name):
+            _merge(**{name: True})
+
+    @pytest.mark.parametrize("diversity", [0, 0.001, 0.3, 0.4, 0.5])
+    def test_diversity_in_range_passes(self, diversity) -> None:
+        assert _quiet_merge(min_diversity=diversity).min_diversity == diversity
+
+    @pytest.mark.parametrize("diversity", [-0.001, 0.501, 1, math.nan])
+    def test_diversity_out_of_range_refused(self, diversity) -> None:
+        with pytest.raises(QuipOrderOptionError, match="from 0 to 0.5") as info:
+            _merge(min_diversity=diversity)
+        assert info.value.option == "min_diversity"
+
+    def test_diversity_off_the_milli_grid_refused(self) -> None:
+        with pytest.raises(QuipOrderOptionError, match="whole number of thousandths"):
+            _merge(min_diversity=0.4005)
+
+    def test_diversity_with_one_solution_refused(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(QuipOrderOptionError, match="InvalidDiversityConfig"):
+                _merge(min_solutions=1, min_diversity=0.4)
+            assert _merge(min_solutions=1, min_diversity=0).min_diversity == 0
+
+    def test_whole_configuration_rechecked(self) -> None:
+        current = _quiet_merge(min_diversity=0.4)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(QuipOrderOptionError, match="InvalidDiversityConfig"):
+                _merge(current, min_solutions=1)
+
+
+def _path3_model() -> XQMX:
+    """A 3-spin SPIN chain, so floor(3/2)/3 caps diversity at 1/3."""
+    model = XQMX.spin_model(3)
+    model.set_quadratic(0, 1, 1)
+    model.set_quadratic(1, 2, 1)
+    return model
+
+
+class TestSolutionFloorsAgainstThePlacedModel:
+    def test_diversity_cap_follows_the_placed_spins(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        assert solver.create_order(_path3_model(), topology="native", min_diversity=0.333).min_diversity == 0.333
+        with pytest.raises(QuipOrderOptionError, match="above 1/3, the most diversity 3 placed spins") as info:
+            solver.create_order(_path3_model(), topology="native", min_diversity=0.334)
+        assert info.value.option == "min_diversity"
+
+    def test_two_spins_allow_one_half(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        assert solver.create_order(_model(), min_diversity=0.5).min_diversity == 0.5
+
+    def test_set_rechecks_the_cap(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_path3_model(), topology="native")
+        with pytest.raises(QuipOrderOptionError, match="min_diversity"):
+            order.set(min_diversity=0.4)
+        assert order.min_diversity is None
+
+    def test_floors_reach_the_call_params(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model(), min_solutions=5, min_diversity=0.3)
+        ising = order._call_params()["ising_params"]
+        assert (ising["min_solutions"], ising["min_diversity_milli"]) == (5, 300)
+        assert order.options()["min_solutions"] == 5
+
+    @pytest.mark.parametrize("diversity", [None, 0])
+    def test_no_diversity_floor_is_none(self, monkeypatch, diversity) -> None:
+        solver, _ = _ready(monkeypatch)
+        ising = solver.create_order(_model(), min_diversity=diversity)._call_params()["ising_params"]
+        assert (ising["min_solutions"], ising["min_diversity_milli"]) == (None, None)
+
+    def test_solve_passes_the_floors(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        solver.solve(_model(), min_solutions=2, min_diversity=0.5)
+        ising = captured["call_params"]["ising_params"]
+        assert (ising["min_solutions"], ising["min_diversity_milli"]) == (2, 500)
+
+
 class TestOrderOptionStrictness:
     def test_unknown_option_strict_raises(self) -> None:
         with pytest.raises(TypeError, match="unknown order option 'colour'"):
@@ -237,6 +485,9 @@ class TestJobOrderLifecycle:
             "block_wait": 20,
             "topology": TOPO_HASH,
             "mapping": None,
+            "max_energy": None,
+            "min_solutions": None,
+            "min_diversity": None,
         }
 
     def test_create_order_overrides_defaults(self, monkeypatch) -> None:
@@ -677,6 +928,10 @@ class TestSolverQuipCompatibility:
         assert captured["builds"] == 0
 
 
+def _box_rows(text: str) -> list[str]:
+    return [line[2:-2].rstrip() for line in text.splitlines() if line.startswith("│")]
+
+
 class TestJobOrderDisplay:
     def test_draft_box(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
@@ -701,6 +956,19 @@ class TestJobOrderDisplay:
                 "╰──────────────────────────────────────────────────────────────────────╯",
             ]
         )
+
+    def test_floors_row_in_model_units(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(
+            _binary_model(), topology="native", max_energy=-2, min_solutions=5, min_diversity=0.4
+        )
+        rows = _box_rows(str(order))
+        start = rows.index("Floors      energy <= -2 (chain -1.25), 5 solutions, diversity >=")
+        assert rows[start + 1] == "            0.4"  # wrapped onto a blank-label line.
+
+    def test_spin_floors_row_has_no_chain_value(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        assert "Floors      energy <= -3" in _box_rows(str(solver.create_order(_model(), max_energy=-3)))
 
     def test_quoted_and_submitted_rows(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
@@ -798,6 +1066,22 @@ class TestJobOrderSolutions:
         order = solver.create_order(_model())
         with pytest.raises(QuipSubmissionError, match=r"submit\(\) it first"):
             getattr(order, method)()
+
+    def test_best_on_an_unanswered_order_names_its_floors(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model(), max_energy=-3, min_solutions=2).submit()
+        solver._iface.maps[(MEMPOOL, "OrderSolutions")] = []
+        with pytest.raises(
+            QuipJobFailedError, match=r"no answers under its quality floors \(energy <= -3, 2 solutions\)"
+        ):
+            order.best()
+
+    def test_best_on_an_answered_order_skips_the_floors_note(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model(), max_energy=-3).submit()
+        solver._iface.maps[(MEMPOOL, "OrderSolutions")] = [_answer(order._job, "0xA", [BEST], -4000)]
+        monkeypatch.setattr(JobOrder, "_floors_text", lambda self: pytest.fail("floors note built for an answer"))
+        assert order.best().energy == -4
 
     def test_best_on_an_unanswered_order_does_not_reclaim(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)

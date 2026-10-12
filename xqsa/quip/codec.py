@@ -79,6 +79,10 @@ MILLI_SCALE = 1000
 I32_MIN = -(2**31)
 I32_MAX = 2**31 - 1
 
+# The energy ceiling is a SCALE ``Option<i64>`` in milli.
+I64_MIN = -(2**63)
+I64_MAX = 2**63 - 1
+
 # Largest natural-scale coefficient that still fits ``i32`` after scaling by
 # ``MILLI_SCALE`` (``2_147_483 * 1000 = 2_147_483_000 <= I32_MAX``).
 MAX_NATURAL_COEFFICIENT = I32_MAX // MILLI_SCALE
@@ -313,7 +317,9 @@ class IsingJob:
     transform. ``quantization_error`` is the largest absolute difference, in
     natural units, between a spin coefficient and its milli encoding: ``0.0``
     when every coefficient was on the milli grid, and at most ``0.0005``
-    otherwise.
+    otherwise. ``offset`` is the constant the BINARY-to-spin transform splits
+    off, in natural units: the model's energy is the spin energy plus
+    ``offset``. It is ``0.0`` for a SPIN model and never goes on chain.
     """
 
     topology: Topology
@@ -322,6 +328,7 @@ class IsingJob:
     mapping: dict[int, int]
     domain: XQMXDomain
     quantization_error: float = 0.0
+    offset: float = 0.0
 
     def __post_init__(self) -> None:
         # h/j carry one entry per node/edge of the submitted graph. A length
@@ -544,6 +551,29 @@ def _to_milli(value: float, label: str) -> tuple[int, float]:
     return milli, (0.0 if gap <= _MILLI_GRID_TOLERANCE else gap / MILLI_SCALE)
 
 
+def energy_ceiling_milli(energy: float, offset: float = 0.0) -> int:
+    """Convert a model-unit energy ceiling to the chain's milli spin energy.
+
+    The chain compares a vector's spin energy, a whole number of milli, with
+    the ceiling, so ``floor((energy - offset) * 1000)`` accepts exactly the
+    vectors whose model energy is at or below ``energy``. A value within
+    :data:`_MILLI_GRID_TOLERANCE` milli of the grid snaps to it first, so float
+    noise cannot floor a round ceiling one milli too low.
+
+    Raises:
+        EncodingError: if the converted ceiling is not finite or does not fit
+            ``i64``.
+    """
+    scaled = (energy - offset) * MILLI_SCALE
+    if not math.isfinite(scaled):
+        raise EncodingError(f"energy ceiling {energy} is not finite in milli")
+    nearest = round(scaled)
+    milli = nearest if abs(scaled - nearest) <= _MILLI_GRID_TOLERANCE else math.floor(scaled)
+    if not (I64_MIN <= milli <= I64_MAX):
+        raise EncodingError(f"energy ceiling {energy} is milli {milli}, outside i64 [{I64_MIN}, {I64_MAX}]")
+    return milli
+
+
 def _range_bounds(inner: object) -> tuple[int, int] | None:
     """Extract ``(min, max)`` from a decoded range variant, or ``None``.
 
@@ -593,22 +623,27 @@ def check_allowed_values(
 
 def _ising_coefficients(
     model: XQMX,
-) -> tuple[dict[int, float], dict[tuple[int, int], float]]:
-    """Return ``(h, j)`` spin coefficients for a model.
+) -> tuple[dict[int, float], dict[tuple[int, int], float], float]:
+    """Return ``(h, j, offset)`` spin coefficients for a model.
 
-    SPIN models pass through directly; BINARY models are converted to the spin
-    basis via dimod (``s = 2x - 1``), which folds quadratic terms into the
-    fields. The energy offset is discarded -- it shifts energy uniformly and we
-    recompute authoritative energy on the original model anyway.
+    SPIN models pass through directly with a zero offset; BINARY models are
+    converted to the spin basis via dimod (``s = 2x - 1``), which folds quadratic
+    terms into the fields and splits off a constant ``offset``. The chain never
+    sees the offset, but a model-unit energy ceiling must subtract it before it
+    is compared with the chain's spin energy.
     """
     if model.domain == XQMXDomain.SPIN:
-        return dict(model.linear), {(min(u, v), max(u, v)): float(c) for (u, v), c in model.quadratic.items()}
+        return (
+            dict(model.linear),
+            {(min(u, v), max(u, v)): float(c) for (u, v), c in model.quadratic.items()},
+            0.0,
+        )
 
     bqm = dimod.BinaryQuadraticModel(model.linear, model.quadratic, 0.0, dimod.BINARY)
     spin = bqm.change_vartype(dimod.SPIN, inplace=False)
     h = {int(var): float(bias) for var, bias in spin.linear.items()}
     j = {(min(int(u), int(v)), max(int(u), int(v))): float(bias) for (u, v), bias in spin.quadratic.items()}
-    return h, j
+    return h, j, float(spin.offset)
 
 
 def native_placement(model: XQMX) -> tuple[Topology, dict[int, int]]:
@@ -624,7 +659,7 @@ def native_placement(model: XQMX) -> tuple[Topology, dict[int, int]]:
     The mapping is then validated rather than searched for, so placement is the
     identity by construction and never depends on a search budget.
     """
-    h, j = _ising_coefficients(model)
+    h, j, _ = _ising_coefficients(model)
     variables = sorted(set(h) | {index for edge in j for index in edge})
     mapping = {var: rank for rank, var in enumerate(variables)}
     topology = Topology.of(range(len(variables)), ((mapping[u], mapping[v]) for u, v in j))
@@ -671,7 +706,7 @@ def model_to_ising(
     if not model.linear and not model.quadratic:
         raise EncodingError("model has no linear or quadratic terms; nothing to solve")
 
-    h, j = _ising_coefficients(model)
+    h, j, offset = _ising_coefficients(model)
 
     variables = set(h) | {index for edge in j for index in edge}
     placement = find_placement(variables, j.keys(), topology, mapping=mapping)
@@ -720,6 +755,7 @@ def model_to_ising(
         mapping=placement,
         domain=model.domain,
         quantization_error=quantization_error,
+        offset=offset,
     )
 
 
@@ -769,8 +805,8 @@ def ising_energy_milli(job: IsingJob, spin_vector: Sequence[int]) -> int:
 
     ``SolverQuip`` compares this against the chain's reported value as an
     ``energy_matches_chain`` canary: it is domain-independent (both sides use the
-    same milli arrays and spin vector, so a BINARY model's dropped offset does
-    not enter) and so confirms both spin-vector index alignment and coefficient
+    same milli arrays and spin vector, so a BINARY model's offset, which never
+    goes on chain, does not enter) and so confirms both spin-vector index alignment and coefficient
     encoding in one check.
 
     Raises:

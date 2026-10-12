@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from xqsa.quip import (
@@ -44,7 +45,7 @@ from xqsa.quip.chain import (
     proposer_orders,
     top_solvers,
 )
-from xqsa.quip.display import terms_rows, variant_text
+from xqsa.quip.display import Floors, floors_text, terms_rows, variant_text
 from xqsa.quip.receipt import JobOrderReceipt
 
 from .test_client import (
@@ -976,15 +977,90 @@ class TestDisplayHelpers:
         assert variant_text(value) == text
 
     def test_terms_rows(self) -> None:
-        rows = terms_rows(resolution="SingleBest", mode="Open", deadline_blocks=100, block_wait=10, reward="1 AGLS")
+        rows = terms_rows(
+            resolution="SingleBest",
+            mode="Open",
+            floors="2 solutions",
+            deadline_blocks=100,
+            block_wait=10,
+            reward="1 AGLS",
+        )
         assert rows == [
             ("Payout", "single best"),
             ("Access", "open"),
-            ("Floors", "none"),
+            ("Floors", "2 solutions"),
             ("Deadline", "100 blocks"),
             ("Block wait", "10 blocks"),
             ("Reward", "1 AGLS"),
         ]
+
+
+class TestFloorsText:
+    def test_no_floors(self) -> None:
+        assert floors_text(Floors(None, None, None)) == "none"
+
+    def test_chain_units_alone(self) -> None:
+        assert floors_text(Floors(-1250, 5, 400)) == "energy <= -1.25, 5 solutions, diversity >= 0.4"
+
+    def test_one_solution_is_singular(self) -> None:
+        assert floors_text(Floors(None, 1, None)) == "1 solution"
+
+    @pytest.mark.parametrize(
+        ("model", "milli", "text"),
+        [(-4, -4000, "-4"), (-4.0, -4000, "-4"), (2.5, 2500, "2.5"), (-1.2345, -1235, "-1.2345")],
+    )
+    def test_model_units_alone_when_not_moved(self, model, milli, text) -> None:
+        assert floors_text(Floors(milli, None, None), model_ceiling=model) == f"energy <= {text}"
+
+    def test_model_units_lead_when_the_offset_moves_them(self) -> None:
+        assert floors_text(Floors(-1250, None, None), model_ceiling=-2, moved=True) == "energy <= -2 (chain -1.25)"
+
+    def test_offset_and_flooring_together(self) -> None:
+        # -1.2345 - (-0.75) = -0.4845, floored to -0.485.
+        text = floors_text(Floors(-485, None, None), model_ceiling=-1.2345, moved=True)
+        assert text == "energy <= -1.2345 (chain -0.485)"
+
+    def test_numpy_model_ceiling(self) -> None:
+        # NumPy 2 reprs a float64 as "np.float64(-2.0)", which Decimal refuses.
+        assert floors_text(Floors(-2000, None, None), model_ceiling=np.float64(-2.0)) == "energy <= -2"
+
+
+class TestReceiptFloors:
+    @pytest.mark.parametrize("key", ["min_energy_milli", "max_energy_milli"])
+    def test_facts_read_the_ceiling_under_either_key(self, monkeypatch, key) -> None:
+        order = _receipt_order(proposer=PROPOSER)
+        order["ising_params"] = {
+            **order["ising_params"],
+            key: -1250,
+            "min_solutions": 5,
+            "min_diversity_milli": 400,
+        }
+        receipt = _display_for(monkeypatch, order=order)
+        assert receipt._facts().floors == (-1250, 5, 400)
+        assert "Floors      energy <= -1.25, 5 solutions, diversity >= 0.4" in _rows(str(receipt))
+
+    def test_unset_floors_read_as_none(self, monkeypatch) -> None:
+        order = _receipt_order(proposer=PROPOSER)
+        order["ising_params"] = {
+            **order["ising_params"],
+            "min_energy_milli": None,
+            "min_solutions": None,
+            "min_diversity_milli": None,
+        }
+        assert _display_for(monkeypatch, order=order)._facts().floors == (None, None, None)
+
+    def test_floors_text_reads_the_cached_facts(self, monkeypatch) -> None:
+        order = _receipt_order(proposer=PROPOSER)
+        order["ising_params"] = {**order["ising_params"], "min_energy_milli": -1250, "min_solutions": 5}
+        receipt = _display_for(monkeypatch, order=order)
+        receipt._facts()
+        assert receipt._facts_cache is not None
+
+        def unreadable() -> None:
+            raise AssertionError("the order was read again")
+
+        monkeypatch.setattr(receipt, "_fetch_order", unreadable)
+        assert receipt._floors_text() == "energy <= -1.25, 5 solutions"
 
 
 class TestDeprecations:

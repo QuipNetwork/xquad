@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, Any, Self
 from xqsa.quip import chain
 from xqsa.quip.chain import MEMPOOL_PALLET, RECLAIM_ORDER_CALL, _coerce_block_number, _status_str
 from xqsa.quip.codec import _TERMINAL_STATUSES, ORDER_STATUS_CLOSED
-from xqsa.quip.display import box, terms_rows
+from xqsa.quip.display import Floors, box, floors_text, terms_rows
 from xqsa.quip.errors import QuipReclaimRefusedError, QuipSubmissionError, QuipTimeoutError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
 
@@ -55,7 +55,8 @@ _SINGLE_BEST = "SingleBest"
 class _Facts:
     """What the chain recorded when the order was placed; none of it changes afterwards.
 
-    ``submitted_ms`` and ``fee`` are ``None`` when their read faulted.
+    ``submitted_ms`` and ``fee`` are ``None`` when their read faulted. The
+    floors are ``None`` when the order was placed without them.
     """
 
     proposer: str
@@ -67,6 +68,7 @@ class _Facts:
     resolution: Any
     deadline_blocks: int
     block_wait: int
+    floors: Floors
     created_at: int
     submitted_ms: int | None
     fee: int | None
@@ -353,6 +355,7 @@ class JobOrderReceipt:
             resolution=order["resolution"],
             deadline_blocks=int(timing["deadline_blocks"]),
             block_wait=int(timing["block_wait"]),
+            floors=_floors_of(params),
             created_at=created_at,
             submitted_ms=submitted_ms,
             fee=fee,
@@ -360,6 +363,17 @@ class JobOrderReceipt:
         if submitted_ms is not None and fee is not None:
             self._facts_cache = facts
         return facts
+
+    def _floors_text(self) -> str | None:
+        """The order's quality floors in chain units, or ``None`` if the order cannot be read.
+
+        From the cached facts when they are read already: the floors never
+        change once the order is placed. For error messages, so a read fault never hides the error they explain.
+        """
+        if self._facts_cache is not None:
+            return floors_text(self._facts_cache.floors)
+        floors = self._best_effort("the quality floors", lambda: _floors_of(self._fetch_order()["ising_params"]))
+        return None if floors is None else floors_text(floors)
 
     def _best_effort(self, what: str, read: Any) -> Any:
         """Return ``read()``, or ``None`` with a warning if it faults; for display-only facts."""
@@ -435,6 +449,7 @@ class JobOrderReceipt:
         terms = terms_rows(
             resolution=facts.resolution,
             mode=facts.mode,
+            floors=floors_text(facts.floors),
             deadline_blocks=facts.deadline_blocks,
             block_wait=facts.block_wait,
             reward=amount(facts.reward),
@@ -471,6 +486,21 @@ def _minutes_until(blocks: int, block_time_ms: int | None) -> str:
     if not block_time_ms:
         return ""
     return f" (about {max(1, math.ceil(blocks * block_time_ms / 60_000))} min)"
+
+
+def _floors_of(params: Mapping[str, Any]) -> Floors:
+    """Read the quality floors from an order's ``ising_params``."""
+    return Floors(
+        # The ceiling's field is min_energy_milli until QUI-1612 renames it max_energy_milli.
+        max_energy_milli=_optional_int(params.get("max_energy_milli", params.get("min_energy_milli"))),
+        min_solutions=_optional_int(params.get("min_solutions")),
+        min_diversity_milli=_optional_int(params.get("min_diversity_milli")),
+    )
+
+
+def _optional_int(value: Any) -> int | None:
+    """Read a decoded ``Option`` integer: ``None`` stays ``None``."""
+    return None if value is None else int(value)
 
 
 def _solution_count(order: Mapping[str, Any]) -> int:

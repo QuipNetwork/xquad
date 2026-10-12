@@ -77,6 +77,7 @@ from xqsa.quip.codec import (
     _require_h256,
     ising_energy_milli,
 )
+from xqsa.quip.display import Floors, floors_text
 from xqsa.quip.faucet import fund_from_faucet
 from xqsa.quip.metadata import connect as connect_shimmed
 from xqsa.quip.signing import SIGNED_EXTENSIONS, _extension_fields, load_or_generate_keystore
@@ -294,8 +295,8 @@ def _by_energy(model: XQMX) -> list[dict[int, int]]:
     return sorted(assignments, key=energy)
 
 
-def _self_solve(solver: SolverQuip, model: XQMX, vectors: list[list[int]]) -> int:
-    """Propose ``model`` and answer it with ``vectors`` in one ``batch_all``; returns the order id.
+def _self_solve(solver: SolverQuip, model: XQMX, vectors: list[list[int]], **options) -> int:
+    """Propose ``model`` with ``options`` and answer it with ``vectors`` in one ``batch_all``; returns the order id.
 
     The answer lands in the proposal's own extrinsic, so it is the order's
     first and its account leads unless a strictly lower energy arrives. The
@@ -307,7 +308,7 @@ def _self_solve(solver: SolverQuip, model: XQMX, vectors: list[list[int]]) -> in
     account = "0x" + bytes(solver._signer.account_id).hex()
     if solver._iface.query(pallet, "Solvers", [account]).value is None:
         solver._submit_extrinsic(pallet, "register_solver", {"solver_type": "Cpu"})
-    propose = solver.create_order(model)._call_params()
+    propose = solver.create_order(model, **options)._call_params()
     solutions = quip_chain.wrap_bounded([quip_chain.wrap_bounded(list(vector)) for vector in vectors])
     for _attempt in range(3):
         order_id = int(solver._iface.query(pallet, "NextOrderId").value)
@@ -775,3 +776,43 @@ class TestLeader:
             assignments[0][var] for var in range(model.size)
         ]
         _claim(solver, order_id)
+
+
+class TestQualityFloors:
+    def test_ceiling_drops_the_vector_above_it(self, make_solver) -> None:
+        """Of a ground-state and a top-energy vector, the chain stores only the one under the ceiling."""
+        model = _asymmetric_spin_model()
+        solver = make_solver()
+        job = solver.create_order(model)._job
+        assignments = _by_energy(model)
+        vectors = [_model_vector(job, assignments[-1]), _model_vector(job, assignments[0])]
+        ground, top = sorted(ising_energy_milli(job, v) for v in vectors)
+        assert ground < top
+        order_id = _self_solve(solver, model, vectors, max_energy=ground / 1000)
+        receipt = solver.get_receipt(order_id).wait()
+
+        params = solver._fetch_order(order_id)["ising_params"]
+        assert params.get("max_energy_milli", params.get("min_energy_milli")) == ground
+        assert receipt._floors_text() == floors_text(Floors(ground, None, None))
+        ours = quip_chain.ss58_address(solver._iface, bytes(solver._signer.account_id))
+        solutions = decode_answers(receipt, job, model, solver=ours)
+        assert [s.energy_milli for s in solutions] == [ground]
+        assert all(entry["energy_milli"] <= ground for entry in receipt.solvers())  # fleet answers too.
+        _claim(solver, order_id)
+
+    def test_floors_order_comes_back_whole(self, make_solver, solving_miner) -> None:
+        """A network-answered order with a solution count and diversity floor; every stored vector decodes."""
+        solver = make_solver()
+        order = solver.create_order(_asymmetric_spin_model(), min_solutions=2, min_diversity=0.1).submit().wait()
+        order_id = order.order_id()
+        params = solver._fetch_order(order_id)["ising_params"]
+        assert (params["min_solutions"], params["min_diversity_milli"]) == (2, 100)
+        answers = solver._fetch_solutions(order_id)
+        if not answers:
+            assert order.reclaim() == order.reward
+            pytest.skip("no solver met the floors on this order")
+
+        for answer in answers:
+            assert len(answer["solutions"]) >= 2
+            assert int(answer["diversity_milli"]) >= 100
+        assert len(order.solutions()) == sum(len(answer["solutions"]) for answer in answers)

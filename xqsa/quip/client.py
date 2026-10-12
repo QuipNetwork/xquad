@@ -68,10 +68,19 @@ from xqsa.quip.errors import (  # noqa: F401 -- the Quip* errors stay importable
 )
 from xqsa.quip.faucet import DEFAULT_DRIP_PLANCK, fund_from_faucet
 from xqsa.quip.networks import NETWORKS
-from xqsa.quip.order import JobOrder, _OrderOptions, _Sent, _SignedCall, check_client_defaults, merge_options
+from xqsa.quip.order import (
+    JobOrder,
+    _chain_floors,
+    _check_floors,
+    _OrderOptions,
+    _Sent,
+    _SignedCall,
+    check_client_defaults,
+    merge_options,
+)
 from xqsa.quip.quote import JobQuote, _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
-from xqsa.quip.solution import pick_best
+from xqsa.quip.solution import no_answer_note, pick_best
 from xqsa.solver import Solver, SolverResult
 
 if TYPE_CHECKING:
@@ -562,15 +571,19 @@ class SolverQuip(Solver):
 
     def _propose_call_params(self, job: IsingJob, options: _OrderOptions) -> dict:
         """Build the ``QuantumComputeMempool.propose_job`` call params for a placed job and its options."""
+        floors = _chain_floors(options, job)
         ising_params = {
             "nodes": self._wrap_bounded(list(job.nodes)),
             "edges": self._wrap_bounded([list(edge) for edge in job.edges]),
             "h_values": self._wrap_bounded(list(job.h_values)),
             "j_values": self._wrap_bounded(list(job.j_values)),
-            # Quality floors are advisory and unset in v1 (Option::None).
-            "min_energy_milli": None,
-            "min_diversity_milli": None,
-            "min_solutions": None,
+            # The ceiling goes under both names: the struct encoder takes only
+            # the field the runtime lists, so this proposes before and after
+            # QUI-1612 renames min_energy_milli to max_energy_milli (QUI-1674).
+            "min_energy_milli": floors.max_energy_milli,
+            "max_energy_milli": floors.max_energy_milli,
+            "min_diversity_milli": floors.min_diversity_milli,
+            "min_solutions": floors.min_solutions,
         }
         call_params = {
             "spec_id": self._spec_id,
@@ -773,12 +786,14 @@ class SolverQuip(Solver):
             QuipJobFailedError: if the order finalized with no usable solution.
                 With no answers at all, the reward is auto-reclaimed first and
                 the message gives the outcome: why the reclaim was refused, or
-                how to retry it when it failed for another reason.
+                how to retry it when it failed for another reason. It also
+                names the order's quality floors, read from the chain, if any.
         """
         order_id = receipt.order_id
         if not self._fetch_solutions(order_id):
             refund = self._try_reclaim(receipt)
-            raise QuipJobFailedError(order_id, f"order {order_id} finalized with no solutions; {refund}")
+            floors = no_answer_note(receipt._floors_text())
+            raise QuipJobFailedError(order_id, f"order {order_id} finalized with no solutions{floors}; {refund}")
 
         pick = pick_best(receipt, job, model)
         return SolverResult(
@@ -926,7 +941,9 @@ class SolverQuip(Solver):
         self._validate_model(model)
         merged = merge_options(self._default_options(), options, self._limits, strict=strict, stacklevel=4)
         merged = self._settle_topology(merged)
-        return JobOrder(self, model, merged, self._place(model, merged), self._genesis_hash)
+        job = self._place(model, merged)
+        _check_floors(merged, job, stacklevel=4)
+        return JobOrder(self, model, merged, job, self._genesis_hash)
 
     def _quote_wire(self, wire: bytes, job: IsingJob, options: _OrderOptions) -> JobQuote:
         """Price the signed ``wire`` without sending it, reading the balance and head block now.
@@ -967,6 +984,19 @@ class SolverQuip(Solver):
             topology: a registered topology hash, or ``"native"``.
             mapping: explicit variable -> node placement (else searched); not
                 allowed with ``"native"``.
+            max_energy: an energy ceiling in the model's own units. The chain
+                drops every answer vector above it, and an answer with none
+                left fails. Refused below the lowest energy the placed model
+                can reach; warns at or above the highest, and on a model whose
+                coefficients were rounded to milli.
+            min_solutions: vectors each answer must store, 1 up to
+                ``MaxSolutions``; 1 warns. Solvers must find this many distinct
+                solutions, counting a solution and its full flip once, so a
+                small model may go unanswered.
+            min_diversity: the average share of spins, from 0 to 0.5 in
+                thousandths, on which each answer's stored vectors must differ.
+                At most floor(n/2)/n for n placed spins, and not with
+                ``min_solutions=1``. 0 is no floor.
 
         Examples:
             Connects to the network, so it is not run as a doctest::
@@ -1128,8 +1158,9 @@ class SolverQuip(Solver):
         warns with a ``DeprecationWarning`` instead of raising, until QUI-1608.
 
         Keyword args:
-            reward, deadline_blocks, block_wait, topology, mapping: as for
-                :meth:`create_order`, for this solve only.
+            reward, deadline_blocks, block_wait, topology, mapping, max_energy,
+                min_solutions, min_diversity: as for :meth:`create_order`, for
+                this solve only.
 
         Raises:
             ValueError: if ``mapping`` is given with ``topology="native"``.

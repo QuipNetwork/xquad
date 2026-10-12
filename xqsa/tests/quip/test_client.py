@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import math
 import sys
 import types
 import warnings
@@ -40,6 +41,7 @@ from xqsa.quip.codec import (
     DEFAULT_ISING_SPEC_ID,
     I32_MAX,
     I32_MIN,
+    I64_MAX,
     MAX_NATURAL_COEFFICIENT,
     MILLI_SCALE,
     QUIP_COEFFICIENTS_DOC_URL,
@@ -51,6 +53,7 @@ from xqsa.quip.codec import (
     check_allowed_values,
     decode_solution,
     effective_expiry,
+    energy_ceiling_milli,
     find_placement,
     is_final,
     ising_energy_milli,
@@ -492,6 +495,27 @@ class TestModelToIsing:
         assert all(isinstance(v, int) for v in job.j_values)
         assert any(v != 0 for v in job.j_values)
 
+    def test_spin_offset_is_zero(self) -> None:
+        model = XQMX.spin_model(2)
+        model.set_linear(0, 1)
+        model.set_quadratic(0, 1, -1)
+        assert model_to_ising(model, PATH5).offset == 0.0
+
+    def test_binary_offset_is_kept(self) -> None:
+        """E = -2*x0 + x0*x1 folds to h = (-0.75, 0.25), J = 0.25 and offset -0.75."""
+        model = XQMX.binary_model(2)
+        model.set_linear(0, -2)
+        model.set_quadratic(0, 1, 1)
+        job = model_to_ising(model, PATH5, mapping={0: 0, 1: 1})
+
+        assert job.h_values == (-750, 250)
+        assert job.j_values == (250,)
+        assert job.offset == -0.75
+        # Model energy is the spin energy plus the offset, for every assignment.
+        for x0, x1 in itertools.product((0, 1), repeat=2):
+            spins = [2 * x0 - 1, 2 * x1 - 1]
+            assert ising_energy_milli(job, spins) / MILLI_SCALE + job.offset == -2 * x0 + x0 * x1
+
     def test_explicit_mapping_threaded_through(self) -> None:
         """A caller mapping reaches placement and drives the scatter positions."""
         model = XQMX.spin_model(2)
@@ -500,6 +524,42 @@ class TestModelToIsing:
         assert job.mapping == {0: 3, 1: 4}
         assert job.nodes == (3, 4)
         assert job.j_values[job.topology.edge_index(3, 4)] == MILLI_SCALE
+
+
+class TestEnergyCeilingMilli:
+    """Model-unit ceilings convert to the chain's milli spin energy."""
+
+    def test_spin_scales(self) -> None:
+        assert energy_ceiling_milli(-4) == -4000
+
+    def test_binary_subtracts_the_offset(self) -> None:
+        """E = -2*x0 + x0*x1 has offset -0.75, so a ceiling of -2 is spin energy -1.25."""
+        model = XQMX.binary_model(2)
+        model.set_linear(0, -2)
+        model.set_quadratic(0, 1, 1)
+        job = model_to_ising(model, PATH5)
+        assert energy_ceiling_milli(-2, job.offset) == -1250
+
+    def test_off_grid_floors(self) -> None:
+        # Chain energy is whole milli, so <= -1234.5 and <= -1235 accept the same vectors.
+        assert energy_ceiling_milli(-1.2345) == -1235
+        assert energy_ceiling_milli(1.2345) == 1234
+
+    def test_float_noise_snaps_to_the_grid(self) -> None:
+        # -(0.1 + 0.2) * 1000 is -300.00000000000006; flooring it would give -301.
+        assert energy_ceiling_milli(-(0.1 + 0.2)) == -300
+
+    @pytest.mark.parametrize("energy", [math.inf, -math.inf, math.nan])
+    def test_non_finite_refused(self, energy) -> None:
+        with pytest.raises(EncodingError, match="not finite"):
+            energy_ceiling_milli(energy)
+
+    def test_i64_bounds(self) -> None:
+        assert energy_ceiling_milli(9.2e15) == 9_200_000_000_000_000_000 <= I64_MAX
+        with pytest.raises(EncodingError, match="outside i64"):
+            energy_ceiling_milli(9.3e15)
+        with pytest.raises(EncodingError, match="outside i64"):
+            energy_ceiling_milli(-9.3e15)
 
 
 # ---------------------------------------------------------------------------
@@ -1977,7 +2037,50 @@ class TestSolverQuipSubmission:
         assert ising["h_values"] == (list(job.h_values),)
         assert ising["j_values"] == (list(job.j_values),)
         assert ising["min_energy_milli"] is None
+        assert ising["max_energy_milli"] is None
         assert ising["min_solutions"] is None
+
+    @pytest.mark.parametrize("ceiling", [None, -1250])
+    def test_ceiling_keys_encode_as_the_runtime_field(self, monkeypatch, ceiling) -> None:
+        """Both ceiling keys encode byte-identical to the one key the runtime lists.
+
+        The struct below mirrors aglais's ``IsingParams`` (spec 118), which lists
+        ``min_energy_milli`` only; a runtime with QUI-1612 lists
+        ``max_energy_milli`` instead and takes the other key the same way.
+        """
+        base = pytest.importorskip("scalecodec.base", reason="scalecodec not installed ([quip] extra)")
+        presets = pytest.importorskip("scalecodec.type_registry")
+        config = base.RuntimeConfigurationObject()
+        config.update_type_registry(presets.load_type_registry_preset("core"))
+        config.update_type_registry(
+            {
+                "types": {
+                    "BoundedU32": {"type": "struct", "type_mapping": [["0", "Vec<u32>"]]},
+                    "BoundedEdges": {"type": "struct", "type_mapping": [["0", "Vec<(u32, u32)>"]]},
+                    "BoundedI32": {"type": "struct", "type_mapping": [["0", "Vec<i32>"]]},
+                    "IsingParams": {
+                        "type": "struct",
+                        "type_mapping": [
+                            ["nodes", "BoundedU32"],
+                            ["edges", "BoundedEdges"],
+                            ["h_values", "BoundedI32"],
+                            ["j_values", "BoundedI32"],
+                            ["min_energy_milli", "Option<i64>"],
+                            ["min_diversity_milli", "Option<u32>"],
+                            ["min_solutions", "Option<u32>"],
+                        ],
+                    },
+                }
+            }
+        )
+        solver = _make_solver(monkeypatch)
+        ising = solver._propose_call_params(self._simple_job(), solver._default_options())["ising_params"]
+        ising = {**ising, "min_energy_milli": ceiling, "max_energy_milli": ceiling}
+        single = {key: value for key, value in ising.items() if key != "max_energy_milli"}
+
+        both = config.create_scale_object("IsingParams").encode(ising)
+
+        assert both == config.create_scale_object("IsingParams").encode(single)
 
     def test_build_extrinsic_returns_wire_and_hash(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)
@@ -2352,6 +2455,39 @@ class TestSolverQuipCollect:
         assert "reclaimed" in str(excinfo.value)
         assert captured["call_function"] == "reclaim_order"
         assert captured["call_params"] == {"order_id": 1}
+
+    @pytest.mark.parametrize(
+        ("floors", "note"),
+        [
+            ({}, "finalized with no solutions; "),
+            (
+                {"min_energy_milli": -2000, "min_solutions": 5, "min_diversity_milli": None},
+                "finalized with no solutions under its quality floors (energy <= -2, 5 solutions), which solvers "
+                "may have been unable to meet; ",
+            ),
+        ],
+    )
+    def test_no_solutions_names_the_floors_on_chain(self, monkeypatch, floors, note) -> None:
+        from xqsa.quip import QuipJobFailedError
+
+        order = {**_order(solution_count=0), "ising_params": {"nodes": [0, 1], "edges": [[0, 1]], **floors}}
+        iface = _chain_iface(order=order, head=200, submissions=[])
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipJobFailedError) as excinfo:
+            solver._collect_result(solver.get_receipt(1), _job(solver), _model(), elapsed=0.0)
+        assert note in str(excinfo.value)
+
+    def test_no_solutions_survives_an_unreadable_order(self, monkeypatch) -> None:
+        from xqsa.quip import QuipJobFailedError
+
+        iface = _chain_iface(order=_order(solution_count=0), head=200, submissions=[])
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        receipt = solver.get_receipt(1)
+        monkeypatch.setattr(receipt, "_fetch_order", lambda: {})  # no ising_params to read.
+        with pytest.raises(QuipJobFailedError, match="finalized with no solutions; "):
+            solver._collect_result(receipt, _job(solver), _model(), elapsed=0.0)
 
     @pytest.mark.parametrize(
         ("order", "error", "reason"),
