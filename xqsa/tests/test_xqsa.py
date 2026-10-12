@@ -36,7 +36,7 @@ _IN_CI = os.environ.get("CI") is not None
 dimod = pytest.importorskip("dimod", reason="dwave-samplers / dimod not installed")
 
 from xqffi.vm import ArithmeticOverflow, Domain, XqmxModel, XqmxSample
-from xqsa import Solver, SolverCPU, SolverDWave, SolverGPU, SolverResult
+from xqsa import SOLVERS, Solver, SolverCPU, SolverDWave, SolverGPU, SolverResult, build_solver
 from xqsa.solver import model_to_bqm, sample_to_xqmx
 
 _cuda = functools.partial(SolverGPU, engine="cuda")
@@ -2298,6 +2298,17 @@ class TestSelectors:
         with pytest.raises(ValueError, match="Unsupported engine 'rocm'"):
             SolverGPU(engine="rocm")
 
+    def test_algorithm_checked_before_the_engine_import(self, monkeypatch) -> None:
+        """An unsupported algorithm is reported as such, not as a missing CuPy."""
+        monkeypatch.setitem(sys.modules, "cupy", None)
+        with pytest.raises(ValueError, match="not available in-process on the CUDA engine"):
+            _cuda(algorithm="gibbs")
+
+    def test_metal_records_gibbs(self, mock_metal_env) -> None:
+        result = _metal(algorithm="gibbs", num_reads=4, num_sweeps=10, seed=1).solve(XqmxModel.binary(2))
+        assert result.metadata["params"]["algorithm"] == "gibbs"
+        assert result.metadata["params"]["engine"] == "metal"
+
     def test_unknown_mode_rejected(self) -> None:
         with pytest.raises(ValueError, match="hybrid modes are not available yet"):
             SolverDWave(mode="hybrid")
@@ -2357,3 +2368,35 @@ class TestDWaveOceanAllowlist:
         with pytest.raises(TypeError, match="answer_mode"):
             SolverDWave(answer_mode="raw")
         mock_dwave_system["composite"].sample.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Metadata contract across the registry
+# ---------------------------------------------------------------------------
+
+# Hardware each registered solver needs mocked. SolverQuip keeps its own
+# metadata until QUI-1608 brings it under the contract.
+_MOCKS = {"cpu": None, "cuda": "mock_cupy_env", "metal": "mock_metal_env", "dwave": "mock_dwave_system"}
+# The selectors each registered solver records in params.
+_SELECTORS = {
+    "cpu": {"algorithm": "sa"},
+    "cuda": {"algorithm": "sa", "engine": "cuda"},
+    "metal": {"algorithm": "sa", "engine": "metal"},
+    "dwave": {"mode": "qpu"},
+}
+
+
+@pytest.mark.parametrize("name", sorted(set(SOLVERS) - {"quip"}))
+def test_registered_solver_metadata_is_seed_reads_params(name, request, monkeypatch) -> None:
+    """Every registered solver except SolverQuip returns exactly seed, reads and params."""
+    if _MOCKS[name] is not None:
+        request.getfixturevalue(_MOCKS[name])
+    monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
+    model = XqmxModel.binary(2)
+    model.set_linear(0, 1)
+
+    result = build_solver(name, seed=1).solve(model)
+
+    assert set(result.metadata) == {"seed", "reads", "params"}
+    params = result.metadata["params"]
+    assert {key: params.get(key) for key in ("algorithm", "engine", "mode") if key in params} == _SELECTORS[name]
