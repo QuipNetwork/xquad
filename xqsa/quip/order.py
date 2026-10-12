@@ -40,6 +40,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 from xqsa.quip import chain
+from xqsa.quip.access import VARIANTS as ACCESS_VARIANTS
 from xqsa.quip.access import Access, AccessAllow, coerce_access
 from xqsa.quip.access import from_chain as access_from_chain
 from xqsa.quip.codec import MILLI_SCALE, _to_milli, energy_ceiling_milli
@@ -117,19 +118,16 @@ class _OrderOptions:
     min_diversity: float | None = None
 
 
-def check_client_defaults(access: Any, delivery: Any) -> None:
-    """Refuse the ``access`` and ``delivery`` values no order can use yet.
+def check_client_defaults(delivery: Any) -> None:
+    """Refuse a ``delivery`` value no order can use yet: it accepts only ``"OnChainOnly"``.
 
-    ``access`` takes ``"Open"`` or an :class:`~xqsa.quip.Access`. A raw chain
-    dict passes, so the deprecated ``solve()`` path keeps working;
-    ``create_order`` refuses it. ``delivery`` accepts only ``"OnChainOnly"``.
-    The client's ``resolution`` is checked by
+    The client's ``access`` and ``resolution`` are checked by
+    :func:`~xqsa.quip.access.coerce_access` and
     :func:`~xqsa.quip.resolution.coerce_resolution`.
 
     Raises:
         ValueError: naming the unsupported value.
     """
-    coerce_access(access)
     if delivery != _SUPPORTED_DELIVERY:
         raise ValueError(
             f"delivery={delivery!r}: result delivery is not supported yet: ResultReady only fires on a claim, "
@@ -190,7 +188,7 @@ def _check_raw_values(options: _OrderOptions, *, strict: bool, stacklevel: int) 
         if strict:
             raise TypeError(f"{option.name}: raw chain values are not accepted")
         warnings.warn(
-            f"{option.name}: passing a raw chain value is deprecated and unchecked",
+            f"{option.name}: passing a raw chain value is deprecated; pass a typed option instead",
             DeprecationWarning,
             stacklevel=stacklevel,
         )
@@ -254,8 +252,9 @@ def _check_access(access: Any, limits: ChainLimits, iface: Any, *, stacklevel: i
 
     An over-cap list traps the runtime with no fee and no readable error, and
     an unknown type fails to encode, so both are refused here. A raw chain
-    dict is read as the rule it names and checked the same way; one that names
-    no rule passes unchecked. A bound the runtime does not expose is not checked.
+    dict is read as the rule it names and checked the same way. One that names
+    a rule but cannot be read as it is refused; one that names no rule passes
+    unchecked. A bound the runtime does not expose is not checked.
 
     With ``iface``, each listed account that is not a registered solver warns
     once. It never raises: the chain does not check registration, and an
@@ -264,7 +263,9 @@ def _check_access(access: Any, limits: ChainLimits, iface: Any, *, stacklevel: i
     if isinstance(access, Mapping):
         try:
             access = access_from_chain(access)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as exc:
+            if len(access) == 1 and next(iter(access)) in ACCESS_VARIANTS:
+                raise QuipOrderOptionError("access", f"{exc}; it cannot be read as an access rule") from None
             return
     if not isinstance(access, AccessAllow):
         return

@@ -510,23 +510,12 @@ class TestOrderOptionStrictness:
 
 class TestClientDefaults:
     def test_supported_defaults_pass(self) -> None:
-        check_client_defaults("Open", "OnChainOnly")
-
-    @pytest.mark.parametrize("access", [AccessOpen(), AccessAllow(types=["Cpu"])])
-    def test_access_rules_pass(self, access) -> None:
-        check_client_defaults(access, "OnChainOnly")
-
-    def test_access_string_refused(self) -> None:
-        with pytest.raises(ValueError, match="not an access rule"):
-            check_client_defaults("Whitelist", "OnChainOnly")
+        check_client_defaults("OnChainOnly")
 
     @pytest.mark.parametrize("delivery", ["ResultReady", {"Callback": {}}])
     def test_delivery_refused(self, delivery) -> None:
         with pytest.raises(ValueError, match="result delivery is not supported yet"):
-            check_client_defaults("Open", delivery)
-
-    def test_raw_dicts_pass_for_the_lenient_path(self) -> None:
-        check_client_defaults({"Bid": 5}, "OnChainOnly")
+            check_client_defaults(delivery)
 
     def test_constructor_checks_before_connecting(self, monkeypatch) -> None:
         from xqsa.tests.quip.test_client import FakeSubstrate
@@ -663,10 +652,31 @@ class TestAccess:
         with pytest.warns(DeprecationWarning, match="raw chain value"):
             assert _merge(strict=False, access=raw).access == raw
 
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            {"Bid": {"miners": None, "miner_types": [f"Type{i}" for i in range(9)]}},
+            {"Bid": {"miners": ["0x" + "11" * 20], "miner_types": None}},
+            {"Bid": {"miners": [7], "miner_types": None}},
+            {"Bid": {"miners": None, "miner_types": None}},
+            {"Bid": {"miners": None, "miner_types": [1]}},
+            {"Bid": 5},
+            {"Open": 1},
+        ],
+        ids=["nine-types", "20-byte-account", "int-account", "empty", "non-str-type", "not-a-struct", "open-value"],
+    )
+    def test_raw_dict_naming_a_rule_that_does_not_decode_refused(self, raw) -> None:
+        with (
+            pytest.warns(DeprecationWarning),
+            pytest.raises(QuipOrderOptionError, match="it cannot be read as an access rule") as info,
+        ):
+            _merge(strict=False, access=raw)
+        assert info.value.option == "access"
+
     def test_raw_dict_naming_no_rule_passes_unchecked(self) -> None:
-        raw = {"Bid": {"miners": [7], "miner_types": None}}
-        with pytest.warns(DeprecationWarning):
-            assert _merge(strict=False, access=raw).access == raw
+        with pytest.warns(DeprecationWarning, match="raw chain value is deprecated; pass a typed option") as record:
+            assert _merge(strict=False, access={"FutureRule": 1}).access == {"FutureRule": 1}
+        assert not any("unchecked" in str(w.message) for w in record)
 
     def test_create_order_encodes_the_allowlist(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
@@ -710,8 +720,6 @@ class TestAccess:
         solver, captured = _ready(monkeypatch)
         with pytest.raises(QuipOrderOptionError, match="not an access rule"):
             solver.create_order(_model(), access=value)
-        with pytest.raises(ValueError, match="not an access rule"):
-            check_client_defaults(value, "OnChainOnly")
         assert captured["builds"] == 0
 
     @pytest.mark.parametrize("kwargs", [{"mode": None}, {"access": None}, {"mode": None, "access": None}])

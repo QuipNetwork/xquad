@@ -196,13 +196,13 @@ class SolverQuip(Solver):
         access = _take_mode(access, mode, stacklevel=2)
         if access is None:
             access = AccessOpen()
-        # Both before any network I/O.
-        check_client_defaults(access, delivery)
+        # All before any network I/O.
+        check_client_defaults(delivery)
+        self._access = coerce_access(access)
         self._resolution = coerce_resolution(resolution)
 
         self._signer = self._build_signer(quip_signing, seed=seed, keystore=keystore)
 
-        self._access = coerce_access(access)
         self._delivery = delivery
         self._deadline_blocks = deadline_blocks
         self._block_wait = block_wait

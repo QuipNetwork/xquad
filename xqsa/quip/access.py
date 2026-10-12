@@ -32,6 +32,9 @@ from typing import Any
 
 from xqsa.quip.chain import account_bytes, wrap_bounded
 
+# The JobMode variant names; a raw dict naming one of them must decode as it.
+VARIANTS = frozenset({"Open", "Bid"})
+
 # The most solver types an allowlist can name. Fixed in the pallet and not
 # published as a constant; over the cap traps the runtime with no readable error.
 MAX_BID_TYPES = 8
