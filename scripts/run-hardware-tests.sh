@@ -68,11 +68,8 @@ uv sync --extra "${extra}"
 # cupy / dwave-system / pyobjc-Metal the sync above just installed. That is
 # the same trap the two `uv run --no-sync` calls below already avoid.
 #
-# No `--active`, unlike the Makefile's `deps-py`. That target's sync carries
-# no extra and targets whatever the caller activated; the sync above targets
-# the project's own .venv, so maturin has to install into that same .venv
-# rather than into a foreign VIRTUAL_ENV. maturin itself is a root
-# `[dependency-groups] dev` entry, so the sync above is what puts it on PATH.
+# maturin itself is a root `[dependency-groups] dev` entry, so the sync above
+# is what puts it on PATH.
 echo ">> maturin develop --manifest-path xqffi/Cargo.toml"
 uv run --no-sync maturin develop --locked --manifest-path xqffi/Cargo.toml
 

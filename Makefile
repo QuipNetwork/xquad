@@ -436,9 +436,13 @@ deps-wasm:
 # /repo/xqcp would be importable, not /repo). That's what lets
 # scripts run from sibling directories (examples/, scripts/) `import
 # xqcp` etc.
+#
+# `--no-sync`, not `--active`, so maturin installs into the project
+# .venv/ that `uv sync` just wrote and `uv run --no-sync` reads, even
+# when VIRTUAL_ENV points at another environment.
 deps-py:
 	uv sync
-	uv run --active maturin develop --locked --manifest-path xqffi/Cargo.toml
+	uv run --no-sync maturin develop --locked --manifest-path xqffi/Cargo.toml
 
 # Point git at the repo-tracked .githooks/ directory so the pre-commit
 # hook runs on every commit. Run once per clone; bypass ad hoc with
@@ -591,7 +595,7 @@ test-unit-rs:
 	cargo nextest run --locked --workspace --all-features --lib --cargo-profile ci-test
 
 # xquad-conformance is excluded here because its `python` feature gates
-# a test file that shells out to `uv run python -m xqvm_py`, and the
+# a test file that shells out to `uv run --no-sync python -m xqvm_py`, and the
 # test:rust CI job does not install uv. The conformance suite has its
 # own dedicated job (verify:parity) that covers both runtimes with
 # the proper before_script setup.
@@ -843,7 +847,7 @@ conformance-rs:
 	cargo test --locked -p xquad-conformance --no-default-features --features rust
 
 # The Python side (run by CI's verify:parity job) shells out to
-# `uv run python -m xqvm_py run` from within the Rust test; the xqffi
+# `uv run --no-sync python -m xqvm_py run` from within the Rust test; the xqffi
 # extension (maturin-built) and xqvm_py (editable) must both be
 # installed in .venv/ first.
 conformance-py: deps-py

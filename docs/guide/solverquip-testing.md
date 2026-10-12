@@ -42,7 +42,8 @@ The three quip targets live in the [`Makefile`](../Makefile):
 chain and always executes. `make test-quip-e2e` hard-errors when `QUIP_RPC_URL`
 is unset (rather than reporting a hollow all-skipped pass), so the aggregate
 `make test-quip` requires the devnet env vars below for its e2e leaf. All three
-self-install the `[quip]` extra via `uv run --extra quip`.
+install the `[quip]` extra themselves: `uv sync --extra quip`, a
+`maturin develop` rebuild of `xqffi`, then pytest through `uv run --no-sync`.
 
 ### Environment variables
 
@@ -76,8 +77,14 @@ aglais needs no CA export.
 ## Common prerequisites
 
 - `uv sync --extra quip` in this repo (installs `substrate-interface` + the
-  `quip-signer` extension). The make targets do this for you via
-  `uv run --extra quip`.
+  `quip-signer` extension), then
+  `uv run --no-sync maturin develop --locked --manifest-path xqffi/Cargo.toml`,
+  because the sync restores a cached `xqffi` build. The make targets do both
+  for you. Run the manual commands below through `uv run --no-sync`; without
+  the flag, the run re-syncs and undoes the rebuild. A plain `uv sync`,
+  including the one in `make deps-py`, `make test-py` and `make repl`, removes
+  the extra again; repeat both steps after any of them, or `SolverQuip` fails
+  with `substrate-interface is not installed`.
 - **Apple Silicon:** `quip-signer` 0.3.0 publishes no macOS wheel, so the first
   sync after the pin moved builds it from the sdist and needs a local Rust
   toolchain. Expect minutes, not seconds. Slow here is expected; a failure is
@@ -272,7 +279,7 @@ what the signing layer speaks.
 Quick version + liveness check. A synced node reports `isSyncing == false` and
 `currentBlock == highestBlock`; if it is behind, its state reads are stale:
 
-    uv run --extra quip python -c "from xqsa.quip.metadata import connect; \
+    uv run --no-sync python -c "from xqsa.quip.metadata import connect; \
         from xqsa.quip.networks import NETWORKS; \
         s=connect(NETWORKS['aglais'].rpc); \
         print('runtime', s.rpc_request('state_getRuntimeVersion',[])['result']); \
@@ -376,7 +383,7 @@ Beyond the pytest suite, a single small model round-trips the propose + decode +
 energy-canary path. Set `QUIP_KEYSTORE` and fund the keystore, then:
 
     export QUIP_KEYSTORE=/tmp/quip-ks.json
-    uv run --extra quip python - <<'PY'
+    uv run --no-sync python - <<'PY'
     from xqsa.quip import SolverQuip
     from xqvm_py.xqmx import XQMX
     m = XQMX.spin_model(2)
