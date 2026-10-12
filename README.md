@@ -165,8 +165,8 @@ driven from the `xqcp` DSL through the VM and `xqsa` solver, runnable on
 either the Python reference VM or the Rust VM:
 
 ```sh
-uv run --no-sync python examples/tsp/runner.py --seed 42
-uv run --no-sync python examples/maxcut/runner.py --seed 42 --interpreter rust
+uv run python examples/tsp/runner.py --seed 42
+uv run python examples/maxcut/runner.py --seed 42 --interpreter rust
 
 # Run every example on both interpreters, check each finds a valid solution:
 make example-smoke
