@@ -145,12 +145,12 @@ effective_expiry = min(created_at + deadline_blocks, first_solution_at + block_w
 ```
 
 `JobOrder.wait()` and `solve()` poll until the chain head reaches that
-height. `solve(model, **options)` is `create_order(model,
-**options).submit().wait()` followed by decoding the answer into a
-`SolverResult` (see [Metadata](#metadata)); unlike `create_order()`, it
-warns about an unknown option and drops it instead of raising. The order
-surface -- drafts, quotes, receipts, reclaiming, and reading answers --
-is on [Job Orders](quip-orders.md).
+height. `solve(model, **options)` is
+`create_order(model, **options).submit().wait()` followed by decoding
+the answer into a `SolverResult` (see [Metadata](#metadata)); unlike
+`create_order()`, it warns about an unknown option and drops it instead
+of raising. The order surface -- drafts, quotes, receipts, reclaiming,
+and reading answers -- is on [Job Orders](quip-orders.md).
 
 Only `solve()`, and the deprecated `query()`, reclaim on their own. When
 an order finalizes with zero solutions, they reclaim the reserved reward
@@ -483,8 +483,9 @@ raw chain dict, or an unknown option.
 
 `query()` has no full replacement yet. A receipt follows an order on
 chain but cannot decode its answers onto your model, so from a session
-other than the one that submitted the order, `query(order_id, model,
-...)` is still the only way to get a decoded `SolverResult`.
+other than the one that submitted the order,
+`query(order_id, model, ...)` is still the only way to get a decoded
+`SolverResult`.
 
 Python shows a `DeprecationWarning` by default only when the deprecated
 call is made from `__main__`: a script sees it, but a library calling

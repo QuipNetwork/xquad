@@ -132,6 +132,7 @@ defect() {
 # Runtime 119 behaviour documented before any network ran it; QUI-1823
 # verifies it on a 119 network and removes the blocks.
 defect QUI-1823 docs/book/src/solving/energy-and-precision.md 1
+defect QUI-1823 docs/book/src/solving/quip-first-job.md 1
 defect QUI-1823 docs/book/src/solving/quip-network.md 1
 defect QUI-1823 docs/book/src/solving/quip-orders.md 2
 

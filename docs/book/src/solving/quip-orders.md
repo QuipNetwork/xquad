@@ -54,8 +54,8 @@ TypeError: unknown order option 'mode'; expected one of access, block_wait, dead
 
 `reward`, `deadline_blocks` and `block_wait` must be integers
 (`TypeError: reward must be an int, not str`). A raw chain dict for
-`access` or `resolution` raises `TypeError: access: raw chain values are
-not accepted`.
+`access` or `resolution` raises
+`TypeError: access: raw chain values are not accepted`.
 
 ### States
 
@@ -102,8 +102,7 @@ and `autofund` gates, as `solve()` does. It ends in one of three states:
 
 - `submitted`: the order is on chain, and `submit()` returns the order.
 - `failed`: the dispatch failed, and `submit()` raises
-  `QuipSubmissionError("propose_job 0x... failed on chain in block
-  0x...: <error>. The fee was paid and no order was placed.")`.
+  `QuipSubmissionError("propose_job 0x... failed on chain in block 0x...: <error>. The fee was paid and no order was placed.")`.
 - `unconfirmed`: the outcome is unknown, and `submit()` raises
   `QuipUnconfirmedError`, which carries `extrinsic_hash` and
   `block_hash`.
@@ -129,9 +128,8 @@ proposed Quip job: order_id=327 spec_id=0x8f46...67f0 reward=1000000000000 planc
 
 (Log lines from the `xqsa.quip` logger at `INFO`, hashes shortened.) If
 the nonce moves again while `submit()` signs, it refuses rather than
-race the other client: `QuipSubmissionError: account nonce moved twice
-while submitting; another client is sending from this account. Nothing
-was sent.`
+race the other client:
+`QuipSubmissionError: account nonce moved twice while submitting; another client is sending from this account. Nothing was sent.`
 
 `submit()` logs the quote box at `INFO` on the `xqsa.quip` logger, and
 also prints it to stderr when stderr is a terminal.
@@ -184,8 +182,8 @@ the receipt:
 ```
 
 The `Quote` row keeps the last quote taken, including the one `submit()`
-takes before an `autofund` drip, so a funded order can still read `not
-affordable` after it was submitted.
+takes before an `autofund` drip, so a funded order can still read
+`not affordable` after it was submitted.
 
 ## Payout rules
 
@@ -212,8 +210,9 @@ order = solver.create_order(model, resolution=ResolutionTopNEqual(2))
 ```
 
 `n` runs from 1 to 32. The rule's own constructor checks it, so a bad
-`n` raises `ValueError` (`ResolutionTopNEqual: n must be from 1 to 32,
-got 33`) or `TypeError` before any order exists. `n=1` warns
+`n` raises `ValueError`
+(`ResolutionTopNEqual: n must be from 1 to 32, got 33`) or `TypeError`
+before any order exists. `n=1` warns
 `ResolutionTopNEqual(1) pays exactly like ResolutionSingleBest()`. Any
 other value for `resolution` is refused: with `ValueError` on the
 constructor, and with `QuipOrderOptionError` on an order:
@@ -232,8 +231,8 @@ QuipOrderOptionError: ResolutionTopNWeighted needs runtime 119 or later, and the
 ```
 
 A top-N rule with `block_wait=0` warns, because the order closes on its
-first answer: `resolution=top 3, equal split: with block_wait=0 only the
-first answer is accepted, so there can be only one winner`.
+first answer:
+`resolution=top 3, equal split: with block_wait=0 only the first answer is accepted, so there can be only one winner`.
 
 ### Settlement
 
@@ -251,10 +250,10 @@ an order with fewer answers than `n` has fewer winners. A receipt's
 
 - `TopNEqual`: each winner gets `reward // k`, and rank 0 also gets the
   remainder. A reward of 10 over 3 winners splits `[4, 3, 3]`.
-- `TopNWeighted`: with `total = k * (k + 1) / 2`, rank `r` gets `(reward
-  // total) * w + (reward % total) * w // total` for its weight `w`, and
-  rank 0 also gets the remainder. A reward of 10 over 3 winners splits
-  `[6, 3, 1]`.
+- `TopNWeighted`: with `total = k * (k + 1) / 2`, rank `r` gets
+  `(reward // total) * w + (reward % total) * w // total` for its weight
+  `w`, and rank 0 also gets the remainder. A reward of 10 over 3 winners
+  splits `[6, 3, 1]`.
 
 A top-2 order answered by eight solvers, two of them tied at the best
 energy:
@@ -272,8 +271,8 @@ winner; until then the receipt shows each as `awaiting claim`, and
 `claimed` turns `True` once the chain closes the order. Below runtime
 119, `settlement()` of a `TopNWeighted` order raises
 `NotImplementedError`, and the receipt prints that message as its
-`Reward` row. The order box and the receipt show the rule as `single
-best`, `top 2, equal split` or `top 2, weighted by rank`.
+`Reward` row. The order box and the receipt show the rule as
+`single best`, `top 2, equal split` or `top 2, weighted by rank`.
 
 ## Access
 
@@ -295,25 +294,25 @@ solver and three others.
 
 The allowlist is bounded:
 
-- It must name at least one account or type: `AccessAllow: name at least
-  one account or solver type; the chain refuses an empty list`
+- It must name at least one account or type:
+  `AccessAllow: name at least one account or solver type; the chain refuses an empty list`
   (`ValueError`, from the constructor). An empty list would fail on
   chain after the fee was paid.
 - At most 8 types (`ValueError`).
-- At most `MaxBidMiners` accounts, 16 on `aglais`: `AccessAllow lists 17
-  accounts; the chain's MaxBidMiners is 16` (`QuipOrderOptionError`).
+- At most `MaxBidMiners` accounts, 16 on `aglais`:
+  `AccessAllow lists 17 accounts; the chain's MaxBidMiners is 16`
+  (`QuipOrderOptionError`).
 - Type names come from the runtime's `MinerType`, on `aglais` `Cpu`,
   `Gpu`, `QpuDwave`, `QpuIbm`, `QpuIonq`, `QpuPasqal` and `Asic`:
-  `AccessAllow: unknown solver type 'Fpga'; the chain has Cpu, Gpu,
-  QpuDwave, QpuIbm, QpuIonq, QpuPasqal, Asic` (`QuipOrderOptionError`).
+  `AccessAllow: unknown solver type 'Fpga'; the chain has Cpu, Gpu, QpuDwave, QpuIbm, QpuIonq, QpuPasqal, Asic`
+  (`QuipOrderOptionError`).
 
 Over either cap the runtime fails with no readable error, which is why
 the client refuses first. Duplicate entries are dropped, and accounts,
 given as SS58, `0x` hex or bytes, are normalised to `0x` hex. A bad
 value for `access` raises `ValueError` on the constructor and
-`QuipOrderOptionError` on an order: `access='Bid' is not an access rule;
-pass 'Open' or one of AccessOpen(), AccessAllow(accounts=[...],
-types=[...])`.
+`QuipOrderOptionError` on an order:
+`access='Bid' is not an access rule; pass 'Open' or one of AccessOpen(), AccessAllow(accounts=[...], types=[...])`.
 
 An allowlisted account that is not a registered solver is never refused,
 but it warns, naming the account in `0x` hex:
@@ -324,9 +323,8 @@ UserWarning: access: 0x9dfe3616d2f32ad5a46ca94262e36b6b6d1fc6ecd15691dc0810b20f5
 
 The constructor warns for its default `access`, and `create_order()` and
 `set()` warn when they change it. When nobody on the allowlist answers,
-the no-answer error says so: `order 327 has no answers; only allowlisted
-solvers could answer (accounts 5Fdr..SFgb) and none did; once it is
-final, reclaim its reward with order.reclaim()`.
+the no-answer error says so:
+`order 327 has no answers; only allowlisted solvers could answer (accounts 5Fdr..SFgb) and none did; once it is final, reclaim its reward with order.reclaim()`.
 
 A solver that is not on the list and answers anyway is refused on chain
 with `System.ExtrinsicFailed: QuantumComputeMempool.NotEligibleSolver`,
@@ -410,17 +408,15 @@ print(receipt.status())
 ```
 
 `get_receipt()` raises `QuipConnectionError` for an id that names no
-order (`order 1000000000 not found on-chain
-(QuantumComputeMempool.JobOrders)`).
+order
+(`order 1000000000 not found on-chain (QuantumComputeMempool.JobOrders)`).
 
 `list_orders(state=None, account=None)` returns an account's order ids,
 newest first. `state` is `"submitted"`, `"finalized"` or `None`, and any
 other value raises `ValueError`; `account` is SS58, `0x` hex or bytes,
 and defaults to the signer. It returns at most the newest 32 ids, after
-the `state` filter, and warns when there are more: `showing 32 of N
-orders on this account. This 32-order page limit was imposed for the old
-protocol cap of 32 orders per account; please flag it to the xquad team
-so it can be lifted.`
+the `state` filter, and warns when there are more:
+`showing 32 of N orders on this account. This 32-order page limit was imposed for the old protocol cap of 32 orders per account; please flag it to the xquad team so it can be lifted.`
 
 The receipt and the in-session `JobOrder` share these methods:
 
@@ -467,8 +463,8 @@ the proposing extrinsic, tip included, read from the block that placed
 the order; when it cannot be read the row says `unknown`. The `Reward`
 row is `reserved, leader so far`, `reserved, no answers yet`,
 `reclaimed`, or `unanswered: reclaim with get_receipt(N).reclaim()`; an
-answered, final order shows one `Winner` row per winner, `awaiting
-claim` or `claimed`:
+answered, final order shows one `Winner` row per winner,
+`awaiting claim` or `claimed`:
 
 ```text
 ╭─ Job order 325 receipt ──────────────────────────────────────────────╮
@@ -503,18 +499,19 @@ claim` or `claimed`:
 the planck refunded. It reads the head block, then refuses before
 signing, with `QuipReclaimRefusedError`, in this order:
 
-1. `order N was proposed by <account>, not by this account` 2. `order N
-is already closed (reclaimed or settled)` 3. `order N is open until
-block B (about M min); reclaim after it closes` 4. `order N was answered
-by K solvers; its reward awaits the winner's claim and cannot be
-reclaimed`
+1. `order N was proposed by <account>, not by this account`
+2. `order N is already closed (reclaimed or settled)`
+3. `order N is open until block B (about M min); reclaim after it closes`
+4. `order N was answered by K solvers; its reward awaits the winner's
+   claim and cannot be reclaimed`
 
 If the chain refuses the reclaim, it raises `QuipReclaimRefusedError`
 naming the block and the chain's error, and the fee is charged. If the
-outcome is unknown, it raises `QuipSubmissionError("the reclaim of order
-N (<extrinsic>) was sent but its outcome is unknown")`; a retry is safe,
-since a reclaim that landed makes the next one refuse as already closed.
-A reclaim costs its own transaction fee, about 0.0011 AGLS on `aglais`.
+outcome is unknown, it raises
+`QuipSubmissionError("the reclaim of order N (<extrinsic>) was sent but its outcome is unknown")`;
+a retry is safe, since a reclaim that landed makes the next one refuse
+as already closed. A reclaim costs its own transaction fee, about 0.0011
+AGLS on `aglais`.
 
 Only `solve()`, and the deprecated `query()`, reclaim on their own: when
 an order finalizes with no answers, they reclaim it and raise
