@@ -2,6 +2,7 @@ accessor
 accessors
 Affero
 allowlist
+allowlisted
 annealer
 annealers
 arity

@@ -67,8 +67,9 @@ The order options among these (`reward`, `access`, `resolution`,
 Every order `create_order()` builds inherits them, and `create_order()`
 or `JobOrder.set()` override them for that order. The quality floors
 (`max_energy`, `min_solutions` and `min_diversity`) exist per order
-only, never as client defaults. The Job Orders page covers each option,
-including the payout rules and access rules. `delivery` accepts only
+only, never as client defaults. [Job Orders](quip-orders.md) covers each
+option, including the [payout rules](quip-orders.md#payout-rules) and
+[access rules](quip-orders.md#access). `delivery` accepts only
 `"OnChainOnly"`: the pallet's `Callback` delivery fires its
 `ResultReady` event only when a reward is claimed, which network solvers
 do not do.
@@ -114,9 +115,10 @@ every order that uses it is refused before signing, because older
 runtimes weight the split by absolute energy, so a worse answer can take
 the larger share.
 
-Runtime 119 started each network afresh instead of upgrading it in
-place. Orders placed before it no longer exist, so an order id recorded
-before the reset does not name the same order after it.
+Moving a network to runtime 119 starts it afresh instead of upgrading it
+in place. Orders placed before the move do not carry over, so an order
+id recorded before it does not name the same order after it. `aglais`
+runs runtime 118 as of 2026-10-12.
 
 ## Job Lifecycle
 
@@ -141,7 +143,7 @@ height. `solve(model, **options)` is `create_order(model,
 `SolverResult` (see [Metadata](#metadata)); unlike `create_order()`, it
 warns about an unknown option and drops it instead of raising. The order
 surface -- drafts, quotes, receipts, reclaiming, and reading answers --
-is on the Job Orders page.
+is on [Job Orders](quip-orders.md).
 
 Only `solve()`, and the deprecated `query()`, reclaim on their own. When
 an order finalizes with zero solutions, they reclaim the reserved reward
@@ -403,8 +405,9 @@ the same key names a different kind of thing depending on the backend.
 `solve()` returns the leader's best vector, the answer the chain pays
 for, rather than the best vector any solver stored. `leader`,
 `leader_read` and `energy_matches_chain` say whether that rule held or a
-fallback chose another vector; the Job Orders page describes the rule
-and both fallbacks.
+fallback chose another vector; [Reading the
+answer](quip-orders.md#reading-the-answer) describes the rule and both
+fallbacks.
 
 ## Failure Taxonomy
 
