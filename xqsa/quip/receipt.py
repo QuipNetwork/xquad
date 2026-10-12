@@ -381,21 +381,24 @@ class JobOrderReceipt:
         return facts
 
     def _floors_text(self) -> str | None:
-        """The order's quality floors in chain units, or ``None`` if the order cannot be read.
+        """The order's quality floors in chain units, or ``None`` if the order cannot be read; see below."""
+        return self._no_answer_facts()[0]
 
-        From the cached facts when they are read already: the floors never
-        change once the order is placed. For error messages, so a read fault never hides the error they explain.
+    def _no_answer_facts(self) -> tuple[str | None, Access | Any]:
+        """The order's quality floors as text and its access rule, each ``None`` if it cannot be read.
+
+        From the cached facts when they are read already, since neither changes
+        once the order is placed; otherwise from one order read. For error
+        messages, so a read fault never hides the error they explain.
         """
         if self._facts_cache is not None:
-            return floors_text(self._facts_cache.floors)
-        floors = self._best_effort("the quality floors", lambda: _floors_of(self._fetch_order()["ising_params"]))
-        return None if floors is None else floors_text(floors)
-
-    def _access_rule(self) -> Access | Any:
-        """The order's access rule, or ``None`` if the order cannot be read; for error messages, as above."""
-        return self._best_effort(
-            "the access rule", lambda: _decoded_or_raw(access_from_chain, self._fetch_order()["mode"])
-        )
+            return floors_text(self._facts_cache.floors), self._facts_cache.access
+        order = self._best_effort("the order", self._fetch_order)
+        if order is None:
+            return None, None
+        floors = self._best_effort("the quality floors", lambda: floors_text(_floors_of(order["ising_params"])))
+        access = self._best_effort("the access rule", lambda: _decoded_or_raw(access_from_chain, order["mode"]))
+        return floors, access
 
     def _best_effort(self, what: str, read: Any) -> Any:
         """Return ``read()``, or ``None`` with a warning if it faults; for display-only facts."""

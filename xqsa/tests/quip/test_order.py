@@ -605,6 +605,45 @@ class TestUnregisteredSolvers:
         with pytest.warns(UserWarning, match=f"{BOB_HEX} is not a registered solver"):
             order.set(access=AccessAllow(accounts=[BOB_HEX]))
 
+    def test_set_with_the_same_allowlist_reads_nothing(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        with pytest.warns(UserWarning, match="is not a registered solver"):
+            order = solver.create_order(_model(), access=AccessAllow(accounts=[ALICE_HEX, BOB_HEX]))
+        reads = _count_solvers_reads(solver)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            order.set(access=order.access, reward=2 * UNIT)
+            order.set(**{name: value for name, value in order.options().items() if name != "mapping"})
+        assert reads == []
+
+    def test_client_default_allowlist_is_looked_up_once_at_construction(self, monkeypatch) -> None:
+        with pytest.warns(UserWarning, match="is not a registered solver") as record:
+            solver, _ = _ready(monkeypatch, access=AccessAllow(accounts=[ALICE_HEX, BOB_HEX]))
+        assert [str(w.message).split()[1] for w in record] == [ALICE_HEX, BOB_HEX]
+        reads = _count_solvers_reads(solver)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            for _ in range(3):
+                solver.create_order(_model())
+        assert reads == []
+        with pytest.warns(UserWarning, match=f"{CAROL_HEX} is not a registered solver"):
+            solver.create_order(_model(), access=AccessAllow(accounts=[CAROL_HEX]))
+        assert reads == [CAROL_HEX]
+
+
+def _count_solvers_reads(solver) -> list[str]:
+    """Record the account of every ``Solvers`` read the solver makes from now on."""
+    reads: list[str] = []
+    query = solver._iface.query
+
+    def counted(module, name, params=None, block_hash=None):
+        if name == "Solvers":
+            reads.append(params[0])
+        return query(module, name, params, block_hash)
+
+    solver._iface.query = counted
+    return reads
+
 
 class TestAccess:
     def test_open_string_coerced(self) -> None:
@@ -1189,9 +1228,13 @@ class TestSolverQuipCompatibility:
             solver.create_order(_model(), colour="red")
 
     def test_create_order_refuses_a_raw_client_default(self, monkeypatch) -> None:
-        solver, _ = _ready(monkeypatch, access={"Bid": 5})
+        solver, _ = _ready(monkeypatch, access=AccessAllow(types=["Cpu"]).to_chain())
         with pytest.raises(TypeError, match="access: raw chain values"):
             solver.create_order(_model())
+
+    def test_constructor_refuses_a_raw_client_default_that_does_not_decode(self, monkeypatch) -> None:
+        with pytest.raises(QuipOrderOptionError, match="it cannot be read as an access rule"):
+            _ready(monkeypatch, access={"Bid": 5})
 
     def test_quote_shortcut_warns_and_prices(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)

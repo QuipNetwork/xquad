@@ -72,6 +72,7 @@ from xqsa.quip.networks import NETWORKS
 from xqsa.quip.order import (
     JobOrder,
     _chain_floors,
+    _check_access,
     _check_floors,
     _OrderOptions,
     _Sent,
@@ -145,6 +146,9 @@ class SolverQuip(Solver):
             or ``delivery`` names a value no order can use yet (checked before
             connecting).
         TypeError: if both ``access`` and the deprecated ``mode`` are given.
+        QuipOrderOptionError: if an ``access`` allowlist is outside the
+            chain's limits. Each listed account that is not a registered
+            solver warns once, here rather than on every order.
         QuipConnectionError: if the node is unreachable or the configured Ising
             spec is not registered on-chain.
         QuipMetadataError: if the node's runtime metadata cannot be decoded by
@@ -242,6 +246,8 @@ class SolverQuip(Solver):
 
         self._spec_id = self._resolve_spec_id(spec_id)
         self._limits = chain.read_limits(self._iface)
+        # Checked once here; an order that keeps the default does not look it up again.
+        _check_access(self._access, self._limits, self._iface, stacklevel=3)
         self._reward = self._resolve_reward(reward)
         self._topology_hash = self._resolve_topology_hash(topology)
 
@@ -805,7 +811,7 @@ class SolverQuip(Solver):
         order_id = receipt.order_id
         if not self._fetch_solutions(order_id):
             refund = self._try_reclaim(receipt)
-            note = no_answer_note(receipt._floors_text(), receipt._access_rule())
+            note = no_answer_note(*receipt._no_answer_facts())
             raise QuipJobFailedError(order_id, f"order {order_id} finalized with no solutions{note}; {refund}")
 
         pick = pick_best(receipt, job, model)

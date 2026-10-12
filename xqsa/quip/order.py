@@ -146,8 +146,10 @@ def merge_options(
 ) -> _OrderOptions:
     """Apply ``updates`` to ``current`` and check the whole result.
 
-    With ``iface``, an allowlist's accounts are also looked up in the chain's
-    ``Solvers``; see :func:`_check_access`.
+    With ``iface``, an allowlist that differs from ``current``'s has its
+    accounts looked up in the chain's ``Solvers``; see :func:`_check_access`.
+    An unchanged one is not looked up again: ``current`` was checked when it
+    was set, or at construction for the client default.
 
     The strict path (``create_order``, ``set``) refuses unknown keywords and
     raw chain dicts with ``TypeError``. The lenient path, used only by the
@@ -176,7 +178,8 @@ def merge_options(
                 raise QuipOrderOptionError(name, str(exc)) from None
     merged = replace(current, **known)
     _check_raw_values(merged, strict=strict, stacklevel=stacklevel + 1)
-    _check_limits(merged, limits, stacklevel=stacklevel + 1, iface=iface)
+    changed = merged.access != current.access
+    _check_limits(merged, limits, stacklevel=stacklevel + 1, iface=iface if changed else None)
     return merged
 
 
@@ -614,9 +617,9 @@ class JobOrder:
             ValueError: if ``mapping`` is combined with a native topology.
         """
         self._require_draft("set")
-        # Look the allowlist up again only when it changes.
-        iface = self._client._iface if "access" in options else None
-        merged = merge_options(self._options, options, self._client._limits, strict=True, stacklevel=3, iface=iface)
+        merged = merge_options(
+            self._options, options, self._client._limits, strict=True, stacklevel=3, iface=self._client._iface
+        )
         merged = self._client._settle_topology(merged)
         job = self._job
         if (merged.topology, merged.mapping) != (self._options.topology, self._options.mapping):

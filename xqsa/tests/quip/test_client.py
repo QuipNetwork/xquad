@@ -2593,6 +2593,26 @@ class TestSolverQuipCollect:
             "did; the reserved reward was reclaimed"
         )
 
+    def test_no_solutions_reads_the_order_once_for_its_note(self, monkeypatch) -> None:
+        from xqsa.quip import QuipJobFailedError
+
+        iface = _chain_iface(order=_order(solution_count=0), head=200, submissions=[])
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        receipt = solver.get_receipt(1)
+        reads = []
+        monkeypatch.setattr(solver, "_try_reclaim", lambda receipt: "reclaimed")
+        query = iface.query
+
+        def counted(module, name, params=None, block_hash=None):
+            reads.append(name)
+            return query(module, name, params, block_hash)
+
+        monkeypatch.setattr(iface, "query", counted)
+        with pytest.raises(QuipJobFailedError):
+            solver._collect_result(receipt, _job(solver), _model(), elapsed=0.0)
+        assert reads.count("JobOrders") == 1
+
     def test_no_solutions_survives_an_unreadable_order(self, monkeypatch) -> None:
         from xqsa.quip import QuipJobFailedError
 
