@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import xqcp as _xqcp
 import xqsa as _xqsa
+import xqsa.quip as _xqsa_quip
 import xquad
 import xqvm_py.vector as _xqvm_py_vector
 import xqvm_py.xqmx as _xqvm_py_xqmx
@@ -73,6 +74,17 @@ def test_identity_reexports():
     assert types.XQMXMode is _xqvm_py_xqmx.XQMXMode
     assert types.Vec is _xqvm_py_vector.Vec
     assert types.triu is _xqvm_py_xqmx.triu
+
+
+def test_quip_subpackage_reexports():
+    """`xquad.sa.quip` re-exports every `xqsa.quip` name by identity."""
+    from xquad.sa import quip
+
+    assert quip.__all__ == _xqsa_quip.__all__
+    assert "Solution" in quip.__all__
+    for name in _xqsa_quip.__all__:
+        assert getattr(quip, name) is getattr(_xqsa_quip, name), name
+    assert sa.quip is quip
 
 
 def test_top_level_namespace():

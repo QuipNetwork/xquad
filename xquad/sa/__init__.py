@@ -20,6 +20,15 @@
 from xqsa import (
     DEFAULT_SOLVER,
     SOLVERS,
+    Solver,
+    SolverCudaGPU,
+    SolverDWaveCPU,
+    SolverDWaveQPU,
+    SolverMetalGPU,
+    SolverResult,
+    build_solver,
+)
+from xqsa.quip import (
     Access,
     AccessAllow,
     AccessOpen,
@@ -45,16 +54,10 @@ from xqsa import (
     ResolutionSingleBest,
     ResolutionTopNEqual,
     ResolutionTopNWeighted,
-    Solver,
-    SolverCudaGPU,
-    SolverDWaveCPU,
-    SolverDWaveQPU,
-    SolverMetalGPU,
     SolverQuip,
-    SolverResult,
-    build_solver,
     fund_from_faucet,
 )
+from xquad.sa import quip as quip
 
 __all__ = [
     "Solver",
