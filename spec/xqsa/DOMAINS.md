@@ -30,7 +30,7 @@ A sample is an `xqffi.vm.XqmxSample`: a dense list of one assignment per variabl
 
 Variable indices range from `0` to `size - 1`. Out-of-range access raises `IndexOutOfBounds`.
 
-**Domain validation:** a sample cannot hold an out-of-domain value. Every constructor and `set_linear` raise `ValueError` for one and leave the sample unchanged. Solvers build their result through `_sample_to_xqmx()`, which writes each assignment with `set_linear`, so a backend that returns an assignment outside the domain fails in `solve()` rather than producing a `SolverResult`. Inside the VM the same rule is `SampleOutOfDomain`, raised by `SETLINE` and `ADDLINE`. The verifier program handles constraint validation independently.
+**Domain validation:** a sample cannot hold an out-of-domain value. Every constructor and `set_linear` raise `ValueError` for one and leave the sample unchanged. In-process implementations build their sample through `sample_to_xqmx()`, which writes each assignment with `set_linear`, so a backend that returns an assignment outside the domain fails in `solve()` rather than producing a `SolverResult`. Inside the VM the same rule is `SampleOutOfDomain`, raised by `SETLINE` and `ADDLINE`. The verifier program handles constraint validation independently.
 
 ## Grid Metadata
 

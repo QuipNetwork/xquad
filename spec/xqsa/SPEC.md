@@ -42,22 +42,25 @@ The solver receives an `XqmxModel` and returns an `XqmxSample` (both `xqffi.vm` 
 
 XQSA uses a class-based plugin model:
 
-- An abstract `Solver` class defines the contract (see [INTERFACE.md](INTERFACE.md))
-- Concrete implementations wrap specific solvers
-- Any class implementing `Solver.solve()` can drop in as a replacement
-- The contract is minimal: validate the model, solve it, return the result
+- A `Solver` base class defines the contract (see [INTERFACE.md](INTERFACE.md)); its `solve()` is a template shared by every solver
+- Each solver composes an `Implementation` that turns a model into a sample; swapping the implementation changes how a solver runs, not its API
+- A new backend drops in as a new implementation behind an existing solver class, or as a new `Solver` subclass that picks one
+- The contract is minimal: validate the model, sample it, return the result with the authoritative energy and `{seed, reads, params}` metadata
 
-v0.3.0 ships `SolverDWaveCPU` in the base package and `SolverDWaveQPU`
-behind the optional `[dwave]` extra. Additional solvers are in progress; see
-[SOLVERS.md](SOLVERS.md) for the planned registry.
+The base package ships `SolverCPU`. `SolverGPU` (CUDA or Metal) and `SolverDWave` need the `[cuda]`, `[metal]` or `[dwave]` extra, and `SolverQuip` the `[quip]` extra. See [SOLVERS.md](SOLVERS.md) for the registry.
 
-## Package Structure (v0.3.0)
+## Package Structure
 
 | Module | Purpose |
 |--------|---------|
-| `solver.py` | Abstract `Solver` class, `SolverResult` dataclass, model validation, BQM conversion helpers |
-| `dwave_cpu.py` | `SolverDWaveCPU` wrapping `dwave-samplers` |
-| `dwave_qpu.py` | `SolverDWaveQPU` wrapping D-Wave Leap QPU access through `dwave-system` |
+| `solver.py` | `Solver` base class and its `solve()` template, `Implementation`, `RunOutput`, `SolverResult`, model validation, BQM conversion helpers |
+| `solvers.py` | The public `SolverCPU`, `SolverGPU` and `SolverDWave` classes |
+| `dwave_cpu.py` | `InProcessCPU` wrapping `dwave-samplers` |
+| `cuda_gpu.py` | `InProcessCuda`, custom CUDA kernels through CuPy |
+| `metal_gpu.py` | `InProcessMetal`, custom Metal kernels through `pyobjc-framework-Metal` |
+| `dwave_qpu.py` | `InProcessDWave` wrapping D-Wave Leap QPU access through `dwave-system` |
+| `quip/` | `SolverQuip`, the Quip Network mempool solver, and its order, receipt and codec types |
+| `registry.py` | `SOLVERS`, `DEFAULT_SOLVER` and `build_solver` |
 
 ## Thread Safety
 
