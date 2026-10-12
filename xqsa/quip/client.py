@@ -571,7 +571,7 @@ class SolverQuip(Solver):
 
     def _propose_call_params(self, job: IsingJob, options: _OrderOptions) -> dict:
         """Build the ``QuantumComputeMempool.propose_job`` call params for a placed job and its options."""
-        ceiling, min_solutions, diversity = _chain_floors(options, job)
+        floors = _chain_floors(options, job)
         ising_params = {
             "nodes": self._wrap_bounded(list(job.nodes)),
             "edges": self._wrap_bounded([list(edge) for edge in job.edges]),
@@ -580,10 +580,10 @@ class SolverQuip(Solver):
             # The ceiling goes under both names: the struct encoder takes only
             # the field the runtime lists, so this proposes before and after
             # QUI-1612 renames min_energy_milli to max_energy_milli (QUI-1674).
-            "min_energy_milli": ceiling,
-            "max_energy_milli": ceiling,
-            "min_diversity_milli": diversity,
-            "min_solutions": min_solutions,
+            "min_energy_milli": floors.max_energy_milli,
+            "max_energy_milli": floors.max_energy_milli,
+            "min_diversity_milli": floors.min_diversity_milli,
+            "min_solutions": floors.min_solutions,
         }
         call_params = {
             "spec_id": self._spec_id,

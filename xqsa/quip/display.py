@@ -22,9 +22,7 @@ from __future__ import annotations
 import textwrap
 from collections.abc import Sequence
 from decimal import Decimal
-from typing import Any
-
-from xqsa.quip.codec import energy_ceiling_milli
+from typing import Any, NamedTuple
 
 WIDTH = 72
 LABEL_WIDTH = 12
@@ -67,32 +65,34 @@ def terms_rows(
     ]
 
 
-def floors_text(
-    ceiling_milli: int | None,
-    min_solutions: int | None,
-    diversity_milli: int | None,
-    model_ceiling: float | None = None,
-) -> str:
-    """Render the quality floors as the chain holds them, or ``"none"``.
+class Floors(NamedTuple):
+    """An order's quality floors as the chain holds them, in milli where scaled; ``None`` is no floor."""
+
+    max_energy_milli: int | None
+    min_solutions: int | None
+    min_diversity_milli: int | None
+
+
+def floors_text(floors: Floors, model_ceiling: float | None = None, *, moved: bool = False) -> str:
+    """Render the quality floors, or ``"none"``.
 
     ``model_ceiling`` is the ceiling in the model's own units, known only to
     the client that placed the order. When given, it leads, and the chain's
-    spin-unit value follows when the offset moves it: ``energy <= -2 (chain
-    -1.25)`` for a BINARY model whose offset is -0.75.
+    spin-unit value follows if ``moved`` says the offset moved it:
+    ``energy <= -2 (chain -1.25)`` for a BINARY model whose offset is -0.75.
     """
     parts = []
-    if ceiling_milli is not None:
-        chain = Decimal(ceiling_milli) / 1000
+    if floors.max_energy_milli is not None:
+        chain = _decimal_text(Decimal(floors.max_energy_milli) / 1000)
         if model_ceiling is None:
-            parts.append(f"energy <= {_decimal_text(chain)}")
+            parts.append(f"energy <= {chain}")
         else:
-            moved = energy_ceiling_milli(model_ceiling) != ceiling_milli
-            differs = f" (chain {_decimal_text(chain)})" if moved else ""
+            differs = f" (chain {chain})" if moved else ""
             parts.append(f"energy <= {_decimal_text(Decimal(repr(float(model_ceiling))))}{differs}")
-    if min_solutions is not None:
-        parts.append(f"{min_solutions} solution{'' if min_solutions == 1 else 's'}")
-    if diversity_milli is not None:
-        parts.append(f"diversity >= {_decimal_text(Decimal(diversity_milli) / 1000)}")
+    if floors.min_solutions is not None:
+        parts.append(f"{floors.min_solutions} solution{'' if floors.min_solutions == 1 else 's'}")
+    if floors.min_diversity_milli is not None:
+        parts.append(f"diversity >= {_decimal_text(Decimal(floors.min_diversity_milli) / 1000)}")
     return ", ".join(parts) or "none"
 
 

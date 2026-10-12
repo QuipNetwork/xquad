@@ -39,7 +39,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 from xqsa.quip.codec import MILLI_SCALE, _to_milli, energy_ceiling_milli
-from xqsa.quip.display import _decimal_text, box, floors_text, terms_rows
+from xqsa.quip.display import Floors, _decimal_text, box, floors_text, terms_rows
 from xqsa.quip.errors import EncodingError, QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
@@ -235,6 +235,8 @@ def _check_min_diversity(diversity: float, min_solutions: int | None) -> None:
         raise QuipOrderOptionError(
             "min_diversity", f"min_diversity={diversity} is not a whole number of thousandths, which the chain needs"
         )
+    # The chain refuses a positive diversity floor only with an explicit
+    # min_solutions below 2; unset keeps every valid vector, so it is accepted.
     if diversity > 0 and min_solutions == 1:
         raise QuipOrderOptionError(
             "min_diversity",
@@ -271,8 +273,14 @@ def _check_floors(options: _OrderOptions, job: IsingJob, *, stacklevel: int) -> 
     Raises:
         QuipOrderOptionError: if a floor cannot be met by the placed model.
     """
+    # Checked as the chain takes them. Only the ceiling can fail to encode:
+    # _check_limits has already held the diversity to 0..0.5.
+    try:
+        floors = _chain_floors(options, job)
+    except EncodingError as exc:
+        raise QuipOrderOptionError("max_energy", f"max_energy={options.max_energy}: {exc}") from exc
     spins = job.topology.num_nodes
-    diversity = None if options.min_diversity is None else _to_milli(options.min_diversity, "min_diversity")[0]
+    diversity = floors.min_diversity_milli
     # In whole milli, so a cap such as 12/25 compares exactly.
     if diversity is not None and diversity * spins > spins // 2 * MILLI_SCALE:
         raise QuipOrderOptionError(
@@ -280,12 +288,9 @@ def _check_floors(options: _OrderOptions, job: IsingJob, *, stacklevel: int) -> 
             f"min_diversity={options.min_diversity} is above {spins // 2}/{spins}, the most diversity "
             f"{spins} placed spins allow, since a vector and its full flip count as one",
         )
-    if options.max_energy is None:
+    ceiling = floors.max_energy_milli
+    if ceiling is None:
         return
-    try:
-        ceiling = energy_ceiling_milli(options.max_energy, job.offset)
-    except EncodingError as exc:
-        raise QuipOrderOptionError("max_energy", f"max_energy={options.max_energy}: {exc}") from exc
     reach = sum(map(abs, job.h_values)) + sum(map(abs, job.j_values))
     # Exact decimals: a rounded bound can land on the wrong side of the ceiling.
     offset = Decimal(repr(job.offset))
@@ -312,15 +317,20 @@ def _check_floors(options: _OrderOptions, job: IsingJob, *, stacklevel: int) -> 
         )
 
 
-def _chain_floors(options: _OrderOptions, job: IsingJob) -> tuple[int | None, int | None, int | None]:
-    """Return the floors as the chain takes them: ``(ceiling_milli, min_solutions, diversity_milli)``.
+def _chain_floors(options: _OrderOptions, job: IsingJob) -> Floors:
+    """Return the floors as the chain takes them.
 
     The ceiling is in milli spin energy, offset included. A zero diversity
     floor is no floor, so it goes out as ``None``.
+
+    Raises:
+        EncodingError: if the ceiling does not fit the chain's ``i64``.
     """
-    ceiling = None if options.max_energy is None else energy_ceiling_milli(options.max_energy, job.offset)
-    diversity = _to_milli(options.min_diversity, "min_diversity")[0] if options.min_diversity else None
-    return ceiling, options.min_solutions, diversity
+    return Floors(
+        max_energy_milli=None if options.max_energy is None else energy_ceiling_milli(options.max_energy, job.offset),
+        min_solutions=options.min_solutions,
+        min_diversity_milli=_to_milli(options.min_diversity, "min_diversity")[0] if options.min_diversity else None,
+    )
 
 
 @dataclass(frozen=True)
@@ -669,7 +679,10 @@ class JobOrder:
 
     def _floors_text(self) -> str:
         """The order's quality floors in model units, with the chain value where the offset moves it."""
-        return floors_text(*_chain_floors(self._options, self._job), model_ceiling=self._options.max_energy)
+        floors, ceiling = _chain_floors(self._options, self._job), self._options.max_energy
+        # Without the offset, the ceiling would convert to the same milli: nothing to add.
+        moved = ceiling is not None and floors.max_energy_milli != energy_ceiling_milli(ceiling)
+        return floors_text(floors, model_ceiling=ceiling, moved=moved)
 
     def _call_params(self) -> dict:
         """Build the ``propose_job`` call params for the current configuration."""

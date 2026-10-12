@@ -77,7 +77,7 @@ from xqsa.quip.codec import (
     _require_h256,
     ising_energy_milli,
 )
-from xqsa.quip.display import floors_text
+from xqsa.quip.display import Floors, floors_text
 from xqsa.quip.faucet import fund_from_faucet
 from xqsa.quip.metadata import connect as connect_shimmed
 from xqsa.quip.signing import SIGNED_EXTENSIONS, _extension_fields, load_or_generate_keystore
@@ -793,7 +793,7 @@ class TestQualityFloors:
 
         params = solver._fetch_order(order_id)["ising_params"]
         assert params.get("max_energy_milli", params.get("min_energy_milli")) == ground
-        assert receipt._floors_text() == floors_text(ground, None, None)
+        assert receipt._floors_text() == floors_text(Floors(ground, None, None))
         ours = quip_chain.ss58_address(solver._iface, bytes(solver._signer.account_id))
         solutions = decode_answers(receipt, job, model, solver=ours)
         assert [s.energy_milli for s in solutions] == [ground]
