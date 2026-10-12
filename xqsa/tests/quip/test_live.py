@@ -63,8 +63,11 @@ pytest.importorskip(
 from xqsa.quip import (
     JobOrder,
     QuipJobFailedError,
+    QuipOrderOptionError,
     QuipSubmissionError,
     QuipTimeoutError,
+    ResolutionTopNEqual,
+    ResolutionTopNWeighted,
     SolverQuip,
 )
 from xqsa.quip import chain as quip_chain
@@ -80,6 +83,7 @@ from xqsa.quip.codec import (
 from xqsa.quip.display import Floors, floors_text
 from xqsa.quip.faucet import fund_from_faucet
 from xqsa.quip.metadata import connect as connect_shimmed
+from xqsa.quip.resolution import MIN_RANK_WEIGHTED_SPEC
 from xqsa.quip.signing import SIGNED_EXTENSIONS, _extension_fields, load_or_generate_keystore
 from xqsa.quip.solution import decode_answers, pick_best
 from xqvm_py.xqmx import XQMX, compute_energy
@@ -144,16 +148,11 @@ def chain():
     iface.close()
 
 
-@pytest.fixture(scope="session")
-def funded_keystore(tmp_path_factory):
-    """A fresh keystore funded via the chain's faucet.
-
-    Skips the whole funded tier when ``QUIP_FAUCET_URL`` is unset -- without a
-    funder we cannot reserve a reward.
-    """
+def _new_funded_keystore(tmp_path_factory, name: str) -> str:
+    """Generate a keystore under ``name``, fund it from the faucet and wait for the transfer; returns its path."""
     if not FAUCET_URL:
         pytest.skip("QUIP_FAUCET_URL unset; funded live tests skipped")
-    path = str(tmp_path_factory.mktemp("quip") / "keystore.json")
+    path = str(tmp_path_factory.mktemp(name) / "keystore.json")
     keystore = load_or_generate_keystore(path)
     dest = "0x" + keystore.account_id.hex()
 
@@ -173,6 +172,22 @@ def funded_keystore(tmp_path_factory):
     finally:
         iface.close()
     return path
+
+
+@pytest.fixture(scope="session")
+def funded_keystore(tmp_path_factory):
+    """A fresh keystore funded via the chain's faucet.
+
+    Skips the whole funded tier when ``QUIP_FAUCET_URL`` is unset -- without a
+    funder we cannot reserve a reward.
+    """
+    return _new_funded_keystore(tmp_path_factory, "quip")
+
+
+@pytest.fixture(scope="session")
+def second_funded_keystore(tmp_path_factory):
+    """Another funded keystore, for a second solver account on one order."""
+    return _new_funded_keystore(tmp_path_factory, "quip-second")
 
 
 @pytest.fixture
@@ -326,6 +341,25 @@ def _self_solve(solver: SolverQuip, model: XQMX, vectors: list[list[int]], **opt
             continue
         return order_id
     pytest.fail("the self-solve batch was refused three times")
+
+
+def _answer(solver: SolverQuip, order_id: int, vectors: list[list[int]]) -> None:
+    """Answer ``order_id`` with ``vectors`` from ``solver``'s account, registering it as a solver in the same batch."""
+    pallet = "QuantumComputeMempool"
+    solutions = quip_chain.wrap_bounded([quip_chain.wrap_bounded(list(vector)) for vector in vectors])
+    calls = [
+        {
+            "call_module": pallet,
+            "call_function": "submit_solution",
+            "call_args": {"order_id": order_id, "solutions": solutions},
+        }
+    ]
+    account = "0x" + bytes(solver._signer.account_id).hex()
+    if solver._iface.query(pallet, "Solvers", [account]).value is None:
+        calls.insert(
+            0, {"call_module": pallet, "call_function": "register_solver", "call_args": {"solver_type": "Cpu"}}
+        )
+    solver._submit_extrinsic("Utility", "batch_all", {"calls": calls})
 
 
 def _claim(solver: SolverQuip, order_id: int) -> None:
@@ -776,6 +810,49 @@ class TestLeader:
             assignments[0][var] for var in range(model.size)
         ]
         _claim(solver, order_id)
+
+
+class TestPayoutRules:
+    def test_top_n_equal_split_matches_the_claim(self, make_solver, second_funded_keystore) -> None:
+        """Two of our accounts answer a TopNEqual(2) order; the receipt's split is what the claim pays."""
+        model = _asymmetric_spin_model()
+        first = make_solver()
+        second = SolverQuip(url=RPC_URL, keystore=second_funded_keystore, **SOLVER_KWARGS)
+        job = first.create_order(model)._job
+        ground = [_model_vector(job, _by_energy(model)[0])]
+        # An odd reward, so the remainder goes to rank 0; a wait long enough for the second answer to land.
+        order_id = _self_solve(
+            first, model, ground, resolution=ResolutionTopNEqual(2), reward=first._reward + 1, block_wait=30
+        )
+        _answer(second, order_id, ground)
+        receipt = first.get_receipt(order_id).wait()
+
+        settlement = receipt.settlement()
+        assert settlement["claimed"] is False
+        ours = quip_chain.ss58_address(first._iface, bytes(first._signer.account_id))
+        assert settlement["winners"][0]["solver"] == ours  # first answer, ground state: rank 0 on any tie.
+        assert len(settlement["winners"]) == 2
+        assert sum(w["allocation_planck"] for w in settlement["winners"]) == first._reward + 1
+
+        sent = first._submit_extrinsic("QuantumComputeMempool", "claim_reward", {"order_id": order_id})
+        paid = {
+            quip_chain.account_bytes(attrs["solver"]): int(attrs["amount"])
+            for _phase, module, event, attrs in quip_chain._events(first._iface, sent.block_hash)
+            if (module, event) == ("QuantumComputeMempool", "RewardClaimed") and int(attrs["order_id"]) == order_id
+        }
+        assert paid == {quip_chain.account_bytes(w["solver"]): w["allocation_planck"] for w in settlement["winners"]}
+        text = str(receipt)
+        print(text)
+        assert "│ Payout      top 2, equal split" in text
+        assert text.count("│ Winner ") == 2
+
+    def test_top_n_weighted_refused_below_runtime_119(self, make_solver) -> None:
+        """create_order refuses rank weighting on a runtime that weights by energy, before anything is signed."""
+        solver = make_solver()
+        if (solver._limits.spec_version or 0) >= MIN_RANK_WEIGHTED_SPEC:
+            pytest.skip(f"the chain runs runtime {solver._limits.spec_version}; QUI-1674 tests TopNWeighted live")
+        with pytest.raises(QuipOrderOptionError, match=f"runtime {solver._limits.spec_version}"):
+            solver.create_order(_asymmetric_spin_model(), resolution=ResolutionTopNWeighted(2))
 
 
 class TestQualityFloors:

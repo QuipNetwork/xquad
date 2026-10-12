@@ -60,6 +60,7 @@ from xqsa.quip.codec import (
     model_to_ising,
     native_placement,
 )
+from xqsa.quip.resolution import ResolutionSingleBest, ResolutionTopNEqual, ResolutionTopNWeighted
 from xqsa.solver import SolverResult
 from xqvm_py.xqmx import XQMX, XQMXDomain, compute_energy
 
@@ -1046,8 +1047,18 @@ class FakeSubstrate:
         self._get_constant_raises = get_constant_raises
         self.token_symbol = token_symbol
         self.token_decimals = token_decimals
-        self.rpc = dict(rpc) if rpc is not None else {"payment_queryInfo": {"result": {"partialFee": "2182560255"}}}
+        self.rpc = (
+            dict(rpc)
+            if rpc is not None
+            else {
+                "payment_queryInfo": {"result": {"partialFee": "2182560255"}},
+                # aglais's runtime as of QUI-1606: below rank-weighted top-N.
+                "state_getRuntimeVersion": {"result": {"specVersion": 118, "transactionVersion": 1}},
+            }
+        )
         self.rpc_calls: list[tuple[str, list | None]] = []
+        # What init_runtime() records: aglais's runtime as of QUI-1606.
+        self.runtime_version: int | None = 118
         self.genesis_hash: object = GENESIS_HASH
         self.ss58_format = 42
         self.nonce = 0
@@ -1245,6 +1256,21 @@ class TestSolverQuipConstruction:
         solver = SolverQuip()
         assert solver._url == "ws://env-node:9944"
 
+    def test_resolution_string_coerced(self, monkeypatch) -> None:
+        assert _make_solver(monkeypatch, resolution="SingleBest")._resolution == ResolutionSingleBest()
+        assert _make_solver(monkeypatch)._resolution == ResolutionSingleBest()
+
+    @pytest.mark.parametrize("value", ["TopNEqual", None])
+    def test_resolution_refused_before_connecting(self, monkeypatch, value) -> None:
+        iface = _default_iface()
+        with pytest.raises(ValueError, match="not a payout rule"):
+            _make_solver(monkeypatch, iface=iface, resolution=value)
+        assert iface.rpc_calls == []
+
+    @pytest.mark.parametrize("rule", [ResolutionSingleBest(), ResolutionTopNEqual(2), ResolutionTopNWeighted(2)])
+    def test_resolution_rules_taken(self, monkeypatch, rule) -> None:
+        assert _make_solver(monkeypatch, resolution=rule)._resolution is rule
+
     def test_missing_url_raises(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip
 
@@ -1367,8 +1393,14 @@ class TestSolverQuipConstruction:
 
         solver = _make_solver(monkeypatch)
         assert solver._limits == ChainLimits(
-            min_reward=UNIT, max_deadline_blocks=1000, max_block_wait=100, max_solutions=20
+            min_reward=UNIT, max_deadline_blocks=1000, max_block_wait=100, max_solutions=20, spec_version=118
         )
+
+    def test_spec_version_read_without_an_rpc(self, monkeypatch) -> None:
+        iface = _default_iface()
+        iface.runtime_version = 119
+        assert _make_solver(monkeypatch, iface=iface)._limits.spec_version == 119
+        assert not any(method == "state_getRuntimeVersion" for method, _ in iface.rpc_calls)
 
     def test_absent_limits_read_as_none(self, monkeypatch) -> None:
         iface = _default_iface()
@@ -2040,6 +2072,45 @@ class TestSolverQuipSubmission:
         assert ising["max_energy_milli"] is None
         assert ising["min_solutions"] is None
 
+    @pytest.mark.parametrize(
+        ("rule", "chain", "scale"),
+        [
+            ("SingleBest", "SingleBest", "00"),
+            (ResolutionSingleBest(), "SingleBest", "00"),
+            (ResolutionTopNWeighted(2), {"TopNWeighted": {"n": 2}}, "0102000000"),
+            (ResolutionTopNEqual(32), {"TopNEqual": {"n": 32}}, "0220000000"),
+        ],
+    )
+    def test_resolution_encodes_as_the_runtime_enum(self, monkeypatch, rule, chain, scale) -> None:
+        """Each payout rule goes out in the form, and SCALE bytes, of the pallet's ``RewardResolution``.
+
+        The enum below mirrors the pallet: declaration order sets the index.
+        """
+        base = pytest.importorskip("scalecodec.base", reason="scalecodec not installed ([quip] extra)")
+        presets = pytest.importorskip("scalecodec.type_registry")
+        config = base.RuntimeConfigurationObject()
+        config.update_type_registry(presets.load_type_registry_preset("core"))
+        config.update_type_registry(
+            {
+                "types": {
+                    "TopN": {"type": "struct", "type_mapping": [["n", "u32"]]},
+                    "RewardResolution": {
+                        "type": "enum",
+                        "type_mapping": [["SingleBest", "Null"], ["TopNWeighted", "TopN"], ["TopNEqual", "TopN"]],
+                    },
+                }
+            }
+        )
+        solver = _make_solver(monkeypatch, resolution=rule)
+        params = solver._propose_call_params(self._simple_job(), solver._default_options())
+        assert params["resolution"] == chain
+        assert config.create_scale_object("RewardResolution").encode(chain).data.hex() == scale
+
+    def test_raw_resolution_dict_goes_out_as_given(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, resolution={"TopNEqual": {"n": 2}})
+        params = solver._propose_call_params(self._simple_job(), solver._default_options())
+        assert params["resolution"] == {"TopNEqual": {"n": 2}}
+
     @pytest.mark.parametrize("ceiling", [None, -1250])
     def test_ceiling_keys_encode_as_the_runtime_field(self, monkeypatch, ceiling) -> None:
         """Both ceiling keys encode byte-identical to the one key the runtime lists.
@@ -2227,6 +2298,7 @@ def _order(
     return {
         "proposer": proposer,
         "reward": reward,
+        "resolution": "SingleBest",
         "status": status,
         "created_at": created_at,
         "first_solution_at": first_solution_at,
@@ -3721,8 +3793,7 @@ def test_fee_is_priced_on_a_disarmed_copy_never_the_submitted_bytes(monkeypatch)
     solver = _solve_ready(monkeypatch)
     captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
     solver.solve(_model())
-    (method, params), *_ = solver._iface.rpc_calls
-    assert method == "payment_queryInfo"
+    [params] = [params for method, params in solver._iface.rpc_calls if method == "payment_queryInfo"]
     assert params == ["0x" + (b"disarmed:" + b"\x00\x01").hex()]
     assert captured["submitted_wire"] == b"\x00\x01"
 

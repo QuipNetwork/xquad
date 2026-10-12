@@ -42,13 +42,19 @@ from xqsa.quip.codec import _TERMINAL_STATUSES, ORDER_STATUS_CLOSED
 from xqsa.quip.display import Floors, box, floors_text, terms_rows
 from xqsa.quip.errors import QuipReclaimRefusedError, QuipSubmissionError, QuipTimeoutError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
+from xqsa.quip.resolution import (
+    Resolution,
+    ResolutionSingleBest,
+    ResolutionTopNEqual,
+    ResolutionTopNWeighted,
+    check_rank_weighting,
+    from_chain,
+)
 
 if TYPE_CHECKING:
     from xqsa.quip.client import SolverQuip
 
 logger = logging.getLogger("xqsa.quip")
-
-_SINGLE_BEST = "SingleBest"
 
 
 @dataclass(frozen=True)
@@ -65,7 +71,7 @@ class _Facts:
     num_couplings: int
     reward: int
     mode: Any
-    resolution: Any
+    resolution: Resolution | Any  # the raw value when this client cannot read it
     deadline_blocks: int
     block_wait: int
     floors: Floors
@@ -225,31 +231,39 @@ class JobOrderReceipt:
         """Return who the reward goes to and whether it was claimed.
 
         ``{"claimed": bool, "winners": [{"solver", "energy_milli",
-        "allocation_planck"}]}``. A ``SingleBest`` order's front runner takes
-        the whole reward. The chain stores no allocations; it computes them
-        when the winner claims, which closes the order, so ``claimed`` means
-        the order is closed with answers. An unanswered order has no winners.
+        "allocation_planck"}]}``, best first. A ``SingleBest`` order's front
+        runner takes the whole reward; a top-N order's ranked solvers split it
+        by the order's rule, and fewer answers than ``n`` means fewer winners.
+        The chain stores no allocations; it computes them when the reward is
+        claimed, which closes the order and pays every winner at once, so
+        ``claimed`` means the order is closed with answers. The allocations
+        here repeat the chain's arithmetic. An unanswered order has no winners.
+
+        A ``TopNWeighted`` split is checked against the runtime this client
+        connected to. That is the runtime that ran the claim because runtime
+        119 started each chain afresh rather than upgrading one in place.
 
         Raises:
-            NotImplementedError: for a top-N order, whose split lands with
-                QUI-1606.
+            NotImplementedError: for a payout rule this client cannot read,
+                or a ``TopNWeighted`` order read from a runtime older than
+                119, which weights by absolute energy rather than rank, so its
+                split cannot be repeated here.
         """
         order = self._fetch_order()
-        resolution = _status_str(order["resolution"])
-        if resolution != _SINGLE_BEST:
-            raise NotImplementedError(f"settlement of a {resolution} order is not supported yet (QUI-1606)")
-        leader = chain.front_runner(self._client._iface, self._order_id)
-        winners = (
-            []
-            if leader is None
-            else [
-                {
-                    "solver": leader["solver"],
-                    "energy_milli": int(leader["energy_milli"]),
-                    "allocation_planck": int(order["reward"]),
-                }
-            ]
-        )
+        return self._settle(order, self._ranking(order))
+
+    def _settle(self, order: Mapping[str, Any], ranked: list[Mapping[str, Any]]) -> dict[str, Any]:
+        """:meth:`settlement` from an order and ranking already read."""
+        try:
+            rule = from_chain(order["resolution"])
+            # No chain upgrades in place to 119 (each was reset), so the client's runtime is the claim's.
+            check_rank_weighting(rule, self._client._limits.spec_version)
+        except ValueError as exc:
+            raise NotImplementedError(f"settlement of order {self._order_id} cannot be computed: {exc}") from None
+        winners = [
+            {"solver": entry["solver"], "energy_milli": int(entry["energy_milli"]), "allocation_planck": share}
+            for entry, share in zip(ranked, rule.payouts(ranked, int(order["reward"])), strict=True)
+        ]
         claimed = _status_str(order["status"]) == ORDER_STATUS_CLOSED and _solution_count(order) > 0
         return {"claimed": claimed, "winners": winners}
 
@@ -329,7 +343,7 @@ class JobOrderReceipt:
     def _fetch_order(self) -> Mapping[str, Any]:
         return self._client._fetch_order(self._order_id)
 
-    def _facts(self) -> _Facts:
+    def _facts(self, order: Mapping[str, Any] | None = None) -> _Facts:
         """Read the order's placement facts: the order, its block's time, and the fee it paid.
 
         Cached once every read succeeded; a faulted read is retried on the next call.
@@ -337,7 +351,7 @@ class JobOrderReceipt:
         if self._facts_cache is not None:
             return self._facts_cache
         iface = self._client._iface
-        order = self._fetch_order()
+        order = self._fetch_order() if order is None else order
         created_at = _coerce_block_number(order["created_at"])
         block_hash = self._best_effort("the submission block", lambda: chain.block_hash(iface, created_at))
         submitted_ms = fee = None
@@ -352,7 +366,7 @@ class JobOrderReceipt:
             num_couplings=len(params["edges"]),
             reward=int(order["reward"]),
             mode=order["mode"],
-            resolution=order["resolution"],
+            resolution=_decoded_or_raw(from_chain, order["resolution"]),
             deadline_blocks=int(timing["deadline_blocks"]),
             block_wait=int(timing["block_wait"]),
             floors=_floors_of(params),
@@ -383,15 +397,17 @@ class JobOrderReceipt:
             logger.warning("could not read %s of order %d: %s", what, self._order_id, exc)
             return None
 
-    def _outcome(self) -> _Outcome:
-        """Read the order's status, answer count and leader now."""
-        order = self._fetch_order()
+    def _outcome(
+        self, order: Mapping[str, Any] | None = None, ranking: list[Mapping[str, Any]] | None = None
+    ) -> _Outcome:
+        """Read the order's status, answer count and leader now, from ``order`` and ``ranking`` when given."""
+        order = self._fetch_order() if order is None else order
         lifecycle = self._client._order_lifecycle(order, self._client._current_block())
         if lifecycle["status"] == ORDER_STATUS_CLOSED:
             status = "closed"
         else:
             status = "final" if lifecycle["is_final"] else "open"
-        ranking = self._ranking()
+        ranking = self._ranking(order) if ranking is None else ranking
         leader = ranking[0] if ranking else None
         return _Outcome(
             status=status,
@@ -407,11 +423,22 @@ class JobOrderReceipt:
         except Exception:  # noqa: BLE001 -- display only.
             return str(account)
 
-    def _ranking(self) -> list[Mapping[str, Any]]:
-        """Return the chain's ranked ``{"solver", "energy_milli"}`` entries, best first."""
+    def _ranking(self, order: Mapping[str, Any] | None = None) -> list[Mapping[str, Any]]:
+        """Return the chain's ranked ``{"solver", "energy_milli"}`` entries, best first.
+
+        Reads the storage the order's payout rule pays from, as the pallet
+        does: the front runner for ``SingleBest``, at most ``n`` top solvers
+        for a top-N rule. An unreadable rule tries the front runner, then the
+        top solvers.
+        """
         iface = self._client._iface
+        rule = _decoded_or_raw(from_chain, (self._fetch_order() if order is None else order)["resolution"])
+        if isinstance(rule, (ResolutionTopNEqual, ResolutionTopNWeighted)):
+            return chain.top_solvers(iface, self._order_id)[: rule.n]
         leader = chain.front_runner(iface, self._order_id)
-        return [leader] if leader is not None else chain.top_solvers(iface, self._order_id)
+        if leader is not None:
+            return [leader]
+        return [] if isinstance(rule, ResolutionSingleBest) else chain.top_solvers(iface, self._order_id)
 
     def __repr__(self) -> str:
         return f"JobOrderReceipt(order_id={self._order_id})"
@@ -429,7 +456,10 @@ class JobOrderReceipt:
 
     def _render(self) -> str:
         client = self._client
-        facts, outcome = self._facts(), self._outcome()
+        # One order read and one ranking read serve every section.
+        order = self._fetch_order()
+        ranking = self._ranking(order)
+        facts, outcome = self._facts(order), self._outcome(order, ranking)
         symbol, decimals = client._token()
 
         def amount(planck: int | None) -> str:
@@ -461,10 +491,12 @@ class JobOrderReceipt:
             ("Leader", outcome.leader or "none"),
             ("Energy", energy),
         ]
-        money = [("Fee", amount(facts.fee)), *self._payout_rows(outcome, amount)]
+        money = [("Fee", amount(facts.fee)), *self._payout_rows(outcome, amount, order, ranking)]
         return box(f"Job order {self._order_id} receipt", [network, problem, terms, results, money], double_before=4)
 
-    def _payout_rows(self, outcome: _Outcome, amount: Any) -> list[tuple[str, str]]:
+    def _payout_rows(
+        self, outcome: _Outcome, amount: Any, order: Mapping[str, Any], ranking: list[Mapping[str, Any]]
+    ) -> list[tuple[str, str]]:
         """The Money rows after the fee: each winner's share, or what happens to an unanswered reward."""
         if outcome.status == "open":
             # The leader can still be displaced, and nothing is claimable before the order is final.
@@ -474,11 +506,19 @@ class JobOrderReceipt:
                 return [("Reward", "reclaimed")]
             return [("Reward", f"unanswered: reclaim with get_receipt({self._order_id}).reclaim()")]
         try:
-            settlement = self.settlement()
+            settlement = self._settle(order, ranking)
         except NotImplementedError as exc:
             return [("Reward", str(exc))]
         state = "claimed" if settlement["claimed"] else "awaiting claim"
         return [("Winner", f"{amount(winner['allocation_planck'])}, {state}") for winner in settlement["winners"]]
+
+
+def _decoded_or_raw(decode: Any, value: Any) -> Any:
+    """Return ``decode(value)``, or ``value`` itself when this client cannot read it; for display."""
+    try:
+        return decode(value)
+    except ValueError:
+        return value
 
 
 def _minutes_until(blocks: int, block_time_ms: int | None) -> str:

@@ -80,6 +80,7 @@ from xqsa.quip.order import (
 )
 from xqsa.quip.quote import JobQuote, _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
+from xqsa.quip.resolution import Resolution, coerce_resolution
 from xqsa.quip.solution import no_answer_note, pick_best
 from xqsa.solver import Solver, SolverResult
 
@@ -161,7 +162,7 @@ class SolverQuip(Solver):
         spec_id: str | None = None,
         topology: str | None = None,
         mode: str = "Open",
-        resolution: str = "SingleBest",
+        resolution: str | Resolution = "SingleBest",
         delivery: str = "OnChainOnly",
         deadline_blocks: int = DEFAULT_DEADLINE_BLOCKS,
         block_wait: int = DEFAULT_BLOCK_WAIT,
@@ -189,12 +190,13 @@ class SolverQuip(Solver):
         resolved_url = url or os.environ.get("QUIP_RPC_URL")
         if not resolved_url:
             raise ValueError("A Quip RPC URL is required. Pass url= or set QUIP_RPC_URL.")
-        check_client_defaults(mode, resolution, delivery)  # before any network I/O.
+        # Both before any network I/O.
+        check_client_defaults(mode, delivery)
+        self._resolution = coerce_resolution(resolution)
 
         self._signer = self._build_signer(quip_signing, seed=seed, keystore=keystore)
 
         self._mode = mode
-        self._resolution = resolution
         self._delivery = delivery
         self._deadline_blocks = deadline_blocks
         self._block_wait = block_wait
@@ -590,10 +592,14 @@ class SolverQuip(Solver):
             "ising_params": ising_params,
             "reward": options.reward,
             # Unit enum variants encode from their bare variant name (the same
-            # form they decode to -- see the miner's _decode_result_delivery).
-            # Data-carrying variants (Bid / TopN* / Callback*) are out of v1.
+            # form they decode to -- see the miner's _decode_result_delivery),
+            # payout rules through Resolution.to_chain(). A raw dict from the
+            # deprecated solve() path goes out as given. Bid and Callback* are
+            # not supported.
             "mode": options.mode,
-            "resolution": options.resolution,
+            "resolution": (
+                options.resolution.to_chain() if isinstance(options.resolution, Resolution) else options.resolution
+            ),
             "deadline_blocks": options.deadline_blocks,
             "block_wait": options.block_wait,
             "delivery": options.delivery,
@@ -981,6 +987,11 @@ class SolverQuip(Solver):
             reward: planck reserved at proposal, at least ``MinReward``.
             deadline_blocks: 10 up to ``MaxDeadlineBlocks``; under 100 warns.
             block_wait: 0 up to ``MaxBlockWait``; not below the deadline warns.
+            resolution: the payout rule: ``"SingleBest"`` or a
+                :class:`~xqsa.quip.Resolution`, such as
+                ``ResolutionTopNEqual(3)``. ``ResolutionTopNWeighted`` is
+                refused on a runtime older than 119. A top-N rule with
+                ``block_wait=0`` warns: it can have one winner only.
             topology: a registered topology hash, or ``"native"``.
             mapping: explicit variable -> node placement (else searched); not
                 allowed with ``"native"``.

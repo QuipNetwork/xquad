@@ -36,6 +36,7 @@ from xqsa.quip import (
 )
 from xqsa.quip.chain import ChainLimits
 from xqsa.quip.order import JobOrder, _OrderOptions, check_client_defaults, merge_options
+from xqsa.quip.resolution import ResolutionSingleBest, ResolutionTopNEqual, ResolutionTopNWeighted
 from xqsa.solver import SolverResult
 from xqvm_py.xqmx import XQMX
 
@@ -393,6 +394,80 @@ class TestSolutionFloorsAgainstThePlacedModel:
         assert (ising["min_solutions"], ising["min_diversity_milli"]) == (2, 500)
 
 
+class TestResolutionOption:
+    def test_string_coerced(self) -> None:
+        assert _quiet_merge(resolution="SingleBest").resolution == ResolutionSingleBest()
+
+    def test_unknown_string_refused(self) -> None:
+        with pytest.raises(QuipOrderOptionError, match="not a payout rule") as info:
+            _merge(resolution="TopNEqual")
+        assert info.value.option == "resolution"
+
+    def test_raw_dict_strict_raises(self) -> None:
+        with pytest.raises(TypeError, match="resolution: raw chain values"):
+            _merge(resolution={"TopNEqual": {"n": 2}})
+
+    def test_raw_weighted_dict_gated_on_the_lenient_path(self) -> None:
+        raw = {"TopNWeighted": {"n": 2}}
+        with pytest.warns(DeprecationWarning), pytest.raises(QuipOrderOptionError, match="runtime 118"):
+            _merge(limits=replace(LIMITS, spec_version=118), strict=False, resolution=raw)
+        with pytest.warns(DeprecationWarning):
+            assert _merge(limits=replace(LIMITS, spec_version=119), strict=False, resolution=raw).resolution is raw
+
+    @pytest.mark.parametrize("spec_version", [118, 119])
+    @pytest.mark.parametrize(
+        "raw", [{"TopNWeighted": 2}, {"TopNWeighted": {"n": 40}}, {"TopNWeighted": {}}, {"TopNEqual": 3}]
+    )
+    def test_undecodable_raw_rule_refused_on_the_lenient_path(self, raw, spec_version) -> None:
+        with pytest.warns(DeprecationWarning), pytest.raises(QuipOrderOptionError, match="cannot be read") as info:
+            _merge(limits=replace(LIMITS, spec_version=spec_version), strict=False, resolution=raw)
+        assert info.value.option == "resolution"
+
+    def test_raw_dict_naming_no_rule_passes_the_lenient_path(self) -> None:
+        with pytest.warns(DeprecationWarning):
+            assert _merge(strict=False, resolution={"FutureRule": 3}).resolution == {"FutureRule": 3}
+
+    @pytest.mark.parametrize("value", [None, 2])
+    def test_non_rule_refused(self, value) -> None:
+        with pytest.raises(QuipOrderOptionError, match="not a payout rule") as info:
+            _merge(resolution=value)
+        assert info.value.option == "resolution"
+
+    def test_equal_passes(self) -> None:
+        assert _quiet_merge(resolution=ResolutionTopNEqual(3)).resolution == ResolutionTopNEqual(3)
+
+    def test_weighted_passes_from_runtime_119(self) -> None:
+        rule = ResolutionTopNWeighted(2)
+        assert _quiet_merge(limits=replace(LIMITS, spec_version=119), resolution=rule).resolution == rule
+
+    def test_weighted_refused_below_119(self) -> None:
+        with pytest.raises(QuipOrderOptionError, match="runtime 118.*absolute energy") as info:
+            _merge(limits=replace(LIMITS, spec_version=118), resolution=ResolutionTopNWeighted(2))
+        assert info.value.option == "resolution"
+
+    def test_weighted_refused_on_unknown_runtime(self) -> None:
+        with pytest.raises(QuipOrderOptionError, match="unknown runtime version"):
+            _merge(resolution=ResolutionTopNWeighted(2))
+
+    @pytest.mark.parametrize("rule", [ResolutionTopNEqual(2), ResolutionTopNWeighted(2)])
+    def test_top_n_without_block_wait_warns(self, rule) -> None:
+        with pytest.warns(UserWarning, match="only one winner"):
+            _merge(limits=replace(LIMITS, spec_version=119), resolution=rule, block_wait=0)
+
+    def test_create_order_refuses_weighted_before_signing(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)  # the fake runtime is 118
+        with pytest.raises(QuipOrderOptionError, match="runtime 118"):
+            solver.create_order(_model(), topology="native", resolution=ResolutionTopNWeighted(2))
+        assert "submitted_wire" not in captured
+
+    def test_create_order_takes_equal(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model(), topology="native", resolution=ResolutionTopNEqual(2))
+        assert order.resolution == order.options()["resolution"] == ResolutionTopNEqual(2)
+        assert "top 2, equal split" in str(order)
+        assert order.set(resolution="SingleBest").resolution == ResolutionSingleBest()
+
+
 class TestOrderOptionStrictness:
     def test_unknown_option_strict_raises(self) -> None:
         with pytest.raises(TypeError, match="unknown order option 'colour'"):
@@ -415,29 +490,25 @@ class TestOrderOptionStrictness:
 
     def test_raw_dict_lenient_warns_and_passes(self) -> None:
         with pytest.warns(DeprecationWarning, match="raw chain value"):
-            merged = _merge(replace_base(resolution={"TopNEqual": 3}), strict=False)
-        assert merged.resolution == {"TopNEqual": 3}
+            merged = _merge(replace_base(resolution={"FutureRule": 3}), strict=False)
+        assert merged.resolution == {"FutureRule": 3}
 
 
 class TestClientDefaults:
     def test_supported_defaults_pass(self) -> None:
-        check_client_defaults("Open", "SingleBest", "OnChainOnly")
+        check_client_defaults("Open", "OnChainOnly")
 
     def test_mode_refused(self) -> None:
         with pytest.raises(ValueError, match="QUI-1607"):
-            check_client_defaults("Whitelist", "SingleBest", "OnChainOnly")
-
-    def test_resolution_refused(self) -> None:
-        with pytest.raises(ValueError, match="QUI-1606"):
-            check_client_defaults("Open", "TopNEqual", "OnChainOnly")
+            check_client_defaults("Whitelist", "OnChainOnly")
 
     @pytest.mark.parametrize("delivery", ["ResultReady", {"Callback": {}}])
     def test_delivery_refused(self, delivery) -> None:
         with pytest.raises(ValueError, match="result delivery is not supported yet"):
-            check_client_defaults("Open", "SingleBest", delivery)
+            check_client_defaults("Open", delivery)
 
     def test_raw_dicts_pass_for_the_lenient_path(self) -> None:
-        check_client_defaults({"Bid": 5}, {"TopNEqual": 3}, "OnChainOnly")
+        check_client_defaults({"Bid": 5}, "OnChainOnly")
 
     def test_constructor_checks_before_connecting(self, monkeypatch) -> None:
         from xqsa.tests.quip.test_client import FakeSubstrate
@@ -485,6 +556,7 @@ class TestJobOrderLifecycle:
             "block_wait": 20,
             "topology": TOPO_HASH,
             "mapping": None,
+            "resolution": ResolutionSingleBest(),
             "max_energy": None,
             "min_solutions": None,
             "min_diversity": None,
@@ -916,10 +988,10 @@ class TestSolverQuipCompatibility:
         assert "wait_for" in captured
 
     def test_solve_warns_on_a_raw_client_default_and_submits(self, monkeypatch) -> None:
-        solver, captured = _ready(monkeypatch, resolution={"TopNEqual": 3})
+        solver, captured = _ready(monkeypatch, resolution={"TopNEqual": {"n": 3}})
         with pytest.warns(DeprecationWarning, match="resolution: passing a raw chain value"):
             solver.solve(_model())
-        assert captured["call_params"]["resolution"] == {"TopNEqual": 3}
+        assert captured["call_params"]["resolution"] == {"TopNEqual": {"n": 3}}
 
     def test_solve_refuses_an_out_of_limit_option_before_signing(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)

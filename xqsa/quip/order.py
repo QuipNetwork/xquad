@@ -43,6 +43,15 @@ from xqsa.quip.display import Floors, _decimal_text, box, floors_text, terms_row
 from xqsa.quip.errors import EncodingError, QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
+from xqsa.quip.resolution import VARIANTS as RESOLUTION_VARIANTS
+from xqsa.quip.resolution import (
+    Resolution,
+    ResolutionTopNEqual,
+    ResolutionTopNWeighted,
+    check_rank_weighting,
+    coerce_resolution,
+    from_chain,
+)
 from xqsa.quip.solution import Solution, decode_answers, pick_best
 
 if TYPE_CHECKING:
@@ -54,10 +63,19 @@ if TYPE_CHECKING:
 
 OrderState = Literal["draft", "submitted", "unconfirmed", "failed", "finalized"]
 
-# The options an order accepts; ``mode``, ``resolution`` and ``delivery`` are
-# client defaults only.
+# The options an order accepts; ``mode`` and ``delivery`` are client defaults only.
 ORDER_OPTIONS = frozenset(
-    {"reward", "deadline_blocks", "block_wait", "topology", "mapping", "max_energy", "min_solutions", "min_diversity"}
+    {
+        "reward",
+        "deadline_blocks",
+        "block_wait",
+        "topology",
+        "mapping",
+        "resolution",
+        "max_energy",
+        "min_solutions",
+        "min_diversity",
+    }
 )
 
 # The largest diversity floor: a vector and its full flip count as identical,
@@ -72,7 +90,6 @@ MIN_DEADLINE_BLOCKS = 10
 RELIABLE_DEADLINE_BLOCKS = 100
 
 _SUPPORTED_MODE = "Open"
-_SUPPORTED_RESOLUTION = "SingleBest"
 _SUPPORTED_DELIVERY = "OnChainOnly"
 
 
@@ -94,22 +111,19 @@ class _OrderOptions:
     min_diversity: float | None = None
 
 
-def check_client_defaults(mode: Any, resolution: Any, delivery: Any) -> None:
-    """Refuse the ``mode``, ``resolution`` and ``delivery`` values no order can use yet.
+def check_client_defaults(mode: Any, delivery: Any) -> None:
+    """Refuse the ``mode`` and ``delivery`` values no order can use yet.
 
-    Bare strings are checked here. A raw chain dict in ``mode`` or
-    ``resolution`` passes, so the deprecated ``solve()`` path keeps working;
-    ``create_order`` refuses it. ``delivery`` accepts only ``"OnChainOnly"``.
+    A bare ``mode`` string is checked here. A raw chain dict passes, so the
+    deprecated ``solve()`` path keeps working; ``create_order`` refuses it.
+    ``delivery`` accepts only ``"OnChainOnly"``. The client's ``resolution``
+    is checked by :func:`~xqsa.quip.resolution.coerce_resolution`.
 
     Raises:
         ValueError: naming the unsupported value.
     """
     if isinstance(mode, str) and mode != _SUPPORTED_MODE:
         raise ValueError(f"mode={mode!r} is not supported yet; only {_SUPPORTED_MODE!r} orders are (QUI-1607)")
-    if isinstance(resolution, str) and resolution != _SUPPORTED_RESOLUTION:
-        raise ValueError(
-            f"resolution={resolution!r} is not supported yet; only {_SUPPORTED_RESOLUTION!r} is (QUI-1606)"
-        )
     if delivery != _SUPPORTED_DELIVERY:
         raise ValueError(
             f"delivery={delivery!r}: result delivery is not supported yet: ResultReady only fires on a claim, "
@@ -141,6 +155,11 @@ def merge_options(
             warnings.warn(f"ignoring unknown SolverQuip option {name!r}", DeprecationWarning, stacklevel=stacklevel)
             continue
         known[name] = value
+    if "resolution" in known:
+        try:
+            known["resolution"] = coerce_resolution(known["resolution"])
+        except ValueError as exc:
+            raise QuipOrderOptionError("resolution", str(exc)) from None
     merged = replace(current, **known)
     _check_raw_values(merged, strict=strict, stacklevel=stacklevel + 1)
     _check_limits(merged, limits, stacklevel=stacklevel + 1)
@@ -184,6 +203,7 @@ def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: in
     if block_wait < 0 or (max_wait is not None and block_wait > max_wait):
         upper = f" and at most MaxBlockWait ({max_wait})" if max_wait is not None else ""
         raise QuipOrderOptionError("block_wait", f"block_wait={block_wait} must be at least 0{upper}")
+    _check_resolution(options.resolution, limits, block_wait, stacklevel=stacklevel + 1)
     if options.max_energy is not None:
         energy = _require_real(options.max_energy, "max_energy")
         try:
@@ -207,6 +227,34 @@ def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: in
         warnings.warn(
             f"block_wait={block_wait} is not below deadline_blocks={deadline}; the deadline ends the order "
             "before the wait for better answers can",
+            UserWarning,
+            stacklevel=stacklevel,
+        )
+
+
+def _check_resolution(resolution: Any, limits: ChainLimits, block_wait: int, *, stacklevel: int) -> None:
+    """Refuse a payout rule the runtime cannot honour, and warn when a top-N order can have one winner only.
+
+    A raw chain dict, which only the deprecated ``solve()`` path lets through,
+    is read as the rule it names and checked the same way. One that names a
+    rule but cannot be read as it is refused; one that names no rule passes
+    unchecked.
+    """
+    if isinstance(resolution, Mapping):
+        try:
+            resolution = from_chain(resolution)
+        except ValueError as exc:
+            if len(resolution) == 1 and next(iter(resolution)) in RESOLUTION_VARIANTS:
+                raise QuipOrderOptionError("resolution", f"{exc}; it cannot be read as a payout rule") from None
+            return
+    try:
+        check_rank_weighting(resolution, limits.spec_version)
+    except ValueError as exc:
+        raise QuipOrderOptionError("resolution", str(exc)) from None
+    if isinstance(resolution, (ResolutionTopNEqual, ResolutionTopNWeighted)) and resolution.n > 1 and block_wait == 0:
+        warnings.warn(
+            f"resolution={resolution}: with block_wait=0 only the first answer is accepted, so there can be only "
+            "one winner",
             UserWarning,
             stacklevel=stacklevel,
         )
@@ -448,6 +496,11 @@ class JobOrder:
         return self._options.mapping
 
     @property
+    def resolution(self) -> Resolution | Mapping[str, Any]:
+        """The payout rule; a raw chain dict only on the deprecated ``solve()`` path."""
+        return self._options.resolution
+
+    @property
     def max_energy(self) -> float | None:
         """The energy ceiling in the model's own units, or ``None`` for no ceiling."""
         return self._options.max_energy
@@ -471,6 +524,7 @@ class JobOrder:
             "block_wait": self.block_wait,
             "topology": self.topology,
             "mapping": None if mapping is None else dict(mapping),
+            "resolution": self.resolution,
             "max_energy": self.max_energy,
             "min_solutions": self.min_solutions,
             "min_diversity": self.min_diversity,
