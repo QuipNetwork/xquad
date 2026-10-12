@@ -58,7 +58,7 @@ cargo nextest run --workspace -E 'test(my_test_name)'
 cargo test --workspace my_test_name
 
 # Python
-make deps-py          # uv sync + maturin develop (editable installs)
+make deps-py          # uv sync: editable installs, xqffi built from current Rust
 make fmt-py           # ruff format across all Python packages
 make fmt-check-py     # ruff format --check
 make lint-py          # ruff check across all Python packages
@@ -299,8 +299,8 @@ Control flow, stack/register I/O, arithmetic (including `SQR`, `ABS`, `INC`, `DE
 ### Dependencies & Environment
 
 - **Dependencies:** manage via each package's `pyproject.toml`. The repo-root `pyproject.toml` hosts the `uv` workspace declaration and dev-tool pins (maturin, pytest, pyyaml, ruff); the xqvm_py / xqcp / xqsa / xqffi members carry their own. Never modify the dev-dep pins without explicit user approval.
-- **Virtual environment:** always use the workspace `.venv/` managed by `uv sync`. Never install packages globally or create ad-hoc venvs. After `make deps-py`, invoke scripts and tests through the `make` targets or `uv run --no-sync`, which picks up the maturin-built `xqffi` extension without a manual activation step. A bare `uv run` (with or without `--extra`) re-syncs the workspace and reinstalls `xqffi` from uv's cached editable wheel over the `maturin develop` build, so tests run against stale Rust. For an extra, follow `make test-quip-sign`: `uv sync --extra <name>`, then `uv run --no-sync maturin develop --locked --manifest-path xqffi/Cargo.toml`, then `uv run --no-sync ...`. A plain `uv sync`, including the one in `make deps-py` and `make test-py`, removes the extra again, so repeat the first two steps after either.
-- **Setup:** `make deps-py` runs `uv sync` + `maturin develop`. Each package's editable install carries `dev-mode-dirs = [".."]`, which puts the repo root on `sys.path`. Re-run after pulls that touch Rust sources or workspace deps.
+- **Virtual environment:** always use the workspace `.venv/` managed by `uv sync`. Never install packages globally or create ad-hoc venvs. Invoke scripts and tests through the `make` targets or `uv run`, which picks up the workspace packages without a manual activation step. `xqffi/pyproject.toml` lists the cdylib's Rust inputs as uv `cache-keys`, so any `uv sync` or `uv run` rebuilds `xqffi` after a Rust edit in `xqffi`, `xqvm` or `xqasm`; uv compares modification times, so a copy that keeps an old mtime over new content is not seen. The make targets pass `--no-sync` to skip a second resolve after their own sync. For an extra, `uv sync --extra <name>`, then `uv run ...`; `uv run` keeps an installed extra, but a plain `uv sync`, including the one in `make deps-py` and `make test-py`, removes it again.
+- **Setup:** `make deps-py` runs `uv sync`, which builds `xqffi` through maturin with `cargo --locked` (the root `pyproject.toml`'s `config-settings-package`). Each package's editable install carries `dev-mode-dirs = [".."]`, which puts the repo root on `sys.path`. Re-run after pulls that touch Rust sources or workspace deps.
 
 ### Package Map
 
@@ -346,7 +346,7 @@ There is deliberately no CI guard for this one -- it is a correctness argument a
 
 ### Rust-Python Bindings (xqffi)
 
-`xqvm_py` consumes `xqffi.asm` only -- its executor stays pure-Python so `xqvm_py` remains an independent conformance oracle. Build with `maturin develop --manifest-path xqffi/Cargo.toml` (handled by `make deps-py`).
+`xqvm_py` consumes `xqffi.asm` only -- its executor stays pure-Python so `xqvm_py` remains an independent conformance oracle. `uv sync` builds it (handled by `make deps-py`).
 
 ### Examples & Smoke Tests
 

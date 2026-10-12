@@ -254,7 +254,7 @@ verify:python:
 # toolchain: opcode-parity-rs exercises the compile-time YAML <->
 # opcodes! macro check via `cargo build -p xqvm` (xqvm/build.rs);
 # opcode-parity-py and the Python-side conformance/example runs shell
-# out to `uv run python -m xqvm_py …`, so the venv (editable xqvm_py +
+# out to `uv run --no-sync python -m xqvm_py …`, so the venv (editable xqvm_py +
 # maturin-built xqffi) has to be active. `.python` gives both: cargo is
 # already on PATH from the pinned default image, and `uv sync`
 # builds xqffi's cdylib through maturin.
@@ -296,9 +296,13 @@ verify:parity:
 # sync --extra dwave` then that import, asserting the symbols resolve.
 #
 # That guarantee used to be added by hand at each hardware call site
-# (scripts/run-hardware-tests.sh rebuilds xqffi's cdylib on every run)
-# and enforced nowhere else -- nothing failed if a caller quietly ran
-# against a stale cached wheel instead. The one path that would have
+# (an explicit `maturin develop` after every sync) and enforced nowhere
+# else -- nothing failed if a caller quietly ran against a stale cached
+# wheel instead. Since QUI-1824 every `uv sync` rebuilds the cdylib when a
+# Rust input listed in xqffi/pyproject.toml's `cache-keys` changed. This
+# job does not prove that list is complete: a fresh clone rebuilds the
+# cdylib whatever the list holds (see below). It proves the rebuilt
+# cdylib satisfies the Python surface. The one path that would have
 # caught a violation sat behind `.hardware`'s protected-ref rule, so it
 # never ran on a merge request -- exactly the blind spot this ticket
 # exists to close. This job is what makes the guarantee systematic
@@ -320,14 +324,13 @@ verify:parity:
 # previous run's environment.
 #
 # That exclusion is necessary but NOT what makes the job trustworthy.
-# `.uv-cache/` IS cached here, keyed on uv.lock + pyproject.toml, so a
-# Rust-only change is a cache hit and the editable-wheel entry restored
-# from it is stale by construction -- no cache shape can fix that,
-# because the key cannot see xqffi/src/. The freshness guarantee comes
-# from `check-xqffi-fresh`'s explicit `maturin develop`, which overwrites
-# whatever the sync restored before the import runs. `.uv-cache/` is
-# therefore safe to keep: it is only a download/build cache, and the
-# rebuild lands on top of it.
+# `.uv-cache/` IS cached here, keyed on uv.lock + pyproject.toml, and the
+# GitLab cache key cannot see xqffi/src/. The freshness guarantee comes
+# from uv itself: it reuses a cached xqffi build only when every
+# `cache-keys` file is unchanged by modification time, and a fresh clone
+# gives every file a new one, so the sync rebuilds the cdylib before the
+# import runs. `.uv-cache/` is therefore safe to keep: it is only a
+# download/build cache.
 #
 # `dwave` is the extra used to prove freshness, not `cuda`, `metal` or
 # `quip`: dwave-system installs cleanly on a plain Linux runner with no

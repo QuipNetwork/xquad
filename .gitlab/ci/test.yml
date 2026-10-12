@@ -212,7 +212,7 @@ test:python:
 # without the extra, so `xqsa/tests/quip/test_signing.py`'s
 # `importorskip("quip_signer")` skips the whole module there and a malformed
 # extrinsic or keystore regression would not turn CI red. `make test-quip-sign` installs the extra
-# (`uv run --extra quip`) so those tests execute.
+# (`uv sync --extra quip`) so those tests execute.
 #
 # NOTE: this runs only the `test-quip-sign` leaf, NOT the full `make test-quip`
 # aggregate. The aggregate also runs the live-devnet e2e suite (`test-quip-e2e`),

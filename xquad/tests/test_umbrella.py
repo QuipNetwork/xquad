@@ -32,11 +32,17 @@ Guards three invariants:
 
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 import xqcp as _xqcp
 import xqsa as _xqsa
+import xqsa.quip as _xqsa_quip
 import xquad
 import xqvm_py.vector as _xqvm_py_vector
 import xqvm_py.xqmx as _xqvm_py_xqmx
+from xqsa._deprecated import FLAT_QUIP_NAMES
 from xquad import asm, cp, sa, types, vm
 
 
@@ -49,30 +55,38 @@ def test_identity_reexports():
     assert sa.SolverMetalGPU is _xqsa.SolverMetalGPU
     assert sa.Solver is _xqsa.Solver
     assert sa.SolverResult is _xqsa.SolverResult
-    assert sa.JobQuote is _xqsa.JobQuote
-    assert sa.JobOrder is _xqsa.JobOrder
-    assert sa.JobOrderReceipt is _xqsa.JobOrderReceipt
-    assert sa.Access is _xqsa.Access
-    assert sa.AccessAllow is _xqsa.AccessAllow
-    assert sa.AccessOpen is _xqsa.AccessOpen
-    assert sa.Resolution is _xqsa.Resolution
-    assert sa.ResolutionSingleBest is _xqsa.ResolutionSingleBest
-    assert sa.ResolutionTopNEqual is _xqsa.ResolutionTopNEqual
-    assert sa.ResolutionTopNWeighted is _xqsa.ResolutionTopNWeighted
-    assert sa.QuipOrderOptionError is _xqsa.QuipOrderOptionError
-    assert sa.QuipReclaimRefusedError is _xqsa.QuipReclaimRefusedError
-    assert sa.QuipUnconfirmedError is _xqsa.QuipUnconfirmedError
-    assert sa.QuipCancelledError is _xqsa.QuipCancelledError
-    assert sa.QuipFaucetError is _xqsa.QuipFaucetError
-    assert sa.QuipMetadataError is _xqsa.QuipMetadataError
-    assert sa.QuipSigningError is _xqsa.QuipSigningError
-    assert sa.QuipTopologyError is _xqsa.QuipTopologyError
-    assert sa.fund_from_faucet is _xqsa.fund_from_faucet
     assert types.XQMX is _xqvm_py_xqmx.XQMX
     assert types.XQMXDomain is _xqvm_py_xqmx.XQMXDomain
     assert types.XQMXMode is _xqvm_py_xqmx.XQMXMode
     assert types.Vec is _xqvm_py_vector.Vec
     assert types.triu is _xqvm_py_xqmx.triu
+
+
+def test_quip_subpackage_reexports():
+    """`xquad.sa.quip` re-exports every `xqsa.quip` name by identity."""
+    from xquad.sa import quip
+
+    assert quip.__all__ == _xqsa_quip.__all__
+    assert "Solution" in quip.__all__
+    for name in _xqsa_quip.__all__:
+        assert getattr(quip, name) is getattr(_xqsa_quip, name), name
+    assert sa.quip is quip
+
+
+@pytest.mark.parametrize(("flat", "home"), [(_xqsa, _xqsa_quip), (sa, sa.quip)], ids=["xqsa", "xquad.sa"])
+@pytest.mark.parametrize("name", sorted(FLAT_QUIP_NAMES))
+def test_flat_quip_name_warns_at_caller(flat, home, name):
+    """A flat Quip name on `xqsa` or `xquad.sa` warns at the caller's line and is the `.quip` object."""
+    with pytest.warns(DeprecationWarning) as record:
+        line = sys._getframe().f_lineno + 1
+        obj = getattr(flat, name)
+    assert obj is getattr(home, name)
+    assert [str(w.message) for w in record] == [
+        f"{flat.__name__}.{name} is deprecated; import it from {home.__name__} (removed in v0.5.0)"
+    ]
+    assert (record[0].filename, record[0].lineno) == (__file__, line)
+    assert name not in flat.__all__
+    assert name in dir(flat)
 
 
 def test_top_level_namespace():

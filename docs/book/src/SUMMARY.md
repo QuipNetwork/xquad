@@ -27,6 +27,7 @@
   - [D-Wave QPU](solving/dwave-qpu.md)
   - [Quip Network](solving/quip-network.md)
     - [Your First Quip Job](solving/quip-first-job.md)
+    - [Job Orders](solving/quip-orders.md)
   - [Energy and Precision](solving/energy-and-precision.md)
 
 - [Examples and Recipes](examples/README.md)

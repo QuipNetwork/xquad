@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 
 import xqsa
+import xqsa.quip
 from xqsa import registry
 
 
@@ -41,7 +42,7 @@ class TestRegistry:
         substrate-interface client and quip_signer extension the real backend
         requires).
         """
-        assert xqsa.SOLVERS["quip"] is xqsa.SolverQuip
+        assert xqsa.SOLVERS["quip"] is xqsa.quip.SolverQuip
         assert "quip" not in registry._SEEDED  # env-driven, not RNG-seeded
 
         built: dict[str, Any] = {}

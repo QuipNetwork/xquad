@@ -14,3 +14,29 @@ dynamic         = [ "version" ]
 manifest-path = "Cargo.toml"
 module-name   = "xqffi"
 strip         = true
+
+# uv rebuilds a local package only when one of its cache keys changes, and
+# the default keys are just the packaging files. List every input to the
+# cdylib so a plain `uv sync` / `uv run` rebuilds after a Rust edit in xqffi
+# or the crates it links (`cargo tree -p xqffi`), plus the readme metadata
+# and the root pyproject.toml that carries the build's cargo arguments. uv
+# compares modification times, not content: a tool that restores an old
+# mtime over new content (`cp -p`, `rsync -t`) defeats it.
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "README.md" },
+    { file = "Cargo.toml" },
+    { file = "src/**/*.rs" },
+    { file = "../pyproject.toml" },
+    { file = "../Cargo.toml" },
+    { file = "../Cargo.lock" },
+    { file = "../rust-toolchain.toml" },
+    { file = "../.cargo/config.toml" },
+    { file = "../xqvm/Cargo.toml" },
+    { file = "../xqvm/build.rs" },
+    { file = "../xqvm/src/**/*.rs" },
+    { file = "../xqasm/Cargo.toml" },
+    { file = "../xqasm/src/**/*" },
+    { file = "../conformance/opcodes.yaml" },
+]

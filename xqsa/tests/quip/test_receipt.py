@@ -26,6 +26,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from xqsa._deprecated import FLAT_QUIP_NAMES
 from xqsa.quip import (
     QuipConnectionError,
     QuipMetadataError,
@@ -1197,7 +1198,17 @@ class TestDeprecations:
         assert not [w for w in recwarn if issubclass(w.category, DeprecationWarning)]
 
     def test_receipt_is_exported(self) -> None:
-        import xqsa
         import xqsa.quip
 
-        assert xqsa.JobOrderReceipt is xqsa.quip.JobOrderReceipt is JobOrderReceipt
+        assert xqsa.quip.JobOrderReceipt is JobOrderReceipt
+
+    def test_flat_names_left_all(self, recwarn) -> None:
+        import xqsa
+
+        assert not FLAT_QUIP_NAMES & set(xqsa.__all__)
+        assert "quip" in vars(xqsa)
+        assert FLAT_QUIP_NAMES <= set(dir(xqsa))
+        exec("from xqsa import *", {})
+        assert not [w for w in recwarn if issubclass(w.category, DeprecationWarning)]
+        with pytest.raises(AttributeError, match="no attribute 'Missing'"):
+            _ = xqsa.Missing
