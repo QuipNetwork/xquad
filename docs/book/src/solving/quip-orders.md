@@ -350,10 +350,12 @@ of them is a client default.
 
 `max_energy` is in model units, the same units as `result.energy`. For a
 BINARY model the chain's energy differs from the model's by a constant
-offset, which the client subtracts before it sends the ceiling; [Energy
-and Precision](energy-and-precision.md) works through the conversion. A
-ceiling that moves shows both values in the order box's `Floors` row,
-here for `max_energy=-2` on the model `-2*x0 + x0*x1`:
+offset, which the client subtracts before it sends the ceiling; [An
+Energy Ceiling on the Quip
+Network](energy-and-precision.md#an-energy-ceiling-on-the-quip-network)
+works through the conversion. A ceiling that moves shows both values in
+the order box's `Floors` row, here for `max_energy=-2` on the model
+`-2*x0 + x0*x1`:
 
 ```text
 │ Floors      energy <= -2 (chain -1.25)                               │

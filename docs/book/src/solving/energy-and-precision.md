@@ -143,3 +143,57 @@ likely within a fixed number of sweeps. Sizing \\(P\\) in practice, and
 reading a solver's output to tell which of these failure modes you hit,
 belongs to
 [Constraints](../modelling/constraints.md#choosing-a-penalty-weight).
+
+## An Energy Ceiling on the Quip Network
+
+<!-- xquad:defect QUI-1823 -->
+> **Not yet verified on runtime 119.** Runtime 119 renames the order
+> field that carries the ceiling, and this section was tested on
+> `aglais` at runtime 118 only. No network ran runtime 119 when it was
+> written, so the ceiling may behave differently there. Report problems
+> at the [issue
+> tracker](https://gitlab.com/quip.network/xquad/-/issues).
+
+`SolverQuip`'s `max_energy` order option (see [Quality
+floors](quip-orders.md#quality-floors)) is an energy ceiling, and it is
+in model units: the same units as `compute_energy()` and
+`result.energy`. The chain never sees your model, only its spin fields
+and couplings at milli scale, so the client converts the ceiling before
+sending it.
+
+For a SPIN model the conversion is a change of scale: the ceiling times
+1000, rounded down, so the chain admits exactly the energies at or below
+it. A BINARY model also carries a constant. The basis change
+`s = 2x - 1` (see [Quip Network](quip-network.md#coefficient-encoding))
+turns the model into spin fields and couplings plus an offset that no
+spin multiplies, and the chain, which stores only the fields and
+couplings, computes energies without it. The client subtracts the offset
+first:
+
+```text
+chain ceiling (milli) = floor((max_energy - offset) * 1000)
+```
+
+A value within a millionth of a milli of the grid snaps to it before the
+floor, so float noise such as `-1.2500000000001` does not lower the
+ceiling to `-1251`.
+
+Take `E = -2*x0 + x0*x1`. Its spin form has fields `h0 = -0.75` and
+`h1 = 0.25`, a coupling of `0.25`, and an offset of `-0.75`. The
+assignment `x0 = 1, x1 = 0` has model energy `-2`; on the chain, with
+spins `s0 = +1, s1 = -1`, its energy is `-0.75 - 0.25 - 0.25 = -1.25`.
+So `max_energy=-2` goes on chain as `-1250` milli, and the order box
+shows both values:
+
+```text
+│ Floors      energy <= -2 (chain -1.25)                               │
+```
+
+The chain applies the ceiling to the model it holds. When the model's
+coefficients were rounded to the milli grid (see [What a Large Penalty
+Costs Instead](#what-a-large-penalty-costs-instead)), the chain's
+energies differ slightly from yours, so an answer near the ceiling can
+land on either side of it, and `create_order()` warns. A ceiling below
+the lowest energy the placed model can reach is refused, and one at or
+above the highest warns that it filters nothing; [Quality
+floors](quip-orders.md#quality-floors) lists every check.
