@@ -315,7 +315,7 @@ class JobOrderReceipt:
         answers = _solution_count(order)
         if answers:
             raise QuipReclaimRefusedError(
-                f"order {order_id} was answered by {count(answers, 'solver')}; its reward awaits the winner's claim "
+                f"order {order_id} was answered by {count(answers, 'solver')}; its reward awaits a claim "
                 "and cannot be reclaimed"
             )
 

@@ -659,7 +659,7 @@ class TestJobOrderReceiptReclaim:
                 {"solution_count": 2},
                 200,
                 None,
-                r"^order 1 was answered by 2 solvers; its reward awaits the winner's claim and cannot be reclaimed$",
+                r"^order 1 was answered by 2 solvers; its reward awaits a claim and cannot be reclaimed$",
                 id="answered-2",
             ),
             pytest.param({"solution_count": 1}, 200, None, r"^order 1 was answered by 1 solver; its", id="answered-1"),
