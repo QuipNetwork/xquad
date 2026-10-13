@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-xqffi.workspace = true
+xqffi = { workspace = true, editable = false }
 
 [tool.hatch.build.targets.wheel]
 only-include = [ "." ]

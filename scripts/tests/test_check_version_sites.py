@@ -170,7 +170,7 @@ def write_tree(root: Path, cargo: str = CARGO_DEV, pep: str = PEP_DEV) -> Path:
         f'[[package]]\nname = "xqcp"\nversion = "{pep}"\nsource = {{ editable = "xqcp" }}\n\n'
         f'[[package]]\nname = "xqsa"\nversion = "{pep}"\nsource = {{ editable = "xqsa" }}\n\n'
         f'[[package]]\nname = "xquad"\nversion = "{pep}"\nsource = {{ editable = "xquad" }}\n\n'
-        '[[package]]\nname = "xqffi"\nsource = { editable = "xqffi" }\n',
+        '[[package]]\nname = "xqffi"\nsource = { directory = "xqffi" }\n',
     )
     write("scripts/python-packages.sh", "CDYLIB=xqffi\nPEERS=(xqcp xqsa xquad)\n")
     return root

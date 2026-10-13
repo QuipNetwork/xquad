@@ -1575,11 +1575,11 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "xqffi", editable = "xqffi" }]
+requires-dist = [{ name = "xqffi", directory = "xqffi" }]
 
 [[package]]
 name = "xqffi"
-source = { editable = "xqffi" }
+source = { directory = "xqffi" }
 
 [[package]]
 name = "xqsa"
@@ -1619,7 +1619,7 @@ requires-dist = [
     { name = "pyobjc-framework-metal", marker = "sys_platform == 'darwin' and extra == 'metal'", specifier = ">=11.0" },
     { name = "quip-signer", marker = "extra == 'quip'", specifier = ">=0.3.0,<0.4" },
     { name = "substrate-interface", marker = "extra == 'quip'", specifier = ">=1.7.4,<2" },
-    { name = "xqffi", editable = "xqffi" },
+    { name = "xqffi", directory = "xqffi" },
 ]
 provides-extras = ["cuda", "dwave", "metal", "quip"]
 
@@ -1650,7 +1650,7 @@ quip = [
 [package.metadata]
 requires-dist = [
     { name = "xqcp", editable = "xqcp" },
-    { name = "xqffi", editable = "xqffi" },
+    { name = "xqffi", directory = "xqffi" },
     { name = "xqsa", editable = "xqsa" },
     { name = "xqsa", extras = ["cuda"], marker = "extra == 'cuda'", editable = "xqsa" },
     { name = "xqsa", extras = ["dwave"], marker = "extra == 'dwave'", editable = "xqsa" },

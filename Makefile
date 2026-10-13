@@ -343,9 +343,9 @@ preflight: preflight-rs preflight-py preflight-docs preflight-policy
 # Bootstrap everything a contributor needs to use the XQuad toolchain
 # locally:
 #   - Python workspace (xqcp, xqsa, xqffi, xquad) synced into .venv/
-#     with the maturin-built xqffi extension; each package's editable
-#     install puts the repo root on sys.path, so any script in the
-#     repo can `import xqcp` etc.
+#     with the maturin-built xqffi wheel; the xqcp, xqsa and xquad
+#     editable installs put the repo root on sys.path, so any script in
+#     the repo can `import xqcp` etc.
 #   - Rust CLI installed as the `xquad` binary under ~/.cargo/bin/ so
 #     `xquad run …`, `xquad dism …`, etc. work from any shell.
 #
@@ -418,7 +418,11 @@ deps-wasm:
 #
 # The sync builds xqffi's cdylib through maturin, and rebuilds it
 # whenever its Rust inputs change: xqffi/pyproject.toml lists them as uv
-# `cache-keys`. No separate `maturin develop` step is needed.
+# `cache-keys`. No separate `maturin develop` step is needed. xqffi
+# installs as a regular wheel (`editable = false` in the members'
+# `[tool.uv.sources]`): an editable install leaves the extension in
+# xqffi/python/xqffi/, outside anything uv tracks, so a `git clean`
+# with unchanged inputs left uv reusing an install with no extension.
 #
 # That build runs `cargo --locked --profile dev` (the root
 # pyproject.toml's `config-settings-package`, which explains the
@@ -430,7 +434,7 @@ deps-wasm:
 # re-resolved into a different dependency set. Regenerate with
 # `cargo check` and commit the result.
 #
-# Each package's pyproject.toml sets `dev-mode-dirs = [".."]`, so its
+# xqcp, xqsa and xquad each set `dev-mode-dirs = [".."]`, so their
 # editable install puts the repo root on sys.path rather than just
 # the package directory (a flat-layout quirk: without it, only
 # /repo/xqcp would be importable, not /repo). That's what lets
