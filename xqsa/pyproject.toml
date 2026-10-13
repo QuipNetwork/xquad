@@ -37,7 +37,7 @@ metal = [ "pyobjc-framework-Metal>=11.0; sys_platform == 'darwin'" ]
 quip = [ "substrate-interface>=1.7.4,<2", "quip-signer>=0.3.0,<0.4", "certifi>=2019.3.9" ]
 
 [tool.uv.sources]
-xqffi.workspace = true
+xqffi = { workspace = true, editable = false }
 
 [tool.hatch.build.targets.wheel]
 only-include = [ "." ]

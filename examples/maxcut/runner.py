@@ -20,7 +20,7 @@ Max-Cut end-to-end XQuad pipeline example.
 
 Build a random weighted complete graph, compile it to XQVM assembly
 via xqcp, run the encoder on the chosen VM (Python reference or
-Rust), sample the resulting QUBO with xqsa's SolverDWaveCPU, run the
+Rust), sample the resulting QUBO with xqsa's SolverCPU, run the
 verifier and decoder on the sampled solution, and print the decoded
 partition.
 

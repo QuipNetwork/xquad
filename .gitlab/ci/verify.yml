@@ -283,11 +283,15 @@ verify:python:
 # That exclusion is necessary but NOT what makes the job trustworthy.
 # `.uv-cache/` IS cached here, keyed on uv.lock + pyproject.toml, and the
 # GitLab cache key cannot see xqffi/src/. The freshness guarantee comes
-# from uv itself: it reuses a cached xqffi build only when every
-# `cache-keys` file is unchanged by modification time, and a fresh clone
-# gives every file a new one, so the sync rebuilds the cdylib before the
-# import runs. `.uv-cache/` is therefore safe to keep: it is only a
-# download/build cache.
+# from uv itself: it reuses a cached xqffi wheel only when every
+# `cache-keys` file is unchanged by modification time. The runners fetch
+# into a reused build directory, so an unchanged file keeps its old time
+# and a reuse is the expected case; it is safe because xqffi installs as
+# a regular wheel, which carries the extension built from those same
+# inputs. (An editable install left the extension in the source tree,
+# where `git clean` deleted it while uv still reused the install.)
+# `.uv-cache/` is therefore safe to keep: it is only a download/build
+# cache.
 #
 # `dwave` is the extra used to prove freshness, not `cuda`, `metal` or
 # `quip`: dwave-system installs cleanly on a plain Linux runner with no

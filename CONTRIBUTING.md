@@ -43,10 +43,13 @@ brew install vale          # macOS
 make deps-py
 ```
 
-This runs `uv sync`, giving you editable installs of `xqcp`, `xqsa`,
-`xqffi`, and `xquad` with the `xqffi` cdylib built from the current
-Rust sources. Later `uv sync` and `uv run` calls rebuild it after a Rust edit,
-because `xqffi/pyproject.toml` lists its Rust inputs as uv `cache-keys`.
+This runs `uv sync`, giving you editable installs of `xqcp`, `xqsa` and
+`xquad`, and `xqffi` as a wheel built from the current Rust sources. Later
+`uv sync` and `uv run` calls rebuild it after a Rust edit, because
+`xqffi/pyproject.toml` lists its Rust inputs as uv `cache-keys`. `xqffi` is not
+editable so that its compiled extension lives in the installed wheel, where a
+cached build always carries it; an edit under `xqffi/python/` takes effect on
+the next `uv sync` or `uv run`.
 The build runs `cargo --locked` from the root `pyproject.toml`'s
 `config-settings-package`, which uv reads from 0.8.1. An older uv warns that it
 failed to parse `pyproject.toml` and builds without `--locked`.

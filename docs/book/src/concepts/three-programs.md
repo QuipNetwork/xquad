@@ -134,7 +134,7 @@ all this problem's verifier checks. `make example-smoke` is what actually
 guards this example: it runs it once and checks `valid == 1`, and does
 not compare `cut_weight`, `energy`, or `partition` against a stored
 answer.
-These numbers depend on the `dwave-samplers` version behind `dwave-cpu`;
+These numbers depend on the `dwave-samplers` version behind `cpu`;
 a different version can return a different valid sample with a different
 cut weight.
 

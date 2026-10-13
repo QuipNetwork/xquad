@@ -53,7 +53,7 @@ uses.
 ## GPU and QPU Install Prerequisites
 
 The base install runs CPU simulated annealing only, through `xqsa`'s
-`dwave-cpu` backend. Every other solver -- a local GPU or a real D-Wave
+`cpu` backend. Every other solver -- a local GPU or a real D-Wave
 QPU -- needs an extra on top, and the extra needs hardware or credentials
 this page cannot install for you. `xqsa/pyproject.toml` defines the
 extras, and `xquad/pyproject.toml` forwards to the ones it re-exports:

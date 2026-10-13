@@ -2,27 +2,88 @@
 
 ## Naming Convention
 
-Concrete solver classes follow the pattern `Solver{Vendor/Technology}{ComputeTarget}`. Vendor-first grouping keeps related solvers together in sorted order.
+Public solver classes are named for where the model is solved: `SolverCPU`, `SolverGPU`, `SolverDWave` and `SolverQuip`. What runs there is chosen by selectors, not by more classes:
 
-v0.4.3 uses `Solver` (abstract) with `SolverDWaveCPU`, `SolverDWaveQPU`, `SolverCudaGPU`, `SolverMetalGPU`, and `SolverQuip` (concrete).
+| Selector | Class | Picks |
+|----------|-------|-------|
+| `algorithm` | `SolverCPU`, `SolverGPU` | The sampling algorithm. Values follow the solver binary suffixes (`sa`, `gibbs`, ...), so new algorithms add values rather than renames. |
+| `engine` | `SolverGPU` | The GPU runtime: `"cuda"` or `"metal"`. Required; there is no auto-detection. |
+| `mode` | `SolverDWave` | How D-Wave hardware is used: `"qpu"`. |
+
+Selectors are keyword-only constructor arguments. Each class passes every other keyword through to the implementation it composes (see [INTERFACE.md](INTERFACE.md)). Implementations are named for how they run: `InProcessCPU`, `InProcessCuda`, `InProcessMetal` and `InProcessDWave` run in the Python process. They are not exported from `xqsa`.
 
 ## Algorithm Families
 
 ### D-Wave SDK Family
 
-Solvers that use the `dimod` BQM format and D-Wave SDK packages. The SDK handles model conversion and sampling; solvers differ in where the BQM is solved (CPU, QPU).
+Implementations that use the `dimod` BQM format and D-Wave SDK packages: `InProcessCPU` (`dwave-samplers`) and `InProcessDWave` (`dwave-system`). The SDK handles model conversion and sampling; they differ in where the BQM is solved (CPU, QPU).
 
-Shared base helpers: `_model_to_bqm()`, `_sample_to_xqmx()` (concrete methods on the `Solver` base class).
+Shared helpers: the module functions `model_to_bqm()` and `sample_to_xqmx()` in `xqsa.solver`.
+
+`SolverDWave(mode="qpu")` runs `InProcessDWave`. Any other `mode` raises `ValueError`; hybrid modes are not available yet. Of the Ocean sampling parameters, it forwards only `chain_strength` and `auto_scale`, from the constructor or per call, and records each one it forwarded in `params`. `None` means unset: a per-call `chain_strength=None` forwards nothing for that call, even when the constructor set a value. Any other Ocean keyword raises `TypeError` rather than reaching the sampler unchecked.
 
 ### Custom Kernel Family
 
-Custom GPU kernels (CUDA `.cu` / Metal `.metal`) bypassing the D-Wave SDK for the compute step. Higher performance ceiling, more code to maintain.
+Custom GPU kernels (CUDA `.cu` / Metal `.metal`) bypassing the D-Wave SDK for the compute step. Higher performance ceiling, more code to maintain. `SolverGPU` runs them; `engine` picks the kernel set and `algorithm` the kernel within it.
 
-Algorithm selection is a configuration option on the solver class via a `strategy` parameter (e.g. `"sa"`, `"gibbs"`, `"metropolis"`), not separate solver classes. This matches the convention from the quip-protocol codebase.
+`InProcessCuda` (`engine="cuda"`) uses CuPy RawKernel for custom CUDA C++ kernels. It converts XQMX models directly to dense float64 GPU arrays (skipping the BQM intermediate) and runs parallel-replica simulated annealing with Metropolis acceptance.
 
-`SolverCudaGPU` is the first solver in this family, using CuPy RawKernel for custom CUDA C++ kernels. It converts XQMX models directly to dense GPU arrays (skipping the BQM intermediate) and runs parallel-replica simulated annealing with Metropolis acceptance.
+`InProcessMetal` (`engine="metal"`) is the Apple Silicon counterpart, using inline Metal Shading Language kernels dispatched via `pyobjc-framework-Metal`. It supports `algorithm="sa"` (simulated annealing) and `algorithm="gibbs"` (block Gibbs sampling over a greedy graph colouring), on dense float32 arrays.
 
-`SolverMetalGPU` is the Apple Silicon counterpart, using inline Metal Shading Language kernels dispatched via `pyobjc-framework-Metal`. It supports `strategy="sa"` (simulated annealing) and `strategy="gibbs"` (block Gibbs sampling over a greedy graph colouring). Like the CUDA solver it works on dense float32 arrays; unlike it, acceptance randomness is generated on-device (xorshift32 per replica) so no random buffer is allocated.
+Both engines generate acceptance randomness on-device per replica, so no random buffer is allocated.
+
+### In-process algorithms
+
+`algorithm` accepts only what runs in-process today. Any other value raises `ValueError` saying the algorithm is not available in-process; further algorithms arrive with the solver binaries.
+
+| Class | `engine` | `algorithm` values | Default |
+|-------|----------|--------------------|---------|
+| `SolverCPU` | -- | `"sa"` | `"sa"` |
+| `SolverGPU` | `"cuda"` | `"sa"` | `"sa"` |
+| `SolverGPU` | `"metal"` | `"sa"`, `"gibbs"` | `"sa"` |
+
+### Parameters
+
+Parameters per (engine, algorithm). Every parameter is a constructor keyword; those marked per-call can also be passed to `solve()`. `seed`, `reads` and `params` in the result are described in [INTERFACE.md](INTERFACE.md#metadata-schema).
+
+**`SolverCPU`, `algorithm="sa"`:**
+
+| Parameter | Default | Per-call |
+|-----------|---------|----------|
+| `num_reads` | `100` | yes |
+| `num_sweeps` | `1000` | yes |
+| `num_sweeps_per_beta` | `1` | yes |
+| `beta_range` | `None` (auto) | yes |
+| `seed` | `None` | yes |
+
+`params` keys: `algorithm`, `num_sweeps`, `num_sweeps_per_beta`, `num_betas`, `beta_range`, `num_occurrences`, `raw_energy`.
+
+**`SolverGPU`, `engine="cuda"` with `algorithm="sa"`, and `engine="metal"` with `algorithm="sa"` or `"gibbs"`:**
+
+| Parameter | Default | Per-call |
+|-----------|---------|----------|
+| `num_reads` | `100` | yes |
+| `num_sweeps` | `1000` | yes |
+| `num_sweeps_per_beta` | `1` | yes |
+| `beta_range` | `None` (auto) | yes |
+| `beta_schedule_type` | `"linear"` on CUDA, `"geometric"` on Metal | yes |
+| `seed` | `None` | yes |
+
+`beta_schedule_type` is `"linear"` or `"geometric"`. The two engines keep different defaults: CUDA's linear default reproduces its historical in-kernel ramp bit for bit. `params` keys: `algorithm`, `engine`, `num_sweeps`, `num_sweeps_per_beta`, `num_betas`, `beta_range`, `beta_schedule_type`, `raw_energy`.
+
+**`SolverDWave`, `mode="qpu"`:**
+
+| Parameter | Default | Per-call |
+|-----------|---------|----------|
+| `token` | `DWAVE_API_TOKEN` | no |
+| `endpoint` | `DWAVE_API_ENDPOINT` | no |
+| `solver` | first Pegasus solver | no |
+| `num_reads` | `100` | yes |
+| `annealing_time` | `20` | yes |
+| `chain_strength` | not forwarded | yes |
+| `auto_scale` | not forwarded | yes |
+
+`params` keys: `mode`, `solver`, `qpu_timing`, `annealing_time`, `raw_energy`, plus `chain_strength` and `auto_scale` when forwarded. `seed` is always `None`.
 
 ### Gate-Based QAOA Family
 
@@ -48,52 +109,49 @@ Configuration (constructor arg, then environment): `url`/`QUIP_RPC_URL`, `seed`/
 
 ## Dependency Model
 
-Each solver beyond the base `SolverDWaveCPU` lives behind an optional extra. Import guards are lazy (inside `__init__`, not at module level) so `import xqsa` never fails.
+`SolverCPU` needs only the base package. Every other solver needs an optional extra, and its dependency is imported only when the solver is constructed, so `import xqsa` never fails: `InProcessCuda`, `InProcessMetal` and `InProcessDWave` import theirs inside `__init__`, `SolverGPU` imports the engine module it picks, and `SolverQuip` checks for `substrate-interface` and imports its signing module on construction.
 
 - `ImportError` with a `pip install xqsa[extra]` hint when the required extra is not installed
 - `RuntimeError` when required hardware is not detected (GPU, QPU)
 
 ## Solver Registry
 
-| Solver | File | Extra | Hardware | Status |
-|--------|------|-------|----------|--------|
-| `SolverDWaveCPU` | `dwave_cpu.py` | (base) | CPU | implemented |
-| `SolverDWaveQPU` | `dwave_qpu.py` | `[dwave]` | D-Wave QPU (cloud) | implemented |
-| `SolverCudaGPU` | `cuda_gpu.py` | `[cuda]` | NVIDIA CUDA GPU | implemented |
-| `SolverMetalGPU` | `metal_gpu.py` | `[metal]` | Apple Metal GPU | implemented |
-| `SolverQuip` | `quip/` | `[quip]` | Quip Network mempool (miner-solved) | implemented |
+| Solver | Implementation (file) | Extra | Hardware | Status |
+|--------|-----------------------|-------|----------|--------|
+| `SolverCPU` | `InProcessCPU` (`dwave_cpu.py`) | (base) | CPU | implemented |
+| `SolverGPU(engine="cuda")` | `InProcessCuda` (`cuda_gpu.py`) | `[cuda]` | NVIDIA CUDA GPU | implemented |
+| `SolverGPU(engine="metal")` | `InProcessMetal` (`metal_gpu.py`) | `[metal]` | Apple Metal GPU | implemented |
+| `SolverDWave(mode="qpu")` | `InProcessDWave` (`dwave_qpu.py`) | `[dwave]` | D-Wave QPU (cloud) | implemented |
+| `SolverQuip` | -- (`quip/`) | `[quip]` | Quip Network mempool (miner-solved) | implemented |
 | `SolverIBMQAOA` | -- | `[ibm]` | IBM QPU / AerSimulator | planned |
 | `SolverIonQQAOA` | -- | `[ionq]` | IonQ trapped-ion QPU | planned |
 
+The public classes live in `solvers.py`, except `SolverQuip` in the `quip/` package.
+
 ## Selecting by Name
 
-`xqsa.build_solver(name, *, seed=None)` constructs a solver from a short,
-CLI-friendly name, decoupling callers (example runners, the smoke harness,
-`--solver` flags) from concrete class names. `xqsa.SOLVERS` is the
-authoritative name->class map and `xqsa.DEFAULT_SOLVER` is the baseline.
-`seed` is forwarded only to the classical SA backends; the QPU is physical
-hardware and `quip` is configured from the environment, so both take no seed.
+`xqsa.build_solver(name, *, seed=None)` constructs a solver from a short, CLI-friendly name, decoupling callers (example runners, the smoke harness, `--solver` flags) from concrete class names. `xqsa.SOLVERS` is the authoritative name -> factory map and `xqsa.DEFAULT_SOLVER` is the baseline. A factory is a class or a `functools.partial` of one, so `cuda` and `metal` both build `SolverGPU`. `seed` is forwarded only to the classical SA backends; the QPU is physical hardware and `quip` is configured from the environment, so both take no seed. The `cuda` and `metal` entries bind `num_reads=200` and `num_sweeps=2000`, so `SOLVERS["cuda"]()` and `build_solver("cuda")` build the same solver; a keyword passed to the factory overrides them.
 
-| CLI name | Class |
-|----------|-------|
-| `dwave-cpu` (default) | `SolverDWaveCPU` |
-| `dwave-qpu` | `SolverDWaveQPU` |
-| `cuda-gpu` | `SolverCudaGPU` |
-| `metal-gpu` | `SolverMetalGPU` |
-| `quip` | `SolverQuip` (env-configured; no seed; needs `[quip]`) |
+| Name | Builds |
+|------|--------|
+| `cpu` (default) | `SolverCPU()` |
+| `cuda` | `SolverGPU(engine="cuda")` |
+| `metal` | `SolverGPU(engine="metal")` |
+| `dwave` | `SolverDWave()` |
+| `quip` | `SolverQuip()` (env-configured; no seed; needs `[quip]`) |
 
 ## Protocol Miner Equivalence
 
-Mapping between `quip-protocol` miner config keys and xqsa solver classes:
+Mapping between `quip-protocol` miner config keys and xqsa solvers:
 
 | Protocol miner | xqsa solver |
 |----------------|-------------|
-| `cpu` | `SolverDWaveCPU` |
-| `qpu` | `SolverDWaveQPU` |
-| `cuda` | `SolverCudaGPU(strategy="sa")` |
-| `cuda-gibbs` | `SolverCudaGPU(strategy="gibbs")` |
-| `metal` | `SolverMetalGPU(strategy="sa")` |
-| `metal-gibbs` | `SolverMetalGPU(strategy="gibbs")` |
+| `cpu` | `SolverCPU()` |
+| `qpu` | `SolverDWave(mode="qpu")` |
+| `cuda` | `SolverGPU(engine="cuda", algorithm="sa")` |
+| `cuda-gibbs` | No in-process equivalent (CUDA runs `"sa"` only) |
+| `metal` | `SolverGPU(engine="metal", algorithm="sa")` |
+| `metal-gibbs` | `SolverGPU(engine="metal", algorithm="gibbs")` |
 | IBM QAOA (feature branch) | `SolverIBMQAOA` |
 | IonQ QAOA (feature branch) | `SolverIonQQAOA` |
 | `modal` | No xqsa equivalent (orchestration layer, not a solver algorithm) |

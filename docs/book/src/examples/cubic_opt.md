@@ -47,7 +47,7 @@ uv run python examples/cubic_opt/runner.py --n 5 --m 4
 |------|---------|-------------|
 | `--n` | `4` | Number of variables |
 | `--m` | `3` | Number of cubic terms |
-| `--solver` | `dwave-cpu` | Solver backend (see Choosing a solver) |
+| `--solver` | `cpu` | Solver backend (see Choosing a solver) |
 | `--seed` | `42` | Random seed |
 | `-o` | stdout | Write JSON result to file |
 
@@ -55,11 +55,11 @@ uv run python examples/cubic_opt/runner.py --n 5 --m 4
 
 Solver selection and install extras are the same for every example: see
 [Using the Examples](using-examples.md#running-one) and
-[Solving Overview](../solving/). The default is `dwave-cpu`, and a
+[Solving Overview](../solving/). The default is `cpu`, and a
 non-default solver will not reproduce the canonical result.
 
 ## Canonical output
 
 `example-smoke` validates that the runner produces `valid == 1` with
-`--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
+`--seed 42 --solver cpu`. The smoke test is invariant-based --
 it checks validity, not exact output.

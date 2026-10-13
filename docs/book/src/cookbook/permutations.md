@@ -44,7 +44,7 @@ def build_problem(n: int) -> Problem:
 ```
 
 Compiling for `n = 3` and running the encoder on the Rust VM, then solving
-the result with `SolverDWaveCPU` at `seed=42`. All six permutations of three
+the result with `SolverCPU` at `seed=42`. All six permutations of three
 things are tied at `-60`, so a different seed decodes to a different one and
 both lines below still hold:
 

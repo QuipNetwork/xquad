@@ -144,7 +144,7 @@ def test_transform_readme_replaces_solver_section_with_a_pointer(tmp_path, monke
                 "",
                 "| Name | Hardware | Install |",
                 "|------|----------|---------|",
-                "| `dwave-cpu` | CPU (default) | `pip install xquad` |",
+                "| `cpu` | CPU (default) | `pip install xquad` |",
                 "",
                 "## Notes",
                 "",
@@ -161,7 +161,7 @@ def test_transform_readme_replaces_solver_section_with_a_pointer(tmp_path, monke
 
     # The heading survives so the page keeps its shape; the table does not.
     assert "## Choosing a solver" in rendered
-    assert "`dwave-cpu` | CPU (default)" not in rendered
+    assert "`cpu` | CPU (default)" not in rendered
     assert "Solver selection and install extras are the same for every example" in rendered
     assert "## Notes" in rendered
     assert "Kept." in rendered

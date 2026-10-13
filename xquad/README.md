@@ -58,7 +58,7 @@ vm.set_output_slots(1)
 vm.run(programs.encoder)
 model = vm.outputs()[0]
 
-sample = sa.SolverDWaveCPU().solve(model).sample
+sample = sa.SolverCPU().solve(model).sample
 ```
 
 Re-exports of peer packages are identity, not copies:
@@ -80,7 +80,7 @@ So `isinstance` works whether the caller imported directly from the peer or via 
 | `xquad.asm` | re-exports `xqffi.asm` | `parse_xqasm`, `assemble_source`, `disassemble` |
 | `xquad.verifier` | re-exports `xqffi.verifier` | `verify`, `verify_source` |
 | `xquad.cp` | re-exports `xqcp` | DSL -- `Problem`, `Types`, expression builders |
-| `xquad.sa` | re-exports `xqsa` | Solvers -- `SolverDWaveCPU`, `Solver` |
+| `xquad.sa` | re-exports `xqsa` | Solvers -- `SolverCPU`, `Solver` |
 
 The raw FFI surface stays available as `xqffi.vm.Vm`.
 

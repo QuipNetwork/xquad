@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """QUI-852 occupancy benchmark: trajectory gate, parity stats, and timing.
 
-Captures reference outputs of ``SolverCudaGPU`` so a kernel change can be
+Captures reference outputs of ``SolverGPU(engine="cuda")`` so a kernel change can be
 verified against the shipped behaviour:
 
 * ``trajectories`` -- integer-coefficient instances (h=0, J in {0,1}). All
@@ -96,9 +96,9 @@ def _sample_hash(sample: XqmxSample, n: int) -> str:
 
 
 def _solve(model: XqmxModel, num_reads: int, num_sweeps: int, seed: int) -> tuple[dict, float]:
-    from xqsa.cuda_gpu import SolverCudaGPU
+    from xqsa import SolverGPU
 
-    solver = SolverCudaGPU(num_reads=num_reads, num_sweeps=num_sweeps, seed=seed)
+    solver = SolverGPU(engine="cuda", num_reads=num_reads, num_sweeps=num_sweeps, seed=seed)
     t0 = time.perf_counter()
     result = solver.solve(model)
     elapsed = time.perf_counter() - t0

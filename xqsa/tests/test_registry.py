@@ -25,6 +25,7 @@ import pytest
 
 import xqsa
 import xqsa.quip
+from xqffi.vm import XqmxModel
 from xqsa import registry
 
 
@@ -33,7 +34,7 @@ class TestRegistry:
 
     def test_expected_solver_names(self) -> None:
         """SOLVERS exposes exactly the registered backend names."""
-        assert set(xqsa.SOLVERS) == {"dwave-cpu", "dwave-qpu", "cuda-gpu", "metal-gpu", "quip"}
+        assert set(xqsa.SOLVERS) == {"cpu", "dwave", "cuda", "metal", "quip"}
 
     def test_quip_registered_and_env_driven(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """'quip' maps to SolverQuip and builds with no seed (env-configured).
@@ -59,19 +60,19 @@ class TestRegistry:
         """DEFAULT_SOLVER is a real registry key, so it always resolves."""
         assert xqsa.DEFAULT_SOLVER in xqsa.SOLVERS
 
-    def test_default_is_dwave_cpu(self) -> None:
+    def test_default_is_cpu(self) -> None:
         """The dependency-free CPU annealer is the default baseline."""
-        assert xqsa.DEFAULT_SOLVER == "dwave-cpu"
+        assert xqsa.DEFAULT_SOLVER == "cpu"
 
 
 class TestBuildSolver:
     """The build_solver factory."""
 
-    def test_builds_dwave_cpu_with_seed(self) -> None:
+    def test_builds_cpu_with_seed(self) -> None:
         """A seeded backend receives the seed it was given."""
-        solver = xqsa.build_solver("dwave-cpu", seed=7)
-        assert isinstance(solver, xqsa.SolverDWaveCPU)
-        assert solver.seed == 7
+        solver = xqsa.build_solver("cpu", seed=7)
+        assert isinstance(solver, xqsa.SolverCPU)
+        assert solver.solve(XqmxModel.binary(2)).metadata["seed"] == 7
 
     def test_unknown_name_raises_value_error(self) -> None:
         """An unregistered name fails fast and lists the valid choices."""

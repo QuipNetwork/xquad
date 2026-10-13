@@ -16,7 +16,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Live QPU integration tests for SolverDWaveQPU.
+Live QPU integration tests for SolverDWave.
 
 These tests submit real problems to a D-Wave Advantage QPU via the Leap API.
 The module is skipped unless dwave-system is installed, which only the
@@ -63,7 +63,7 @@ skip_no_token = pytest.mark.skipif(
 )
 
 # `dwave.system` is a real module dependency of this file, not merely a
-# runtime one: SolverDWaveQPU lazy-imports it inside __init__
+# runtime one: SolverDWave lazy-imports it inside __init__
 # (xqsa/dwave_qpu.py), but every test below constructs one. It ships only in
 # xqsa's `dwave` extra, so under `uv sync --extra cuda` / `--extra metal` --
 # what hardware:cuda and hardware:metal install -- this module now skips at
@@ -77,7 +77,7 @@ pytest.importorskip(
 )
 
 from xqffi.vm import XqmxModel
-from xqsa import SolverDWaveQPU, SolverResult
+from xqsa import SolverDWave, SolverResult
 from xquad.cp import Domain, Problem, Types, xq_triu
 from xquad.vm import VM
 
@@ -194,13 +194,13 @@ def _run_tsp(programs, n: int, distances, solver) -> tuple[int, int]:
 
 @skip_no_token
 class TestQPUConnection:
-    """Verify SolverDWaveQPU connects to a real QPU."""
+    """Verify SolverDWave connects to a real QPU."""
 
     def test_solver_reports_name(self) -> None:
         """Constructor resolves to an Advantage system."""
-        solver = SolverDWaveQPU(num_reads=1, annealing_time=1)
-        assert solver._solver_name
-        assert "Advantage" in solver._solver_name or "system" in solver._solver_name
+        solver = SolverDWave(num_reads=1, annealing_time=1)
+        assert solver._impl._solver_name
+        assert "Advantage" in solver._impl._solver_name or "system" in solver._impl._solver_name
 
 
 @skip_no_token
@@ -214,16 +214,16 @@ class TestQPUBareQUBO:
         model.set_linear(1, -1)
         model.set_quad(0, 1, 2)
 
-        solver = SolverDWaveQPU(num_reads=1, annealing_time=1)
+        solver = SolverDWave(num_reads=1, annealing_time=1)
         result = solver.solve(model)
 
         assert isinstance(result, SolverResult)
         assert result.energy == -1
         assert result.timing > 0
-        assert result.metadata["solver"]
-        assert result.metadata["qpu_timing"] is not None
-        assert isinstance(result.metadata["qpu_timing"], dict)
-        assert len(result.metadata["qpu_timing"]) > 0
+        assert result.metadata["params"]["solver"]
+        assert result.metadata["params"]["qpu_timing"] is not None
+        assert isinstance(result.metadata["params"]["qpu_timing"], dict)
+        assert len(result.metadata["params"]["qpu_timing"]) > 0
 
 
 @skip_no_token
@@ -233,7 +233,7 @@ class TestQPUMaxCut:
     def test_maxcut_n5_seed42(self) -> None:
         """MaxCut n=5, seed=42: valid solution with energy <= -232."""
         programs, n, edges = _build_maxcut(5, seed=42)
-        solver = SolverDWaveQPU(num_reads=10, annealing_time=20)
+        solver = SolverDWave(num_reads=10, annealing_time=20)
         energy, valid = _run_maxcut(programs, n, edges, solver)
         assert valid == 1
         assert energy <= -232
@@ -246,7 +246,7 @@ class TestQPUTSP:
     def test_tsp_n4_seed42(self) -> None:
         """TSP n=4, seed=42: valid tour."""
         programs, n, distances = _build_tsp(4, seed=42)
-        solver = SolverDWaveQPU(num_reads=10, annealing_time=20)
+        solver = SolverDWave(num_reads=10, annealing_time=20)
         energy, valid = _run_tsp(programs, n, distances, solver)
         assert valid == 1
 
@@ -256,16 +256,16 @@ class TestQPUMetadata:
     """Verify result metadata from real QPU submissions."""
 
     def test_qpu_timing_populated(self) -> None:
-        """result.metadata['qpu_timing'] is a non-empty dict, result.timing > 0."""
+        """result.metadata['params']['qpu_timing'] is a non-empty dict, result.timing > 0."""
         model = XqmxModel.binary(2)
         model.set_linear(0, -1)
 
-        solver = SolverDWaveQPU(num_reads=1, annealing_time=1)
+        solver = SolverDWave(num_reads=1, annealing_time=1)
         result = solver.solve(model)
 
         assert result.timing > 0
-        assert result.metadata["qpu_timing"] is not None
-        qpu_timing = result.metadata["qpu_timing"]
+        assert result.metadata["params"]["qpu_timing"] is not None
+        qpu_timing = result.metadata["params"]["qpu_timing"]
         assert isinstance(qpu_timing, dict)
         assert "qpu_sampling_time" in qpu_timing
         assert "qpu_access_time" in qpu_timing
@@ -280,10 +280,10 @@ class TestQPUErrorPaths:
         """Unset DWAVE_API_TOKEN raises ValueError with clear message."""
         monkeypatch.delenv("DWAVE_API_TOKEN", raising=False)
         with pytest.raises(ValueError, match="DWAVE_API_TOKEN"):
-            SolverDWaveQPU()
+            SolverDWave()
 
     def test_bad_token_raises(self, monkeypatch) -> None:
         """Invalid token surfaces a D-Wave authentication error."""
         monkeypatch.setenv("DWAVE_API_TOKEN", "bad-token")
         with pytest.raises(Exception, match="[Uu]nauthorized|[Aa]uthentication|[Aa]ccess denied|[Ii]nvalid token"):
-            SolverDWaveQPU()
+            SolverDWave()

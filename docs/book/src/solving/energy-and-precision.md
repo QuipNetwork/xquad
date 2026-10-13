@@ -85,39 +85,39 @@ cancel, so the stored energy falls by `P`.
 Nothing in the model degrades, but two things outside it do, and both
 matter to backends in this chapter.
 
-**Fixed-precision hardware loses resolution.** `metal-gpu` computes
+**Fixed-precision hardware loses resolution.** The Metal engine (`SolverGPU(engine="metal")`) computes
 coefficients in float32 on the GPU, not the integer arithmetic
 `ENERGY` uses -- `result.energy` is still recomputed in exact integers
 afterward, but the *search* that finds the sample runs at float32
-precision. `cuda-gpu` does not share this: its kernels take
+precision. The CUDA engine does not share this: its kernels take
 `const double*` throughout, its acceptance draws stay float64, and
 `result.energy` is recomputed the same way as every other backend. See
-[Local Solvers](local.md#gpu-backends-cuda-gpu-and-metal-gpu) for the
-per-backend split. The rest of this section applies to `metal-gpu` and
+[Local Solvers](local.md#gpu-backends-solvergpu) for the
+per-backend split. The rest of this section applies to the Metal engine and
 to fixed-precision annealing hardware, not to every GPU backend.
 
 A float32 mantissa carries about seven decimal digits. Once a term in
 the combined Hamiltonian is large enough that a difference of `2` no
-longer changes the float, `metal-gpu`'s search cannot distinguish the
+longer changes the float, the Metal engine's search cannot distinguish the
 two assignments that difference separates, even though `ENERGY` still
 resolves them exactly afterward:
 
 ```python
 import numpy as np
-np.float32(-2000000006) == np.float32(-2000000004)   # True -- the 2 vanished, at metal-gpu's width
-np.float64(-2000000006) == np.float64(-2000000004)   # False -- still resolved, at cuda-gpu's width
+np.float32(-2000000006) == np.float32(-2000000004)   # True -- the 2 vanished, at the Metal engine's width
+np.float64(-2000000006) == np.float64(-2000000004)   # False -- still resolved, at the CUDA engine's width
 np.float32(-1006) == np.float32(-1004)                 # False -- still resolved
 ```
 
 At `P = 2000000000` the two feasible assignments above are
-computationally indistinguishable to `metal-gpu`'s float32 search even
+computationally indistinguishable to the Metal engine's float32 search even
 though `XqmxModel.energy()` still tells them apart exactly; at
-`P = 1000` they are not. `cuda-gpu`'s float64 search keeps this pair
+`P = 1000` they are not. The CUDA engine's float64 search keeps this pair
 distinguishable at this scale, though a large enough \\(P\\) would
 eventually exhaust its wider but still finite mantissa too. Neither
 GPU backend's correctness ever suffers -- the returned energy is
-always the exact integer -- but `metal-gpu`'s search can lose the
-signal, at penalty weights where `cuda-gpu`'s still keeps it visible.
+always the exact integer -- but the Metal engine's search can lose the
+signal, at penalty weights where the CUDA engine's still keeps it visible.
 
 **Real annealing hardware rescales, and the Quip network encodes at
 fixed precision.** A physical D-Wave annealer maps coefficients onto

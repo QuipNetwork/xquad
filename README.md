@@ -52,9 +52,9 @@ The base install includes CPU simulated annealing only. To use GPU or quantum ha
 
 | Solver | Install | Prerequisite |
 |--------|---------|-------------|
-| NVIDIA CUDA GPU (`cuda-gpu`) | `pip install xquad[cuda]` | CUDA 12.x driver + NVIDIA GPU |
-| Apple Metal GPU (`metal-gpu`) | `pip install xquad[metal]` | Apple Silicon Mac with a Metal device |
-| D-Wave Advantage QPU (`dwave-qpu`) | `pip install xquad[dwave]` | D-Wave Leap account + API token |
+| NVIDIA CUDA GPU (`cuda`) | `pip install xquad[cuda]` | CUDA 12.x driver + NVIDIA GPU |
+| Apple Metal GPU (`metal`) | `pip install xquad[metal]` | Apple Silicon Mac with a Metal device |
+| D-Wave Advantage QPU (`dwave`) | `pip install xquad[dwave]` | D-Wave Leap account + API token |
 | Quip Network solver (`quip`) | `pip install xquad[quip]` | `QUIP_RPC_URL` + a configured signer |
 
 Extras are composable: `pip install xquad[cuda,dwave]`. See [`xqsa/README.md`](xqsa/README.md#install) for driver prerequisites and per-solver quick-starts.

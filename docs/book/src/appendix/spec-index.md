@@ -79,7 +79,7 @@ Normative for the solver-adapter interface between a model and a backend.
   -- normative for the architecture overview, where solving sits in the
   pipeline, and the plugin model new solvers implement.
 - [`spec/xqsa/INTERFACE.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqsa/INTERFACE.md)
-  -- normative for the `Solver` abstract class, the `solve()` contract,
+  -- normative for the `Solver` base class, the `solve()` contract,
   the `SolverResult` type, and parameter-passing conventions.
 - [`spec/xqsa/ENERGY.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqsa/ENERGY.md)
   -- normative for the energy computation formula, its precision contract,

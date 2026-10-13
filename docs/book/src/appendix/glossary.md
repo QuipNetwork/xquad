@@ -34,7 +34,7 @@ Models](../concepts/quadratic-models.md#three-domains).
 **Embedding (D-Wave).** Mapping a model's logical variables onto a QPU's
 physical qubit graph, called *minor embedding*: each logical variable
 becomes a chain of one or more physical qubits held together by chain
-strength (above). `SolverDWaveQPU` builds this automatically. See [D-Wave
+strength (above). `SolverDWave` builds this automatically. See [D-Wave
 QPU](../solving/dwave-qpu.md#what-embedding-means).
 
 **Embedding (Rust).** Using the `xqvm` and `xqasm` crates directly from a
@@ -92,9 +92,9 @@ variable count with the model it answers, but not its shape. See
 [Quadratic Models](../concepts/quadratic-models.md).
 
 **Solver.** Anything implementing the `xqsa` interface: takes a model,
-returns a sample and its reported energy. `xqsa` ships five: a CPU
-annealer, CUDA and Metal GPU annealers, the D-Wave QPU, and the Quip
-network. See [Solving Overview](../solving/).
+returns a sample and its reported energy. `xqsa` ships five backends: a
+CPU annealer, CUDA and Metal GPU annealers (both `SolverGPU`), the D-Wave
+QPU, and the Quip network. See [Solving Overview](../solving/).
 
 **Step limit.** The maximum number of instructions a VM run will execute
 before faulting with `StepLimitExceeded`, guarding against runaway

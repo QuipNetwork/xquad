@@ -20,7 +20,7 @@ TSP end-to-end XQuad pipeline example.
 
 Build a random Travelling-Salesman-Problem instance, compile it to
 XQVM assembly via xqcp, run the encoder on the XQVM, sample the
-resulting QUBO with xqsa's SolverDWaveCPU, run the verifier and
+resulting QUBO with xqsa's SolverCPU, run the verifier and
 decoder on the sampled solution, and print the decoded tour.
 
 The runner is the showcase: a single file exercises every layer of

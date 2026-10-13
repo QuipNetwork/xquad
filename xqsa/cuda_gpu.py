@@ -16,10 +16,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-CUDA GPU simulated annealing solver.
+In-process CUDA GPU simulated annealing implementation.
 
 Custom CUDA kernels via CuPy RawKernel for solving XQMX quadratic
-models on NVIDIA GPUs. Bypasses the D-Wave SDK entirely.
+models on NVIDIA GPUs. Bypasses the D-Wave SDK entirely. Run through
+:class:`xqsa.SolverGPU` with ``engine="cuda"``.
 
 Requires the optional ``cuda`` extra::
 
@@ -29,21 +30,27 @@ Requires the optional ``cuda`` extra::
 from __future__ import annotations
 
 import functools
-import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
 
 from xqffi.vm import Domain, XqmxModel
 
-from .solver import Solver, SolverResult
+from .solver import (
+    Implementation,
+    RunOutput,
+    _check_algorithm,
+    _check_anneal_params,
+    _check_beta_schedule,
+    sample_to_xqmx,
+)
 
 if TYPE_CHECKING:
     import cupy as cp
 
-_SUPPORTED_STRATEGIES = frozenset({"sa"})
-_SUPPORTED_SCHEDULES = frozenset({"geometric", "linear"})
+_SUPPORTED_ALGORITHMS = frozenset({"sa"})
+
 
 # One CUDA block per replica; this many threads cooperate on the local-field
 # reduction (QUI-852). Must be a power of two (tree reduction) and match the
@@ -54,7 +61,7 @@ _THREADS_PER_REPLICA = 256
 # CUDA kernel sources
 # ---------------------------------------------------------------------------
 
-# Device RNG (QUI-705): mirrors SolverMetalGPU's on-device strategy
+# Device RNG (QUI-705): mirrors InProcessMetal's on-device scheme
 # (xqsa/metal_gpu.py _RNG_PRELUDE) with 64-bit state so acceptance draws
 # stay float64 (53-bit uniform). Metal's float32 is an MSL platform limit,
 # not a precision decision. Python mirrors live in tests/test_xqsa.py;
@@ -238,8 +245,8 @@ void sa_spin(
 )
 
 
-class SolverCudaGPU(Solver):
-    """Simulated annealing solver using custom CUDA kernels via CuPy.
+class InProcessCuda(Implementation):
+    """Simulated annealing using custom CUDA kernels via CuPy.
 
     Runs parallel replica simulated annealing on an NVIDIA GPU. Each
     replica (controlled by ``num_reads``) executes independently in its
@@ -258,37 +265,22 @@ class SolverCudaGPU(Solver):
     default of 1 keeps one beta per sweep, bit-identical to the previous
     behaviour for ``num_sweeps >= 2``. When ``num_betas == 1`` the whole run
     is a cold greedy quench at ``beta_range[-1]``, matching
-    ``SolverDWaveCPU`` and ``SolverMetalGPU`` (QUI-685); the previous CUDA
+    ``InProcessCPU`` and ``InProcessMetal`` (QUI-685); the previous CUDA
     kernel used ``beta_start`` for this degenerate case.
 
     ``beta_schedule_type`` selects the schedule shape: ``"linear"`` (the
     default, preserving the historical CUDA ramp) or ``"geometric"``.
-    Note: ``SolverMetalGPU`` defaults to ``"geometric"``.
-
-    Examples:
-
-    ```python
-    from xqsa import SolverCudaGPU
-    from xquad.types import XqmxModel
-
-    model = XqmxModel.binary(4)
-    model.set_linear(0, -1)
-    model.set_quad(0, 1, 2)
-
-    solver = SolverCudaGPU()
-    result = solver.solve(model)
-    print(result.energy, result.timing)
-    ```
+    Note: ``InProcessMetal`` defaults to ``"geometric"``.
 
     Raises:
         ImportError: if ``cupy-cuda12x`` is not installed.
         RuntimeError: if no NVIDIA CUDA GPU is detected.
-        ValueError: if ``strategy`` or ``beta_schedule_type`` is not supported.
+        ValueError: if ``algorithm`` or ``beta_schedule_type`` is not supported.
     """
 
     def __init__(
         self,
-        strategy: str = "sa",
+        algorithm: str = "sa",
         num_reads: int = 100,
         num_sweeps: int = 1000,
         num_sweeps_per_beta: int = 1,
@@ -296,30 +288,27 @@ class SolverCudaGPU(Solver):
         beta_schedule_type: str = "linear",
         seed: int | None = None,
     ) -> None:
+        _check_algorithm(algorithm, _SUPPORTED_ALGORITHMS, "the CUDA engine")
+        _check_beta_schedule(beta_schedule_type)
+
         try:
             import cupy as _cupy
         except ImportError as exc:
             raise ImportError("cupy is not installed. Install xqsa with: pip install xqsa[cuda]") from exc
 
         if _cupy.cuda.runtime.getDeviceCount() == 0:
-            raise RuntimeError("No NVIDIA CUDA GPU detected. SolverCudaGPU requires an NVIDIA GPU with CUDA support.")
-
-        if strategy not in _SUPPORTED_STRATEGIES:
-            raise ValueError(f"Unsupported strategy {strategy!r}. Supported: {sorted(_SUPPORTED_STRATEGIES)}")
-
-        if beta_schedule_type not in _SUPPORTED_SCHEDULES:
-            raise ValueError(
-                f"Unsupported beta_schedule_type {beta_schedule_type!r}. Supported: {sorted(_SUPPORTED_SCHEDULES)}"
-            )
+            raise RuntimeError("No NVIDIA CUDA GPU detected. The CUDA engine requires an NVIDIA GPU with CUDA support.")
 
         self._cp = _cupy
-        self.strategy = strategy
-        self.num_reads = num_reads
-        self.num_sweeps = num_sweeps
-        self.num_sweeps_per_beta = num_sweeps_per_beta
-        self.beta_range = beta_range
-        self.beta_schedule_type = beta_schedule_type
-        self.seed = seed
+        self.algorithm = algorithm
+        super().__init__(
+            num_reads=num_reads,
+            num_sweeps=num_sweeps,
+            num_sweeps_per_beta=num_sweeps_per_beta,
+            beta_range=beta_range,
+            beta_schedule_type=beta_schedule_type,
+            seed=seed,
+        )
 
     @functools.cached_property
     def _binary_kernel(self):
@@ -331,46 +320,27 @@ class SolverCudaGPU(Solver):
         """Compile the spin-domain SA kernel on first use."""
         return self._cp.RawKernel(_SA_SPIN_KERNEL, "sa_spin")
 
-    def solve(self, model: XqmxModel, **kwargs: Any) -> SolverResult:
-        """Solve using parallel-replica simulated annealing on GPU.
+    def run(
+        self,
+        model: XqmxModel,
+        *,
+        num_reads: int,
+        num_sweeps: int,
+        num_sweeps_per_beta: int,
+        beta_range: tuple[float, float] | None,
+        beta_schedule_type: str,
+        seed: int | None,
+    ) -> RunOutput:
+        """Sample using parallel-replica simulated annealing on GPU.
 
         Raises:
-            ValueError: if the model is not in BINARY or SPIN domain,
-                or if parameter values are invalid.
+            ValueError: if parameter values are invalid.
         """
-        self._validate_model(model)
-
-        strategy = kwargs.get("strategy", self.strategy)
-        num_reads = kwargs.get("num_reads", self.num_reads)
-        num_sweeps = kwargs.get("num_sweeps", self.num_sweeps)
-        num_sweeps_per_beta = kwargs.get("num_sweeps_per_beta", self.num_sweeps_per_beta)
-        beta_range = kwargs.get("beta_range", self.beta_range)
-        beta_schedule_type = kwargs.get("beta_schedule_type", self.beta_schedule_type)
-        seed = kwargs.get("seed", self.seed)
-
-        if strategy not in _SUPPORTED_STRATEGIES:
-            raise ValueError(f"Unsupported strategy {strategy!r}. Supported: {sorted(_SUPPORTED_STRATEGIES)}")
-        if num_reads < 1:
-            raise ValueError(f"num_reads must be >= 1, got {num_reads}")
-        if num_sweeps < 1:
-            raise ValueError(f"num_sweeps must be >= 1, got {num_sweeps}")
-        if beta_schedule_type not in _SUPPORTED_SCHEDULES:
-            raise ValueError(
-                f"Unsupported beta_schedule_type {beta_schedule_type!r}. Supported: {sorted(_SUPPORTED_SCHEDULES)}"
-            )
-        if not isinstance(num_sweeps_per_beta, int):
-            raise ValueError(f"num_sweeps_per_beta must be an int, got {type(num_sweeps_per_beta).__name__}")
-        if num_sweeps_per_beta < 1:
-            raise ValueError(f"num_sweeps_per_beta must be >= 1, got {num_sweeps_per_beta}")
-        num_betas, rem = divmod(num_sweeps, num_sweeps_per_beta)
-        if rem != 0:
-            raise ValueError(
-                f"num_sweeps ({num_sweeps}) must be divisible by num_sweeps_per_beta ({num_sweeps_per_beta})"
-            )
+        num_betas = _check_anneal_params(num_reads, num_sweeps, num_sweeps_per_beta)
+        _check_beta_schedule(beta_schedule_type)
 
         h, j_matrix = self._to_dense_arrays(model)
 
-        t0 = time.perf_counter()
         best_sample_dict, raw_energy = self._run_sa(
             model=model,
             h=h,
@@ -383,26 +353,18 @@ class SolverCudaGPU(Solver):
             beta_range=beta_range,
             seed=seed,
         )
-        elapsed = time.perf_counter() - t0
 
-        sample = self._sample_to_xqmx(model, best_sample_dict)
-
-        return SolverResult(
-            sample=sample,
-            energy=self._recompute_energy(model, sample),
-            timing=elapsed,
-            metadata={
-                "seed": seed,
-                "reads": num_reads,
-                "params": {
-                    "strategy": strategy,
-                    "num_sweeps": num_sweeps,
-                    "num_sweeps_per_beta": num_sweeps_per_beta,
-                    "num_betas": num_betas,
-                    "beta_range": beta_range,
-                    "beta_schedule_type": beta_schedule_type,
-                    "raw_energy": raw_energy,
-                },
+        return RunOutput(
+            sample=sample_to_xqmx(model, best_sample_dict),
+            seed=seed,
+            reads=num_reads,
+            params={
+                "num_sweeps": num_sweeps,
+                "num_sweeps_per_beta": num_sweeps_per_beta,
+                "num_betas": num_betas,
+                "beta_range": beta_range,
+                "beta_schedule_type": beta_schedule_type,
+                "raw_energy": raw_energy,
             },
         )
 
@@ -450,7 +412,7 @@ class SolverCudaGPU(Solver):
 
         The buffer is float64 because the CUDA pipeline is float64
         end-to-end (``h``, ``J``, ``randoms``, and ``betas`` are all
-        ``const double*`` in the kernels), unlike ``SolverMetalGPU``, whose
+        ``const double*`` in the kernels), unlike ``InProcessMetal``, whose
         pipeline -- including its float32 schedule -- trades precision for
         Metal throughput. The bit-identical-default guarantee below also
         requires float64.
@@ -469,7 +431,7 @@ class SolverCudaGPU(Solver):
         beta_start, beta_end = beta_range
         if num_betas == 1:
             # A single temperature level anneals at beta_end (coldest), a
-            # greedy quench matching SolverDWaveCPU and SolverMetalGPU
+            # greedy quench matching InProcessCPU and InProcessMetal
             # (QUI-685). This intentionally differs from the retired kernel's
             # num_sweeps <= 1 branch, which used beta_start: cross-backend
             # consistency wins over bit-identity on a level that performs no

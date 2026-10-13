@@ -67,12 +67,12 @@ uv run python examples/portfolio_rebalance/runner.py --n 6
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--n` | `5` | Number of assets |
-| `--solver` | `dwave-cpu` | Accepted and ignored |
+| `--solver` | `cpu` | Accepted and ignored |
 | `--seed` | `42` | Random seed |
 | `-o` | stdout | Write JSON result to file |
 
 ## Canonical output
 
 `example-smoke` validates that the runner produces `valid == 1` with
-`--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
+`--seed 42 --solver cpu`. The smoke test is invariant-based --
 it checks validity, not exact output.
