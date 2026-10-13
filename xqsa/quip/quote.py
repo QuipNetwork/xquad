@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from xqsa.quip.display import box
+from xqsa.quip.display import box, count
 
 
 @dataclass(frozen=True)
@@ -93,7 +93,11 @@ class JobQuote:
         problem = []
         if None not in (self.num_variables, self.num_spins, self.num_couplings):
             problem.append(
-                ("Problem", f"{self.num_variables} variables -> {self.num_spins} spins, {self.num_couplings} couplings")
+                (
+                    "Problem",
+                    f"{count(self.num_variables, 'variable')} -> {count(self.num_spins, 'spin')}, "
+                    f"{count(self.num_couplings, 'coupling')}",
+                )
             )
         if self.placement is not None:
             problem.append(("Placed on", "native" if self.placement == "native" else f"topology\n{self.placement}"))

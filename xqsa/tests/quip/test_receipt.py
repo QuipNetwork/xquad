@@ -48,7 +48,7 @@ from xqsa.quip.chain import (
     proposer_orders,
     top_solvers,
 )
-from xqsa.quip.display import Floors, floors_text, terms_rows, variant_text
+from xqsa.quip.display import Floors, count, floors_text, terms_rows, variant_text
 from xqsa.quip.receipt import JobOrderReceipt
 from xqsa.quip.resolution import ResolutionTopNEqual
 
@@ -1121,6 +1121,11 @@ class TestDisplayHelpers:
             ("Block wait", "10 blocks"),
             ("Reward", "1 AGLS"),
         ]
+
+
+@pytest.mark.parametrize(("n", "text"), [(0, "0 spins"), (1, "1 spin"), (2, "2 spins")])
+def test_count_is_singular_only_at_one(n, text) -> None:
+    assert count(n, "spin") == text
 
 
 class TestFloorsText:

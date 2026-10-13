@@ -62,8 +62,8 @@ def terms_rows(
         ("Payout", variant_text(resolution)),
         ("Access", variant_text(access)),
         ("Floors", floors),
-        ("Deadline", f"{deadline_blocks} blocks"),
-        ("Block wait", f"{block_wait} blocks"),
+        ("Deadline", count(deadline_blocks, "block")),
+        ("Block wait", count(block_wait, "block")),
         ("Reward", reward),
     ]
 
@@ -93,10 +93,15 @@ def floors_text(floors: Floors, model_ceiling: float | None = None, *, moved: bo
             differs = f" (chain {chain})" if moved else ""
             parts.append(f"energy <= {_decimal_text(Decimal(repr(float(model_ceiling))))}{differs}")
     if floors.min_solutions is not None:
-        parts.append(f"{floors.min_solutions} solution{'' if floors.min_solutions == 1 else 's'}")
+        parts.append(count(floors.min_solutions, "solution"))
     if floors.min_diversity_milli is not None:
         parts.append(f"diversity >= {_decimal_text(Decimal(floors.min_diversity_milli) / 1000)}")
     return ", ".join(parts) or "none"
+
+
+def count(n: int, noun: str) -> str:
+    """Return ``n`` and ``noun``, plural unless ``n`` is 1 (``1 coupling``, ``0 couplings``)."""
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
 
 
 def _decimal_text(value: Decimal) -> str:

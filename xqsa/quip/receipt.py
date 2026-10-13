@@ -41,7 +41,7 @@ from xqsa.quip.access import Access
 from xqsa.quip.access import from_chain as access_from_chain
 from xqsa.quip.chain import MEMPOOL_PALLET, RECLAIM_ORDER_CALL, _coerce_block_number, _status_str
 from xqsa.quip.codec import _TERMINAL_STATUSES, ORDER_STATUS_CLOSED
-from xqsa.quip.display import Floors, box, floors_text, terms_rows
+from xqsa.quip.display import Floors, box, count, floors_text, terms_rows
 from xqsa.quip.errors import QuipReclaimRefusedError, QuipSubmissionError, QuipTimeoutError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
 from xqsa.quip.resolution import (
@@ -314,9 +314,8 @@ class JobOrderReceipt:
             )
         answers = _solution_count(order)
         if answers:
-            solvers = "solver" if answers == 1 else "solvers"
             raise QuipReclaimRefusedError(
-                f"order {order_id} was answered by {answers} {solvers}; its reward awaits the winner's claim "
+                f"order {order_id} was answered by {count(answers, 'solver')}; its reward awaits the winner's claim "
                 "and cannot be reclaimed"
             )
 
@@ -486,7 +485,10 @@ class JobOrderReceipt:
             ("Proposer", facts.proposer),
             ("Submitted", submitted),
         ]
-        problem = [("Problem", f"{facts.num_spins} spins, {facts.num_couplings} couplings"), ("Spec", facts.spec_id)]
+        problem = [
+            ("Problem", f"{count(facts.num_spins, 'spin')}, {count(facts.num_couplings, 'coupling')}"),
+            ("Spec", facts.spec_id),
+        ]
         terms = terms_rows(
             resolution=facts.resolution,
             access=facts.access,

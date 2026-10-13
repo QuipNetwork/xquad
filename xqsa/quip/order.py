@@ -44,7 +44,7 @@ from xqsa.quip.access import VARIANTS as ACCESS_VARIANTS
 from xqsa.quip.access import Access, AccessAllow, coerce_access
 from xqsa.quip.access import from_chain as access_from_chain
 from xqsa.quip.codec import MILLI_SCALE, _to_milli, energy_ceiling_milli
-from xqsa.quip.display import Floors, _decimal_text, box, floors_text, terms_rows
+from xqsa.quip.display import Floors, _decimal_text, box, count, floors_text, terms_rows
 from xqsa.quip.errors import EncodingError, QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
@@ -874,16 +874,14 @@ class JobOrder:
         symbol, decimals = self._client._token()
         options = self._options
         topology = self._job.topology
-        placed = (
-            f"native, {topology.num_nodes} spins"
-            if options.topology == "native"
-            else f"topology, {topology.num_nodes} spins\n{options.topology}"
-        )
+        spins = count(topology.num_nodes, "spin")
+        placed = f"native, {spins}" if options.topology == "native" else f"topology, {spins}\n{options.topology}"
         model = self._model
         problem = [
             (
                 "Model",
-                f"{model.size} variables, {len(model.quadratic)} couplings, {model.domain.name.lower()}",
+                f"{count(model.size, 'variable')}, {count(len(model.quadratic), 'coupling')}, "
+                f"{model.domain.name.lower()}",
             ),
             ("Placed", placed),
         ]

@@ -1318,7 +1318,7 @@ class TestJobOrderDisplay:
                 "╭─ Job order (draft) ──────────────────────────────────────────────────╮",
                 "│ Network     custom endpoint                                          │",
                 "├──────────────────────────────────────────────────────────────────────┤",
-                "│ Model       2 variables, 1 couplings, spin                           │",
+                "│ Model       2 variables, 1 coupling, spin                            │",
                 "│ Placed      native, 2 spins                                          │",
                 "├──────────────────────────────────────────────────────────────────────┤",
                 "│ Payout      single best                                              │",
@@ -1342,6 +1342,10 @@ class TestJobOrderDisplay:
         rows = _box_rows(str(order))
         start = rows.index("Floors      energy <= -2 (chain -1.25), 5 solutions, diversity >=")
         assert rows[start + 1] == "            0.4"  # wrapped onto a blank-label line.
+
+    def test_block_wait_of_one_is_singular(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        assert "Block wait  1 block" in _box_rows(str(solver.create_order(_model(), block_wait=1)))
 
     def test_spin_floors_row_has_no_chain_value(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
