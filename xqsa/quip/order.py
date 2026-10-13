@@ -527,9 +527,8 @@ class JobOrder:
         self._signed: _SignedCall | None = None
         # The most recent quote, from quote() or submit(); shown, never gated on.
         self._last_quote: JobQuote | None = None
-        # The fee the order paid, read once for the box: a pruned node would fail every re-read.
+        # The fee the order paid, kept once a read returns it; a failed read is retried on the next print.
         self._paid_fee: int | None = None
-        self._paid_fee_read = False
         self._order_id: int | None = None
         self._included_block: int | None = None
         # The sent extrinsic's hash and inclusion block, and the chain's error when its dispatch failed.
@@ -847,23 +846,20 @@ class JobOrder:
     # -- display ---------------------------------------------------------
 
     def _paid_text(self, symbol: str, decimals: int, quote: JobQuote | None) -> str:
-        """The Paid row: the fee the chain charged and the reward reserved, then the quote for comparison.
+        """The Paid row: the fee the chain charged and the reward, then the quote for comparison.
 
         The quote's fee is an estimate at the head block; the charged one is
         read from the order's ``TransactionFeePaid`` event, best-effort.
         """
-        if not self._paid_fee_read:
-            self._paid_fee_read = True
+        if self._paid_fee is None:
             try:
                 self._paid_fee = self.receipt()._facts().fee
             except Exception:  # noqa: BLE001 -- display only; a read fault shows the fee as unknown.
                 pass
         fee = self._paid_fee
         fee_text = "fee unknown" if fee is None else f"{_format_planck(fee, decimals)} {symbol} fee"
-        # A finalized order's reward has been paid out or reclaimed, so it is no longer reserved.
-        reserved = " reserved" if self._state == "submitted" else ""
         # One amount per line: both on one line overflow the box's 56-column value at 12 decimals.
-        paid = f"{fee_text}\n{_format_planck(self._options.reward, decimals)} {symbol} reward{reserved}"
+        paid = f"{fee_text}\n{_format_planck(self._options.reward, decimals)} {symbol} reward"
         if quote is None:
             return paid
         at_block = f" at block {quote.quoted_at_block}" if quote.quoted_at_block else ""

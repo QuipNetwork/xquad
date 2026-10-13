@@ -3299,17 +3299,16 @@ class TestSolverQuipQuote:
 
 
 class TestAccountDisplaysInSs58:
-    """With scalecodec the prompt and errors name the account in SS58; without it they fall back to hex."""
+    """The prompt and errors name the account through a stubbed ``chain.ss58_address``; no scalecodec needed."""
 
     @pytest.fixture(autouse=True)
-    def _scalecodec(self) -> None:
-        pytest.importorskip("scalecodec.utils.ss58")
+    def _marker(self, monkeypatch) -> None:
+        # bytes() refuses a hex string, so a caller that skips account_bytes fails here.
+        monkeypatch.setattr(quip_chain, "ss58_address", lambda iface, account_id: f"<ss58:{bytes(account_id).hex()}>")
 
     @staticmethod
     def _ss58(solver) -> str:
-        from scalecodec.utils.ss58 import ss58_encode
-
-        return ss58_encode(bytes(solver._signer.account_id), 42)
+        return f"<ss58:{bytes(solver._signer.account_id).hex()}>"
 
     def test_balance_read_error(self, monkeypatch) -> None:
         from xqsa.quip import QuipConnectionError

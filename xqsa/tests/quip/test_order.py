@@ -611,13 +611,13 @@ class TestUnregisteredSolvers:
         with pytest.warns(UserWarning, match=f"access: {_ss58(BOB_HEX)} is not a registered solver"):
             order.set(access=AccessAllow(accounts=[BOB_HEX]))
 
-    def test_warning_names_the_account_in_ss58(self, monkeypatch) -> None:
-        ss58_encode = pytest.importorskip("scalecodec.utils.ss58").ss58_encode
-
+    def test_warning_names_the_account_through_ss58_address(self, monkeypatch) -> None:
+        # A marker stands in for the encoder, so this runs without scalecodec; bytes() refuses a hex string.
+        monkeypatch.setattr(chain, "ss58_address", lambda iface, account_id: f"<ss58:{bytes(account_id).hex()}>")
         solver, _ = _ready(monkeypatch)
         with pytest.warns(UserWarning, match="is not a registered solver") as record:
             solver.create_order(_model(), access=AccessAllow(accounts=[ALICE_HEX]))
-        assert str(record[0].message).split()[1] == ss58_encode(bytes.fromhex(ALICE_HEX[2:]), 42)
+        assert str(record[0].message).split()[1] == f"<ss58:{ALICE_HEX[2:]}>"
 
     def test_set_with_the_same_allowlist_reads_nothing(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
@@ -1362,7 +1362,7 @@ class TestJobOrderDisplay:
         assert str(order).startswith("╭─ Job order (submitted) ")
         start = rows.index("Paid        0.001907881410 AGLS fee")
         assert rows[start + 1 : start + 4] == [
-            "            1.000000000000 AGLS reward reserved",
+            "            1.000000000000 AGLS reward",
             "            quoted 1.002182560255 AGLS total at block 200",
             "Receipt     order 1, included in block 200, final",
         ]
@@ -1383,27 +1383,25 @@ class TestJobOrderDisplay:
         rows = _box_rows(str(order))
         start = rows.index("Paid        fee unknown")
         assert rows[start + 1 : start + 3] == [
-            "            1.000000000000 AGLS reward reserved",
+            "            1.000000000000 AGLS reward",
             "            quoted 1.002182560255 AGLS total at block 200",
         ]
 
-    def test_paid_row_reads_the_fee_once(self, monkeypatch) -> None:
+    def test_paid_row_keeps_a_read_fee_and_retries_a_failed_read(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
         order = solver.create_order(_model()).submit()
-        reads: list[int] = []
-        monkeypatch.setattr(order.receipt(), "_facts", lambda: reads.append(1) or SimpleNamespace(fee=None))
-        str(order)
-        str(order)
-        assert reads == [1]
+        fees = iter([None, 1_907_881_410])
+        reads: list[int | None] = []
 
-    def test_finalized_paid_row_drops_reserved(self, monkeypatch) -> None:
-        solver, _ = _ready(monkeypatch)
-        order = solver.create_order(_model()).submit()
-        monkeypatch.setattr(order.receipt(), "_facts", lambda: SimpleNamespace(fee=1_907_881_410))
-        order._state = "finalized"
-        rows = _box_rows(str(order))
-        start = rows.index("Paid        0.001907881410 AGLS fee")
-        assert rows[start + 1] == "            1.000000000000 AGLS reward"
+        def facts() -> SimpleNamespace:
+            reads.append(fee := next(fees))
+            return SimpleNamespace(fee=fee)
+
+        monkeypatch.setattr(order.receipt(), "_facts", facts)
+        assert "Paid        fee unknown" in _box_rows(str(order))
+        assert "Paid        0.001907881410 AGLS fee" in _box_rows(str(order))
+        str(order)
+        assert reads == [None, 1_907_881_410]  # the third print reads nothing.
 
     def test_receipt_row_keeps_the_plain_text_when_the_live_read_faults(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
