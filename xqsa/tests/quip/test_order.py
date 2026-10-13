@@ -754,6 +754,24 @@ class TestAccess:
             solver.solve(_model(), access=AccessAllow(types=["Cpu"]))
         assert captured["call_params"]["mode"] == {"Bid": {"miners": None, "miner_types": (["Cpu"],)}}
 
+    @pytest.mark.parametrize("default", [False, True], ids=["per-call", "client-default"])
+    def test_solve_encodes_a_raw_dict(self, monkeypatch, default) -> None:
+        raw = {"Bid": {"miners": None, "miner_types": ["Cpu"]}}
+        solver, captured = _ready(monkeypatch, **({"access": raw} if default else {}))
+        with pytest.warns(DeprecationWarning, match="raw chain value"):
+            solver.solve(_model(), **({} if default else {"access": raw}))
+        assert captured["call_params"]["mode"] == {"Bid": {"miners": None, "miner_types": (["Cpu"],)}}
+
+    def test_solve_refuses_a_raw_dict_naming_no_rule_before_signing(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        with (
+            pytest.warns(DeprecationWarning),
+            pytest.raises(QuipOrderOptionError, match="not an access rule the chain takes") as info,
+        ):
+            solver.solve(_model(), access={"FutureRule": 1})
+        assert info.value.option == "access"
+        assert captured["builds"] == 0
+
     @pytest.mark.parametrize("value", [None, 5, ["Open"]])
     def test_non_rule_refused(self, monkeypatch, value) -> None:
         solver, captured = _ready(monkeypatch)

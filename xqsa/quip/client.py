@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, Literal, Self
 from xqsa.quip import chain
 from xqsa.quip import metadata as quip_metadata
 from xqsa.quip.access import Access, AccessOpen, coerce_access
+from xqsa.quip.access import from_chain as access_from_chain
 from xqsa.quip.chain import (  # noqa: F401 -- FEE_HEADROOM_PLANCK and the pallet names stay importable from here.
     FEE_HEADROOM_PLANCK,
     JOB_ORDERS_STORAGE,
@@ -607,9 +608,9 @@ class SolverQuip(Solver):
             # Unit enum variants encode from their bare variant name (the same
             # form they decode to -- see the miner's _decode_result_delivery),
             # access and payout rules through to_chain(). A raw dict from the
-            # deprecated solve() path goes out as given. Callback* delivery is
-            # not supported.
-            "mode": options.access.to_chain() if isinstance(options.access, Access) else options.access,
+            # deprecated solve() path is read as the rule it names and encoded
+            # the same way. Callback* delivery is not supported.
+            "mode": _access_to_chain(options.access),
             "resolution": (
                 options.resolution.to_chain() if isinstance(options.resolution, Resolution) else options.resolution
             ),
@@ -955,7 +956,8 @@ class SolverQuip(Solver):
         """Build a draft from the client defaults and ``options``.
 
         ``strict=False`` is the deprecated ``solve``/``quote`` path: unknown
-        options and raw chain dicts warn instead of raising. QUI-1608 removes it.
+        options and raw chain dicts warn instead of raising, though a dict that
+        names no access rule is refused at encoding. QUI-1608 removes it.
         """
         self._validate_model(model)
         merged = merge_options(
@@ -1158,7 +1160,8 @@ class SolverQuip(Solver):
 
         Raises:
             ValueError: if ``mapping`` is given with ``topology="native"``.
-            QuipOrderOptionError: if an option is outside its chain limit.
+            QuipOrderOptionError: if an option is outside its chain limit, or a
+                raw ``access`` dict names no access rule.
             QuipConnectionError: if a chain read faults while resolving the
                 topology or the account balance.
             QuipSubmissionError: if the extrinsic cannot be built.
@@ -1187,6 +1190,7 @@ class SolverQuip(Solver):
 
         Unlike :meth:`create_order`, an unknown option or a raw chain dict
         warns with a ``DeprecationWarning`` instead of raising, until QUI-1608.
+        A raw ``access`` dict is read as the rule it names.
 
         Keyword args:
             reward, deadline_blocks, block_wait, topology, mapping, access,
@@ -1197,8 +1201,9 @@ class SolverQuip(Solver):
         Raises:
             TypeError: if both ``access`` and the deprecated ``mode`` are given.
             ValueError: if ``mapping`` is given with ``topology="native"``.
-            QuipOrderOptionError: if an option is outside its chain limit,
-                before anything is signed.
+            QuipOrderOptionError: if an option is outside its chain limit, or a
+                raw ``access`` dict names no access rule, before anything is
+                signed.
             QuipConnectionError: if a chain read faults (transport/decode) while
                 resolving the topology, the order, or the account balance.
             QuipSubmissionError: if the account cannot cover the quote and no
@@ -1382,6 +1387,21 @@ def _take_mode(access: Any, mode: Any, *, stacklevel: int) -> Any:
     message = "mode= is deprecated, use access= (removed in QUI-1608)"
     warnings.warn(message, DeprecationWarning, stacklevel=stacklevel + 1)
     return mode
+
+
+def _access_to_chain(access: Any) -> Any:
+    """Encode ``access`` as ``JobMode``, reading a raw chain dict as the rule it names.
+
+    Raises:
+        QuipOrderOptionError: for a dict that is not an access rule, before
+            anything is signed.
+    """
+    if isinstance(access, Access):
+        return access.to_chain()
+    try:
+        return access_from_chain(access).to_chain()
+    except (ValueError, TypeError) as exc:
+        raise QuipOrderOptionError("access", f"access={access!r} is not an access rule the chain takes: {exc}") from exc
 
 
 def _pop_mode(kwargs: dict[str, Any], *, stacklevel: int) -> None:
