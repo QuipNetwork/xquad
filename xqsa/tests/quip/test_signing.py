@@ -16,7 +16,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Tests for the Quip Network extrinsic-assembly layer (xqsa.quip_signing).
+Tests for the Quip Network extrinsic-assembly layer (xqsa.quip.signing).
 
 These exercise our half of the contract -- keystore persistence, SCALE
 SignedPayload composition (including the >256-byte blake2_256 rule), the v4
@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import stat
+from types import SimpleNamespace
 
 import pytest
 
@@ -41,14 +42,16 @@ quip_signer = pytest.importorskip(
     reason="quip_signer extension not installed (run `uv sync --extra quip`)",
 )
 
-from xqsa import quip_signing
-from xqsa.quip_signing import (
+from xqsa.quip import signing as quip_signing
+from xqsa.quip.signing import (
     EXTRINSIC_VERSION_SIGNED,
     HYBRID_ENVELOPE_LEN,
     HYBRID_PUBLIC_LEN,
     MULTI_ADDRESS_ID,
     ExtrinsicReceipt,
     QuipSigningError,
+    SendOutcomeUnknown,
+    _dispatch_error_text,
     build_signed_extrinsic,
     encode_compact_u32,
     encode_compact_u128,
@@ -114,6 +117,8 @@ class FakeIface:
         self.block: dict | None = None
         self.events: list = []
         self.unwatched: list = []
+        # RPC method (or "get_events") -> exception that call raises.
+        self.raises: dict[str, Exception] = {}
 
     # --- assembly reads ---
 
@@ -131,6 +136,8 @@ class FakeIface:
     # --- submission ---
 
     def rpc_request(self, method, params, result_handler=None):
+        if method in self.raises:
+            raise self.raises[method]
         if method == "state_getRuntimeVersion":
             return {"result": {"specVersion": self.spec_version, "transactionVersion": self.tx_version}}
         if method == "author_submitExtrinsic":
@@ -147,6 +154,8 @@ class FakeIface:
         return self.block
 
     def get_events(self, block_hash):
+        if "get_events" in self.raises:
+            raise self.raises["get_events"]
         return self.events
 
 
@@ -256,7 +265,7 @@ class TestSignedExtensions:
 
     def test_eth_set_origin_sits_between_metadata_hash_and_weight_reclaim(self) -> None:
         # QUI-1257: the live runtime lists 12 extensions, with EthSetOrigin
-        # (pallet_revive's SetOrigin) in this slot. test_quip_live.py asserts the
+        # (pallet_revive's SetOrigin) in this slot. test_live.py asserts the
         # whole tuple against chain metadata; this pins the position offline.
         order = quip_signing.SIGNED_EXTENSIONS
         assert order.index("EthSetOrigin") == order.index("CheckMetadataHash") + 1
@@ -544,6 +553,62 @@ def _event(idx: int, event_id: str) -> dict:
     }
 
 
+class _FakeMetadata:
+    """Runtime metadata with one pallet, index 9, with errors ``OrderNotOpen`` (5) and ``NotEligibleSolver`` (6)."""
+
+    ERRORS = {5: ("OrderNotOpen", []), 6: ("NotEligibleSolver", ["Not on the list."])}
+
+    def get_pallet_by_index(self, index: int):
+        if index != 9:
+            raise ValueError(f'Pallet for index "{index}" not found')
+        return SimpleNamespace(name="QuantumComputeMempool")
+
+    def get_module_error(self, module_index: int, error_index: int):
+        name, docs = self.ERRORS[error_index]
+        return SimpleNamespace(name=name, docs=docs)
+
+
+NOT_ELIGIBLE = "QuantumComputeMempool.NotEligibleSolver (Not on the list.)"
+
+
+class TestDispatchErrorText:
+    IFACE = SimpleNamespace(metadata=_FakeMetadata())
+
+    @pytest.mark.parametrize(
+        ("error", "text"),
+        [
+            ({"Module": {"index": 9, "error": "0x06000000"}}, NOT_ELIGIBLE),
+            ({"Module": {"index": 9, "error": 5}}, "QuantumComputeMempool.OrderNotOpen"),
+            ({"Module": (9, 6)}, NOT_ELIGIBLE),
+            ("BadOrigin", "BadOrigin"),
+            ({"Token": "FundsUnavailable"}, "Token: FundsUnavailable"),
+            ({"Other": None}, "Other"),
+        ],
+    )
+    def test_named(self, error, text) -> None:
+        assert _dispatch_error_text(self.IFACE, {"dispatch_error": error, "dispatch_info": {}}) == text
+        assert _dispatch_error_text(self.IFACE, [error, {}]) == text
+        assert _dispatch_error_text(self.IFACE, (error, {})) == text
+
+    @pytest.mark.parametrize(
+        "attrs",
+        [
+            {"dispatch_error": {"Module": {"index": 99, "error": "0x00000000"}}},  # unknown pallet
+            {"dispatch_error": {"Module": {"index": 9, "error": "0x07000000"}}},  # unknown error
+            {"dispatch_error": {"Module": {"index": 9}}},  # malformed
+            {"weight": 1},  # no dispatch error at all
+            [1, 2],  # positional, but element 0 is not an error
+            [],
+        ],
+    )
+    def test_unnamed_falls_back_to_the_raw_value(self, attrs) -> None:
+        assert _dispatch_error_text(self.IFACE, attrs) == repr(attrs)
+
+    def test_no_metadata_falls_back(self) -> None:
+        attrs = {"dispatch_error": {"Module": {"index": 9, "error": "0x06000000"}}}
+        assert _dispatch_error_text(SimpleNamespace(), attrs) == repr(attrs)
+
+
 def _event_str_phase(idx: int, event_id: str) -> dict:
     """An event as newer substrate-interface decodes it: ``phase`` is the bare
     enum name ("ApplyExtrinsic", index dropped) and the applied-extrinsic index
@@ -604,6 +669,19 @@ class TestSubmitAndWatch:
         assert "ExtrinsicFailed" in receipt.error
         assert receipt.is_success is False
 
+    def test_inblock_module_error_is_named(self) -> None:
+        ext_hash = "0x" + "cd" * 32
+        iface = FakeIface()
+        iface.watch_message = {"params": {"result": {"inBlock": "0x" + "ef" * 32}}}
+        iface.block = _block_with_extrinsic(ext_hash)
+        iface.metadata = _FakeMetadata()
+        failed = _event(0, "ExtrinsicFailed")
+        failed["event"]["attributes"] = {"dispatch_error": {"Module": {"index": 9, "error": "0x06000000"}}}
+        iface.events = [failed]
+        receipt = submit_and_watch(iface, b"\x01\x02", ext_hash, wait_for="inblock")
+        assert receipt.error == "System.ExtrinsicFailed: QuantumComputeMempool.NotEligibleSolver (Not on the list.)"
+        assert receipt.is_unverified is False
+
     def test_inblock_extrinsic_not_found_is_non_success(self) -> None:
         ext_hash = "0x" + "cd" * 32
         block_hash = "0x" + "ef" * 32
@@ -643,6 +721,84 @@ class TestSubmitAndWatch:
         with pytest.raises(QuipSigningError, match="transaction pool"):
             submit_and_watch(iface, b"\x01\x02", "0x" + "cd" * 32, wait_for="inblock")
         assert iface.unwatched  # the subscription was closed, not left hanging
+
+    @pytest.mark.parametrize(
+        ("message", "uncertain"),
+        [
+            ("invalid", False),
+            ("dropped", False),
+            ({"usurped": "0x" + "ab" * 32}, False),
+            ({"retracted": "0x" + "ab" * 32}, True),
+            ({"finalityTimeout": "0x" + "ab" * 32}, True),
+        ],
+    )
+    def test_pool_statuses_after_which_it_may_land_are_uncertain(self, message, uncertain) -> None:
+        # retracted and finalityTimeout can still see the extrinsic included;
+        # the rest take it out of the pool for good.
+        iface = FakeIface()
+        iface.watch_message = {"params": {"result": message}}
+        with pytest.raises(QuipSigningError) as info:
+            submit_and_watch(iface, b"\x01\x02", "0x" + "cd" * 32, wait_for="inblock")
+        assert isinstance(info.value, SendOutcomeUnknown) is uncertain
+
+    @pytest.mark.parametrize(
+        ("code", "uncertain"),
+        [(1010, False), (1014, False), (1012, True), (1013, True)],
+    )
+    @pytest.mark.parametrize("wait_for", ["sent", "inblock"])
+    def test_node_refusal_is_a_signing_error(self, code, uncertain, wait_for) -> None:
+        # substrate-interface raises a refusal of the request itself as
+        # SubstrateRequestException; only "already seen" codes may still land.
+        from substrateinterface.exceptions import SubstrateRequestException
+
+        method = "author_submitExtrinsic" if wait_for == "sent" else "author_submitAndWatchExtrinsic"
+        iface = FakeIface()
+        iface.raises[method] = SubstrateRequestException({"code": code, "message": "Invalid Transaction"})
+        with pytest.raises(QuipSigningError, match="rejected the extrinsic") as info:
+            submit_and_watch(iface, b"\x01\x02", "0x" + "cd" * 32, wait_for=wait_for)
+        assert isinstance(info.value, SendOutcomeUnknown) is uncertain
+
+    def test_request_failure_without_an_error_object_propagates(self) -> None:
+        # An HTTP-status failure carries a plain string: the node may have taken it.
+        from substrateinterface.exceptions import SubstrateRequestException
+
+        iface = FakeIface()
+        iface.raises["author_submitAndWatchExtrinsic"] = SubstrateRequestException("HTTP status code 502")
+        with pytest.raises(SubstrateRequestException):
+            submit_and_watch(iface, b"\x01\x02", "0x" + "cd" * 32, wait_for="inblock")
+
+    def test_unwatch_failure_keeps_the_inclusion(self) -> None:
+        from substrateinterface.exceptions import SubstrateRequestException
+
+        ext_hash = "0x" + "cd" * 32
+        block_hash = "0x" + "ef" * 32
+        iface = FakeIface()
+        iface.watch_message = {"params": {"result": {"inBlock": block_hash}}}
+        iface.block = _block_with_extrinsic(ext_hash)
+        iface.events = [_event(0, "ExtrinsicSuccess")]
+        iface.raises["author_unwatchExtrinsic"] = SubstrateRequestException({"code": -32602, "message": "gone"})
+        receipt = submit_and_watch(iface, b"\x01\x02", ext_hash, wait_for="inblock")
+        assert receipt.block_hash == block_hash
+        assert receipt.is_success is True
+
+    def test_event_read_failure_keeps_the_block(self) -> None:
+        ext_hash = "0x" + "cd" * 32
+        block_hash = "0x" + "ef" * 32
+        iface = FakeIface()
+        iface.watch_message = {"params": {"result": {"inBlock": block_hash}}}
+        iface.block = _block_with_extrinsic(ext_hash)
+        iface.raises["get_events"] = TimeoutError("websocket timed out")
+        receipt = submit_and_watch(iface, b"\x01\x02", ext_hash, wait_for="inblock")
+        assert receipt.block_hash == block_hash
+        assert receipt.is_unverified
+        assert "get_events failed" in receipt.error
+
+    def test_unverified_receipt_is_flagged(self) -> None:
+        unverified = ExtrinsicReceipt(
+            extrinsic_hash="0x", block_hash="0xb", is_finalized=False, error="unclassified: get_block failed"
+        )
+        failed = ExtrinsicReceipt(extrinsic_hash="0x", block_hash="0xb", is_finalized=False, error="Module error")
+        assert unverified.is_unverified and not failed.is_unverified
 
     def test_inblock_success_string_phase_matches_by_extrinsic_idx(self) -> None:
         # Regression (QUI-569): newer substrate-interface decodes event `phase`

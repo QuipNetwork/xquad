@@ -22,22 +22,12 @@ Provides pluggable solvers that take XQMX models and return
 optimized samples. The first solver wraps DWave's CPU simulated annealer.
 """
 
+from . import quip as quip
+from ._deprecated import flat_quip_dir, flat_quip_getattr
 from .cuda_gpu import SolverCudaGPU
 from .dwave_cpu import SolverDWaveCPU
 from .dwave_qpu import SolverDWaveQPU
 from .metal_gpu import SolverMetalGPU
-from .quip import (
-    JobQuote,
-    QuipCancelledError,
-    QuipConnectionError,
-    QuipJobFailedError,
-    QuipSubmissionError,
-    QuipTimeoutError,
-    QuipTopologyError,
-    SolverQuip,
-)
-from .quip_codec import EncodingError, PlacementError, QuipError, QuipMetadataError, QuipSigningError
-from .quip_faucet import QuipFaucetError, fund_from_faucet
 from .registry import DEFAULT_SOLVER, SOLVERS, build_solver
 from .solver import Solver, SolverResult
 
@@ -48,22 +38,11 @@ __all__ = [
     "SolverDWaveCPU",
     "SolverDWaveQPU",
     "SolverMetalGPU",
-    "SolverQuip",
-    "JobQuote",
-    "QuipError",
-    "QuipCancelledError",
-    "QuipConnectionError",
-    "QuipMetadataError",
-    "QuipSubmissionError",
-    "QuipTimeoutError",
-    "QuipTopologyError",
-    "QuipJobFailedError",
-    "QuipSigningError",
-    "QuipFaucetError",
-    "PlacementError",
-    "EncodingError",
     "SOLVERS",
     "DEFAULT_SOLVER",
     "build_solver",
-    "fund_from_faucet",
 ]
+
+# The Quip names live in xqsa.quip; the flat ones warn until v0.5.0 (QUI-1608).
+__getattr__ = flat_quip_getattr(__name__, "xqsa.quip")
+__dir__ = flat_quip_dir(__name__)

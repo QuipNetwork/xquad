@@ -16,7 +16,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Tests for the Quip Network codec (xqsa.quip_codec).
+Tests for the Quip Network codec (xqsa.quip.codec).
 
 Pure-logic coverage: topology canonicalization, subgraph placement, Ising
 encoding (SPIN and BINARY), spin-vector decoding, and lifecycle expiry math.
@@ -27,9 +27,11 @@ from __future__ import annotations
 
 import itertools
 import logging
+import math
 import sys
 import types
 import warnings
+from dataclasses import replace
 from unittest.mock import MagicMock
 
 import pytest
@@ -37,10 +39,11 @@ import pytest
 dimod = pytest.importorskip("dimod", reason="dwave-samplers / dimod not installed")
 
 from xqffi.vm import Domain, XqmxModel, XqmxSample
-from xqsa.quip_codec import (
+from xqsa.quip.codec import (
     DEFAULT_ISING_SPEC_ID,
     I32_MAX,
     I32_MIN,
+    I64_MAX,
     MAX_NATURAL_COEFFICIENT,
     MILLI_SCALE,
     QUIP_COEFFICIENTS_DOC_URL,
@@ -52,12 +55,14 @@ from xqsa.quip_codec import (
     check_allowed_values,
     decode_solution,
     effective_expiry,
+    energy_ceiling_milli,
     find_placement,
     is_final,
     ising_energy_milli,
     model_to_ising,
     native_placement,
 )
+from xqsa.quip.resolution import ResolutionSingleBest, ResolutionTopNEqual, ResolutionTopNWeighted
 from xqsa.solver import SolverResult
 
 # ---------------------------------------------------------------------------
@@ -381,6 +386,12 @@ class TestModelToIsing:
         with pytest.raises(EncodingError, match="overflows"):
             model_to_ising(over, PATH5)
 
+    def test_integer_model_reports_zero_error(self) -> None:
+        model = XqmxModel.spin(2)
+        model.set_linear(0, 3)
+        model.set_quad(0, 1, -2)
+        assert model_to_ising(model, PATH5).quantization_error == 0.0
+
     def test_binary_path_is_milli_exact(self) -> None:
         """The BINARY->spin transform yields milli-exact i32 coefficients."""
         model = XqmxModel.binary(3)
@@ -394,6 +405,27 @@ class TestModelToIsing:
         assert all(isinstance(v, int) for v in job.j_values)
         assert any(v != 0 for v in job.j_values)
 
+    def test_spin_offset_is_zero(self) -> None:
+        model = XqmxModel.spin(2)
+        model.set_linear(0, 1)
+        model.set_quad(0, 1, -1)
+        assert model_to_ising(model, PATH5).offset == 0.0
+
+    def test_binary_offset_is_kept(self) -> None:
+        """E = -2*x0 + x0*x1 folds to h = (-0.75, 0.25), J = 0.25 and offset -0.75."""
+        model = XqmxModel.binary(2)
+        model.set_linear(0, -2)
+        model.set_quad(0, 1, 1)
+        job = model_to_ising(model, PATH5, mapping={0: 0, 1: 1})
+
+        assert job.h_values == (-750, 250)
+        assert job.j_values == (250,)
+        assert job.offset == -0.75
+        # Model energy is the spin energy plus the offset, for every assignment.
+        for x0, x1 in itertools.product((0, 1), repeat=2):
+            spins = [2 * x0 - 1, 2 * x1 - 1]
+            assert ising_energy_milli(job, spins) / MILLI_SCALE + job.offset == -2 * x0 + x0 * x1
+
     def test_explicit_mapping_threaded_through(self) -> None:
         """A caller mapping reaches placement and drives the scatter positions."""
         model = XqmxModel.spin(2)
@@ -402,6 +434,42 @@ class TestModelToIsing:
         assert job.mapping == {0: 3, 1: 4}
         assert job.nodes == (3, 4)
         assert job.j_values[job.topology.edge_index(3, 4)] == MILLI_SCALE
+
+
+class TestEnergyCeilingMilli:
+    """Model-unit ceilings convert to the chain's milli spin energy."""
+
+    def test_spin_scales(self) -> None:
+        assert energy_ceiling_milli(-4) == -4000
+
+    def test_binary_subtracts_the_offset(self) -> None:
+        """E = -2*x0 + x0*x1 has offset -0.75, so a ceiling of -2 is spin energy -1.25."""
+        model = XqmxModel.binary(2)
+        model.set_linear(0, -2)
+        model.set_quad(0, 1, 1)
+        job = model_to_ising(model, PATH5)
+        assert energy_ceiling_milli(-2, job.offset) == -1250
+
+    def test_off_grid_floors(self) -> None:
+        # Chain energy is whole milli, so <= -1234.5 and <= -1235 accept the same vectors.
+        assert energy_ceiling_milli(-1.2345) == -1235
+        assert energy_ceiling_milli(1.2345) == 1234
+
+    def test_float_noise_snaps_to_the_grid(self) -> None:
+        # -(0.1 + 0.2) * 1000 is -300.00000000000006; flooring it would give -301.
+        assert energy_ceiling_milli(-(0.1 + 0.2)) == -300
+
+    @pytest.mark.parametrize("energy", [math.inf, -math.inf, math.nan])
+    def test_non_finite_refused(self, energy) -> None:
+        with pytest.raises(EncodingError, match="not finite"):
+            energy_ceiling_milli(energy)
+
+    def test_i64_bounds(self) -> None:
+        assert energy_ceiling_milli(9.2e15) == 9_200_000_000_000_000_000 <= I64_MAX
+        with pytest.raises(EncodingError, match="outside i64"):
+            energy_ceiling_milli(9.3e15)
+        with pytest.raises(EncodingError, match="outside i64"):
+            energy_ceiling_milli(-9.3e15)
 
 
 # ---------------------------------------------------------------------------
@@ -831,6 +899,10 @@ UNIT = 1_000_000_000_000  # 1 AGLS in planck (chain MinReward default).
 # Stand-in for a deployment's QuantumPow.DefaultTopology. The real hash is
 # per-deployment and read from the chain; nothing is pinned in the codebase.
 DEFAULT_TOPOLOGY_HASH = "0x" + "cb" * 32
+# Stand-in for the chain's genesis block hash, as get_block_hash(0) returns it.
+GENESIS_HASH = "0x" + "9e" * 32
+# aglais's MinerType variants, as register_solver's metadata names them.
+SOLVER_TYPES = ("Cpu", "Gpu", "QpuDwave", "QpuIbm", "QpuIonq", "QpuPasqal", "Asic")
 
 # A topology carrying allowed-value sets, so check_allowed_values has data.
 TOPO_WITH_SETS = Topology.of(
@@ -885,8 +957,21 @@ class FakeSubstrate:
         self._get_constant_raises = get_constant_raises
         self.token_symbol = token_symbol
         self.token_decimals = token_decimals
-        self.rpc = dict(rpc) if rpc is not None else {"payment_queryInfo": {"result": {"partialFee": "2182560255"}}}
+        self.rpc = (
+            dict(rpc)
+            if rpc is not None
+            else {
+                "payment_queryInfo": {"result": {"partialFee": "2182560255"}},
+                # aglais's runtime as of QUI-1606: below rank-weighted top-N.
+                "state_getRuntimeVersion": {"result": {"specVersion": 118, "transactionVersion": 1}},
+            }
+        )
         self.rpc_calls: list[tuple[str, list | None]] = []
+        # What init_runtime() records: aglais's runtime as of QUI-1606.
+        self.runtime_version: int | None = 118
+        self.genesis_hash: object = GENESIS_HASH
+        self.ss58_format = 42
+        self.nonce = 0
 
     def rpc_request(self, method: str, params: list | None = None):
         self.rpc_calls.append((method, params))
@@ -910,14 +995,26 @@ class FakeSubstrate:
             return None
         return _Const(self.constants[(module, name)])
 
-    def query(self, module: str, name: str, params: list | None = None):
+    def query(self, module: str, name: str, params: list | None = None, block_hash: str | None = None):
         return _StorageEntry(self.storage.get((module, name)))
+
+    def get_metadata_call_function(self, module: str, name: str):
+        # Only register_solver is introspected, for the solver type names.
+        assert (module, name) == ("QuantumComputeMempool", "register_solver")
+        return types.SimpleNamespace(get_param_info=lambda: {"solver_type": SOLVER_TYPES})
 
     def query_map(self, module: str, name: str, params: list | None = None):
         return list(self.maps.get((module, name), []))
 
     def get_block_header(self, block_hash: str | None = None, ignore_decoding_errors: bool = False):
         return {"header": {"number": self.head}}
+
+    def get_account_nonce(self, account_address: str) -> int:
+        return self.nonce
+
+    def get_block_hash(self, block_id: int | None = None) -> str | None:
+        assert block_id == 0, "only the genesis hash is read"
+        return self.genesis_hash
 
     def get_events(self, block_hash: str | None = None):
         return self.events
@@ -974,7 +1071,13 @@ def _fake_quip_signer() -> types.ModuleType:
 
 
 def _default_iface(*, with_default_spec_const: bool = False, balance: int | None = None) -> FakeSubstrate:
-    constants: dict = {("QuantumComputeMempool", "MinReward"): UNIT}
+    constants: dict = {
+        ("QuantumComputeMempool", "MinReward"): UNIT,
+        ("QuantumComputeMempool", "MaxDeadlineBlocks"): 1000,
+        ("QuantumComputeMempool", "MaxBlockWait"): 100,
+        ("QuantumComputeMempool", "MaxSolutions"): 20,
+        ("QuantumComputeMempool", "MaxBidMiners"): 16,
+    }
     if with_default_spec_const:
         constants[("QuantumComputeMempool", "DefaultIsingSpecId")] = DEFAULT_ISING_SPEC_ID
     storage: dict = {
@@ -1023,7 +1126,11 @@ def _make_solver(monkeypatch, *, iface: FakeSubstrate | None = None, **kwargs):
     _clear_quip_env(monkeypatch)
     kwargs.setdefault("url", "ws://fake:9944")
     kwargs.setdefault("seed", VALID_SEED)
-    return SolverQuip(**kwargs)
+    solver = SolverQuip(**kwargs)
+    order = resolved.storage.get(("QuantumComputeMempool", "JobOrders"))
+    if isinstance(order, dict) and order.get("proposer") == SIGNER_ACCOUNT:
+        order["proposer"] = "0x" + bytes(solver._signer.account_id).hex()
+    return solver
 
 
 class TestSolverQuipGuards:
@@ -1065,6 +1172,21 @@ class TestSolverQuipConstruction:
         solver = SolverQuip()
         assert solver._url == "ws://env-node:9944"
 
+    def test_resolution_string_coerced(self, monkeypatch) -> None:
+        assert _make_solver(monkeypatch, resolution="SingleBest")._resolution == ResolutionSingleBest()
+        assert _make_solver(monkeypatch)._resolution == ResolutionSingleBest()
+
+    @pytest.mark.parametrize("value", ["TopNEqual", None])
+    def test_resolution_refused_before_connecting(self, monkeypatch, value) -> None:
+        iface = _default_iface()
+        with pytest.raises(ValueError, match="not a payout rule"):
+            _make_solver(monkeypatch, iface=iface, resolution=value)
+        assert iface.rpc_calls == []
+
+    @pytest.mark.parametrize("rule", [ResolutionSingleBest(), ResolutionTopNEqual(2), ResolutionTopNWeighted(2)])
+    def test_resolution_rules_taken(self, monkeypatch, rule) -> None:
+        assert _make_solver(monkeypatch, resolution=rule)._resolution is rule
+
     def test_missing_url_raises(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip
 
@@ -1079,7 +1201,7 @@ class TestSolverQuipConstruction:
         _install(monkeypatch, _default_iface())
         _clear_quip_env(monkeypatch)
         monkeypatch.setenv("HOME", str(tmp_path))
-        from xqsa import quip_signing
+        from xqsa.quip import signing as quip_signing
 
         fake = sys.modules["quip_signer"]
         fake.HybridSigner.from_seed.return_value.public_key = b"\x01" * 32
@@ -1182,6 +1304,74 @@ class TestSolverQuipConstruction:
         with pytest.raises(QuipConnectionError, match="reward=.*QUIP_REWARD"):
             _make_solver(monkeypatch, iface=iface)
 
+    def test_limits_read_from_chain_constants(self, monkeypatch) -> None:
+        from xqsa.quip.chain import ChainLimits
+
+        solver = _make_solver(monkeypatch)
+        assert solver._limits == ChainLimits(
+            min_reward=UNIT,
+            max_deadline_blocks=1000,
+            max_block_wait=100,
+            max_solutions=20,
+            spec_version=118,
+            max_bid_miners=16,
+            solver_types=SOLVER_TYPES,
+        )
+
+    def test_solver_types_unreadable_read_as_none(self, monkeypatch) -> None:
+        iface = _default_iface()
+        iface.get_metadata_call_function = lambda module, name: None  # no such call: None.get_param_info fails.
+        assert _make_solver(monkeypatch, iface=iface)._limits.solver_types is None
+
+    def test_spec_version_read_without_an_rpc(self, monkeypatch) -> None:
+        iface = _default_iface()
+        iface.runtime_version = 119
+        assert _make_solver(monkeypatch, iface=iface)._limits.spec_version == 119
+        assert not any(method == "state_getRuntimeVersion" for method, _ in iface.rpc_calls)
+
+    def test_absent_limits_read_as_none(self, monkeypatch) -> None:
+        iface = _default_iface()
+        for name in ("MaxDeadlineBlocks", "MaxBlockWait", "MaxSolutions"):
+            del iface.constants[("QuantumComputeMempool", name)]
+        limits = _make_solver(monkeypatch, iface=iface)._limits
+        assert (limits.max_deadline_blocks, limits.max_block_wait, limits.max_solutions) == (None, None, None)
+
+    def test_min_reward_read_once_for_the_default_reward(self, monkeypatch) -> None:
+        iface = _default_iface()
+        reads: list[str] = []
+        original = iface.get_constant
+
+        def counting(module: str, name: str):
+            reads.append(name)
+            return original(module, name)
+
+        iface.get_constant = counting
+        _make_solver(monkeypatch, iface=iface, spec_id=DEFAULT_ISING_SPEC_ID)
+        assert reads.count("MinReward") == 1
+
+    def test_genesis_hash_read_at_construction(self, monkeypatch) -> None:
+        assert _make_solver(monkeypatch)._genesis_hash == GENESIS_HASH
+
+    def test_genesis_hash_read_fault_raises_connection_error(self, monkeypatch) -> None:
+        from xqsa.quip import QuipConnectionError
+
+        iface = _default_iface()
+
+        def _boom(block_id=None):
+            raise RuntimeError("socket closed")
+
+        iface.get_block_hash = _boom
+        with pytest.raises(QuipConnectionError, match="genesis block hash: socket closed"):
+            _make_solver(monkeypatch, iface=iface)
+
+    def test_missing_genesis_hash_raises_connection_error(self, monkeypatch) -> None:
+        from xqsa.quip import QuipConnectionError
+
+        iface = _default_iface()
+        iface.genesis_hash = None
+        with pytest.raises(QuipConnectionError, match="no genesis block hash"):
+            _make_solver(monkeypatch, iface=iface)
+
     def test_topology_explicit_arg_beats_env(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip
 
@@ -1194,17 +1384,27 @@ class TestSolverQuipConstruction:
 
     def test_for_network_uses_preset_rpc(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip
-        from xqsa.quip_networks import NETWORKS
+        from xqsa.quip.networks import NETWORKS
 
         _install(monkeypatch, _default_iface())
         _clear_quip_env(monkeypatch)
         solver = SolverQuip.for_network("aglais", seed=VALID_SEED)
         assert solver._url == NETWORKS["aglais"].rpc
 
+    def test_for_network_mode_is_deprecated_at_the_callers_line(self, monkeypatch) -> None:
+        from xqsa.quip import AccessAllow, SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        with pytest.warns(DeprecationWarning, match="mode= is deprecated") as record:
+            solver = SolverQuip.for_network("aglais", seed=VALID_SEED, mode=AccessAllow(types=["Cpu"]))
+        assert record[0].filename == __file__
+        assert solver._access == AccessAllow(types=["Cpu"])
+
     def test_for_network_beats_env_url(self, monkeypatch) -> None:
         # The preset enters as url=, so an exported QUIP_RPC_URL cannot redirect it.
         from xqsa.quip import SolverQuip
-        from xqsa.quip_networks import NETWORKS
+        from xqsa.quip.networks import NETWORKS
 
         _install(monkeypatch, _default_iface())
         _clear_quip_env(monkeypatch)
@@ -1214,7 +1414,7 @@ class TestSolverQuipConstruction:
 
     def test_for_network_passes_kwargs_through(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip
-        from xqsa.quip_networks import NETWORKS
+        from xqsa.quip.networks import NETWORKS
 
         _install(monkeypatch, _default_iface())
         _clear_quip_env(monkeypatch)
@@ -1240,7 +1440,7 @@ class TestSolverQuipConstruction:
 
     def test_for_network_sets_preset_faucet_and_name(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip
-        from xqsa.quip_networks import NETWORKS
+        from xqsa.quip.networks import NETWORKS
 
         _install(monkeypatch, _default_iface())
         _clear_quip_env(monkeypatch)
@@ -1252,7 +1452,7 @@ class TestSolverQuipConstruction:
 
     def test_for_network_faucet_none_keeps_the_preset(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip
-        from xqsa.quip_networks import NETWORKS
+        from xqsa.quip.networks import NETWORKS
 
         _install(monkeypatch, _default_iface())
         _clear_quip_env(monkeypatch)
@@ -1659,10 +1859,10 @@ class TestSolverQuipAllowedValueWarning:
         # The decode path from a chain-shaped meta dict through to the warning,
         # which nothing covered before: reading a key the meta does not carry
         # yields None and disables the warning with no error to notice. This
-        # fixture spells the same literals as quip_codec, so it catches a
+        # fixture spells the same literals as xqsa.quip.codec, so it catches a
         # one-sided edit here, NOT a pallet-side rename -- only the chain can
         # witness that. test_allowed_value_spec_names_match_the_pallet in
-        # test_quip_live.py is the guard for that half.
+        # test_live.py is the guard for that half.
         topo_hash = "0x" + "ab" * 32
         iface = _default_iface()
         iface.storage[("QuantumPow", "RegisteredTopologies")] = {
@@ -1691,6 +1891,39 @@ class TestSolverQuipAllowedValueWarning:
             solver._maybe_warn_allowed_values(job)
 
 
+class TestSolverQuipQuantizationWarning:
+    """The milli-rounding warning reports the largest error and fires at most once."""
+
+    @staticmethod
+    def _rounded_job() -> IsingJob:
+        # An integer model never rounds, so the error is set on the job directly.
+        model = XqmxModel.spin(2)
+        model.set_linear(0, 1)
+        model.set_quad(0, 1, 1)
+        return replace(model_to_ising(model, PATH5), quantization_error=0.0002)
+
+    def test_warns_once_with_the_error(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+        job = self._rounded_job()
+        with pytest.warns(UserWarning) as record:
+            solver._maybe_warn_quantization(job)
+            solver._maybe_warn_quantization(job)  # suppressed by the one-time flag
+        assert len(record) == 1
+        message = str(record[0].message)
+        assert "0.0002" in message
+        assert QUIP_COEFFICIENTS_DOC_URL in message
+
+    def test_no_warning_without_rounding(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+        model = XqmxModel.spin(2)
+        model.set_linear(0, 5)
+        model.set_quad(0, 1, 1)
+        job = model_to_ising(model, PATH5)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # any warning would raise
+            solver._maybe_warn_quantization(job)
+
+
 def _patch_signing(monkeypatch, solver, *, receipt=None, build_raises: Exception | None = None) -> dict:
     """Stub the quip_signing layer on ``solver`` and capture the submitted call.
 
@@ -1699,22 +1932,29 @@ def _patch_signing(monkeypatch, solver, *, receipt=None, build_raises: Exception
     so submission tests never touch real crypto or a chain. ``receipt`` may be a
     receipt or a callable ``(call_function) -> receipt`` to vary the outcome per
     call (e.g. a successful propose followed by a failing reclaim). ``captured["builds"]``
-    counts calls into ``build_signed_extrinsic``, so a test can assert an
-    extrinsic was assembled exactly once.
+    counts calls into ``build_signed_extrinsic``; ``captured["nonces"]``,
+    ``captured["params"]`` and ``captured["wires"]`` record each build's explicit
+    nonce (``None`` when the signing layer reads it), call params and distinct
+    wire bytes, and ``captured["sent"]`` the wires that reached the node.
     """
     captured: dict = {"builds": 0}
     qs = solver._quip_signing
 
-    def fake_build(iface, signer, call_module, call_function, call_params):
+    def fake_build(iface, signer, call_module, call_function, call_params, nonce=None):
         captured.update(iface=iface, call_module=call_module, call_function=call_function, call_params=call_params)
         captured["builds"] += 1
+        captured.setdefault("nonces", []).append(nonce)
+        captured.setdefault("params", []).append(call_params)
         if build_raises is not None:
             raise build_raises
-        return b"\x00\x01", "0xext"
+        wire = bytes([0, captured["builds"]])  # b"\x00\x01", then b"\x00\x02", ...: one per build.
+        captured.setdefault("wires", []).append(wire)
+        return wire, "0xext"
 
     def fake_submit(iface, wire_bytes, ext_hash, wait_for="inblock"):
         captured["wait_for"] = wait_for
         captured["submitted_wire"] = wire_bytes
+        captured.setdefault("sent", []).append(wire_bytes)
         return receipt(captured["call_function"]) if callable(receipt) else receipt
 
     monkeypatch.setattr(qs, "build_signed_extrinsic", fake_build)
@@ -1732,9 +1972,8 @@ def _ok_receipt(solver, *, error: str | None = None):
 class TestSolverQuipSubmission:
     """_propose_call_params / _build_extrinsic / _submit_built / _propose_job / _wrap_bounded.
 
-    ``_propose_job`` now takes a prebuilt ``(wire, ext_hash)`` pair rather than
-    building the extrinsic itself: ``solve()`` builds once, via ``_prepare``,
-    then displays the quote before deciding whether to submit that same wire.
+    ``_propose_job`` takes a prebuilt ``(wire, ext_hash)`` pair; ``_propose``
+    signs it with the current nonce after the gates have passed.
     """
 
     @staticmethod
@@ -1752,7 +1991,7 @@ class TestSolverQuipSubmission:
     def test_propose_call_params_composition(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)
         job = self._simple_job()
-        params = solver._propose_call_params(job)
+        params = solver._propose_call_params(job, solver._default_options())
 
         assert params["spec_id"] == solver._spec_id
         assert params["reward"] == solver._reward
@@ -1768,12 +2007,94 @@ class TestSolverQuipSubmission:
         assert ising["h_values"] == (list(job.h_values),)
         assert ising["j_values"] == (list(job.j_values),)
         assert ising["min_energy_milli"] is None
+        assert ising["max_energy_milli"] is None
         assert ising["min_solutions"] is None
+
+    @pytest.mark.parametrize(
+        ("rule", "chain", "scale"),
+        [
+            ("SingleBest", "SingleBest", "00"),
+            (ResolutionSingleBest(), "SingleBest", "00"),
+            (ResolutionTopNWeighted(2), {"TopNWeighted": {"n": 2}}, "0102000000"),
+            (ResolutionTopNEqual(32), {"TopNEqual": {"n": 32}}, "0220000000"),
+        ],
+    )
+    def test_resolution_encodes_as_the_runtime_enum(self, monkeypatch, rule, chain, scale) -> None:
+        """Each payout rule goes out in the form, and SCALE bytes, of the pallet's ``RewardResolution``.
+
+        The enum below mirrors the pallet: declaration order sets the index.
+        """
+        base = pytest.importorskip("scalecodec.base", reason="scalecodec not installed ([quip] extra)")
+        presets = pytest.importorskip("scalecodec.type_registry")
+        config = base.RuntimeConfigurationObject()
+        config.update_type_registry(presets.load_type_registry_preset("core"))
+        config.update_type_registry(
+            {
+                "types": {
+                    "TopN": {"type": "struct", "type_mapping": [["n", "u32"]]},
+                    "RewardResolution": {
+                        "type": "enum",
+                        "type_mapping": [["SingleBest", "Null"], ["TopNWeighted", "TopN"], ["TopNEqual", "TopN"]],
+                    },
+                }
+            }
+        )
+        solver = _make_solver(monkeypatch, resolution=rule)
+        params = solver._propose_call_params(self._simple_job(), solver._default_options())
+        assert params["resolution"] == chain
+        assert config.create_scale_object("RewardResolution").encode(chain).data.hex() == scale
+
+    def test_raw_resolution_dict_goes_out_as_given(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, resolution={"TopNEqual": {"n": 2}})
+        params = solver._propose_call_params(self._simple_job(), solver._default_options())
+        assert params["resolution"] == {"TopNEqual": {"n": 2}}
+
+    @pytest.mark.parametrize("ceiling", [None, -1250])
+    def test_ceiling_keys_encode_as_the_runtime_field(self, monkeypatch, ceiling) -> None:
+        """Both ceiling keys encode byte-identical to the one key the runtime lists.
+
+        The struct below mirrors aglais's ``IsingParams`` (spec 118), which lists
+        ``min_energy_milli`` only; a runtime with QUI-1612 lists
+        ``max_energy_milli`` instead and takes the other key the same way.
+        """
+        base = pytest.importorskip("scalecodec.base", reason="scalecodec not installed ([quip] extra)")
+        presets = pytest.importorskip("scalecodec.type_registry")
+        config = base.RuntimeConfigurationObject()
+        config.update_type_registry(presets.load_type_registry_preset("core"))
+        config.update_type_registry(
+            {
+                "types": {
+                    "BoundedU32": {"type": "struct", "type_mapping": [["0", "Vec<u32>"]]},
+                    "BoundedEdges": {"type": "struct", "type_mapping": [["0", "Vec<(u32, u32)>"]]},
+                    "BoundedI32": {"type": "struct", "type_mapping": [["0", "Vec<i32>"]]},
+                    "IsingParams": {
+                        "type": "struct",
+                        "type_mapping": [
+                            ["nodes", "BoundedU32"],
+                            ["edges", "BoundedEdges"],
+                            ["h_values", "BoundedI32"],
+                            ["j_values", "BoundedI32"],
+                            ["min_energy_milli", "Option<i64>"],
+                            ["min_diversity_milli", "Option<u32>"],
+                            ["min_solutions", "Option<u32>"],
+                        ],
+                    },
+                }
+            }
+        )
+        solver = _make_solver(monkeypatch)
+        ising = solver._propose_call_params(self._simple_job(), solver._default_options())["ising_params"]
+        ising = {**ising, "min_energy_milli": ceiling, "max_energy_milli": ceiling}
+        single = {key: value for key, value in ising.items() if key != "max_energy_milli"}
+
+        both = config.create_scale_object("IsingParams").encode(ising)
+
+        assert both == config.create_scale_object("IsingParams").encode(single)
 
     def test_build_extrinsic_returns_wire_and_hash(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)
         captured = _patch_signing(monkeypatch, solver)
-        params = solver._propose_call_params(self._simple_job())
+        params = solver._propose_call_params(self._simple_job(), solver._default_options())
 
         wire, ext_hash = solver._build_extrinsic("QuantumComputeMempool", "propose_job", params)
 
@@ -1813,24 +2134,24 @@ class TestSolverQuipSubmission:
         solver = _make_solver(monkeypatch)
         solver._iface.events = [_job_proposed_event(42)]
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
-        assert solver._propose_job(b"\x00\x01", "0xext") == 42
+        sent = solver._propose_job(b"\x00\x01", "0xext", UNIT)
+        assert (sent.order_id, sent.block_hash, sent.error) == (42, "0xblock", None)
 
-    def test_propose_job_submit_failure_raises(self, monkeypatch) -> None:
-        from xqsa.quip import QuipSubmissionError
-
+    def test_propose_job_dispatch_failure_is_reported_not_raised(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error="System.ExtrinsicFailed: {...}"))
-        with pytest.raises(QuipSubmissionError, match="failed on-chain"):
-            solver._propose_job(b"\x00\x01", "0xext")
+        sent = solver._propose_job(b"\x00\x01", "0xext", UNIT)
+        assert (sent.order_id, sent.error) == (None, "System.ExtrinsicFailed: {...}")
 
-    def test_propose_job_missing_event_raises(self, monkeypatch) -> None:
-        from xqsa.quip import QuipSubmissionError
+    def test_propose_job_missing_event_is_unconfirmed(self, monkeypatch) -> None:
+        from xqsa.quip import QuipUnconfirmedError
 
         solver = _make_solver(monkeypatch)
         solver._iface.events = []  # included, but no JobProposed event.
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
-        with pytest.raises(QuipSubmissionError, match="no JobProposed"):
-            solver._propose_job(b"\x00\x01", "0xext")
+        with pytest.raises(QuipUnconfirmedError, match="no JobProposed") as info:
+            solver._propose_job(b"\x00\x01", "0xext", UNIT)
+        assert (info.value.extrinsic_hash, info.value.block_hash) == ("0xext", "0xblock")
 
     @pytest.mark.parametrize("attrs_form", ["mapping", "params"])
     def test_order_id_extraction_tolerates_attribute_shapes(self, monkeypatch, attrs_form) -> None:
@@ -1898,6 +2219,9 @@ def _spin_vector(job: IsingJob, var_spins: dict[int, int], default: int = 1) -> 
     return vector
 
 
+SIGNER_ACCOUNT = "<signer>"  # placeholder; _make_solver swaps in the real signer account.
+
+
 def _order(
     *,
     status: str = "Opened",
@@ -1906,8 +2230,13 @@ def _order(
     deadline_blocks: int = 100,
     block_wait: int = 10,
     solution_count: int = 1,
+    proposer: str = SIGNER_ACCOUNT,
+    reward: int = UNIT,
 ) -> dict:
     return {
+        "proposer": proposer,
+        "reward": reward,
+        "resolution": "SingleBest",
         "status": status,
         "created_at": created_at,
         "first_solution_at": first_solution_at,
@@ -1927,12 +2256,12 @@ def _submission(solver_id: str, vectors: list[list[int]], best_energy_milli: int
 
 
 def _force_timeout(monkeypatch) -> None:
-    """Patch xqsa.quip's clock so _await_finality's first deadline check trips.
+    """Patch xqsa.quip's clock so a wait's first deadline check trips.
 
     monotonic() returns 0 for the deadline baseline, then 100 for the post-check,
     so a non-final order raises QuipTimeoutError without real sleeping.
     """
-    import xqsa.quip as quip_mod
+    import xqsa.quip.client as quip_mod
 
     calls = {"n": 0}
 
@@ -1956,42 +2285,9 @@ def _chain_iface(*, order: dict, head: int, submissions: list[tuple] | None = No
     return iface
 
 
+@pytest.mark.filterwarnings("ignore:SolverQuip.status:DeprecationWarning")
 class TestSolverQuipLifecycle:
-    """_await_finality, _order_lifecycle, and status() against the mocked chain."""
-
-    def test_await_finality_terminal_status_returns_immediately(self, monkeypatch) -> None:
-        # Closed short-circuits regardless of height (head 5 < expiry 100).
-        iface = _chain_iface(order=_order(status="Closed"), head=5)
-        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
-        assert solver._await_finality(1)["status"] == "Closed"
-
-    def test_await_finality_terminal_skips_head_read(self, monkeypatch) -> None:
-        # A terminal status is final regardless of height, so the head-height
-        # RPC must be skipped entirely.
-        iface = _chain_iface(order=_order(status="Closed"), head=5)
-        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
-
-        def _boom() -> int:
-            raise AssertionError("head-height read must be skipped for a terminal order")
-
-        monkeypatch.setattr(solver, "_current_block", _boom)
-        assert solver._await_finality(1)["status"] == "Closed"
-
-    def test_await_finality_by_height(self, monkeypatch) -> None:
-        # Opened but past the hard deadline (head 200 >= expiry 100).
-        iface = _chain_iface(order=_order(status="Opened"), head=200)
-        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
-        assert solver._await_finality(1)["status"] == "Opened"
-
-    def test_await_finality_times_out(self, monkeypatch) -> None:
-        from xqsa.quip import QuipTimeoutError
-
-        iface = _chain_iface(order=_order(status="Opened"), head=50)  # 50 < expiry 100 -> never final
-        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH, timeout=0.0)
-        _force_timeout(monkeypatch)
-        with pytest.raises(QuipTimeoutError) as excinfo:
-            solver._await_finality(1)
-        assert excinfo.value.order_id == 1
+    """_order_lifecycle and status() against the mocked chain."""
 
     def test_status_snapshot(self, monkeypatch) -> None:
         iface = _chain_iface(order=_order(status="Opened", solution_count=2), head=150)
@@ -2026,17 +2322,19 @@ class TestSolverQuipCollect:
             (b"solver", _submission("0xSOLVER", [high, low], chain_best))
         ]
 
-        result = solver._collect_result(1, job, model, elapsed=1.5)
+        result = solver._collect_result(solver.get_receipt(1), job, model, elapsed=1.5)
         assert result.energy == 0  # the lower-energy vector wins
         assert result.timing == 1.5
         assert result.metadata["order_id"] == 1
         assert result.metadata["solver"] == "0xSOLVER"
         assert result.metadata["best_energy_milli"] == chain_best
         assert result.metadata["energy_matches_chain"] is True
+        assert result.metadata["leader_read"] is False  # no front runner is set.
         assert result.metadata["num_submissions"] == 1
         assert result.metadata["num_solutions"] == 2
+        assert result.metadata["quantization_error"] == 0.0
 
-    def test_picks_lowest_best_energy_submission(self, monkeypatch) -> None:
+    def test_falls_back_to_the_best_stored_vector_without_a_leader(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch, iface=_chain_iface(order=_order(), head=200), topology=TOPO_HASH)
         model = _model()
         job = _job(solver)
@@ -2046,9 +2344,69 @@ class TestSolverQuipCollect:
             (b"a", _submission("0xLOSER", [loser], ising_energy_milli(job, loser))),
             (b"b", _submission("0xWINNER", [winner], ising_energy_milli(job, winner))),
         ]
-        result = solver._collect_result(1, job, model, elapsed=0.0)
+        result = solver._collect_result(solver.get_receipt(1), job, model, elapsed=0.0)
         assert result.metadata["solver"] == "0xWINNER"
+        assert result.metadata["leader_read"] is False
         assert result.energy == 0
+
+    def test_follows_the_front_runner_on_a_tie(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, iface=_chain_iface(order=_order(), head=200), topology=TOPO_HASH)
+        job = _job(solver)
+        vector = _spin_vector(job, {0: 1, 1: 1})
+        milli = ising_energy_milli(job, vector)
+        solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [
+            (b"a", _submission("0xA", [vector], milli)),
+            (b"b", _submission("0xB", [vector], milli)),
+        ]
+        solver._iface.storage[("QuantumComputeMempool", "OrderFrontRunner")] = {"solver": "0xB", "energy_milli": milli}
+        result = solver._collect_result(solver.get_receipt(1), job, _model(), elapsed=0.0)
+        assert result.metadata["solver"] == "0xB"
+        assert result.metadata["leader_read"] is True
+        assert result.metadata["leader"] is True
+        assert result.metadata["energy_matches_chain"] is True
+
+    def test_follows_the_front_runner_over_a_lower_stored_energy(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, iface=_chain_iface(order=_order(), head=200), topology=TOPO_HASH)
+        job = _job(solver)
+        low = _spin_vector(job, {0: 1, 1: 1})  # E = 0
+        lead = _spin_vector(job, {0: 1, 1: -1})  # E = +2
+        lead_milli = ising_energy_milli(job, lead)
+        solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [
+            (b"a", _submission("0xLOW", [low], ising_energy_milli(job, low))),
+            (b"b", _submission("0xLEAD", [lead], lead_milli)),
+        ]
+        solver._iface.storage[("QuantumComputeMempool", "OrderFrontRunner")] = {
+            "solver": "0xLEAD",
+            "energy_milli": lead_milli,
+        }
+        result = solver._collect_result(solver.get_receipt(1), job, _model(), elapsed=0.0)
+        assert result.metadata["solver"] == "0xLEAD"
+        assert result.metadata["leader_read"] is True
+        assert result.metadata["leader"] is True
+        assert result.metadata["best_energy_milli"] == lead_milli
+        assert result.energy == 2
+
+    def test_mismatched_leader_returns_the_best_stored_sample(self, monkeypatch) -> None:
+        # The chain ranks 0xLEAD at E = 0, but its stored vector only reaches +2
+        # (an overwrite, QUI-1408); 0xOTHER stored the E = 0 vector.
+        solver = _make_solver(monkeypatch, iface=_chain_iface(order=_order(), head=200), topology=TOPO_HASH)
+        job = _job(solver)
+        good = _spin_vector(job, {0: 1, 1: 1})  # E = 0
+        worse = _spin_vector(job, {0: 1, 1: -1})  # E = +2
+        solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [
+            (b"a", _submission("0xLEAD", [worse], ising_energy_milli(job, worse))),
+            (b"b", _submission("0xOTHER", [good], ising_energy_milli(job, good))),
+        ]
+        solver._iface.storage[("QuantumComputeMempool", "OrderFrontRunner")] = {
+            "solver": "0xLEAD",
+            "energy_milli": ising_energy_milli(job, good),
+        }
+        result = solver._collect_result(solver.get_receipt(1), job, _model(), elapsed=0.0)
+        assert result.energy == 0
+        assert result.metadata["solver"] == "0xOTHER"
+        assert result.metadata["leader"] is False
+        assert result.metadata["leader_read"] is True
+        assert result.metadata["energy_matches_chain"] is False
 
     def test_canary_false_on_energy_mismatch(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch, iface=_chain_iface(order=_order(), head=200), topology=TOPO_HASH)
@@ -2059,8 +2417,26 @@ class TestSolverQuipCollect:
         solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [
             (b"solver", _submission("0xSOLVER", [vector], wrong))
         ]
-        result = solver._collect_result(1, job, model, elapsed=0.0)
+        result = solver._collect_result(solver.get_receipt(1), job, model, elapsed=0.0)
         assert result.metadata["energy_matches_chain"] is False
+
+    def test_canary_false_when_the_ranked_energy_differs_from_the_leaders_vector(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, iface=_chain_iface(order=_order(), head=200), topology=TOPO_HASH)
+        job = _job(solver)
+        vector = _spin_vector(job, {0: 1, 1: 1})
+        stored = ising_energy_milli(job, vector)
+        ranked = stored + 1000  # the chain ranks the leader at an energy its vector does not recompute to.
+        solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [
+            (b"solver", _submission("0xSOLVER", [vector], stored))
+        ]
+        solver._iface.storage[("QuantumComputeMempool", "OrderFrontRunner")] = {
+            "solver": "0xSOLVER",
+            "energy_milli": ranked,
+        }
+        result = solver._collect_result(solver.get_receipt(1), job, _model(), elapsed=0.0)
+        assert result.metadata["leader_read"] is True
+        assert result.metadata["energy_matches_chain"] is False
+        assert result.metadata["best_energy_milli"] == ranked
 
     def test_missing_pallet_field_raises_typed_error(self, monkeypatch) -> None:
         # A pre-release field rename must surface as QuipJobFailedError, not a
@@ -2074,7 +2450,7 @@ class TestSolverQuipCollect:
         del broken["best_energy_milli"]  # simulate a renamed/absent field
         solver._iface.maps[("QuantumComputeMempool", "OrderSolutions")] = [(b"solver", broken)]
         with pytest.raises(QuipJobFailedError, match="field layout"):
-            solver._collect_result(1, job, _model(), elapsed=0.0)
+            solver._collect_result(solver.get_receipt(1), job, _model(), elapsed=0.0)
 
     def test_no_solutions_auto_reclaims_then_fails(self, monkeypatch) -> None:
         from xqsa.quip import QuipJobFailedError
@@ -2084,21 +2460,140 @@ class TestSolverQuipCollect:
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         job = _job(solver)
         with pytest.raises(QuipJobFailedError) as excinfo:
-            solver._collect_result(1, job, _model(), elapsed=0.0)
+            solver._collect_result(solver.get_receipt(1), job, _model(), elapsed=0.0)
         assert excinfo.value.order_id == 1
         assert "reclaimed" in str(excinfo.value)
         assert captured["call_function"] == "reclaim_order"
         assert captured["call_params"] == {"order_id": 1}
 
-    def test_reclaim_failure_is_tolerated(self, monkeypatch) -> None:
+    @pytest.mark.parametrize(
+        ("floors", "note"),
+        [
+            ({}, "finalized with no solutions; "),
+            (
+                {"min_energy_milli": -2000, "min_solutions": 5, "min_diversity_milli": None},
+                "finalized with no solutions under its quality floors (energy <= -2, 5 solutions), which solvers "
+                "may have been unable to meet; ",
+            ),
+        ],
+    )
+    def test_no_solutions_names_the_floors_on_chain(self, monkeypatch, floors, note) -> None:
+        from xqsa.quip import QuipJobFailedError
+
+        order = {**_order(solution_count=0), "ising_params": {"nodes": [0, 1], "edges": [[0, 1]], **floors}}
+        iface = _chain_iface(order=order, head=200, submissions=[])
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipJobFailedError) as excinfo:
+            solver._collect_result(solver.get_receipt(1), _job(solver), _model(), elapsed=0.0)
+        assert note in str(excinfo.value)
+
+    def test_no_solutions_names_the_allowlist(self, monkeypatch) -> None:
+        from xqsa.quip import QuipJobFailedError
+
+        order = {**_order(solution_count=0), "mode": {"Bid": {"miners": None, "miner_types": ["QpuDwave"]}}}
+        iface = _chain_iface(order=order, head=200, submissions=[])
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipJobFailedError) as excinfo:
+            solver._collect_result(solver.get_receipt(1), _job(solver), _model(), elapsed=0.0)
+        assert str(excinfo.value) == (
+            "order 1 finalized with no solutions; only allowlisted solvers could answer (types QpuDwave) and none "
+            "did; the reserved reward was reclaimed"
+        )
+
+    def test_no_solutions_reads_the_order_once_for_its_note(self, monkeypatch) -> None:
         from xqsa.quip import QuipJobFailedError
 
         iface = _chain_iface(order=_order(solution_count=0), head=200, submissions=[])
         solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
-        # reclaim_order dispatch fails (e.g. not proposer); _reclaim swallows it.
-        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error="System.ExtrinsicFailed: NotProposer"))
-        with pytest.raises(QuipJobFailedError, match="remain reserved"):
-            solver._collect_result(1, _job(solver), _model(), elapsed=0.0)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        receipt = solver.get_receipt(1)
+        reads = []
+        monkeypatch.setattr(solver, "_try_reclaim", lambda receipt: "reclaimed")
+        query = iface.query
+
+        def counted(module, name, params=None, block_hash=None):
+            reads.append(name)
+            return query(module, name, params, block_hash)
+
+        monkeypatch.setattr(iface, "query", counted)
+        with pytest.raises(QuipJobFailedError):
+            solver._collect_result(receipt, _job(solver), _model(), elapsed=0.0)
+        assert reads.count("JobOrders") == 1
+
+    def test_no_solutions_survives_an_unreadable_order(self, monkeypatch) -> None:
+        from xqsa.quip import QuipJobFailedError
+
+        iface = _chain_iface(order=_order(solution_count=0), head=200, submissions=[])
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        receipt = solver.get_receipt(1)
+        monkeypatch.setattr(receipt, "_fetch_order", lambda: {})  # no ising_params to read.
+        with pytest.raises(QuipJobFailedError, match="finalized with no solutions; "):
+            solver._collect_result(receipt, _job(solver), _model(), elapsed=0.0)
+
+    @pytest.mark.parametrize(
+        ("order", "error", "reason"),
+        [
+            pytest.param(
+                _order(solution_count=0),
+                "System.ExtrinsicFailed: NotProposer",
+                "NotProposer",
+                id="chain-dispatch-failure",
+            ),
+            pytest.param(
+                _order(solution_count=0, proposer="0x" + "11" * 32), None, "not by this account", id="local-refusal"
+            ),
+            pytest.param(_order(solution_count=0, status="Closed"), None, "already closed", id="already-closed"),
+        ],
+    )
+    def test_reclaim_refusal_is_tolerated_without_a_retry(self, monkeypatch, order, error, reason) -> None:
+        from xqsa.quip import QuipJobFailedError
+
+        iface = _chain_iface(order=order, head=200, submissions=[])
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        # The reclaim is refused, locally or on chain; _try_reclaim swallows it.
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error=error))
+        with pytest.raises(QuipJobFailedError, match="the reward was not reclaimed: ") as excinfo:
+            solver._collect_result(solver.get_receipt(1), _job(solver), _model(), elapsed=0.0)
+        assert reason in str(excinfo.value)
+        assert "retry" not in str(excinfo.value)
+
+    @pytest.mark.parametrize(
+        ("fault", "reason"),
+        [
+            pytest.param("node-refused", "could not be submitted", id="node-refused"),
+            pytest.param("outcome-unknown", "outcome is unknown", id="outcome-unknown"),
+            pytest.param("unverified", "result could not be read", id="unverified"),
+            pytest.param("read-fault", "connection reset", id="read-fault"),
+        ],
+    )
+    def test_reclaim_fault_is_tolerated_with_a_retry(self, monkeypatch, fault, reason) -> None:
+        from xqsa.quip import QuipJobFailedError
+
+        iface = _chain_iface(order=_order(solution_count=0), head=200, submissions=[])
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        qs = solver._quip_signing
+
+        def send(call_function):
+            if fault == "node-refused":
+                raise qs.QuipSigningError("author_submitExtrinsic rejected the extrinsic: {'code': 1014}")
+            if fault == "outcome-unknown":
+                raise qs.SendOutcomeUnknown("the pool reported retracted")
+            return _ok_receipt(solver, error=f"{qs.UNCLASSIFIED_PREFIX}get_events failed for 0xblock")
+
+        _patch_signing(monkeypatch, solver, receipt=send)
+        receipt = solver.get_receipt(1)
+        if fault == "read-fault":
+            monkeypatch.setattr(
+                solver, "_current_block", lambda: (_ for _ in ()).throw(ConnectionError("connection reset"))
+            )
+        # The reward may still be reserved, so the message names the retry.
+        with pytest.raises(QuipJobFailedError, match="the reward was not reclaimed: ") as excinfo:
+            solver._collect_result(receipt, _job(solver), _model(), elapsed=0.0)
+        assert reason in str(excinfo.value)
+        assert "it may still be reserved -- retry with SolverQuip.get_receipt(1).reclaim()" in str(excinfo.value)
 
 
 class TestSolverQuipSolve:
@@ -2132,6 +2627,7 @@ class TestSolverQuipSolve:
         with pytest.raises(QuipTimeoutError) as excinfo:
             solver.solve(_model())
         assert excinfo.value.order_id == 1
+        assert excinfo.value.receipt.order_id == 1
 
     def test_solve_no_solutions_reclaims_and_fails(self, monkeypatch) -> None:
         from xqsa.quip import QuipJobFailedError
@@ -2157,7 +2653,9 @@ class TestSolverQuipSolve:
         # gate, so "builds" is no longer the signal; submission is.
         assert "wait_for" not in captured  # never reached submission
 
-    def test_solve_builds_extrinsic_exactly_once(self, monkeypatch) -> None:
+    def test_solve_signs_once_and_sends_the_priced_bytes(self, monkeypatch) -> None:
+        # submit() signs once with the current nonce, prices those bytes, and
+        # sends them unchanged when the nonce has not moved.
         iface = _chain_iface(order=_order(), head=200)
         iface.maps[("QuantumPow", "MineableTopologies")] = [(TOPO_HASH, ())]
         solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
@@ -2167,8 +2665,11 @@ class TestSolverQuipSolve:
             (b"solver", _submission("0xSOLVER", [vector], ising_energy_milli(job, vector)))
         ]
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        solver._iface.nonce = 7
         solver.solve(_model())
         assert captured["builds"] == 1
+        assert captured["nonces"] == [7]
+        assert captured["sent"] == captured["wires"]
 
     def test_solve_proceeds_when_topology_is_not_mineable(self, monkeypatch) -> None:
         # Inverted guard. solve() used to reject a registered hash absent from
@@ -2206,8 +2707,22 @@ class TestSolverQuipSolve:
         assert solver.solve(_model()).metadata["order_id"] == 1
 
 
+@pytest.mark.filterwarnings("ignore:SolverQuip.query:DeprecationWarning")
 class TestSolverQuipQuery:
     """query() finality gating and result recovery."""
+
+    def test_query_warns_deprecated(self, monkeypatch) -> None:
+        iface = _chain_iface(order=_order(status="Opened"), head=50)
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        with pytest.warns(DeprecationWarning, match=r"query\(\) is deprecated; use SolverQuip.get_receipt"):
+            solver.query(1, _model())
+
+    def test_status_warns_deprecated_and_keeps_its_keys(self, monkeypatch) -> None:
+        iface = _chain_iface(order=_order(status="Opened"), head=50)
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        with pytest.warns(DeprecationWarning, match=r"get_receipt\(order_id\).status\(\)"):
+            snap = solver.status(1)
+        assert {"status", "is_final"} <= snap.keys()
 
     def test_query_returns_none_when_not_final(self, monkeypatch) -> None:
         iface = _chain_iface(order=_order(status="Opened"), head=50)  # 50 < expiry 100
@@ -2237,6 +2752,7 @@ class TestSolverQuipQuery:
         assert captured["call_function"] == "reclaim_order"
 
 
+@pytest.mark.filterwarnings("ignore:SolverQuip.query:DeprecationWarning")
 class TestSolverQuipNativeTopology:
     """topology="native" / QUIP_TOPOLOGY=native: submit over the model's own coupling graph."""
 
@@ -2310,7 +2826,7 @@ class TestSolverQuipNativeTopology:
 
         monkeypatch.setattr(solver, "_fetch_topology", _fail)
         _patch_signing(monkeypatch, solver)
-        job = solver._prepare(_k5_model(), {})[0]
+        job = solver.create_order(_k5_model())._job
         assert job.nodes == (0, 1, 2, 3, 4)
         assert len(job.edges) == 10
 
@@ -2342,17 +2858,17 @@ class TestSolverQuipNativeTopology:
         assert calls == [TOPO_HASH]
         assert job.nodes  # a job was actually built against the fetched topology.
 
-    def test_query_native_rederives_the_same_job_prepare_built(self, monkeypatch) -> None:
+    def test_query_native_rederives_the_same_job_an_order_built(self, monkeypatch) -> None:
         iface = _chain_iface(order=_order(), head=200)
         solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
         model = _k5_model()
         _patch_signing(monkeypatch, solver)
 
-        prepared_job, _wire, _hash, _quote = solver._prepare(model, {"topology": "native"})
+        prepared_job = solver.create_order(model, topology="native")._job
 
         captured: dict = {}
 
-        def _fake_collect(order_id, job, model_arg, *, elapsed):
+        def _fake_collect(receipt, job, model_arg, *, elapsed):
             captured["job"] = job
             return SolverResult(sample=model_arg, energy=0, timing=elapsed, metadata={})
 
@@ -2427,7 +2943,7 @@ class TestSolverQuipNativeTopology:
 
 
 def test_format_planck_matches_the_documented_formula() -> None:
-    from xqsa.quip import _format_planck
+    from xqsa.quip.client import _format_planck
 
     assert _format_planck(1_002_182_560_255, 12) == "1.002182560255"
     assert _format_planck(20_000_000_000_000, 12) == "20.000000000000"
@@ -2454,6 +2970,19 @@ class TestJobQuote:
         defaults.update(overrides)
         return JobQuote(**defaults)
 
+    @classmethod
+    def _full_quote(cls, **overrides: object):
+        full: dict[str, object] = dict(
+            account="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            quoted_at_block=412301,
+            num_variables=12,
+            num_spins=12,
+            num_couplings=30,
+            placement="0x8f46f3a31321d1d093314fc769c42cbe7a83d71a0b69e6571a0f68e2a04067f0",
+        )
+        full.update(overrides)
+        return cls._quote(**full)
+
     def test_total_is_reward_plus_fee(self) -> None:
         quote = self._quote(reward_planck=1000, fee_planck=200)
         assert quote.total_planck == 1200
@@ -2471,28 +3000,72 @@ class TestJobQuote:
         quote = self._quote(reward_planck=1000, fee_planck=200, balance_planck=500)
         assert quote.shortfall_planck == 700
 
-    def test_str_lines_all_start_with_quip_tag_and_are_ascii(self) -> None:
+    def test_affordable_tracks_the_shortfall(self) -> None:
+        assert self._quote(reward_planck=1000, fee_planck=200, balance_planck=1200).affordable
+        assert not self._quote(reward_planck=1000, fee_planck=200, balance_planck=1199).affordable
+
+    def test_new_fields_default_to_none(self) -> None:
+        quote = self._quote()
+        assert (quote.account, quote.quoted_at_block, quote.placement) == (None, None, None)
+        assert (quote.num_variables, quote.num_spins, quote.num_couplings) == (None, None, None)
+
+    def test_str_is_a_72_column_box(self) -> None:
+        lines = str(self._full_quote()).splitlines()
+        assert lines[0].startswith("╭─ Job quote ")
+        assert lines[-1].startswith("╰")
+        assert {len(line) for line in lines} == {72}
+
+    def test_str_full_box(self) -> None:
+        assert str(self._full_quote()) == "\n".join(
+            [
+                "╭─ Job quote ──────────────────────────────────────────────────────────╮",
+                "│ Network     aglais                                                   │",
+                "│ Account     5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY         │",
+                "│ Quoted at   block 412301                                             │",
+                "├──────────────────────────────────────────────────────────────────────┤",
+                "│ Problem     12 variables -> 12 spins, 30 couplings                   │",
+                "│ Placed on   topology                                                 │",
+                "│             0x8f46f3a31321d1d093314fc769c42cbe7a83d71a0b69e6571a0f68 │",
+                "│             e2a04067f0                                               │",
+                "├──────────────────────────────────────────────────────────────────────┤",
+                "│ Reward       1.000000000000 AGLS  refunded if unanswered             │",
+                "│ Fee          0.002182560255 AGLS  exact                              │",
+                "│ Total        1.002182560255 AGLS                                     │",
+                "╞══════════════════════════════════════════════════════════════════════╡",
+                "│ Balance     20.000000000000 AGLS                                     │",
+                "│ Shortfall    0.000000000000 AGLS                                     │",
+                "│ Affordable  yes                                                      │",
+                "╰──────────────────────────────────────────────────────────────────────╯",
+            ]
+        )
+
+    def test_str_native_placement_on_one_line(self) -> None:
+        assert "│ Placed on   native " in str(self._full_quote(placement="native"))
+
+    def test_str_omits_unknown_rows_and_sections(self) -> None:
         text = str(self._quote())
-        lines = text.splitlines()
-        assert lines
-        assert all(line.startswith("[quip]") for line in lines)
-        assert text.isascii()
+        for absent in ("Account", "Quoted at", "Problem", "Placed on"):
+            assert absent not in text
+        assert {len(line) for line in text.splitlines()} == {72}
 
     def test_str_decimal_points_align_across_amount_lines(self) -> None:
         text = str(self._quote())
-        amount_lines = [line for line in text.splitlines() if "." in line]
+        amount_lines = [line for line in text.splitlines() if "AGLS" in line]
         assert len(amount_lines) == 5  # reward, fee, total, balance, shortfall
         assert len({line.index(".") for line in amount_lines}) == 1
 
-    def test_str_header_names_the_network(self) -> None:
-        assert "network aglais" in str(self._quote(network="aglais"))
+    def test_str_names_the_network(self) -> None:
+        assert "│ Network     aglais " in str(self._quote(network="aglais"))
 
-    def test_str_header_says_custom_endpoint_when_network_is_none(self) -> None:
-        assert "custom endpoint" in str(self._quote(network=None))
+    def test_str_says_custom_endpoint_when_network_is_none(self) -> None:
+        assert "│ Network     custom endpoint " in str(self._quote(network=None))
 
-    def test_str_header_fee_exact_vs_estimated(self) -> None:
-        assert "fee exact" in str(self._quote(fee_exact=True))
-        assert "fee estimated" in str(self._quote(fee_exact=False))
+    def test_str_fee_exact_vs_estimated(self) -> None:
+        assert "AGLS  exact " in str(self._quote(fee_exact=True))
+        assert "AGLS  estimated " in str(self._quote(fee_exact=False))
+
+    def test_str_shows_unaffordable(self) -> None:
+        assert "│ Affordable  no " in str(self._quote(balance_planck=0))
 
     def test_str_has_no_fractional_part_when_decimals_is_zero(self) -> None:
         quote = self._quote(
@@ -2553,6 +3126,37 @@ class TestSolverQuipQuote:
         assert quote.token_decimals == 0
         assert "." not in str(quote)
 
+    def test_quote_describes_account_block_and_placement(self, monkeypatch) -> None:
+        iface = self._iface()
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver)
+        quote = solver.quote(_model())
+        ss58_encode = pytest.importorskip("scalecodec.utils.ss58").ss58_encode
+
+        assert quote.account == ss58_encode(bytes(solver._signer.account_id), 42)
+        assert quote.account.startswith("5")
+        assert quote.quoted_at_block == iface.head
+        assert quote.placement == TOPO_HASH
+        assert (quote.num_spins, quote.num_couplings) == (
+            _job(solver).topology.num_nodes,
+            _job(solver).topology.num_edges,
+        )
+        assert quote.num_variables == 2
+
+    def test_quote_account_falls_back_to_hex(self, monkeypatch) -> None:
+        iface = self._iface()
+        iface.ss58_format = None
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH)
+        _patch_signing(monkeypatch, solver)
+        assert solver.quote(_model()).account == "0x" + bytes(solver._signer.account_id).hex()
+
+    def test_quote_placement_is_native(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, iface=self._iface(), topology="native")
+        _patch_signing(monkeypatch, solver)
+        quote = solver.quote(_model())
+        assert quote.placement == "native"
+        assert quote.num_spins == quote.num_variables
+
     def test_quote_never_submits(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch, iface=self._iface(), topology=TOPO_HASH)
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
@@ -2577,7 +3181,7 @@ class TestSolverQuipQuote:
         _patch_signing(monkeypatch, solver)
         quote = solver.quote(_model())
         assert quote.network == "aglais"
-        assert "network aglais" in str(quote)
+        assert "│ Network     aglais " in str(quote)
 
 
 class TestSolverQuipInsufficientBalance:
@@ -2669,7 +3273,7 @@ class TestSolverQuipDisplay:
 
 
 def test_quip_metadata_logger_parents_under_xqsa_quip() -> None:
-    """xqsa.quip_metadata's logger renamed to xqsa.quip.metadata, nesting under xqsa.quip."""
+    """The metadata logger, once xqsa.quip_metadata, is xqsa.quip.metadata, nesting under xqsa.quip."""
     assert logging.getLogger("xqsa.quip.metadata").parent.name == "xqsa.quip"
 
 
@@ -2683,32 +3287,32 @@ class TestEnvFlag:
 
     @pytest.mark.parametrize("spelling", ["1", "true", "yes", "on", "TRUE", " YES "])
     def test_true_spellings(self, monkeypatch, spelling) -> None:
-        from xqsa.quip import _env_flag
+        from xqsa.quip.client import _env_flag
 
         monkeypatch.setenv("QUIP_TEST_FLAG", spelling)
         assert _env_flag("QUIP_TEST_FLAG") is True
 
     @pytest.mark.parametrize("spelling", ["0", "false", "no", "off", "FALSE", " NO "])
     def test_false_spellings(self, monkeypatch, spelling) -> None:
-        from xqsa.quip import _env_flag
+        from xqsa.quip.client import _env_flag
 
         monkeypatch.setenv("QUIP_TEST_FLAG", spelling)
         assert _env_flag("QUIP_TEST_FLAG") is False
 
     def test_unset_is_none(self, monkeypatch) -> None:
-        from xqsa.quip import _env_flag
+        from xqsa.quip.client import _env_flag
 
         monkeypatch.delenv("QUIP_TEST_FLAG", raising=False)
         assert _env_flag("QUIP_TEST_FLAG") is None
 
     def test_empty_is_none(self, monkeypatch) -> None:
-        from xqsa.quip import _env_flag
+        from xqsa.quip.client import _env_flag
 
         monkeypatch.setenv("QUIP_TEST_FLAG", "")
         assert _env_flag("QUIP_TEST_FLAG") is None
 
     def test_garbage_raises_naming_the_variable(self, monkeypatch) -> None:
-        from xqsa.quip import _env_flag
+        from xqsa.quip.client import _env_flag
 
         monkeypatch.setenv("QUIP_TEST_FLAG", "maybe")
         with pytest.raises(ValueError, match="QUIP_TEST_FLAG"):
@@ -2781,7 +3385,7 @@ class TestSolverQuipGateResolution:
 
 def test_quip_cancelled_error_is_a_quip_error() -> None:
     from xqsa.quip import QuipCancelledError
-    from xqsa.quip_codec import QuipError
+    from xqsa.quip.codec import QuipError
 
     assert issubclass(QuipCancelledError, QuipError)
 
@@ -2958,7 +3562,7 @@ class TestSolveAutofundGate:
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
 
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", fake_fund)
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", fake_fund)
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         result = solver.solve(_model())
         assert isinstance(result, SolverResult)
@@ -2972,7 +3576,7 @@ class TestSolveAutofundGate:
 
         calls: list[tuple] = []
         solver, _iface = _solve_ready_short(monkeypatch, autofund=lambda quote: False)
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: calls.append((dest, kwargs)))
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", lambda dest, **kwargs: calls.append((dest, kwargs)))
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         with pytest.raises(QuipCancelledError):
             solver.solve(_model())
@@ -2988,7 +3592,7 @@ class TestSolveAutofundGate:
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
 
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", fake_fund)
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", fake_fund)
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         solver.solve(_model())
         assert calls == [{"url": "http://faucet"}]
@@ -3005,7 +3609,7 @@ class TestSolveAutofundGate:
             autoconfirm=lambda quote: asked.append(quote) or True,
             autofund=lambda quote: asked.append(quote) or True,
         )
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: funded.append(dest))
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", lambda dest, **kwargs: funded.append(dest))
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         with pytest.raises(QuipSubmissionError, match="more than one faucet drip"):
             solver.solve(_model())
@@ -3026,7 +3630,7 @@ class TestSolveAutofundGate:
             autoconfirm=lambda quote: asked.append(quote) or True,
             autofund=lambda quote: asked.append(quote) or True,
         )
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: funded.append(dest))
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", lambda dest, **kwargs: funded.append(dest))
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         with pytest.raises(QuipSubmissionError, match="at most one drip"):
             solver.solve(_model())
@@ -3039,7 +3643,7 @@ class TestSolveAutofundGate:
 
         calls: list = []
         solver, _iface = _solve_ready_short(monkeypatch, autofund=False)
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: calls.append(dest))
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", lambda dest, **kwargs: calls.append(dest))
         monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=False))
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         with pytest.raises(QuipCancelledError, match="autofund=lambda q"):
@@ -3048,14 +3652,14 @@ class TestSolveAutofundGate:
         assert "wait_for" not in captured
 
     def test_faucet_error_propagates_without_proposing(self, monkeypatch) -> None:
-        from xqsa.quip_faucet import QuipFaucetError
+        from xqsa.quip.faucet import QuipFaucetError
 
         solver, _iface = _solve_ready_short(monkeypatch)
 
         def refuse(dest, *, url, amount=None):
             raise QuipFaucetError(403, {"error": "destination already funded"}, "refused")
 
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", refuse)
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", refuse)
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         with pytest.raises(QuipFaucetError):
             solver.solve(_model())
@@ -3068,7 +3672,7 @@ class TestSolveAutofundGate:
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
 
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", fake_fund)
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", fake_fund)
         monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
         stderr = _FakeTTY(isatty=True)
         monkeypatch.setattr(sys, "stderr", stderr)
@@ -3084,7 +3688,7 @@ class TestSolveAutofundGate:
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
 
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", fake_fund)
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", fake_fund)
         monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
         stderr, stdout = _FakeTTY(isatty=False), _FakeTTY(isatty=True)
         monkeypatch.setattr(sys, "stderr", stderr)
@@ -3094,7 +3698,7 @@ class TestSolveAutofundGate:
         solver.solve(_model())
         shown = "".join(stdout.written)
         assert "Fund 0x" in shown
-        assert "[quip] job quote" in shown
+        assert "╭─ Job quote " in shown
         assert stderr.written == []
 
     def test_no_faucet_raises_before_the_autofund_gate(self, monkeypatch) -> None:
@@ -3117,7 +3721,7 @@ class TestSolveAutofundGate:
         from xqsa.quip import QuipSubmissionError
 
         solver, _iface = _solve_ready_short(monkeypatch)
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: {})
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", lambda dest, **kwargs: {})
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         _force_timeout(monkeypatch)  # xqsa.quip.time.monotonic: 0.0 then 100.0, past FUND_WAIT_SECONDS
         with pytest.raises(QuipSubmissionError, match="insufficient balance"):
@@ -3128,7 +3732,7 @@ class TestSolveAutofundGate:
 
         calls: list = []
         solver, _iface = _solve_ready_short(monkeypatch, autoconfirm=lambda quote: False)
-        monkeypatch.setattr("xqsa.quip.fund_from_faucet", lambda dest, **kwargs: calls.append((dest, kwargs)))
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", lambda dest, **kwargs: calls.append((dest, kwargs)))
         captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         with pytest.raises(QuipCancelledError):
             solver.solve(_model())
@@ -3140,8 +3744,7 @@ def test_fee_is_priced_on_a_disarmed_copy_never_the_submitted_bytes(monkeypatch)
     solver = _solve_ready(monkeypatch)
     captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
     solver.solve(_model())
-    (method, params), *_ = solver._iface.rpc_calls
-    assert method == "payment_queryInfo"
+    [params] = [params for method, params in solver._iface.rpc_calls if method == "payment_queryInfo"]
     assert params == ["0x" + (b"disarmed:" + b"\x00\x01").hex()]
     assert captured["submitted_wire"] == b"\x00\x01"
 

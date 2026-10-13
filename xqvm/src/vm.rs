@@ -252,6 +252,21 @@ fn sign_extend_be(bytes: &[u8]) -> i64 {
     (v << shift) >> shift
 }
 
+/// Bit length of a positive `i64`: the number of bits needed to write it in
+/// binary, at most 63. Callers check `value > 0` first; a negative value
+/// would report 64.
+#[expect(
+    clippy::manual_bit_width,
+    reason = "`u64::bit_width` is stable only from Rust 1.99, and xqffi is built from source by pip on macOS and Windows (README.md), so the VM keeps to APIs a pre-1.99 toolchain has"
+)]
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "`leading_zeros()` returns at most `i64::BITS`, so the subtraction stays in 0..=64"
+)]
+const fn bit_length(value: i64) -> u32 {
+    i64::BITS - value.leading_zeros()
+}
+
 // ---------------------------------------------------------------------------
 // VM struct
 // ---------------------------------------------------------------------------
@@ -1804,15 +1819,7 @@ impl Vm {
 
     fn exec_bit_len(&mut self, pos: usize) -> Result<StepResult, Error> {
         let a = self.pop(pos)?;
-        let result = if a > 0 {
-            #[expect(
-                clippy::arithmetic_side_effects,
-                reason = "`leading_zeros()` returns at most `i64::BITS`, so the bit-length subtraction stays in 0..=64"
-            )]
-            i64::from(i64::BITS - a.leading_zeros())
-        } else {
-            0
-        };
+        let result = if a > 0 { i64::from(bit_length(a)) } else { 0 };
         self.push_stack(result, pos)?;
         Ok(StepResult::Continue)
     }
@@ -2137,7 +2144,7 @@ impl Vm {
 
     #[expect(
         clippy::arithmetic_side_effects,
-        reason = "`spec/xqvm/SPEC.md`'s overflow rule states that SLACK computes its powers of two only up to the largest one not exceeding `capacity`, so none of these operations overflows for a positive i64 `capacity` (pinned by the `slack_max_capacity` vector). `power > 0` consumes the final `wrapping_mul` to i64::MIN, so the loops run `i64::BITS - capacity.leading_zeros()` times, at most 63; that bounds the charge and `i`"
+        reason = "`spec/xqvm/SPEC.md`'s overflow rule states that SLACK computes its powers of two only up to the largest one not exceeding `capacity`, so none of these operations overflows for a positive i64 `capacity` (pinned by the `slack_max_capacity` vector). `power > 0` consumes the final `wrapping_mul` to i64::MIN, so the loops run `bit_length(capacity)` times, at most 63; that bounds the charge and `i`"
     )]
     fn exec_slack(
         &mut self,
@@ -2169,7 +2176,7 @@ impl Vm {
         }
         // Both loops below run once per set bit position in `capacity`, so at
         // most 63 iterations each; charge for the entries they will append.
-        let entries = u64::from(i64::BITS - capacity.leading_zeros());
+        let entries = u64::from(bit_length(capacity));
         self.charge(pos, entries.saturating_mul(2 * VEC_ELEMENT_BYTES))?;
         self.charge_steps(
             pos,
@@ -2716,7 +2723,7 @@ impl Vm {
 
     #[expect(
         clippy::arithmetic_side_effects,
-        reason = "`1 <= k <= n_i64` is checked above so the excess is in `0..n_i64`, and `leading_zeros()` returns at most `i64::BITS` so `num_slacks` is at most 63. The growth itself goes through `grow_model`, which bounds `m.size + num_slacks` by `MAX_ALLOCATION_SIZE` on every target and so bounds `slack_start + i` with it; `1i64 << i` is in range for `i <= 62`. The allocation budget is deliberately not the justification -- it bounds the model in bytes, not in the target's `usize` (QUI-1315)"
+        reason = "`1 <= k <= n_i64` is checked above so the excess is in `0..n_i64`, and `bit_length` of a positive i64 is at most 63, so `num_slacks` is too. The growth itself goes through `grow_model`, which bounds `m.size + num_slacks` by `MAX_ALLOCATION_SIZE` on every target and so bounds `slack_start + i` with it; `1i64 << i` is in range for `i <= 62`. The allocation budget is deliberately not the justification -- it bounds the model in bytes, not in the target's `usize` (QUI-1315)"
     )]
     fn exec_at_least(
         &mut self,
@@ -2747,13 +2754,13 @@ impl Vm {
             });
         }
         let max_excess = n_i64 - k;
-        // `max_excess > 0` implies `leading_zeros` operates on a positive i64,
-        // so the bit-length fits in u32; widening u32 → usize is lossless on
-        // every supported target.
+        // `max_excess > 0` is the positive input `bit_length` requires;
+        // widening its u32 result to usize is lossless on every supported
+        // target.
         let num_slacks = if max_excess <= 0 {
             0
         } else {
-            (i64::BITS - max_excess.leading_zeros()) as usize
+            bit_length(max_excess) as usize
         };
         // The slack variables grow the model, and the expansion is quadratic
         // in the total term count. Charge for both before either happens.
@@ -2792,7 +2799,7 @@ impl Vm {
 
     #[expect(
         clippy::arithmetic_side_effects,
-        reason = "`max_excess` comes from a checked subtraction so `leading_zeros()` returns at most `i64::BITS` and `num_slacks` is at most 63. The growth itself goes through `grow_model`, which bounds `m.size + num_slacks` by `MAX_ALLOCATION_SIZE` on every target and so bounds `slack_start + i` with it; `1i64 << i` is in range for `i <= 62`. The allocation budget is deliberately not the justification -- it bounds the model in bytes, not in the target's `usize` (QUI-1315)"
+        reason = "`max_excess` comes from a checked subtraction and `bit_length` of a positive i64 is at most 63, so `num_slacks` is too. The growth itself goes through `grow_model`, which bounds `m.size + num_slacks` by `MAX_ALLOCATION_SIZE` on every target and so bounds `slack_start + i` with it; `1i64 << i` is in range for `i <= 62`. The allocation budget is deliberately not the justification -- it bounds the model in bytes, not in the target's `usize` (QUI-1315)"
     )]
     fn exec_at_least_w(
         &mut self,
@@ -2847,11 +2854,11 @@ impl Vm {
         let max_excess = weight_sum
             .checked_sub(k)
             .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
-        // See `exec_at_least` for the `leading_zeros` widening argument.
+        // See `exec_at_least` for the `bit_length` widening argument.
         let num_slacks = if max_excess <= 0 {
             0
         } else {
-            (i64::BITS - max_excess.leading_zeros()) as usize
+            bit_length(max_excess) as usize
         };
         self.charge_variables(pos, num_slacks)?;
         self.charge_equality_expansion(pos, n.saturating_add(num_slacks))?;
@@ -3433,8 +3440,8 @@ mod tests {
         let s0 = tracer.steps.first().expect("step 0");
         assert_eq!(s0.step, 1);
         assert_eq!(s0.stack, &[3]);
-        assert!(s0.read_regs.is_empty());
-        assert!(s0.written_regs.is_empty());
+        assert_eq!(s0.read_regs, []);
+        assert_eq!(s0.written_regs, []);
 
         // Step 2: PUSH 4 -> stack=[3, 4], no regs
         let s1 = tracer.steps.get(1).expect("step 1");
@@ -3447,7 +3454,7 @@ mod tests {
         // Step 4: STOW r0 -> stack=[], writes r0=7
         let s3 = tracer.steps.get(3).expect("step 3");
         assert_eq!(s3.stack, &[] as &[i64]);
-        assert!(s3.read_regs.is_empty());
+        assert_eq!(s3.read_regs, []);
         assert_eq!(s3.written_regs.len(), 1);
         assert_eq!(s3.written_regs.first(), Some(&(0, RegVal::Int(7))));
 

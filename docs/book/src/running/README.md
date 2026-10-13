@@ -165,6 +165,20 @@ except TypeError as e:
 # XqmxModel, XqmxSample, or None
 ```
 
+The constructors also refuse a `size` over
+`xqffi.vm.MAX_ALLOCATION_SIZE`, the largest allocation bytecode can
+make, with `ValueError`, and `XqmxSample` refuses a value outside its
+domain the same way. The coefficient accessors (`set_linear`,
+`get_linear`, `set_quad`, `get_quad`) raise `IndexError` for a variable
+index outside `0..size`, a negative index included:
+
+```python
+try:
+    model.set_linear(4, 1)
+except IndexError as e:
+    print(e)
+# variable index 4 is out of range for a model of size 4
+```
 ## Inspecting a model or sample
 
 `XqmxModel` and `XqmxSample` are pyo3 objects; there is no dict-conversion
@@ -250,6 +264,15 @@ the same `XqmxModel` / `XqmxSample` objects as `xqffi.vm.Vm.outputs()` and
 script and want the settings to carry across runs; pick `Session` for the
 dict-keyed, slot-sparse ergonomics shown above; pick `xqffi.vm.Vm` only if
 you are building your own layer on top of the raw Rust FFI.
+
+`VM.set_calldata()` applies the same size, grid and index rules to every
+`xquad.types.XQMX` it is given, with the same errors on both backends,
+and applies them again at `run()`, since it keeps your objects rather
+than copying them. A sample value outside its domain raises
+`xqvm_py.errors.SampleOutOfDomain`, a `ValueError` subclass, from
+`set_calldata()` on both backends. A sample changed out of its domain
+after `set_calldata()` is caught again at `run()`, where `RUST` raises a
+plain `ValueError` instead.
 
 ## A complete run across three programs
 

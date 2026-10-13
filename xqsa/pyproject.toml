@@ -29,11 +29,11 @@ metal = [ "pyobjc-framework-Metal>=11.0; sys_platform == 'darwin'" ]
 # release carrying the H4 suite, and the old `>=0.2.2` accepted H3 and H4 alike.
 # The ceiling matters as much as the floor. `quip-signer` is pre-1.0, so a minor
 # bump may carry another suite change, and nothing here would catch it: the
-# envelope self-check in `quip_signing.build_signed_extrinsic` verifies through
-# the same installed binding that produced it, so a suite change keeping the same
-# byte lengths self-verifies locally and is rejected only by the chain.
+# envelope self-check in `xqsa.quip.signing.build_signed_extrinsic` verifies
+# through the same installed binding that produced it, so a suite change keeping
+# the same byte lengths self-verifies locally and is rejected only by the chain.
 # `certifi` arrives through substrate-interface anyway; it is listed because
-# `quip_metadata.connect` imports it directly for the wss:// CA default.
+# `xqsa.quip.metadata.connect` imports it directly for the wss:// CA default.
 quip = [ "substrate-interface>=1.7.4,<2", "quip-signer>=0.3.0,<0.4", "certifi>=2019.3.9" ]
 
 [tool.uv.sources]

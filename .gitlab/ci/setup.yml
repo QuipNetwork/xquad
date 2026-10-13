@@ -322,12 +322,12 @@
 # Dead config plus a misleading comment (audit finding CI-10).
 #
 # CACHE WRITERS: both current consumers (test:python, test:quip) genuinely
-# write here, so neither becomes `policy: pull`. test:python pulls in the
-# full `deps-py` sequence (uv sync + an explicit `maturin develop`) via its
-# Makefile prerequisites. test:quip does its own `uv run --extra quip`
-# sync, which pulls in the quip_signer wheel test:python does not install
-# -- it is the sole writer for that part of the cache's contents. Leave
-# both at the default pull-push policy.
+# write here, so neither becomes `policy: pull`. test:python pulls in
+# `deps-py` (a `uv sync` that rebuilds xqffi's cdylib when its Rust inputs
+# changed) via its Makefile prerequisites. test:quip does its own
+# `uv sync --extra quip`, which pulls in the quip_signer wheel test:python
+# does not install -- it is the sole writer for that part of the cache's
+# contents. Leave both at the default pull-push policy.
 .python:
     before_script:
         - !reference [.fragments, uv-sync]

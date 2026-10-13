@@ -1,10 +1,10 @@
 # Testing SolverQuip against a Quip network
 
-`SolverQuip` (the [`xqsa`](../xqsa/) `"quip"` backend, [`xqsa/quip.py`](../xqsa/quip.py))
+`SolverQuip` (the [`xqsa`](../xqsa/) `"quip"` backend, [`xqsa/quip/`](../xqsa/quip/))
 submits Ising jobs to a live Quip Network chain, waits for a solver fleet to
 return a solution, decodes the best one, and runs an energy canary against the
 chain's recorded result. The gated live suite
-([`xqsa/tests/test_quip_live.py`](../xqsa/tests/test_quip_live.py), pytest marker
+([`xqsa/tests/quip/test_live.py`](../xqsa/tests/quip/test_live.py), pytest marker
 `quip`) exercises that whole path end to end against a real chain.
 
 This guide covers running that suite in the two environments you can point it
@@ -34,15 +34,17 @@ The three quip targets live in the [`Makefile`](../Makefile):
 
 | Target | Runs | Needs a chain? |
 | --- | --- | --- |
-| `make test-quip-sign` | signing tests ([`test_quip_signing.py`](../xqsa/tests/test_quip_signing.py)) -- pure-Python SCALE / keystore / extrinsic | no |
-| `make test-quip-e2e` | live suite ([`test_quip_live.py`](../xqsa/tests/test_quip_live.py)) against a chain | yes |
+| `make test-quip-sign` | signing tests ([`test_signing.py`](../xqsa/tests/quip/test_signing.py)) -- pure-Python SCALE / keystore / extrinsic | no |
+| `make test-quip-e2e` | live suite ([`test_live.py`](../xqsa/tests/quip/test_live.py)) against a chain | yes |
 | `make test-quip` | both of the above (the MR-template Optional Check) | yes (for the e2e leaf) |
 
 `make test-quip-sign` is also what the CI `test:quip` job runs; it needs no
 chain and always executes. `make test-quip-e2e` hard-errors when `QUIP_RPC_URL`
 is unset (rather than reporting a hollow all-skipped pass), so the aggregate
 `make test-quip` requires the devnet env vars below for its e2e leaf. All three
-self-install the `[quip]` extra via `uv run --extra quip`.
+install the `[quip]` extra themselves: `uv sync --extra quip`, which also
+rebuilds `xqffi` when its Rust sources changed, then pytest through
+`uv run --no-sync`.
 
 ### Environment variables
 
@@ -56,28 +58,59 @@ self-install the `[quip]` extra via `uv run --extra quip`.
 Any variable exported in your shell -- or passed as `make VAR=val` -- reaches
 pytest, so you can set `QUIP_MINER_PROBE_TIMEOUT` alongside the two the
 recipe forwards. On macOS, whose python.org and uv Pythons ship no CA
-bundle, `xqsa.quip_metadata.connect` and the suite's faucet requests verify
+bundle, `xqsa.quip.metadata.connect` and the suite's faucet requests verify
 TLS against certifi's bundle unless `SSL_CERT_FILE` or `SSL_CERT_DIR` is
 set, or `WEBSOCKET_CLIENT_CA_BUNDLE` names an existing file or directory, so
 aglais needs no CA export.
 
-### The two test tiers
+### The test tiers
 
-- **submit + lifecycle** (always run against any healthy chain): connectivity,
-  the live `propose_job` SCALE / extras contract (a clean submission with no
-  `System.ExtrinsicFailed`), the topology fetch, the balance pre-check, the
-  timeout path, and expired-no-solution auto-reclaim. These need no returned
-  solution.
-- **end-to-end** (`TestEndToEnd`): need the fleet to actually solve. They are
-  guarded by the `solving_miner` fixture, which proposes a throwaway order and
-  waits for a solution; it skips the tier cleanly when no fleet is active. A
-  fresh order solves in ~1-2 blocks when a fleet is running.
+The live suite runs in three tiers, by what a test needs from the chain:
+
+- **read-only** (`TestConnectivity`): any reachable chain. Without
+  `QUIP_FAUCET_URL`, these are the only tests that run.
+- **funded**: `QUIP_FAUCET_URL` set. The `funded_keystore` fixture generates a
+  fresh keystore and draws one faucet drip into it; `second_funded_keystore`
+  draws a second for another account and skips its tests if the funding has not
+  landed within 60 s. A full session makes up to three faucet requests.
+- **solved**: an answer to the order. Some tests wait for the solver fleet
+  through the `solving_miner` fixture, which proposes a throwaway order and
+  skips the tier cleanly when nothing answers within `QUIP_MINER_PROBE_TIMEOUT`.
+  Others answer their own orders (self-solve, below) and need no fleet.
+
+| Class | Covers | Needs |
+| --- | --- | --- |
+| `TestConnectivity` | chain constants, the topology decode, the V14 metadata shim, the signed-extension list, the topology override | a reachable chain; a few tests fund an account; the override test needs `QUIP_TOPOLOGY` |
+| `TestSubmitPath` | the balance pre-check, a proposal that times out and is recovered, auto-reclaim of an expired unanswered order | funding; patches `MIN_DEADLINE_BLOCKS` to 1 so an order can expire inside the test |
+| `TestJobOrder` | `create_order`, `set()`, `quote()` and `submit()`, the stored order read back, `set()` refused after submit | funding |
+| `TestReceipt` | an unanswered order reclaimed through its receipt (`Reward  reclaimed`), `list_orders()`, a repeated reclaim refused | funding; patches `MIN_DEADLINE_BLOCKS` to 1 |
+| `TestEndToEnd` | spin, binary and native round trips; a receipt rebuilt in a fresh session (reclaims and skips if unanswered); the deprecated `query()` and `status()` | the fleet (`solving_miner`) |
+| `TestLeader` | a tied order follows our lead (skips without a tie); a four-vector answer comes back whole (skips if `MaxSolutions` is below 4) | funding and self-solve; the tie test also needs the fleet |
+| `TestPayoutRules` | a `TopNEqual(2)` split matches the claim; `TopNWeighted` refused below runtime 119 (skips on 119 and later) | `second_funded_keystore` and self-solve |
+| `TestAccess` | an allowlisted account answers; a type allowlist admits by type; an unlisted solver is refused (`NotEligibleSolver`) | self-solve; two tests use `second_funded_keystore` |
+| `TestQualityFloors` | the ceiling drops the vector above it (self-answered); an order with floors comes back whole (reclaims and skips if no solver meets them) | funding; the second test needs the fleet |
+
+Self-solve tests answer their own orders. A helper registers the test account as
+a `Cpu` solver if it is not one, then proposes the order and submits its answer
+in one `Utility.batch_all`, predicting the order id from `NextOrderId` and
+retrying up to three times when another proposal takes it; payout tests then
+send `claim_reward`. Registration is permanent: every account a run registers
+stays on chain as a `Cpu` solver. The fixtures use throwaway keystores for that
+reason, so a run adds up to two solver accounts to the network.
+
+A fresh order's first answer took 1 to 25 blocks on aglais, measured across
+twelve answered orders on 2026-09-18 (median 1 to 2). The suite therefore runs
+with `deadline_blocks=100` and `block_wait=10` (`SOLVER_KWARGS` in
+`test_live.py`), so a slow answer still lands before the deadline.
 
 ## Common prerequisites
 
 - `uv sync --extra quip` in this repo (installs `substrate-interface` + the
-  `quip-signer` extension). The make targets do this for you via
-  `uv run --extra quip`.
+  `quip-signer` extension). The make targets do it for you. `uv run` keeps the
+  extra, but a plain `uv sync`, including the one in `make deps-py`,
+  `make test-py` and `make repl`, removes it again; re-run
+  `uv sync --extra quip` after any of them, or `SolverQuip` fails with
+  `substrate-interface is not installed`.
 - **Apple Silicon:** `quip-signer` 0.3.0 publishes no macOS wheel, so the first
   sync after the pin moved builds it from the sdist and needs a local Rust
   toolchain. Expect minutes, not seconds. Slow here is expected; a failure is
@@ -230,7 +263,7 @@ what the signing layer speaks.
 
 ### Coordinates (verify before a run -- these move)
 
-- **RPC:** the `aglais` preset in `xqsa/quip_networks.py` is the source of
+- **RPC:** the `aglais` preset in `xqsa/quip/networks.py` is the source of
   truth; it points at bootnode-1's validator RPC (bootnode-2 and bootnode-3
   serve the same chain). The commands below spell out its current RPC and
   faucet values; if they disagree with the preset, the preset wins. Any
@@ -239,7 +272,7 @@ what the signing layer speaks.
   caught up before trusting reads (see the liveness check below), and point
   `QUIP_RPC_URL` at a different RPC if the one you are on is not syncing.
 - **Faucet:** the `aglais` preset's faucet coordinate in
-  `xqsa/quip_networks.py` is the source of truth, healthy as of 2026-09-15
+  `xqsa/quip/networks.py` is the source of truth, healthy as of 2026-09-15
   (`/health` returns `{"status":"ok"}`; the bare root returns 404, which is not a
   fault). Set `QUIP_FAUCET_URL` to it and the funded tier runs. The faucet
   [gates requests two ways](https://gitlab.com/quip.network/faucet/-/blob/10ca67676777da0031be5bf8dd2f9ed6967d269a/README.md?plain=1#L54-62). A `429` with
@@ -247,8 +280,9 @@ what the signing layer speaks.
   about 5s. A `429` without `retry_after_seconds` is a
   [duplicate request still in flight](https://gitlab.com/quip.network/faucet/-/blob/10ca67676777da0031be5bf8dd2f9ed6967d269a/src/handlers.rs#L87-90) for the
   same destination. Both are retryable, and `fund_from_faucet` retries
-  a `429` once, waiting 5s when no `retry_after_seconds` is given. A
-  `403` `destination already funded` with
+  a `429` once, waiting 5s when no `retry_after_seconds` is given; a
+  `429` asking for more than 30 s raises `QuipFaucetError` instead of
+  waiting (`MAX_RETRY_AFTER_SECONDS`). A `403` `destination already funded` with
   `free_balance_plancks` is the balance ceiling: the faucet refuses any
   account holding more than one drip (10 AGLS), and it is not retryable.
   Spending below the ceiling makes the account eligible again, so there is
@@ -258,12 +292,12 @@ what the signing layer speaks.
   rather than assuming a pinned value. The signer reads `transactionVersion`
   from the chain, so a bump to that number alone does not break submission.
   The signed-extension list and its order are fixed client-side
-  (`SIGNED_EXTENSIONS` in `xqsa/quip_signing.py`), so a runtime that adds,
+  (`SIGNED_EXTENSIONS` in `xqsa/quip/signing.py`), so a runtime that adds,
   removes, reorders or reshapes an extension breaks signing. After an upgrade,
-  run `test_quip_live.py::TestConnectivity`, which checks that list against the
+  run `test_live.py::TestConnectivity`, which checks that list against the
   chain.
 - **Metadata:** the runtime serves Metadata V16, which `scalecodec` cannot
-  decode. Build clients through `xqsa.quip_metadata.connect`, which pulls V14
+  decode. Build clients through `xqsa.quip.metadata.connect`, which pulls V14
   from the versioned runtime API; a stock `SubstrateInterface` fails with
   `Index '16' not present in Enum type mapping` (see the gotcha below).
 - **Spec id:** `DEFAULT_ISING_SPEC_ID = 0x8f46f3a3...` (== chain
@@ -272,8 +306,8 @@ what the signing layer speaks.
 Quick version + liveness check. A synced node reports `isSyncing == false` and
 `currentBlock == highestBlock`; if it is behind, its state reads are stale:
 
-    uv run --extra quip python -c "from xqsa.quip_metadata import connect; \
-        from xqsa.quip_networks import NETWORKS; \
+    uv run python -c "from xqsa.quip.metadata import connect; \
+        from xqsa.quip.networks import NETWORKS; \
         s=connect(NETWORKS['aglais'].rpc); \
         print('runtime', s.rpc_request('state_getRuntimeVersion',[])['result']); \
         print('sync   ', s.rpc_request('system_syncState',[])['result']); \
@@ -328,20 +362,20 @@ once when the fleet is active.
 - **Discovery gap (important):** the fleet discovers jobs ONLY from live
   `JobProposed` events -- there is NO storage backfill of pre-existing open
   orders. An order proposed BEFORE a solver subscribed is invisible to it
-  forever. Always test with a freshly proposed order; a fresh one solves within
-  ~1-2 blocks while the fleet is live, but historical orders that predate the
-  current fleet stay unsolved, which looks like "nothing solves" if you only
-  inspect old orders. (Known miner-side follow-up, not a client bug.)
+  forever. Always test with a freshly proposed order; a fresh one usually gets
+  its first answer within 1 to 2 blocks while the fleet is live (the slowest
+  measured took 25), but historical orders that predate the current fleet stay
+  unsolved, which looks like "nothing solves" if you only inspect old orders. (Known miner-side follow-up, not a client bug.)
 - **Runtime can advance under you:** re-read `state_getRuntimeVersion` each
   session; do not hard-code pinned facts. The signer adapts `transactionVersion`
   from the chain, but the signed-extension list is fixed client-side, so an
   upgrade that changes it breaks submission. Run
-  `test_quip_live.py::TestConnectivity` after every known upgrade.
+  `test_live.py::TestConnectivity` after every known upgrade.
 - **Metadata V16 blocks a stock client:** `substrate-interface` decodes through
   `scalecodec`, whose `MetadataAll` enum ends at V14, so
   `SubstrateInterface.init_runtime()` raises `ValueError: Index '16' not present
   in Enum type mapping` against any runtime from `specVersion 116` on. No
-  release of either library decodes V16. `xqsa.quip_metadata` fetches V14
+  release of either library decodes V16. `xqsa.quip.metadata` fetches V14
   through `state_call("Metadata_metadata_at_version", 14)` instead, and
   `SolverQuip` builds its client that way; ad-hoc scripts must do the same. The
   shim falls back to `state_getMetadata` for older DevNet images, and raises
@@ -364,7 +398,7 @@ once when the fleet is active.
   `TestEndToEnd` asserts only pipeline correctness (`energy_matches_chain`, a
   returned solution, domain feasibility); encoding and optimality correctness
   are guarded deterministically offline by
-  `test_quip.py::test_encoded_problem_argmin_decodes_to_optimum`.
+  `test_client.py::test_encoded_problem_argmin_decodes_to_optimum`.
 - **Direct `pytest` invocation:** export `QUIP_RPC_URL` / `QUIP_FAUCET_URL` as
   environment variables before the command. Passing them as trailing `KEY=VAL`
   args is a make-ism (`make VAR=val`); pytest reads trailing `KEY=VAL` tokens
@@ -376,7 +410,7 @@ Beyond the pytest suite, a single small model round-trips the propose + decode +
 energy-canary path. Set `QUIP_KEYSTORE` and fund the keystore, then:
 
     export QUIP_KEYSTORE=/tmp/quip-ks.json
-    uv run --extra quip python - <<'PY'
+    uv run python - <<'PY'
     from xqsa.quip import SolverQuip
     from xquad.types import XqmxModel
     m = XqmxModel.spin(2)

@@ -357,7 +357,7 @@ mod tests {
         let bytes = prog.encode();
         assert_eq!(bytes.len(), HEADER_SIZE);
         let decoded = Program::decode(&bytes).expect("decode");
-        assert!(decoded.code().is_empty());
+        assert_eq!(decoded.code(), []);
         assert!(decoded.jump_table().is_empty());
     }
 

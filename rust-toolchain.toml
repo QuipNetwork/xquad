@@ -8,6 +8,10 @@
 # toolchains, so a minor-only channel would download a second toolchain
 # in every CI job next to the one the image already ships.
 #
+# When to bump: at each Rust minor release (1.99, 1.100, ...), not at
+# patch releases. The Docker Hub tags of a superseded minor stop getting
+# Debian rebuilds, so a pin left on one stops getting OS security fixes.
+#
 # To bump: change `channel` here AND the `default: image:` tag in
 # .gitlab-ci.yml, in the same commit, to the same version. If they
 # disagree nothing breaks, but every CI job silently downloads this
@@ -17,6 +21,6 @@
 # make every job download them. The jobs that need one run `rustup
 # target add` themselves.
 [toolchain]
-channel    = "1.98.1"
+channel    = "1.99.0"
 components = [ "clippy", "rustfmt" ]
 profile    = "minimal"

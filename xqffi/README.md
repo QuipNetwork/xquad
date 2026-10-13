@@ -27,7 +27,7 @@ vm.run(assemble_source(src))
 assert vm.outputs() == [42]
 ```
 
-`XqmxModel` and `XqmxSample` are thin getter/setter wrappers around the Rust types for direct model/sample manipulation.
+`XqmxModel` and `XqmxSample` are thin getter/setter wrappers around the Rust types for direct model/sample manipulation. They refuse what bytecode could not build: a `size` over `MAX_ALLOCATION_SIZE` or a grid that does not fit (`ValueError`), a sample value outside its domain (`ValueError`), and a coefficient index outside `0..size`, negative included (`IndexError`).
 
 ### `xqffi.asm` -- assembly
 

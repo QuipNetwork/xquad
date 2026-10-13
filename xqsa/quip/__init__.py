@@ -1,0 +1,214 @@
+# Copyright (C) 2026 Postquant Labs Incorporated
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+"""
+SolverQuip: submit XQMX Ising models to the Quip Network mempool.
+
+``SolverQuip`` proposes a job to the ``QuantumComputeMempool`` pallet via
+``propose_job``, waits for a miner to solve it, and reads the solution back as
+an XQMX sample. It is a synchronous :class:`~xqsa.solver.Solver`; the
+``substrate-interface`` client is sync and the Quip chain is hybrid-signed, so
+there is no async surface here.
+
+Configuration is resolved from constructor arguments first, then environment:
+
+    =====================  =======================================================================
+    Argument               Environment variable
+    =====================  =======================================================================
+    ``url``                ``QUIP_RPC_URL``      websocket RPC endpoint
+    ``seed``               ``QUIP_SIGNER_SEED``  32-byte hex master seed
+    ``keystore``           ``QUIP_KEYSTORE``     keystore path (else ~/.quip/keystore.json)
+    ``reward``             ``QUIP_REWARD``       reward in planck (else MinReward)
+    ``topology``           ``QUIP_TOPOLOGY``     topology hash, or "native" (else DefaultTopology)
+    ``faucet``             ``QUIP_FAUCET_URL``   faucet base URL (env read only without url=)
+    ``autoconfirm``        ``QUIP_AUTOCONFIRM``  submit without asking (default true)
+    ``autofund``           ``QUIP_AUTOFUND``     fund from the faucet without asking
+    =====================  =======================================================================
+
+A seed wins over a keystore. With neither configured, the keystore at
+``~/.quip/keystore.json`` is loaded, or generated on first use.
+
+The order options among them (``reward``, ``deadline_blocks``,
+``block_wait``) are client defaults. :meth:`SolverQuip.create_order` returns a
+draft :class:`JobOrder` that inherits them and may override them; the draft is
+edited with :meth:`JobOrder.set`, priced with :meth:`JobOrder.quote` and
+proposed with :meth:`JobOrder.submit`, after which it is read-only and
+:meth:`JobOrder.status` follows it to ``finalized``. A submitted order has a
+:class:`JobOrderReceipt`, its handle on the chain, which any session rebuilds
+from the order id with :meth:`SolverQuip.get_receipt`; :meth:`SolverQuip.list_orders`
+lists an account's order ids::
+
+    order = solver.create_order(model, deadline_blocks=200)
+    print(order.quote())
+    order.submit().wait()
+    print(order.receipt())
+
+The payout rule is the ``resolution`` option: ``"SingleBest"`` (the default)
+or one of :class:`ResolutionSingleBest`, :class:`ResolutionTopNEqual` and
+:class:`ResolutionTopNWeighted`, which split the reward across the best ``n``
+solvers evenly or by rank::
+
+    order = solver.create_order(model, resolution=ResolutionTopNEqual(3))
+
+Who may answer is the ``access`` option: ``"Open"`` or :class:`AccessOpen` (the
+default) lets any registered solver answer, and :class:`AccessAllow` restricts
+the order to listed accounts or solver types. The protocol does not verify
+solver types: each solver declares its own when it registers::
+
+    order = solver.create_order(model, access=AccessAllow(accounts=[operator], types=["QpuDwave"]))
+
+Every option is checked against the chain's limits, read once per client,
+before anything is signed: a reward below ``MinReward``, a deadline outside 10
+to ``MaxDeadlineBlocks``, a block wait over ``MaxBlockWait``, an allowlist over
+``MaxBidMiners`` accounts or naming an unknown solver type, or
+``ResolutionTopNWeighted`` on a runtime older than 119 raises
+:class:`QuipOrderOptionError` without paying a fee. :meth:`SolverQuip.solve` is
+``create_order``, ``submit``, then waiting for the result.
+
+Every submission first quotes the job (:class:`JobQuote`: reward plus the
+chain-reported fee, against the balance) and passes two consent gates. ``autoconfirm`` decides whether to submit at that
+price; ``autofund`` decides whether an account short of it is topped up with
+one faucet drip first. A shortfall larger than one drip is never requested; it
+raises :class:`QuipSubmissionError`, since it is more often a mistyped reward.
+Each gate is ``True`` (proceed, the default), ``False`` (ask on the terminal;
+raises :class:`QuipCancelledError` when stdin is not one, which includes a
+Jupyter kernel), or a callable taking the quote and returning a verdict. The
+environment variables take ``1/true/yes/on`` or ``0/false/no/off``. A short
+account with no faucet configured raises :class:`QuipSubmissionError`.
+
+Named networks skip the URL: ``SolverQuip.for_network("aglais")``
+builds a solver against a preset, ``aglais`` (the public testnet) or ``devnet``
+(the localdev stack). The coordinates, and how often they move, are in
+:mod:`xqsa.quip.networks`.
+
+Signing is hybrid (sr25519 + FN-DSA-512): the chain's ``Signature`` is
+``HybridTxSignature``, which ``substrate-interface`` cannot produce, so all
+crypto is delegated to the ``quip_signer`` extension and extrinsic assembly to
+:mod:`xqsa.quip.signing`. Install both with ``pip install xqsa[quip]`` (or
+``uv sync --extra quip``); ``quip_signer`` resolves a wheel on Linux and builds
+from its sdist with a local Rust toolchain elsewhere. It is lazy-imported, so
+every other xqsa solver installs and runs without it; only constructing
+``SolverQuip`` requires the extra.
+
+The chain client is built by :func:`xqsa.quip.metadata.connect`, not by
+``substrateinterface.SubstrateInterface`` directly: Quip runtimes serve Metadata
+V16 and ``scalecodec`` decodes at most V14, so the stock client cannot read the
+chain at all. The shim pulls V14 through the versioned runtime API and is
+confined to the instances built here.
+
+Beta-testnet notice: the Quip devnet/testnet is pre-release. Pallet metadata,
+the signed-extension layout, and economic parameters can change between
+releases; pin a node image and re-validate after upgrades.
+"""
+
+from .access import Access, AccessAllow, AccessOpen
+from .chain import (
+    FEE_HEADROOM_PLANCK,
+    JOB_ORDERS_STORAGE,
+    JOB_PROPOSED_EVENT,
+    MEMPOOL_PALLET,
+    MINEABLE_TOPOLOGIES_STORAGE,
+    ORDER_SOLUTIONS_STORAGE,
+    PROPOSE_JOB_CALL,
+    RECLAIM_ORDER_CALL,
+)
+from .client import (
+    DEFAULT_BLOCK_WAIT,
+    DEFAULT_DEADLINE_BLOCKS,
+    DEFAULT_KEYSTORE,
+    DEFAULT_POLL_INTERVAL,
+    DEFAULT_TIMEOUT,
+    FUND_WAIT_SECONDS,
+    NATIVE_TOPOLOGY,
+    SolverQuip,
+)
+from .errors import (
+    EncodingError,
+    PlacementError,
+    QuipCancelledError,
+    QuipConnectionError,
+    QuipError,
+    QuipFaucetError,
+    QuipJobFailedError,
+    QuipMetadataError,
+    QuipOrderOptionError,
+    QuipReclaimRefusedError,
+    QuipSigningError,
+    QuipSubmissionError,
+    QuipTimeoutError,
+    QuipTopologyError,
+    QuipUnconfirmedError,
+)
+from .faucet import fund_from_faucet
+from .networks import NETWORKS
+from .order import JobOrder
+from .quote import JobQuote
+from .receipt import JobOrderReceipt
+from .resolution import (
+    Resolution,
+    ResolutionSingleBest,
+    ResolutionTopNEqual,
+    ResolutionTopNWeighted,
+)
+from .solution import Solution
+
+__all__ = [
+    "SolverQuip",
+    "JobOrder",
+    "JobOrderReceipt",
+    "JobQuote",
+    "Access",
+    "AccessAllow",
+    "AccessOpen",
+    "Resolution",
+    "ResolutionSingleBest",
+    "ResolutionTopNEqual",
+    "ResolutionTopNWeighted",
+    "Solution",
+    "QuipError",
+    "QuipCancelledError",
+    "QuipConnectionError",
+    "QuipMetadataError",
+    "QuipSubmissionError",
+    "QuipOrderOptionError",
+    "QuipReclaimRefusedError",
+    "QuipTimeoutError",
+    "QuipTopologyError",
+    "QuipUnconfirmedError",
+    "QuipJobFailedError",
+    "QuipSigningError",
+    "QuipFaucetError",
+    "PlacementError",
+    "EncodingError",
+    "NETWORKS",
+    "fund_from_faucet",
+    "DEFAULT_BLOCK_WAIT",
+    "DEFAULT_DEADLINE_BLOCKS",
+    "DEFAULT_KEYSTORE",
+    "DEFAULT_POLL_INTERVAL",
+    "DEFAULT_TIMEOUT",
+    "FEE_HEADROOM_PLANCK",
+    "FUND_WAIT_SECONDS",
+    "NATIVE_TOPOLOGY",
+    "MEMPOOL_PALLET",
+    "PROPOSE_JOB_CALL",
+    "RECLAIM_ORDER_CALL",
+    "JOB_PROPOSED_EVENT",
+    "JOB_ORDERS_STORAGE",
+    "ORDER_SOLUTIONS_STORAGE",
+    "MINEABLE_TOPOLOGIES_STORAGE",
+]

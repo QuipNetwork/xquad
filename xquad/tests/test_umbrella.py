@@ -32,10 +32,16 @@ Guards three invariants:
 
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 import xqcp as _xqcp
 import xqffi.vm as _xqffi_vm
 import xqsa as _xqsa
+import xqsa.quip as _xqsa_quip
 import xquad
+from xqsa._deprecated import FLAT_QUIP_NAMES
 from xquad import asm, cp, sa, types, vm
 
 
@@ -48,15 +54,35 @@ def test_identity_reexports():
     assert sa.SolverMetalGPU is _xqsa.SolverMetalGPU
     assert sa.Solver is _xqsa.Solver
     assert sa.SolverResult is _xqsa.SolverResult
-    assert sa.JobQuote is _xqsa.JobQuote
-    assert sa.QuipCancelledError is _xqsa.QuipCancelledError
-    assert sa.QuipFaucetError is _xqsa.QuipFaucetError
-    assert sa.QuipMetadataError is _xqsa.QuipMetadataError
-    assert sa.QuipSigningError is _xqsa.QuipSigningError
-    assert sa.QuipTopologyError is _xqsa.QuipTopologyError
-    assert sa.fund_from_faucet is _xqsa.fund_from_faucet
     for name in types.__all__:
         assert getattr(types, name) is getattr(_xqffi_vm, name), name
+
+
+def test_quip_subpackage_reexports():
+    """`xquad.sa.quip` re-exports every `xqsa.quip` name by identity."""
+    from xquad.sa import quip
+
+    assert quip.__all__ == _xqsa_quip.__all__
+    assert "Solution" in quip.__all__
+    for name in _xqsa_quip.__all__:
+        assert getattr(quip, name) is getattr(_xqsa_quip, name), name
+    assert sa.quip is quip
+
+
+@pytest.mark.parametrize(("flat", "home"), [(_xqsa, _xqsa_quip), (sa, sa.quip)], ids=["xqsa", "xquad.sa"])
+@pytest.mark.parametrize("name", sorted(FLAT_QUIP_NAMES))
+def test_flat_quip_name_warns_at_caller(flat, home, name):
+    """A flat Quip name on `xqsa` or `xquad.sa` warns at the caller's line and is the `.quip` object."""
+    with pytest.warns(DeprecationWarning) as record:
+        line = sys._getframe().f_lineno + 1
+        obj = getattr(flat, name)
+    assert obj is getattr(home, name)
+    assert [str(w.message) for w in record] == [
+        f"{flat.__name__}.{name} is deprecated; import it from {home.__name__} (removed in v0.5.0)"
+    ]
+    assert (record[0].filename, record[0].lineno) == (__file__, line)
+    assert name not in flat.__all__
+    assert name in dir(flat)
 
 
 def test_top_level_namespace():

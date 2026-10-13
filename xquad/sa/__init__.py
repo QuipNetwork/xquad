@@ -20,29 +20,16 @@
 from xqsa import (
     DEFAULT_SOLVER,
     SOLVERS,
-    EncodingError,
-    JobQuote,
-    PlacementError,
-    QuipCancelledError,
-    QuipConnectionError,
-    QuipError,
-    QuipFaucetError,
-    QuipJobFailedError,
-    QuipMetadataError,
-    QuipSigningError,
-    QuipSubmissionError,
-    QuipTimeoutError,
-    QuipTopologyError,
     Solver,
     SolverCudaGPU,
     SolverDWaveCPU,
     SolverDWaveQPU,
     SolverMetalGPU,
-    SolverQuip,
     SolverResult,
     build_solver,
-    fund_from_faucet,
 )
+from xqsa._deprecated import flat_quip_dir, flat_quip_getattr
+from xquad.sa import quip as quip
 
 __all__ = [
     "Solver",
@@ -50,23 +37,12 @@ __all__ = [
     "SolverDWaveCPU",
     "SolverDWaveQPU",
     "SolverMetalGPU",
-    "SolverQuip",
     "SolverResult",
-    "JobQuote",
-    "QuipError",
-    "QuipCancelledError",
-    "QuipConnectionError",
-    "QuipFaucetError",
-    "QuipMetadataError",
-    "QuipSigningError",
-    "QuipSubmissionError",
-    "QuipTimeoutError",
-    "QuipTopologyError",
-    "QuipJobFailedError",
-    "PlacementError",
-    "EncodingError",
     "SOLVERS",
     "DEFAULT_SOLVER",
     "build_solver",
-    "fund_from_faucet",
 ]
+
+# The Quip names live in xquad.sa.quip; the flat ones warn until v0.5.0 (QUI-1608).
+__getattr__ = flat_quip_getattr(__name__, "xquad.sa.quip")
+__dir__ = flat_quip_dir(__name__)

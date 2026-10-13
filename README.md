@@ -163,8 +163,8 @@ limits across runs, and hands back the `xqffi` types unchanged.
 driven from the `xqcp` DSL through the VM and `xqsa` solver:
 
 ```sh
-uv run --no-sync python examples/tsp/runner.py --seed 42
-uv run --no-sync python examples/maxcut/runner.py --seed 42
+uv run python examples/tsp/runner.py --seed 42
+uv run python examples/maxcut/runner.py --seed 42
 
 # Run every example and check each finds a valid solution:
 make example-smoke

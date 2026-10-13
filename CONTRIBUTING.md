@@ -37,15 +37,19 @@ brew install vale          # macOS
 # or download the pinned release from https://github.com/errata-ai/vale/releases
 ```
 
-- Python 3.13+ and [uv](https://docs.astral.sh/uv/) -- install the Python workspace in one step:
+- Python 3.13+ and [uv](https://docs.astral.sh/uv/) 0.8.1 or later -- install the Python workspace in one step:
 
 ```sh
 make deps-py
 ```
 
-This runs `uv sync` plus `maturin develop`, giving you editable installs of
-`xqcp`, `xqsa`, `xqffi`, and `xquad` with the `xqffi` cdylib built
-from the current Rust sources.
+This runs `uv sync`, giving you editable installs of `xqcp`, `xqsa`,
+`xqffi`, and `xquad` with the `xqffi` cdylib built from the current
+Rust sources. Later `uv sync` and `uv run` calls rebuild it after a Rust edit,
+because `xqffi/pyproject.toml` lists its Rust inputs as uv `cache-keys`.
+The build runs `cargo --locked` from the root `pyproject.toml`'s
+`config-settings-package`, which uv reads from 0.8.1. An older uv warns that it
+failed to parse `pyproject.toml` and builds without `--locked`.
 
 `uv sync` resolves the base dependencies only, so the optional solver backends
 are absent from a fresh workspace. Local GPU or QPU work needs the matching
@@ -61,9 +65,10 @@ re-resolved:
 - **`Cargo.lock`** -- every dependency-resolving invocation carries
   `--locked`, so cargo fails if the lockfile would have to change instead of
   quietly resolving a different dependency set. That covers the wrappers as
-  well as `cargo` itself: `cargo deny --locked check`, `maturin develop
-  --locked` (including the one in `make deps-py`, so a drifted lock fails the
-  bootstrap rather than being resolved around), the two `maturin build
+  well as `cargo` itself: `cargo deny --locked check`, the maturin
+  build `uv sync` runs for `xqffi` (the root `pyproject.toml` passes
+  `--locked` through `config-settings-package`, so a drifted lock fails
+  `make deps-py` rather than being resolved around), the two `maturin build
   --locked` calls in `scripts/python-dists.sh` that produce the wheels
   `release:pypi` uploads, and `wasm-pack test`, which forwards trailing
   options through to its `cargo build`. `cargo fmt` is excluded because it

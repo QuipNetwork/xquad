@@ -50,7 +50,7 @@
 //! 3. **Decoder** -- reads the sample and `N` from input slots; extracts the
 //!    ordered tour; writes it to output slot 0.
 
-use miette::{IntoDiagnostic, Result, WrapErr, bail, ensure};
+use miette::{IntoDiagnostic, Result, WrapErr, ensure, miette};
 use xqasm::assemble_source;
 use xqvm::{Domain, RegVal, Vm, XqmxModel, XqmxSample};
 
@@ -90,7 +90,7 @@ fn main() -> Result<()> {
 
     let qubo = match vm.outputs().first() {
         Some(v) => v.clone(),
-        None => bail!("encoder produced no output"),
+        None => return Err(miette!("encoder produced no output")),
     };
 
     if let RegVal::Model(ref m) = qubo {
@@ -154,13 +154,13 @@ fn main() -> Result<()> {
 
     let energy = match vm.outputs().first() {
         Some(RegVal::Int(v)) => *v,
-        Some(other) => bail!("expected Int for energy output, got {other:?}"),
-        None => bail!("verifier produced no output at slot 0"),
+        Some(other) => return Err(miette!("expected Int for energy output, got {other:?}")),
+        None => return Err(miette!("verifier produced no output at slot 0")),
     };
     let is_valid = match vm.outputs().get(1) {
         Some(RegVal::Int(v)) => *v != 0,
-        Some(other) => bail!("expected Int for valid flag output, got {other:?}"),
-        None => bail!("verifier produced no output at slot 1"),
+        Some(other) => return Err(miette!("expected Int for valid flag output, got {other:?}")),
+        None => return Err(miette!("verifier produced no output at slot 1")),
     };
 
     // -- Step 4: decode the sample into an ordered tour -------------------------
@@ -178,8 +178,8 @@ fn main() -> Result<()> {
 
     let tour = match vm.outputs().first() {
         Some(RegVal::VecInt(v)) => v.clone(),
-        Some(other) => bail!("expected VecInt for tour output, got {other:?}"),
-        None => bail!("decoder produced no output"),
+        Some(other) => return Err(miette!("expected VecInt for tour output, got {other:?}")),
+        None => return Err(miette!("decoder produced no output")),
     };
 
     // -- Print results ----------------------------------------------------------

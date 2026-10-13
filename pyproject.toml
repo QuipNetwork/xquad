@@ -11,6 +11,20 @@
 [tool.uv.workspace]
 members = [ "xqffi", "xqcp", "xqsa", "xquad" ]
 
+# Build xqffi with `cargo --locked` when uv builds it for the workspace, the
+# contract every resolving cargo call carries (CONTRIBUTING.md,
+# "Dependencies and Lockfiles"). Set here, not as `locked = true` under
+# xqffi's `[tool.maturin]`: that table ships in the sdist, whose pruned
+# workspace no longer matches its Cargo.lock, so `--locked` would refuse
+# every build from the sdist.
+#
+# `--profile dev` keeps the build `maturin develop` used to give: overflow
+# checks and `debug_assert!`s stay on for test-py, parity and example
+# smoke, and a Rust edit costs an unoptimized rebuild. Without it the
+# PEP 517 build defaults to release.
+[tool.uv]
+config-settings-package = { xqffi = { build-args = "--locked --profile dev" } }
+
 [dependency-groups]
 dev = [
     "maturin>=1.7,<2",
@@ -36,7 +50,7 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"xqsa/tests/test_*.py" = [ "E402" ] # imports after pytest.importorskip
+"xqsa/tests/**/test_*.py" = [ "E402" ] # imports after pytest.importorskip
 
 [tool.ruff.lint.isort]
 known-first-party = [

@@ -16,13 +16,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Tests for the V14 metadata shim (xqsa.quip_metadata).
+Tests for the V14 metadata shim (xqsa.quip.metadata).
 
 The shim is exercised over a stub interface rather than ``substrate-interface``:
 it never imports the library itself (the base class is passed in), so these run
 everywhere, without the ``[quip]`` extra and without a chain. ``scalecodec`` is
 stubbed for the same reason -- the real V14 decode is covered live by
-``test_quip_live.py``.
+``test_live.py``.
 
 Two stubs matter: one that serves ``Metadata_metadata_at_version`` and one that
 does not, covering the runtime-API path, the ``state_getMetadata`` fallback, and
@@ -45,8 +45,8 @@ import types
 
 import pytest
 
-from xqsa.quip_codec import QuipMetadataError
-from xqsa.quip_metadata import (
+from xqsa.quip.codec import QuipMetadataError
+from xqsa.quip.metadata import (
     METADATA_AT_VERSION_API,
     TARGET_METADATA_VERSION,
     _default_ca_bundle,

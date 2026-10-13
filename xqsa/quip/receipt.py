@@ -1,0 +1,568 @@
+# Copyright (C) 2026 Postquant Labs Incorporated
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+"""
+:class:`JobOrderReceipt`, the chain-side handle of a submitted Quip order.
+
+A receipt is built from an order id alone, so any session can rebuild it with
+:meth:`SolverQuip.get_receipt <xqsa.quip.SolverQuip.get_receipt>` and follow
+the order without the model it was built from. :meth:`JobOrder.submit
+<xqsa.quip.JobOrder.submit>` creates one for the order it proposes. Every
+method reads the chain when called; constructing a receipt reads nothing.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+import time
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any, Self
+
+from xqsa.quip import chain
+from xqsa.quip.access import Access
+from xqsa.quip.access import from_chain as access_from_chain
+from xqsa.quip.chain import MEMPOOL_PALLET, RECLAIM_ORDER_CALL, _coerce_block_number, _status_str
+from xqsa.quip.codec import _TERMINAL_STATUSES, ORDER_STATUS_CLOSED
+from xqsa.quip.display import Floors, box, floors_text, terms_rows
+from xqsa.quip.errors import QuipReclaimRefusedError, QuipSubmissionError, QuipTimeoutError, QuipUnconfirmedError
+from xqsa.quip.quote import _format_planck
+from xqsa.quip.resolution import (
+    Resolution,
+    ResolutionSingleBest,
+    ResolutionTopNEqual,
+    ResolutionTopNWeighted,
+    check_rank_weighting,
+    from_chain,
+)
+
+if TYPE_CHECKING:
+    from xqsa.quip.client import SolverQuip
+
+logger = logging.getLogger("xqsa.quip")
+
+
+@dataclass(frozen=True)
+class _Facts:
+    """What the chain recorded when the order was placed; none of it changes afterwards.
+
+    ``submitted_ms`` and ``fee`` are ``None`` when their read faulted. The
+    floors are ``None`` when the order was placed without them.
+    """
+
+    proposer: str
+    spec_id: str
+    num_spins: int
+    num_couplings: int
+    reward: int
+    access: Access | Any  # the raw value when this client cannot read it
+    resolution: Resolution | Any  # the raw value when this client cannot read it
+    deadline_blocks: int
+    block_wait: int
+    floors: Floors
+    created_at: int
+    submitted_ms: int | None
+    fee: int | None
+
+
+@dataclass(frozen=True)
+class _Outcome:
+    """The order's outcome now: ``status`` is ``open``, ``final`` or ``closed``."""
+
+    status: str
+    answers: int
+    leader: str | None
+    energy_milli: int | None
+
+
+class JobOrderReceipt:
+    """The chain-side handle of one submitted order: status, answers and settlement.
+
+    Built by :meth:`JobOrder.submit <xqsa.quip.JobOrder.submit>` or
+    :meth:`SolverQuip.get_receipt <xqsa.quip.SolverQuip.get_receipt>`, never
+    directly. It holds the order id and the genesis hash of the chain the
+    order lives on, and reads everything else from that chain when asked, so
+    a receipt rebuilt in another session reports the same as the original.
+
+    Examples:
+        Connects to the network, so it is not run as a doctest::
+
+            receipt = solver.get_receipt(42)
+            receipt.wait()
+            receipt.solvers()
+            receipt.settlement()
+            receipt.reclaim()  # only for a final order nobody answered.
+    """
+
+    def __init__(self, client: SolverQuip, order_id: int, genesis_hash: str) -> None:
+        self._client = client
+        self._order_id = order_id
+        # The chain this order belongs to; checked by the first client method
+        # that accepts a receipt (QUI-1609). Never displayed.
+        self._genesis_hash = genesis_hash
+        # Set once a read shows the order final; a later read from a lagging node must not reopen it.
+        self._final_seen = False
+        # Filled only once every placement read succeeded, so a faulted read is retried.
+        self._facts_cache: _Facts | None = None
+
+    @property
+    def order_id(self) -> int:
+        """The chain's order id."""
+        return self._order_id
+
+    def status(self) -> dict[str, Any]:
+        """Return the order's lifecycle as the chain reports it now.
+
+        Keys: ``state`` (``submitted``, or ``finalized`` once the chain closes
+        the order; once seen final it stays final, while the other keys are
+        as read), ``order_id``, ``chain_status`` (the chain's
+        ``OrderStatus``), the order's block heights under the pallet's names
+        (``created_at``, ``first_solution_at``, ``effective_expiry``),
+        ``current_block`` and ``solution_count``.
+
+        Raises:
+            QuipConnectionError: if the order or the head block cannot be read.
+        """
+        order = self._fetch_order()
+        current_block = self._client._current_block()
+        lifecycle = self._client._order_lifecycle(order, current_block)
+        self._final_seen = self._final_seen or lifecycle["is_final"]
+        return {
+            "state": "finalized" if self._final_seen else "submitted",
+            "order_id": self._order_id,
+            "chain_status": lifecycle["status"],
+            "created_at": lifecycle["created_at"],
+            "first_solution_at": lifecycle["first_solution_at"],
+            "effective_expiry": lifecycle["effective_expiry"],
+            "current_block": current_block,
+            "solution_count": _solution_count(order),
+        }
+
+    def wait(self) -> Self:
+        """Block until the order is final, polling at the client's ``poll_interval``.
+
+        An order is final ``block_wait`` blocks after its first accepted
+        answer, or at its deadline if nobody answers. The chain flips an
+        expired order's status lazily, so finality is decided by block height
+        and never by waiting for the status to change. Waiting never reclaims.
+
+        Raises:
+            QuipTimeoutError: if the order is not final within the client's
+                ``timeout``; it carries this receipt.
+            QuipConnectionError: if the order or the head block cannot be read.
+        """
+        deadline = time.monotonic() + self._client._timeout
+        while True:
+            order = self._fetch_order()
+            # A terminal status is final whatever the height, so skip the head read.
+            if self._final_seen or _status_str(order["status"]) in _TERMINAL_STATUSES:
+                self._final_seen = True
+                return self
+            if self._client._order_lifecycle(order, self._client._current_block())["is_final"]:
+                self._final_seen = True
+                return self
+            if time.monotonic() >= deadline:
+                raise QuipTimeoutError(self._order_id, receipt=self)
+            time.sleep(self._client._poll_interval)
+
+    def solvers(self) -> list[dict[str, Any]]:
+        """Return who answered, in the chain's ranking order.
+
+        Each entry is ``{"solver", "ranked_energy_milli", "energy_milli",
+        "submitted_at", "num_solutions"}``, energies in milli Ising units as
+        the chain computed them. ``ranked_energy_milli`` is the energy the
+        chain ranked the solver at, ``None`` for an unranked answer.
+        ``energy_milli`` is the best energy stored with the solver's answer,
+        which a later resubmission can overwrite, so it can differ from the
+        ranked one. The ranked answers come first: the front runner of a
+        ``SingleBest`` order, or a top-N order's ranked solvers. The unranked
+        answers follow, lowest stored energy first, then earliest.
+        """
+        answers = {answer["solver"]: answer for answer in self._client._fetch_solutions(self._order_id)}
+        ranked = {
+            entry["solver"]: int(entry["energy_milli"]) for entry in self._ranking() if entry["solver"] in answers
+        }
+        rest = sorted(
+            (answer for solver, answer in answers.items() if solver not in ranked),
+            key=lambda answer: (int(answer["best_energy_milli"]), answer.get("submitted_at") or 0),
+        )
+        return [_solver_entry(answer, ranked.get(answer["solver"])) for answer in [answers[s] for s in ranked] + rest]
+
+    def raw_solutions(self, solver: Any = None) -> dict[Any, Any]:
+        """Return the spin vectors each solver answered with, as the chain stores them.
+
+        Maps each solver to ``{"energy_milli", "spins"}``, where ``spins`` is a
+        list of spin vectors indexed by the placed problem's chain nodes. They
+        are not decoded onto the model's variables. With ``solver``, returns
+        that solver's entry alone.
+
+        Raises:
+            KeyError: if ``solver`` did not answer this order.
+        """
+        solutions = {
+            answer["solver"]: {
+                "energy_milli": int(answer["best_energy_milli"]),
+                "spins": [[int(spin) for spin in vector] for vector in answer["solutions"]],
+            }
+            for answer in self._client._fetch_solutions(self._order_id)
+        }
+        if solver is None:
+            return solutions
+        if solver not in solutions:
+            raise KeyError(f"{solver} did not answer order {self._order_id}")
+        return solutions[solver]
+
+    def settlement(self) -> dict[str, Any]:
+        """Return who the reward goes to and whether it was claimed.
+
+        ``{"claimed": bool, "winners": [{"solver", "energy_milli",
+        "allocation_planck"}]}``, best first. A ``SingleBest`` order's front
+        runner takes the whole reward; a top-N order's ranked solvers split it
+        by the order's rule, and fewer answers than ``n`` means fewer winners.
+        The chain stores no allocations; it computes them when the reward is
+        claimed, which closes the order and pays every winner at once, so
+        ``claimed`` means the order is closed with answers. The allocations
+        here repeat the chain's arithmetic. An unanswered order has no winners.
+
+        A ``TopNWeighted`` split is checked against the runtime this client
+        connected to. That is the runtime that ran the claim because runtime
+        119 started each chain afresh rather than upgrading one in place.
+
+        Raises:
+            NotImplementedError: for a payout rule this client cannot read,
+                or a ``TopNWeighted`` order read from a runtime older than
+                119, which weights by absolute energy rather than rank, so its
+                split cannot be repeated here.
+        """
+        order = self._fetch_order()
+        return self._settle(order, self._ranking(order))
+
+    def _settle(self, order: Mapping[str, Any], ranked: list[Mapping[str, Any]]) -> dict[str, Any]:
+        """:meth:`settlement` from an order and ranking already read."""
+        try:
+            rule = from_chain(order["resolution"])
+            # No chain upgrades in place to 119 (each was reset), so the client's runtime is the claim's.
+            check_rank_weighting(rule, self._client._limits.spec_version)
+        except ValueError as exc:
+            raise NotImplementedError(f"settlement of order {self._order_id} cannot be computed: {exc}") from None
+        winners = [
+            {"solver": entry["solver"], "energy_milli": int(entry["energy_milli"]), "allocation_planck": share}
+            for entry, share in zip(ranked, rule.payouts(ranked, int(order["reward"])), strict=True)
+        ]
+        claimed = _status_str(order["status"]) == ORDER_STATUS_CLOSED and _solution_count(order) > 0
+        return {"claimed": claimed, "winners": winners}
+
+    def reclaim(self) -> int:
+        """Refund the reward of a final order nobody answered, and return it in planck.
+
+        Only the proposer can reclaim, and only once the order is final with
+        no answers. This checks those conditions against the latest block,
+        in the order the chain does, and raises before anything is signed,
+        so a refused reclaim costs no fee. An answer that lands between the
+        check and inclusion still fails on chain, which stays the authority.
+        Nothing reclaims on its own.
+
+        Raises:
+            QuipReclaimRefusedError: if this account did not propose the order,
+                the order is already closed, it is still open, or it was
+                answered; or if the chain refuses the reclaim at dispatch, which
+                charges the fee. Sending it again cannot succeed.
+            QuipSubmissionError: if the node did not take the reclaim, or took
+                it and its outcome is unknown. The reward may still be
+                reserved, and calling this again is safe: a reclaim that landed
+                is refused here as already closed, before anything is signed.
+            QuipConnectionError: if the order or the head block cannot be read.
+        """
+        client = self._client
+        order_id = self._order_id
+        # The head first: the order read after it then reflects every answer
+        # up to that block, so a reclaim the chain would refuse is caught here.
+        current_block = client._current_block()
+        order = self._fetch_order()
+        lifecycle = client._order_lifecycle(order, current_block)
+
+        proposer = chain.account_bytes(order["proposer"])
+        if proposer != bytes(client._signer.account_id):
+            proposed_by = chain.ss58_address(client._iface, proposer)
+            raise QuipReclaimRefusedError(f"order {order_id} was proposed by {proposed_by}, not by this account")
+        if lifecycle["status"] == ORDER_STATUS_CLOSED:
+            raise QuipReclaimRefusedError(f"order {order_id} is already closed (reclaimed or settled)")
+        expiry = lifecycle["effective_expiry"]
+        # The reclaim executes in a later block than the head read here, so an
+        # order one block short of expiry is already reclaimable on chain.
+        if not (lifecycle["is_final"] or self._final_seen) and current_block + 1 < expiry:
+            about = _minutes_until(expiry - current_block - 1, chain.block_time_ms(client._iface))
+            raise QuipReclaimRefusedError(
+                f"order {order_id} is open until block {expiry}{about}; reclaim after it closes"
+            )
+        answers = _solution_count(order)
+        if answers:
+            solvers = "solver" if answers == 1 else "solvers"
+            raise QuipReclaimRefusedError(
+                f"order {order_id} was answered by {answers} {solvers}; its reward awaits the winner's claim "
+                "and cannot be reclaimed"
+            )
+
+        # Sent, not submitted: a dispatch error comes back on the receipt rather
+        # than raised, and it is the one refusal the checks above cannot see.
+        try:
+            sent = client._send_extrinsic(MEMPOOL_PALLET, RECLAIM_ORDER_CALL, {"order_id": order_id})
+        except QuipUnconfirmedError as exc:
+            # Its message warns against resubmitting, which holds for a
+            # proposal; a reclaim is safe to resend, so state the outcome only.
+            raise QuipSubmissionError(
+                f"the reclaim of order {order_id} ({exc.extrinsic_hash}) was sent but its outcome is unknown"
+            ) from exc
+        if sent.is_unverified:
+            raise QuipSubmissionError(
+                f"the reclaim of order {order_id} ({sent.extrinsic_hash}) reached block {sent.block_hash} "
+                f"but its result could not be read: {sent.error}"
+            )
+        if sent.error is not None:
+            raise QuipReclaimRefusedError(
+                f"the chain refused the reclaim of order {order_id} in block {sent.block_hash} "
+                f"and charged the fee: {sent.error}"
+            )
+        return int(order["reward"])
+
+    def _fetch_order(self) -> Mapping[str, Any]:
+        return self._client._fetch_order(self._order_id)
+
+    def _facts(self, order: Mapping[str, Any] | None = None) -> _Facts:
+        """Read the order's placement facts: the order, its block's time, and the fee it paid.
+
+        Cached once every read succeeded; a faulted read is retried on the next call.
+        """
+        if self._facts_cache is not None:
+            return self._facts_cache
+        iface = self._client._iface
+        order = self._fetch_order() if order is None else order
+        created_at = _coerce_block_number(order["created_at"])
+        block_hash = self._best_effort("the submission block", lambda: chain.block_hash(iface, created_at))
+        submitted_ms = fee = None
+        if block_hash is not None:
+            submitted_ms = self._best_effort("the submission time", lambda: chain.block_timestamp(iface, block_hash))
+            fee = self._best_effort("the fee", lambda: chain.proposal_fee(iface, block_hash, self._order_id))
+        params, timing = order["ising_params"], order["timing"]
+        facts = _Facts(
+            proposer=self._ss58(order["proposer"]),
+            spec_id=str(order["spec_id"]),
+            num_spins=len(params["nodes"]),
+            num_couplings=len(params["edges"]),
+            reward=int(order["reward"]),
+            access=_decoded_or_raw(access_from_chain, order["mode"]),
+            resolution=_decoded_or_raw(from_chain, order["resolution"]),
+            deadline_blocks=int(timing["deadline_blocks"]),
+            block_wait=int(timing["block_wait"]),
+            floors=_floors_of(params),
+            created_at=created_at,
+            submitted_ms=submitted_ms,
+            fee=fee,
+        )
+        if submitted_ms is not None and fee is not None:
+            self._facts_cache = facts
+        return facts
+
+    def _floors_text(self) -> str | None:
+        """The order's quality floors in chain units, or ``None`` if the order cannot be read; see below."""
+        return self._no_answer_facts()[0]
+
+    def _no_answer_facts(self) -> tuple[str | None, Access | Any]:
+        """The order's quality floors as text and its access rule, each ``None`` if it cannot be read.
+
+        From the cached facts when they are read already, since neither changes
+        once the order is placed; otherwise from one order read. For error
+        messages, so a read fault never hides the error they explain.
+        """
+        if self._facts_cache is not None:
+            return floors_text(self._facts_cache.floors), self._facts_cache.access
+        order = self._best_effort("the order", self._fetch_order)
+        if order is None:
+            return None, None
+        floors = self._best_effort("the quality floors", lambda: floors_text(_floors_of(order["ising_params"])))
+        access = self._best_effort("the access rule", lambda: _decoded_or_raw(access_from_chain, order["mode"]))
+        return floors, access
+
+    def _best_effort(self, what: str, read: Any) -> Any:
+        """Return ``read()``, or ``None`` with a warning if it faults; for display-only facts."""
+        try:
+            return read()
+        except Exception as exc:  # noqa: BLE001 -- display only; the receipt stays usable.
+            logger.warning("could not read %s of order %d: %s", what, self._order_id, exc)
+            return None
+
+    def _outcome(
+        self, order: Mapping[str, Any] | None = None, ranking: list[Mapping[str, Any]] | None = None
+    ) -> _Outcome:
+        """Read the order's status, answer count and leader now, from ``order`` and ``ranking`` when given."""
+        order = self._fetch_order() if order is None else order
+        lifecycle = self._client._order_lifecycle(order, self._client._current_block())
+        if lifecycle["status"] == ORDER_STATUS_CLOSED:
+            status = "closed"
+        else:
+            status = "final" if lifecycle["is_final"] else "open"
+        ranking = self._ranking(order) if ranking is None else ranking
+        leader = ranking[0] if ranking else None
+        return _Outcome(
+            status=status,
+            answers=_solution_count(order),
+            leader=None if leader is None else self._ss58(leader["solver"]),
+            energy_milli=None if leader is None else int(leader["energy_milli"]),
+        )
+
+    def _ss58(self, account: Any) -> str:
+        """Render a decoded account as SS58 in the chain's format, or as given if it cannot be read."""
+        try:
+            return chain.ss58_address(self._client._iface, chain.account_bytes(account))
+        except Exception:  # noqa: BLE001 -- display only.
+            return str(account)
+
+    def _ranking(self, order: Mapping[str, Any] | None = None) -> list[Mapping[str, Any]]:
+        """Return the chain's ranked ``{"solver", "energy_milli"}`` entries, best first.
+
+        Reads the storage the order's payout rule pays from, as the pallet
+        does: the front runner for ``SingleBest``, at most ``n`` top solvers
+        for a top-N rule. An unreadable rule tries the front runner, then the
+        top solvers.
+        """
+        iface = self._client._iface
+        rule = _decoded_or_raw(from_chain, (self._fetch_order() if order is None else order)["resolution"])
+        if isinstance(rule, (ResolutionTopNEqual, ResolutionTopNWeighted)):
+            return chain.top_solvers(iface, self._order_id)[: rule.n]
+        leader = chain.front_runner(iface, self._order_id)
+        if leader is not None:
+            return [leader]
+        return [] if isinstance(rule, ResolutionSingleBest) else chain.top_solvers(iface, self._order_id)
+
+    def __repr__(self) -> str:
+        return f"JobOrderReceipt(order_id={self._order_id})"
+
+    def __str__(self) -> str:
+        """Render the receipt as a box: network, problem, terms, outcome, then money.
+
+        Reads the chain when called; a read fault renders a one-line box
+        naming it instead.
+        """
+        try:
+            return self._render()
+        except Exception as exc:  # noqa: BLE001 -- printing must never raise.
+            return box(f"Job order {self._order_id} receipt", [[("Chain", f"could not be read: {exc}")]])
+
+    def _render(self) -> str:
+        client = self._client
+        # One order read and one ranking read serve every section.
+        order = self._fetch_order()
+        ranking = self._ranking(order)
+        facts, outcome = self._facts(order), self._outcome(order, ranking)
+        symbol, decimals = client._token()
+
+        def amount(planck: int | None) -> str:
+            return "unknown" if planck is None else f"{_format_planck(planck, decimals)} {symbol}"
+
+        submitted = f"block {facts.created_at}, " + (
+            "time unknown"
+            if facts.submitted_ms is None
+            else datetime.fromtimestamp(facts.submitted_ms / 1000, UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+        )
+        network = [
+            ("Network", client._network or "custom endpoint"),
+            ("Proposer", facts.proposer),
+            ("Submitted", submitted),
+        ]
+        problem = [("Problem", f"{facts.num_spins} spins, {facts.num_couplings} couplings"), ("Spec", facts.spec_id)]
+        terms = terms_rows(
+            resolution=facts.resolution,
+            access=facts.access,
+            floors=floors_text(facts.floors),
+            deadline_blocks=facts.deadline_blocks,
+            block_wait=facts.block_wait,
+            reward=amount(facts.reward),
+        )
+        energy = "none" if outcome.energy_milli is None else f"{Decimal(outcome.energy_milli) / 1000}"
+        results = [
+            ("Status", outcome.status),
+            ("Answers", str(outcome.answers)),
+            ("Leader", outcome.leader or "none"),
+            ("Energy", energy),
+        ]
+        money = [("Fee", amount(facts.fee)), *self._payout_rows(outcome, amount, order, ranking)]
+        return box(f"Job order {self._order_id} receipt", [network, problem, terms, results, money], double_before=4)
+
+    def _payout_rows(
+        self, outcome: _Outcome, amount: Any, order: Mapping[str, Any], ranking: list[Mapping[str, Any]]
+    ) -> list[tuple[str, str]]:
+        """The Money rows after the fee: each winner's share, or what happens to an unanswered reward."""
+        if outcome.status == "open":
+            # The leader can still be displaced, and nothing is claimable before the order is final.
+            return [("Reward", "reserved, leader so far" if outcome.answers else "reserved, no answers yet")]
+        if outcome.answers == 0:
+            if outcome.status == "closed":
+                return [("Reward", "reclaimed")]
+            return [("Reward", f"unanswered: reclaim with get_receipt({self._order_id}).reclaim()")]
+        try:
+            settlement = self._settle(order, ranking)
+        except NotImplementedError as exc:
+            return [("Reward", str(exc))]
+        state = "claimed" if settlement["claimed"] else "awaiting claim"
+        return [("Winner", f"{amount(winner['allocation_planck'])}, {state}") for winner in settlement["winners"]]
+
+
+def _decoded_or_raw(decode: Any, value: Any) -> Any:
+    """Return ``decode(value)``, or ``value`` itself when this client cannot read it; for display."""
+    try:
+        return decode(value)
+    except (ValueError, TypeError):  # an access rule with a non-string type raises TypeError.
+        return value
+
+
+def _minutes_until(blocks: int, block_time_ms: int | None) -> str:
+    """Render ``blocks`` as " (about M min)", or nothing when the block time is unknown."""
+    if not block_time_ms:
+        return ""
+    return f" (about {max(1, math.ceil(blocks * block_time_ms / 60_000))} min)"
+
+
+def _floors_of(params: Mapping[str, Any]) -> Floors:
+    """Read the quality floors from an order's ``ising_params``."""
+    return Floors(
+        # The ceiling's field is min_energy_milli until QUI-1612 renames it max_energy_milli.
+        max_energy_milli=_optional_int(params.get("max_energy_milli", params.get("min_energy_milli"))),
+        min_solutions=_optional_int(params.get("min_solutions")),
+        min_diversity_milli=_optional_int(params.get("min_diversity_milli")),
+    )
+
+
+def _optional_int(value: Any) -> int | None:
+    """Read a decoded ``Option`` integer: ``None`` stays ``None``."""
+    return None if value is None else int(value)
+
+
+def _solution_count(order: Mapping[str, Any]) -> int:
+    return int(order.get("solution_count", 0) or 0)
+
+
+def _solver_entry(answer: Mapping[str, Any], ranked_energy_milli: int | None) -> dict[str, Any]:
+    return {
+        "solver": answer["solver"],
+        "ranked_energy_milli": ranked_energy_milli,
+        "energy_milli": int(answer["best_energy_milli"]),
+        "submitted_at": answer.get("submitted_at"),
+        "num_solutions": len(answer["solutions"]),
+    }

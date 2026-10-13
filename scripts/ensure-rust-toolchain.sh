@@ -24,7 +24,7 @@
 # hardware:metal, which runs on a macOS SHELL executor -- `image:` is
 # ignored there, nothing is containerised, and the toolchain is whatever
 # the host happens to carry. Since QUI-1191 that job compiles Rust
-# (`maturin develop` rebuilds xqffi's cdylib), so it acquired a hard
+# (its `uv sync` builds xqffi's cdylib), so it acquired a hard
 # dependency on host state without acquiring any way to satisfy it.
 #
 # That dependency is not one the fleet can meet by accident. `[macos,

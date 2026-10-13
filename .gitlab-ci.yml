@@ -56,7 +56,7 @@ workflow:
 
 default:
     # Readable version tag, no digest (QUI-1266). `rust:latest` moved OS
-    # from bookworm to trixie on 2026-09-19 with nothing in the repo
+    # from bookworm to trixie in August 2025 with nothing in the repo
     # recording it; this tag cannot. It names the exact patch because it
     # has to match `channel` in rust-toolchain.toml -- see that file for
     # why, and for what a mismatch costs. There is no bump automation
@@ -64,7 +64,7 @@ default:
     # on Docker Hub and change it here and in rust-toolchain.toml in the
     # same commit. Every other comment calls this "the pinned default
     # image" rather than repeating the tag, so a bump touches two lines.
-    image: rust:1.98.1-trixie
+    image: rust:1.99.0-trixie
     # Cancel in-flight pipelines on push; saves runner minutes when
     # developers push rapidly on a WIP branch.
     interruptible: true

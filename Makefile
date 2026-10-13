@@ -268,12 +268,12 @@ check-release: check-version-sites check-crate-publish check-python-dists
 # rather than by discipline.
 #
 # preflight-rs is pure-Rust (no uv / maturin prereqs); preflight-py pulls
-# the deps-py maturin rebuild via its leaf prereqs; preflight-docs needs
-# uv for docs generation but not the maturin rebuild. test-wasm,
-# test-substrate-fixture and lint-deny-fixture are blocking CI gates with
-# no phase aggregate of their own (each is a single dedicated CI job), so
-# preflight-rs lists them as leaves alongside lint-rust and test-rust --
-# omitting the first two here was a prior gap, not a deliberate
+# the deps-py sync (which rebuilds xqffi) via its leaf prereqs;
+# preflight-docs needs uv for docs generation but not the xqffi build.
+# test-wasm, test-substrate-fixture and lint-deny-fixture are blocking CI
+# gates with no phase aggregate of their own (each is a single dedicated CI
+# job), so preflight-rs lists them as leaves alongside lint-rust and
+# test-rust -- omitting the first two here was a prior gap, not a deliberate
 # exclusion. All three CI jobs are path-gated (the "Path gating" sections
 # of .gitlab/ci/test.yml and .gitlab/ci/verify.yml) while these targets
 # are not: a local preflight runs them unconditionally, so it still
@@ -305,8 +305,8 @@ preflight-rs: lint-rust lint-deny-rs lint-deny-fixture test-rust test-wasm test-
 # target/), so that is not a new constraint.
 #
 # check-xqffi-fresh is deliberately NOT here even though it is also a
-# Python check: it runs `uv sync --extra dwave` and a maturin rebuild,
-# which mutate the developer's own .venv/, and a preflight aggregate
+# Python check: it runs `uv sync --extra dwave`, which mutates the
+# developer's own .venv/, and a preflight aggregate
 # that leaves dwave-system installed in a contributor's working
 # environment as a side effect is a bad trade. It stays reachable only
 # as its own leaf target (make check-xqffi-fresh) and through its own
@@ -416,19 +416,18 @@ deps-wasm:
 # via uv. Assumes `uv` is already on $PATH; CI installs it in its
 # before_script.
 #
-# `uv sync` alone can skip rebuilding the maturin-built xqffi cdylib
-# when Cargo source has changed but uv's editable-wheel cache is
-# still valid, leaving .venv/.../xqffi.*.so stale. An explicit
-# `maturin develop` after sync guarantees the extension matches
-# current Rust sources — essential for local runs of
-# `make example-smoke`, `make test-py`, etc.
+# The sync builds xqffi's cdylib through maturin, and rebuilds it
+# whenever its Rust inputs change: xqffi/pyproject.toml lists them as uv
+# `cache-keys`. No separate `maturin develop` step is needed.
 #
-# `--locked` on that maturin call is the same contract every other
-# resolving cargo invocation in this file carries (see CONTRIBUTING.md,
-# "Dependencies and Lockfiles"), and it is worth naming here because
-# deps-py is the contributor bootstrap: a Cargo.lock that has drifted
-# from the manifests now fails `make deps-py` outright rather than being
-# quietly re-resolved into a different dependency set. Regenerate with
+# That build runs `cargo --locked --profile dev` (the root
+# pyproject.toml's `config-settings-package`, which explains the
+# profile). `--locked` is the same contract every other resolving
+# cargo invocation in this file carries (see CONTRIBUTING.md,
+# "Dependencies and Lockfiles"). It is worth naming here because deps-py
+# is the contributor bootstrap: a Cargo.lock that has drifted from the
+# manifests fails `make deps-py` outright rather than being quietly
+# re-resolved into a different dependency set. Regenerate with
 # `cargo check` and commit the result.
 #
 # Each package's pyproject.toml sets `dev-mode-dirs = [".."]`, so its
@@ -439,7 +438,6 @@ deps-wasm:
 # xqcp` etc.
 deps-py:
 	uv sync
-	uv run --active maturin develop --locked --manifest-path xqffi/Cargo.toml
 
 # Point git at the repo-tracked .githooks/ directory so the pre-commit
 # hook runs on every commit. Run once per clone; bypass ad hoc with
@@ -611,15 +609,9 @@ test-doc:
 test-miri: deps-miri
 	cargo +nightly miri test --locked --workspace --all-features
 
-# `uv run pytest` alone skips rebuilding xqffi's maturin-built cdylib
-# when Rust sources have changed (uv's editable-wheel cache masks the
-# edit). Depend on deps-py so a fresh maturin develop runs first. CI does
-# NOT get this for free from the job's before_script -- `.python`'s
-# before_script is a bare `uv sync`, with no maturin step at all (see
-# setup.yml's `.fragments.uv-sync`). `test:python` only gets the rebuild
-# because its script is `make -k test-py`, which pulls it in through this
-# deps-py prerequisite; a job that called pytest directly would silently
-# run against a stale cdylib.
+# Depends on deps-py so the workspace, and with it xqffi's cdylib, is
+# synced to this tree before pytest starts. `--no-sync` then keeps the
+# pytest call from re-resolving the environment it was just given.
 # Excludes the hardware-backed solver tests (cuda/qpu/metal); those run in
 # their own GPU/QPU runner jobs (.gitlab/ci/hardware.yml) where they hard-fail
 # on a missing device/token rather than skip. Also excludes the Quip signing
@@ -651,7 +643,7 @@ test-substrate-fixture:
 	cargo test --locked --manifest-path fixtures/pallet-xqvm/Cargo.toml
 
 # Full SolverQuip sweep -- the signing tests plus the live-devnet end-to-end
-# suite. Run this when an MR changes SolverQuip (xqsa/quip*.py); it is the
+# suite. Run this when an MR changes SolverQuip (xqsa/quip/); it is the
 # Optional Check the MR template names. Opt-in and NOT part of `make test` /
 # preflight: the e2e leaf needs a running Quip devnet and hard-errors without
 # QUIP_RPC_URL, so drive it with the devnet env vars set (see test-quip-e2e):
@@ -661,38 +653,27 @@ test-substrate-fixture:
 #       QUIP_FAUCET_URL=http://localhost:20049/api/faucet
 test-quip: test-quip-sign test-quip-e2e
 
-# Run the quip-marked signing tests (xqsa/tests/test_quip_signing.py): the
+# Run the quip-marked signing tests (xqsa/tests/quip/test_signing.py): the
 # pure-Python SCALE / keystore / extrinsic tests that need the `[quip]` extra
 # and so are deselected by `make test-py` (`-m "not ... quip"`). This is the
 # local leaf for the CI `test:quip` job (.gitlab/ci/test.yml).
 #
-# Three-step shape, matching scripts/run-hardware-tests.sh:59-77 rather
-# than test-py's `deps-py` + `uv run --no-sync` pair (QUI-1199 asked for
-# the latter; it does not work here, see below):
-#   1. `uv sync --extra quip` -- extras-bearing sync. setup.yml:256-267
-#      names test:quip the SOLE writer of the quip extra's cache
-#      contents, and it holds that role only because this call performs
-#      its own sync (it pulls in the quip_signer wheel test:python does
-#      not install). Swapping in a `deps-py` prerequisite
-#      plus `--no-sync` here, as the ticket's literal text suggested,
-#      removes that sync and the cache-writer role with it.
-#   2. `uv run --no-sync maturin develop --manifest-path xqffi/Cargo.toml`
-#      -- explicit rebuild, so this job never runs against a cdylib
-#      staled by step 1's editable-wheel cache restore, the same problem
-#      test-py's deps-py prerequisite solves for that job.
-#   3. `uv run --no-sync pytest ...` -- `--no-sync` here is load-bearing,
-#      not decorative: a bare `uv run --extra quip pytest ...` re-syncs
-#      the workspace and, per run-hardware-tests.sh:66-69, reverts xqffi
-#      to the cached editable wheel, silently undoing step 2's rebuild
-#      and reintroducing the exact stale-cdylib bug this reshape exists
-#      to close.
+# Two-step shape, matching scripts/run-hardware-tests.sh rather than
+# test-py's `deps-py` + `uv run --no-sync` pair:
+#   1. `uv sync --extra quip` -- extras-bearing sync, which also rebuilds
+#      xqffi when its Rust inputs changed. setup.yml names test:quip the
+#      SOLE writer of the quip extra's cache contents, and it holds that
+#      role only because this call performs its own sync (it pulls in the
+#      quip_signer wheel test:python does not install). A `deps-py`
+#      prerequisite would sync without the extra and drop that role.
+#   2. `uv run --no-sync pytest ...` -- runs in the environment step 1
+#      wrote, with no second resolve.
 test-quip-sign:
 	uv sync --extra quip
-	uv run --no-sync maturin develop --locked --manifest-path xqffi/Cargo.toml
-	uv run --no-sync pytest xqsa/tests/test_quip_signing.py -m quip
+	uv run --no-sync pytest xqsa/tests/quip/test_signing.py -m quip
 
 # Live Quip Network devnet end-to-end tests for SolverQuip
-# (xqsa/tests/test_quip_live.py) -- the chain-backed sibling of
+# (xqsa/tests/quip/test_live.py) -- the chain-backed sibling of
 # `test-quip-sign`. Opt-in and deliberately NOT part of `make test` /
 # preflight: like the cuda / qpu / metal hardware tiers they need a running
 # Quip devnet, so they are driven by hand or a dedicated runner. Point the two
@@ -707,40 +688,31 @@ test-quip-sign:
 # skipped pass. QUIP_FAUCET_URL is optional but needed for the funded submit
 # and end-to-end tiers; without it only the read-only connectivity tests run.
 #
-# Same three-step shape as test-quip-sign above, for the same reason:
-# extras-bearing sync to preserve the cache-writer role, an explicit
-# maturin rebuild for a fresh cdylib, `--no-sync` on the pytest call so
-# that rebuild is not immediately reverted. See test-quip-sign's comment
-# for the full rationale; not repeated here.
+# Same two-step shape as test-quip-sign above, for the same reason. See
+# its comment; not repeated here.
 test-quip-e2e:
 	@if [ -z "$(QUIP_RPC_URL)" ]; then \
 		echo "error: QUIP_RPC_URL is required (e.g. make test-quip-e2e QUIP_RPC_URL=ws://localhost:20049/rpc QUIP_FAUCET_URL=http://localhost:20049/api/faucet)" >&2; \
 		exit 2; \
 	fi
 	uv sync --extra quip
-	uv run --no-sync maturin develop --locked --manifest-path xqffi/Cargo.toml
 	QUIP_RPC_URL="$(QUIP_RPC_URL)" QUIP_FAUCET_URL="$(QUIP_FAUCET_URL)" \
-		uv run --no-sync pytest xqsa/tests/test_quip_live.py -m quip -v
+		uv run --no-sync pytest xqsa/tests/quip/test_live.py -m quip -v
 
 # Real-hardware xqsa solver tests -- CUDA, D-Wave QPU, Apple Metal -- each
 # exercising the encode -> solve -> verify -> decode pipeline against an
 # actual device rather than the mocked unit tests in `make test-py`. Each
 # delegates to scripts/run-hardware-tests.sh <kind>, which syncs that
-# solver's extra, rebuilds xqffi's cdylib through maturin (a plain `uv sync`
-# reinstalls it from uv's editable-wheel cache, which is stale whenever only
-# Rust sources changed -- the same trap deps-py above documents), preflights
-# the device/token before running (hard-erroring on a missing GPU or API
+# solver's extra (which rebuilds xqffi's cdylib when its Rust inputs
+# changed, as deps-py above describes), preflights the device/token before running (hard-erroring on a missing GPU or API
 # token rather than letting the tests skip themselves quietly) and treats a
 # pytest "collected zero tests" result as a failure rather than a hollow
 # pass; see that script for the full rationale.
 #
-# These three are NOT `deps-py` prerequisites and must not become them.
-# deps-py's `uv sync` carries no extra, so ordered before the script it
-# would rebuild xqffi and then have the script's own `uv sync --extra
-# <solver>` reinstall the stale one straight back over it, and ordered after
-# it would prune the extra. The rebuild has to sit between the extra-bearing
-# sync and pytest, which is why it lives in the script rather than being
-# reused from deps-py.
+# These three are NOT `deps-py` prerequisites and must not become them:
+# deps-py's `uv sync` carries no extra, so it would only add a sync the
+# script's own `uv sync --extra <solver>` replaces, and ordered after it
+# would prune the extra.
 #
 # Opt-in and deliberately NOT part of `make test` / preflight, same policy
 # as test-quip-sign / test-quip-e2e above: each needs a real GPU, a D-Wave
@@ -762,7 +734,7 @@ test-qpu:
 test-metal:
 	bash scripts/run-hardware-tests.sh metal
 
-# Asserts the xqffi cdylib xquad actually loads is fresh: build it from
+# Asserts the xqffi cdylib xquad actually loads is fresh: sync it from
 # current Rust sources, then prove by runtime import that the result
 # still satisfies the Python surface. `xquad/__init__.py` eagerly imports
 # `asm`, `program`, `verifier` and `vm`, each doing a top-level `from
@@ -773,16 +745,15 @@ test-metal:
 # the fresh-cdylib guarantee QUI-1199 exists to make systematic rather
 # than hand-enforced at each quip/hardware call site.
 #
-# The maturin step is what binds the assertion to *this* tree, and it is
-# not optional: `uv sync` does not rebuild the cdylib when only Rust
-# sources changed, it reinstalls xqffi from uv's editable-wheel cache,
-# which those sources do not invalidate (run-hardware-tests.sh:12 and
-# deps-py above document the same trap). Without the rebuild this target
-# would import whatever wheel the sync restored and report it fresh --
-# a check that cannot fail, which is worse than no check. Hence the same
-# three-step shape as test-quip-sign / test-quip-e2e above and
-# run-hardware-tests.sh: extras-bearing sync, explicit maturin rebuild,
-# `--no-sync` on everything after it so the rebuild is not reverted.
+# Locally, what binds the assertion to *this* tree is the `cache-keys`
+# list in xqffi/pyproject.toml: the sync rebuilds the cdylib when a listed
+# Rust input changed, and reuses uv's cached build otherwise. This check
+# does NOT prove that list is complete. A fresh clone (every CI run) gives
+# every file a new modification time, so the sync rebuilds whatever the
+# list holds; a Rust input missing from it only bites a local checkout
+# whose sole change is that file. Same two-step shape as test-quip-sign / test-quip-e2e above
+# and run-hardware-tests.sh: extras-bearing sync, then `--no-sync` on
+# everything after it.
 #
 # `dwave` is the extra to sync, not `cuda` or `metal`: dwave-system
 # installs on a plain Linux runner with no device attached, cuda pulls a
@@ -806,7 +777,6 @@ test-metal:
 # the rest of local dev expects.
 check-xqffi-fresh:
 	uv sync --extra dwave
-	uv run --no-sync maturin develop --locked --manifest-path xqffi/Cargo.toml
 	uv run --no-sync python -c \
 		"import xquad; \
 		syms = [xquad.asm.assemble_source, xquad.asm.disassemble, xquad.asm.parse_xqasm, \

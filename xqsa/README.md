@@ -47,8 +47,8 @@ print(result.energy)
 # -1
 ```
 
-Every backend returns the same `SolverResult(sample, energy, timing,
-metadata)`: `sample` is the best assignment found, `energy` is the
+Every backend's `solve()` returns the same `SolverResult(sample, energy,
+timing, metadata)`: `sample` is the best assignment found, `energy` is the
 Hamiltonian recomputed independently in exact integer arithmetic (never
 taken on faith from the backend), and `metadata`'s shape is per-backend.
 `build_solver("dwave-cpu", ...)` is equivalent to constructing
@@ -56,13 +56,21 @@ taken on faith from the backend), and `metadata`'s shape is per-backend.
 `build_solver` when the backend is fixed at write time rather than chosen
 by name at run time.
 
+`SolverQuip` also splits a job into steps: `create_order(model)` returns
+a draft `JobOrder` whose options (payout rule, allowlist, quality
+floors) are checked before anything is signed, `quote()` prices it and
+`submit()` sends it. A submitted order leaves a `JobOrderReceipt`, which
+any session rebuilds from the order id with `get_receipt()`. Import them
+from `xqsa.quip`.
+
 ## Reference
 
 Driver prerequisites, per-backend parameters, embedding on a D-Wave QPU,
-the Quip network job lifecycle, and what the reported energy means on
+the Quip network job lifecycle and its job orders, and what the reported
+energy means on
 fixed-precision hardware are covered in
 [Solving Overview](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/solving/README.md)
-and its four chapters. The normative reference is
+and its chapters. The normative reference is
 [`spec/xqsa/SPEC.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqsa/SPEC.md);
 this package follows it, and any divergence here is a bug.
 
