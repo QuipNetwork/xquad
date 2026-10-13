@@ -526,7 +526,7 @@ class SolverQuip(Solver):
         else:
             remedy = "Pass faucet=, set QUIP_FAUCET_URL, or build with SolverQuip.for_network(...) to name a faucet."
         return QuipSubmissionError(
-            f"insufficient balance: account {_as_hex(self._signer.account_id)} holds "
+            f"insufficient balance: account {chain.ss58_address(self._iface, self._signer.account_id)} holds "
             f"{amount(quote.balance_planck)} but the job needs {amount(quote.total_planck)} "
             f"(reward plus fee), {amount(quote.shortfall_planck)} short. {remedy}"
         )
@@ -1148,7 +1148,7 @@ class SolverQuip(Solver):
                 self._autofund,
                 quote,
                 name="autofund",
-                question=f"Fund {_as_hex(self._signer.account_id)} from {self._faucet}?",
+                question=f"Fund {chain.ss58_address(self._iface, self._signer.account_id)} from {self._faucet}?",
             )
             self._fund(quote)
 

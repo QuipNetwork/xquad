@@ -292,8 +292,9 @@ def _check_access(access: Any, limits: ChainLimits, iface: Any, *, stacklevel: i
         logger.warning("could not check whether the allowlisted accounts are registered solvers: %s", exc)
         return
     for account in missing:
+        name = chain.ss58_address(iface, chain.account_bytes(account))
         warnings.warn(
-            f"access: {account} is not a registered solver, so it cannot answer until it registers",
+            f"access: {name} is not a registered solver, so it cannot answer until it registers",
             UserWarning,
             stacklevel=stacklevel,
         )

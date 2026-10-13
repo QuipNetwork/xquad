@@ -320,10 +320,10 @@ value for `access` raises `ValueError` on the constructor and
 `access='Bid' is not an access rule; pass 'Open' or one of AccessOpen(), AccessAllow(accounts=[...], types=[...])`.
 
 An allowlisted account that is not a registered solver is never refused,
-but it warns, naming the account in `0x` hex:
+but it warns, naming the account in SS58:
 
 ```text
-UserWarning: access: 0x9dfe3616d2f32ad5a46ca94262e36b6b6d1fc6ecd15691dc0810b20f583e5188 is not a registered solver, so it cannot answer until it registers
+UserWarning: access: 5FdrtfYWZKnRQJT356sXLne1V2GSCWs9DTs7vkXht35bSFgb is not a registered solver, so it cannot answer until it registers
 ```
 
 The constructor warns for its default `access`, and `create_order()` and

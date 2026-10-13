@@ -34,6 +34,7 @@ from xqsa.quip import (
     QuipOrderOptionError,
     QuipSubmissionError,
     QuipUnconfirmedError,
+    chain,
 )
 from xqsa.quip.access import AccessAllow, AccessOpen
 from xqsa.quip.chain import ChainLimits, unregistered_solvers
@@ -545,6 +546,11 @@ BOB_HEX = "0x" + "8e" * 32
 CAROL_HEX = "0x" + "90" * 32
 
 
+def _ss58(account_hex: str) -> str:
+    """``account_hex`` as warnings name it: SS58 in the fake chain's format, or hex without ``scalecodec``."""
+    return chain.ss58_address(SimpleNamespace(ss58_format=42), bytes.fromhex(account_hex[2:]))
+
+
 class _SolversIface:
     """Answers ``Solvers`` reads from ``registered``, recording each account read."""
 
@@ -596,14 +602,22 @@ class TestUnregisteredSolvers:
 
     def test_create_order_warns_and_set_rechecks_only_a_new_list(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
-        with pytest.warns(UserWarning, match=f"{ALICE_HEX} is not a registered solver") as record:
+        with pytest.warns(UserWarning, match=f"access: {_ss58(ALICE_HEX)} is not a registered solver") as record:
             order = solver.create_order(_model(), access=AccessAllow(accounts=[ALICE_HEX]))
         assert record[0].filename == __file__
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             order.set(reward=2 * UNIT)
-        with pytest.warns(UserWarning, match=f"{BOB_HEX} is not a registered solver"):
+        with pytest.warns(UserWarning, match=f"access: {_ss58(BOB_HEX)} is not a registered solver"):
             order.set(access=AccessAllow(accounts=[BOB_HEX]))
+
+    def test_warning_names_the_account_in_ss58(self, monkeypatch) -> None:
+        ss58_encode = pytest.importorskip("scalecodec.utils.ss58").ss58_encode
+
+        solver, _ = _ready(monkeypatch)
+        with pytest.warns(UserWarning, match="is not a registered solver") as record:
+            solver.create_order(_model(), access=AccessAllow(accounts=[ALICE_HEX]))
+        assert str(record[0].message).split()[1] == ss58_encode(bytes.fromhex(ALICE_HEX[2:]), 42)
 
     def test_set_with_the_same_allowlist_reads_nothing(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
@@ -619,14 +633,14 @@ class TestUnregisteredSolvers:
     def test_client_default_allowlist_is_looked_up_once_at_construction(self, monkeypatch) -> None:
         with pytest.warns(UserWarning, match="is not a registered solver") as record:
             solver, _ = _ready(monkeypatch, access=AccessAllow(accounts=[ALICE_HEX, BOB_HEX]))
-        assert [str(w.message).split()[1] for w in record] == [ALICE_HEX, BOB_HEX]
+        assert [str(w.message).split()[1] for w in record] == [_ss58(ALICE_HEX), _ss58(BOB_HEX)]
         reads = _count_solvers_reads(solver)
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             for _ in range(3):
                 solver.create_order(_model())
         assert reads == []
-        with pytest.warns(UserWarning, match=f"{CAROL_HEX} is not a registered solver"):
+        with pytest.warns(UserWarning, match=f"access: {_ss58(CAROL_HEX)} is not a registered solver"):
             solver.create_order(_model(), access=AccessAllow(accounts=[CAROL_HEX]))
         assert reads == [CAROL_HEX]
 

@@ -306,7 +306,7 @@ def free_balance(iface: Any, account_id: Any) -> int:
         # or decode fault, not a funded-to-zero account -- surface it rather
         # than defaulting free=0 and blaming the user for "insufficient balance".
         raise QuipConnectionError(
-            f"could not read the free balance of {_as_hex(account_id)} from "
+            f"could not read the free balance of {ss58_address(iface, account_id)} from "
             f"System.Account (got {value!r}); cannot verify funding"
         ) from exc
     return free
