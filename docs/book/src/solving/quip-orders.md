@@ -507,8 +507,8 @@ signing, with `QuipReclaimRefusedError`, in this order:
 1. `order N was proposed by <account>, not by this account`
 2. `order N is already closed (reclaimed or settled)`
 3. `order N is open until block B (about M min); reclaim after it closes`
-4. `order N was answered by K solvers; its reward awaits the winner's
-   claim and cannot be reclaimed`
+4. `order N was answered by K solvers; its reward awaits a claim and
+   cannot be reclaimed`
 
 If the chain refuses the reclaim, it raises `QuipReclaimRefusedError`
 naming the block and the chain's error, and the fee is charged. If the

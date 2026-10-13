@@ -776,13 +776,14 @@ class TestAccess:
             solver.solve(_model(), **({} if default else {"access": raw}))
         assert captured["call_params"]["mode"] == {"Bid": {"miners": None, "miner_types": (["Cpu"],)}}
 
-    def test_solve_refuses_a_raw_dict_naming_no_rule_before_signing(self, monkeypatch) -> None:
+    @pytest.mark.parametrize("shortcut", ["solve", "quote"])
+    def test_shortcut_refuses_a_raw_dict_naming_no_rule_before_signing(self, monkeypatch, shortcut) -> None:
         solver, captured = _ready(monkeypatch)
         with (
             pytest.warns(DeprecationWarning),
             pytest.raises(QuipOrderOptionError, match="not an access rule the chain takes") as info,
         ):
-            solver.solve(_model(), access={"FutureRule": 1})
+            getattr(solver, shortcut)(_model(), access={"FutureRule": 1})
         assert info.value.option == "access"
         assert captured["builds"] == 0
 
