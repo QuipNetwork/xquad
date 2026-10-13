@@ -1190,6 +1190,7 @@ class TestJobOrderSendOutcomes:
             unconfirmed.submit()
         text = str(unconfirmed)
         assert text.startswith("╭─ Job order (unconfirmed) ")
+        assert "│ Quoted      1.002182560255 AGLS total, block 200 " in text
         assert "│ Receipt     unconfirmed, extrinsic " in text
         assert {len(line) for line in text.splitlines()} == {72}
 
@@ -1200,6 +1201,8 @@ class TestJobOrderSendOutcomes:
             failed.submit()
         text = str(failed)
         assert text.startswith("╭─ Job order (failed) ")
+        assert "│ Quoted      1.002182560255 AGLS total, block 200 " in text
+        assert "affordable" not in text
         assert f"│ Receipt     failed in block {solver._iface.head}: QuantumComputeMempool." in text
 
 
@@ -1336,10 +1339,53 @@ class TestJobOrderDisplay:
         order.quote()
         assert "│ Quote       1.002182560255 AGLS total, affordable, block 200 " in str(order)
         order.submit()
-        text = str(order)
-        assert text.startswith("╭─ Job order (submitted) ")
-        assert "│ Receipt     order 1, included in block 200, final " in text
-        assert {len(line) for line in text.splitlines()} == {72}
+        monkeypatch.setattr(order.receipt(), "_facts", lambda: SimpleNamespace(fee=1_907_881_410))
+        rows = _box_rows(str(order))
+        assert str(order).startswith("╭─ Job order (submitted) ")
+        start = rows.index("Paid        0.001907881410 AGLS fee")
+        assert rows[start + 1 : start + 4] == [
+            "            1.000000000000 AGLS reward reserved",
+            "            quoted 1.002182560255 AGLS total at block 200",
+            "Receipt     order 1, included in block 200, final",
+        ]
+        assert not any("affordable" in row for row in rows)
+        assert {len(line) for line in str(order).splitlines()} == {72}
+
+    @pytest.mark.parametrize("fault", ["fee", "facts"])
+    def test_paid_row_keeps_the_fee_unknown_when_its_read_faults(self, monkeypatch, fault) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model()).submit()
+
+        def _boom():
+            raise QuipConnectionError("node gone")
+
+        # _facts() reports a faulted fee read as fee=None; any other fault raises out of it.
+        facts = (lambda: SimpleNamespace(fee=None)) if fault == "fee" else _boom
+        monkeypatch.setattr(order.receipt(), "_facts", facts)
+        rows = _box_rows(str(order))
+        start = rows.index("Paid        fee unknown")
+        assert rows[start + 1 : start + 3] == [
+            "            1.000000000000 AGLS reward reserved",
+            "            quoted 1.002182560255 AGLS total at block 200",
+        ]
+
+    def test_paid_row_reads_the_fee_once(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model()).submit()
+        reads: list[int] = []
+        monkeypatch.setattr(order.receipt(), "_facts", lambda: reads.append(1) or SimpleNamespace(fee=None))
+        str(order)
+        str(order)
+        assert reads == [1]
+
+    def test_finalized_paid_row_drops_reserved(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model()).submit()
+        monkeypatch.setattr(order.receipt(), "_facts", lambda: SimpleNamespace(fee=1_907_881_410))
+        order._state = "finalized"
+        rows = _box_rows(str(order))
+        start = rows.index("Paid        0.001907881410 AGLS fee")
+        assert rows[start + 1] == "            1.000000000000 AGLS reward"
 
     def test_receipt_row_keeps_the_plain_text_when_the_live_read_faults(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)

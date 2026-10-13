@@ -181,9 +181,14 @@ the receipt:
 ╰──────────────────────────────────────────────────────────────────────╯
 ```
 
-The `Quote` row keeps the last quote taken, including the one `submit()`
-takes before an `autofund` drip, so a funded order can still read
-`not affordable` after it was submitted.
+On a draft, the `Quote` row shows the last quote taken and whether the
+account can afford it. Once the order has an id, a `Paid` row replaces
+it: the fee the chain charged, read from the order's
+`TransactionFeePaid` event, the reward (marked reserved until the order
+finalizes), and the quote's total beside them for comparison. The quoted fee is an estimate at the head
+block, so the two can differ. When the fee cannot be read, the row says
+`fee unknown`. A failed or unconfirmed order has no id to read a fee
+from, so its `Quoted` row shows the quote alone.
 
 ## Payout rules
 
