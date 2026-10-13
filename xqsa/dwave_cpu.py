@@ -38,8 +38,6 @@ _SUPPORTED_ALGORITHMS = frozenset({"sa"})
 class InProcessCPU(Implementation):
     """Simulated annealing using dwave-samplers (CPU)."""
 
-    accepts = frozenset({"num_reads", "num_sweeps", "num_sweeps_per_beta", "beta_range", "seed"})
-
     def __init__(
         self,
         algorithm: str = "sa",
@@ -50,20 +48,25 @@ class InProcessCPU(Implementation):
         seed: int | None = None,
     ) -> None:
         _check_algorithm(algorithm, _SUPPORTED_ALGORITHMS, "CPU")
-        self.algorithm = algorithm
-        self.num_reads = num_reads
-        self.num_sweeps = num_sweeps
-        self.num_sweeps_per_beta = num_sweeps_per_beta
-        self.beta_range = beta_range
-        self.seed = seed
+        super().__init__(
+            num_reads=num_reads,
+            num_sweeps=num_sweeps,
+            num_sweeps_per_beta=num_sweeps_per_beta,
+            beta_range=beta_range,
+            seed=seed,
+        )
 
-    def run(self, model: XqmxModel, **kwargs: Any) -> RunOutput:
+    def run(
+        self,
+        model: XqmxModel,
+        *,
+        num_reads: int,
+        num_sweeps: int,
+        num_sweeps_per_beta: int,
+        beta_range: tuple[float, float] | None,
+        seed: int | None,
+    ) -> RunOutput:
         """Sample using simulated annealing via dwave-samplers."""
-        num_reads = kwargs.get("num_reads", self.num_reads)
-        num_sweeps = kwargs.get("num_sweeps", self.num_sweeps)
-        num_sweeps_per_beta = kwargs.get("num_sweeps_per_beta", self.num_sweeps_per_beta)
-        beta_range = kwargs.get("beta_range", self.beta_range)
-        seed = kwargs.get("seed", self.seed)
 
         # Enforce locally for a consistent cross-backend error; dwave-samplers
         # retains the same check as a backstop.
@@ -87,7 +90,6 @@ class InProcessCPU(Implementation):
             seed=seed,
             reads=num_reads,
             params={
-                "algorithm": self.algorithm,
                 "num_sweeps": num_sweeps,
                 "num_sweeps_per_beta": num_sweeps_per_beta,
                 "num_betas": num_betas,

@@ -25,6 +25,7 @@ import pytest
 
 import xqsa
 import xqsa.quip
+from xqffi.vm import XqmxModel
 from xqsa import registry
 
 
@@ -71,7 +72,7 @@ class TestBuildSolver:
         """A seeded backend receives the seed it was given."""
         solver = xqsa.build_solver("cpu", seed=7)
         assert isinstance(solver, xqsa.SolverCPU)
-        assert solver._impl.seed == 7
+        assert solver.solve(XqmxModel.binary(2)).metadata["seed"] == 7
 
     def test_unknown_name_raises_value_error(self) -> None:
         """An unregistered name fails fast and lists the valid choices."""

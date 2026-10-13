@@ -54,7 +54,7 @@ class SolverCPU(Solver):
     """
 
     def __init__(self, *, algorithm: str = "sa", **params: Any) -> None:
-        super().__init__(InProcessCPU(algorithm=algorithm, **params))
+        super().__init__(InProcessCPU(algorithm=algorithm, **params), algorithm=algorithm)
 
 
 class SolverGPU(Solver):
@@ -93,7 +93,7 @@ class SolverGPU(Solver):
             from .metal_gpu import InProcessMetal as impl
         else:
             raise ValueError(f"Unsupported engine {engine!r}. Supported: ['cuda', 'metal']")
-        super().__init__(impl(algorithm=algorithm, **params))
+        super().__init__(impl(algorithm=algorithm, **params), engine=engine, algorithm=algorithm)
 
 
 class SolverDWave(Solver):
@@ -130,4 +130,4 @@ class SolverDWave(Solver):
             raise ValueError(f"Unsupported mode {mode!r}. Supported: ['qpu']; hybrid modes are not available yet.")
         from .dwave_qpu import InProcessDWave
 
-        super().__init__(InProcessDWave(**params))
+        super().__init__(InProcessDWave(**params), mode=mode)

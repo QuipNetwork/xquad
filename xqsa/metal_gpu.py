@@ -289,8 +289,6 @@ class InProcessMetal(Implementation):
         ValueError: if ``algorithm`` or ``beta_schedule_type`` is unsupported.
     """
 
-    accepts = frozenset({"num_reads", "num_sweeps", "num_sweeps_per_beta", "beta_range", "beta_schedule_type", "seed"})
-
     def __init__(
         self,
         algorithm: str = "sa",
@@ -316,12 +314,14 @@ class InProcessMetal(Implementation):
         self._metal = _metal
         self._device = device
         self.algorithm = algorithm
-        self.num_reads = num_reads
-        self.num_sweeps = num_sweeps
-        self.num_sweeps_per_beta = num_sweeps_per_beta
-        self.beta_range = beta_range
-        self.beta_schedule_type = beta_schedule_type
-        self.seed = seed
+        super().__init__(
+            num_reads=num_reads,
+            num_sweeps=num_sweeps,
+            num_sweeps_per_beta=num_sweeps_per_beta,
+            beta_range=beta_range,
+            beta_schedule_type=beta_schedule_type,
+            seed=seed,
+        )
 
     # -- lazy kernel compilation ------------------------------------------
 
@@ -350,19 +350,22 @@ class InProcessMetal(Implementation):
 
     # -- public API -------------------------------------------------------
 
-    def run(self, model: XqmxModel, **kwargs: Any) -> RunOutput:
+    def run(
+        self,
+        model: XqmxModel,
+        *,
+        num_reads: int,
+        num_sweeps: int,
+        num_sweeps_per_beta: int,
+        beta_range: tuple[float, float] | None,
+        beta_schedule_type: str,
+        seed: int | None,
+    ) -> RunOutput:
         """Sample using parallel-replica SA or Gibbs sampling on the GPU.
 
         Raises:
             ValueError: if parameter values are invalid.
         """
-        num_reads = kwargs.get("num_reads", self.num_reads)
-        num_sweeps = kwargs.get("num_sweeps", self.num_sweeps)
-        num_sweeps_per_beta = kwargs.get("num_sweeps_per_beta", self.num_sweeps_per_beta)
-        beta_range = kwargs.get("beta_range", self.beta_range)
-        beta_schedule_type = kwargs.get("beta_schedule_type", self.beta_schedule_type)
-        seed = kwargs.get("seed", self.seed)
-
         _check_beta_schedule(beta_schedule_type)
         num_betas = _check_anneal_params(num_reads, num_sweeps, num_sweeps_per_beta)
 
@@ -391,8 +394,6 @@ class InProcessMetal(Implementation):
             seed=seed,
             reads=num_reads,
             params={
-                "algorithm": self.algorithm,
-                "engine": "metal",
                 "num_sweeps": num_sweeps,
                 "num_sweeps_per_beta": num_sweeps_per_beta,
                 "num_betas": num_betas,

@@ -156,19 +156,19 @@ class TestSolverCPU:
     def test_default_params(self) -> None:
         """SolverCPU stores default parameters."""
         solver = SolverCPU()
-        assert solver._impl.num_reads == 100
-        assert solver._impl.num_sweeps == 1000
-        assert solver._impl.num_sweeps_per_beta == 1
-        assert solver._impl.beta_range is None
-        assert solver._impl.seed is None
+        assert solver._impl.defaults["num_reads"] == 100
+        assert solver._impl.defaults["num_sweeps"] == 1000
+        assert solver._impl.defaults["num_sweeps_per_beta"] == 1
+        assert solver._impl.defaults["beta_range"] is None
+        assert solver._impl.defaults["seed"] is None
 
     def test_custom_params(self) -> None:
         """SolverCPU accepts custom parameters."""
         solver = SolverCPU(num_reads=50, num_sweeps=500, num_sweeps_per_beta=5, seed=42)
-        assert solver._impl.num_reads == 50
-        assert solver._impl.num_sweeps == 500
-        assert solver._impl.num_sweeps_per_beta == 5
-        assert solver._impl.seed == 42
+        assert solver._impl.defaults["num_reads"] == 50
+        assert solver._impl.defaults["num_sweeps"] == 500
+        assert solver._impl.defaults["num_sweeps_per_beta"] == 5
+        assert solver._impl.defaults["seed"] == 42
 
     def test_solve_trivial_binary(self) -> None:
         """Solve a trivial 2-variable QUBO: minimize x0 + x1."""
@@ -404,15 +404,15 @@ class TestSolverDWave:
         """SolverDWave stores default parameters."""
         monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
         solver = SolverDWave()
-        assert solver._impl.num_reads == 100
-        assert solver._impl.annealing_time == 20
+        assert solver._impl.defaults["num_reads"] == 100
+        assert solver._impl.defaults["annealing_time"] == 20
 
     def test_custom_params(self, mock_dwave_system, monkeypatch) -> None:
         """SolverDWave accepts custom parameters."""
         monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
         solver = SolverDWave(num_reads=50, annealing_time=100)
-        assert solver._impl.num_reads == 50
-        assert solver._impl.annealing_time == 100
+        assert solver._impl.defaults["num_reads"] == 50
+        assert solver._impl.defaults["annealing_time"] == 100
 
     def test_solve_binary(self, mock_dwave_system, monkeypatch) -> None:
         """Solve a trivial 2-variable QUBO with mocked sampler."""
@@ -1029,20 +1029,20 @@ class TestSolverGPUCuda:
         """SolverGPU (CUDA engine) stores default parameters."""
         solver = _cuda()
         assert solver._impl.algorithm == "sa"
-        assert solver._impl.num_reads == 100
-        assert solver._impl.num_sweeps == 1000
-        assert solver._impl.beta_range is None
-        assert solver._impl.seed is None
-        assert solver._impl.num_sweeps_per_beta == 1
-        assert solver._impl.beta_schedule_type == "linear"
+        assert solver._impl.defaults["num_reads"] == 100
+        assert solver._impl.defaults["num_sweeps"] == 1000
+        assert solver._impl.defaults["beta_range"] is None
+        assert solver._impl.defaults["seed"] is None
+        assert solver._impl.defaults["num_sweeps_per_beta"] == 1
+        assert solver._impl.defaults["beta_schedule_type"] == "linear"
 
     def test_custom_params(self) -> None:
         """SolverGPU (CUDA engine) accepts custom parameters."""
         solver = _cuda(algorithm="sa", num_reads=50, num_sweeps=500, num_sweeps_per_beta=5, seed=42)
-        assert solver._impl.num_reads == 50
-        assert solver._impl.num_sweeps == 500
-        assert solver._impl.num_sweeps_per_beta == 5
-        assert solver._impl.seed == 42
+        assert solver._impl.defaults["num_reads"] == 50
+        assert solver._impl.defaults["num_sweeps"] == 500
+        assert solver._impl.defaults["num_sweeps_per_beta"] == 5
+        assert solver._impl.defaults["seed"] == 42
 
     def test_solve_trivial_binary(self) -> None:
         """Solve a trivial 2-variable QUBO: minimize x0 + x1."""
@@ -2046,21 +2046,21 @@ class TestSolverGPUMetal:
         """SolverGPU (Metal engine) stores default parameters."""
         solver = _metal()
         assert solver._impl.algorithm == "sa"
-        assert solver._impl.num_reads == 100
-        assert solver._impl.num_sweeps == 1000
-        assert solver._impl.num_sweeps_per_beta == 1
-        assert solver._impl.beta_range is None
-        assert solver._impl.beta_schedule_type == "geometric"
-        assert solver._impl.seed is None
+        assert solver._impl.defaults["num_reads"] == 100
+        assert solver._impl.defaults["num_sweeps"] == 1000
+        assert solver._impl.defaults["num_sweeps_per_beta"] == 1
+        assert solver._impl.defaults["beta_range"] is None
+        assert solver._impl.defaults["beta_schedule_type"] == "geometric"
+        assert solver._impl.defaults["seed"] is None
 
     def test_custom_params(self) -> None:
         """SolverGPU (Metal engine) accepts custom parameters."""
         solver = _metal(algorithm="gibbs", num_reads=50, num_sweeps=500, num_sweeps_per_beta=5, seed=42)
         assert solver._impl.algorithm == "gibbs"
-        assert solver._impl.num_reads == 50
-        assert solver._impl.num_sweeps == 500
-        assert solver._impl.num_sweeps_per_beta == 5
-        assert solver._impl.seed == 42
+        assert solver._impl.defaults["num_reads"] == 50
+        assert solver._impl.defaults["num_sweeps"] == 500
+        assert solver._impl.defaults["num_sweeps_per_beta"] == 5
+        assert solver._impl.defaults["seed"] == 42
 
     def test_solve_trivial_binary_sa(self) -> None:
         """Solve a trivial 2-variable QUBO with SA: minimize x0 + x1."""

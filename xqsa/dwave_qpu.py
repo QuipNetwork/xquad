@@ -39,10 +39,6 @@ from xqffi.vm import XqmxModel
 
 from .solver import Implementation, RunOutput, model_to_bqm, sample_to_xqmx
 
-# Ocean sampling parameters forwarded to ``sampler.sample`` when set. Anything
-# else is rejected rather than passed through unchecked.
-_OCEAN_PARAMS = ("chain_strength", "auto_scale")
-
 
 class InProcessDWave(Implementation):
     """D-Wave Advantage QPU sampling via D-Wave Leap cloud API.
@@ -54,8 +50,6 @@ class InProcessDWave(Implementation):
         ImportError: if ``dwave-system`` is not installed.
         ValueError: if no API token is available.
     """
-
-    accepts = frozenset({"num_reads", "annealing_time", *_OCEAN_PARAMS})
 
     def __init__(
         self,
@@ -78,10 +72,12 @@ class InProcessDWave(Implementation):
 
         resolved_endpoint = endpoint or os.environ.get("DWAVE_API_ENDPOINT")
 
-        self.num_reads = num_reads
-        self.annealing_time = annealing_time
-        self.chain_strength = chain_strength
-        self.auto_scale = auto_scale
+        super().__init__(
+            num_reads=num_reads,
+            annealing_time=annealing_time,
+            chain_strength=chain_strength,
+            auto_scale=auto_scale,
+        )
 
         solver_filter: str | dict[str, str] = solver if solver is not None else {"topology__type": "pegasus"}
 
@@ -96,11 +92,22 @@ class InProcessDWave(Implementation):
         self._sampler = _dwave_system.EmbeddingComposite(raw)
         self._solver_name: str = raw.solver.id
 
-    def run(self, model: XqmxModel, **kwargs: Any) -> RunOutput:
+    def run(
+        self,
+        model: XqmxModel,
+        *,
+        num_reads: int,
+        annealing_time: int,
+        chain_strength: float | None,
+        auto_scale: bool | None,
+    ) -> RunOutput:
         """Sample on the D-Wave Advantage QPU via EmbeddingComposite."""
-        num_reads = kwargs.get("num_reads", self.num_reads)
-        annealing_time = kwargs.get("annealing_time", self.annealing_time)
-        ocean = {key: value for key in _OCEAN_PARAMS if (value := kwargs.get(key, getattr(self, key))) is not None}
+        # Ocean sampling parameters forwarded when set; the constructor rejects any other.
+        ocean = {
+            key: value
+            for key, value in {"chain_strength": chain_strength, "auto_scale": auto_scale}.items()
+            if value is not None
+        }
 
         result = self._sampler.sample(
             model_to_bqm(model),
@@ -116,7 +123,6 @@ class InProcessDWave(Implementation):
             seed=None,
             reads=num_reads,
             params={
-                "mode": "qpu",
                 "solver": self._solver_name,
                 "qpu_timing": qpu_timing,
                 "annealing_time": annealing_time,

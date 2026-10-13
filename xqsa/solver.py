@@ -21,8 +21,9 @@ quadratic models.
 
 A :class:`Solver` is the public face of a backend. Its :meth:`Solver.solve`
 is a template: it validates the model, rejects unknown per-call keywords, runs
-the composed :class:`Implementation`, recomputes the energy on the original
-model, and builds the ``{seed, reads, params}`` metadata. An implementation
+the composed :class:`Implementation` with the per-call keywords merged over its
+defaults, recomputes the energy on the original model, and builds the
+``{seed, reads, params}`` metadata, recording the selectors in ``params``. An implementation
 only turns a model into a sample; swapping it changes how a solver runs
 without changing its API.
 """
@@ -57,7 +58,7 @@ class RunOutput:
 
     ``seed`` is the seed the run used (``None`` when unseeded), ``reads`` the
     number of reads taken, and ``params`` everything else that describes the
-    run, including the selectors that picked the implementation.
+    run. The solver adds its selectors to ``params``.
     """
 
     sample: XqmxSample
@@ -69,14 +70,18 @@ class RunOutput:
 class Implementation(ABC):
     """How a :class:`Solver` turns a model into a sample.
 
-    ``accepts`` names the per-call keywords :meth:`run` takes; the solver
-    rejects any other keyword before calling it.
+    A subclass passes its per-call parameters, with their constructor values,
+    to ``__init__``; those keys are the only keywords ``solve()`` accepts.
+    :meth:`run` declares the same keys as keyword-only parameters and always
+    receives every one of them, so a key missing on either side raises on
+    every call.
     """
 
-    accepts: frozenset[str] = frozenset()
+    def __init__(self, **defaults: Any) -> None:
+        self.defaults = defaults
 
     @abstractmethod
-    def run(self, model: XqmxModel, **kwargs: Any) -> RunOutput:
+    def run(self, model: XqmxModel, **params: Any) -> RunOutput:
         """Sample a validated model, returning the best sample found."""
         ...
 
@@ -84,12 +89,14 @@ class Implementation(ABC):
 class Solver(ABC):
     """Solver base class for XQMX quadratic models.
 
-    Subclasses pass the :class:`Implementation` they run to ``__init__``.
-    ``SolverQuip`` overrides :meth:`solve` and builds its own metadata.
+    Subclasses pass the :class:`Implementation` they run and the selectors
+    that chose it to ``__init__``. ``SolverQuip`` overrides :meth:`solve` and
+    builds its own metadata.
     """
 
-    def __init__(self, impl: Implementation) -> None:
+    def __init__(self, impl: Implementation, **selectors: str) -> None:
         self._impl = impl
+        self._selectors = selectors
 
     def solve(self, model: XqmxModel, **kwargs: Any) -> SolverResult:
         """Solve a quadratic model, returning the best solution found.
@@ -99,22 +106,23 @@ class Solver(ABC):
             TypeError: if a keyword is not one the implementation accepts.
         """
         self._validate_model(model)
-        unknown = kwargs.keys() - self._impl.accepts
+        defaults = self._impl.defaults
+        unknown = kwargs.keys() - defaults.keys()
         if unknown:
             raise TypeError(
                 f"{type(self).__name__}.solve() got unexpected keyword argument(s) "
-                f"{', '.join(repr(k) for k in sorted(unknown))}; accepted: {', '.join(sorted(self._impl.accepts))}"
+                f"{', '.join(repr(k) for k in sorted(unknown))}; accepted: {', '.join(sorted(defaults))}"
             )
 
         t0 = time.perf_counter()
-        out = self._impl.run(model, **kwargs)
+        out = self._impl.run(model, **(defaults | kwargs))
         elapsed = time.perf_counter() - t0
 
         return SolverResult(
             sample=out.sample,
             energy=self._recompute_energy(model, out.sample),
             timing=elapsed,
-            metadata={"seed": out.seed, "reads": out.reads, "params": out.params},
+            metadata={"seed": out.seed, "reads": out.reads, "params": out.params | self._selectors},
         )
 
     def _validate_model(self, model: XqmxModel) -> None:

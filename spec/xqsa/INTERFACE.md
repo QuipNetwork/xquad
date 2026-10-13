@@ -4,8 +4,9 @@
 
 ```python
 class Solver(ABC):
-    def __init__(self, impl: Implementation) -> None:
+    def __init__(self, impl: Implementation, **selectors: str) -> None:
         self._impl = impl
+        self._selectors = selectors
 
     def solve(self, model: XqmxModel, **kwargs: Any) -> SolverResult:
         """Solve a quadratic model, returning the best solution found."""
@@ -22,7 +23,7 @@ class Solver(ABC):
 
 `XqmxModel`, `XqmxSample` and `Domain` are the `xqffi.vm` types, re-exported by `xquad.types`.
 
-A solver is a public class that composes an `Implementation`. `solve()` is a template method shared by every solver: it validates, runs the implementation, and builds the result the same way whichever implementation runs. A solver subclass picks its implementation in `__init__` and does not override `solve()`. Moving a solver onto a different implementation therefore changes how it runs without changing its API.
+A solver is a public class that composes an `Implementation`. `solve()` is a template method shared by every solver: it validates, runs the implementation, and builds the result the same way whichever implementation runs. A solver subclass picks its implementation in `__init__`, passes it to `Solver.__init__` with the selectors that chose it, and does not override `solve()`. Moving a solver onto a different implementation therefore changes how it runs without changing its API.
 
 `SolverQuip` is the one exception. It overrides `solve()` with its own network protocol and does not compose an implementation (see [Metadata Schema](#metadata-schema)).
 
@@ -37,15 +38,16 @@ class RunOutput:
     params: dict[str, Any]      # Everything else that describes the run
 
 class Implementation(ABC):
-    accepts: frozenset[str]     # Per-call keywords run() takes
+    def __init__(self, **defaults: Any) -> None:
+        self.defaults = defaults  # Per-call parameters and their constructor values
 
     @abstractmethod
-    def run(self, model: XqmxModel, **kwargs: Any) -> RunOutput:
+    def run(self, model: XqmxModel, **params: Any) -> RunOutput:
         """Sample a validated model, returning the best sample found."""
         ...
 ```
 
-An implementation turns a validated model into a sample. It does not time the run, compute the authoritative energy or assemble metadata; the template does all three. Its constructor declares every parameter it takes as an explicit keyword, so a misspelled parameter raises `TypeError` when the solver is built.
+An implementation turns a validated model into a sample. It does not time the run, compute the authoritative energy or assemble metadata; the template does all three. Its constructor declares every parameter it takes as an explicit keyword, so a misspelled parameter raises `TypeError` when the solver is built. It passes the per-call parameters, with their values, to `Implementation.__init__`, and `run()` declares the same names as keyword-only parameters. `run()` always receives every one of them, so a name present on one side only raises on every call.
 
 The shipped implementations run in-process, in the Python interpreter that calls `solve()`: `InProcessCPU`, `InProcessCuda`, `InProcessMetal` and `InProcessDWave` (see [SOLVERS.md](SOLVERS.md)). A solver-binary implementation, which runs a solver as a separate executable, plugs in at the same seam.
 
@@ -58,22 +60,21 @@ The shipped implementations run in-process, in the Python interpreter that calls
 
 **Input:**
 - `model` -- an `XqmxModel` with a supported domain (see [DOMAINS.md](DOMAINS.md))
-- `**kwargs` -- per-call overrides of constructor parameters, limited to the implementation's `accepts` (see [Parameter Convention](#parameter-convention))
+- `**kwargs` -- per-call overrides of constructor parameters, limited to the keys of the implementation's `defaults` (see [Parameter Convention](#parameter-convention))
 
 **Output:**
 - A `SolverResult` containing the best solution found
 
 **Template steps:**
 1. Call `_validate_model(model)`.
-2. Reject any keyword not in `self._impl.accepts` with `TypeError`, before anything runs. The message names the rejected keys, the solver class and the accepted keys.
-3. Run `self._impl.run(model, **kwargs)` and measure its wall-clock time with `time.perf_counter()`. The measurement covers the whole run, including model conversion and sample conversion, not only the sampler call.
+2. Reject any keyword not in `self._impl.defaults` with `TypeError`, before anything runs. The message names the rejected keys, the solver class and the accepted keys.
+3. Run `self._impl.run(model, **(self._impl.defaults | kwargs))` and measure its wall-clock time with `time.perf_counter()`. The measurement covers the whole run, including model conversion and sample conversion, not only the sampler call.
 4. Set `SolverResult.energy` to `_recompute_energy(model, out.sample)`, the authoritative integer energy on the original model (see [ENERGY.md](ENERGY.md)). That call raises `ArithmeticOverflow` when the energy of the returned sample is not representable in signed 64 bits, or when a partial sum leaves the range on the way to a total that is. The template does not catch it and never substitutes the implementation's own float energy.
-5. Build `SolverResult.metadata` as `{"seed": out.seed, "reads": out.reads, "params": out.params}` (see [Metadata Schema](#metadata-schema)).
+5. Build `SolverResult.metadata` as `{"seed": out.seed, "reads": out.reads, "params": out.params | self._selectors}` (see [Metadata Schema](#metadata-schema)).
 
 **Implementation requirements:**
 1. `run()` must return the best (lowest-energy) sample when it takes several reads.
 2. `run()` must report the seed it used in `RunOutput.seed`, or `None` when the run was unseeded or the hardware has no seed.
-3. `run()` must record the selectors that chose it (`algorithm`, `engine`, `mode`; see [SOLVERS.md](SOLVERS.md)) in `RunOutput.params`.
 
 A solver that overrides `solve()` must still validate the model, measure wall-clock time, return the best sample, and set `energy` through `_recompute_energy()` without catching `ArithmeticOverflow`.
 
@@ -172,7 +173,7 @@ The `raw_energy` key under `params` holds the backend's native float energy befo
 Solver parameters follow a two-level pattern:
 
 1. **Constructor parameters** -- set once when creating the solver. A public solver class takes its selectors (`algorithm`, `engine`, `mode`) as keyword-only arguments and passes every other keyword through to its implementation's constructor. That constructor declares its parameters explicitly, so an unknown name raises `TypeError` when the solver is built.
-2. **Per-call overrides** -- `**kwargs` on `solve()` override constructor parameters for that call only. They are limited to the implementation's `accepts`. Selectors are constructor-only: a solver's implementation is fixed when it is built.
+2. **Per-call overrides** -- `**kwargs` on `solve()` override constructor parameters for that call only. They are limited to the keys of the implementation's `defaults`. Selectors are constructor-only: a solver's implementation is fixed when it is built.
 
 ```python
 solver = SolverCPU(num_reads=100, seed=42)
