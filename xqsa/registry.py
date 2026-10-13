@@ -43,12 +43,12 @@ from xqsa.solvers import SolverCPU, SolverDWave, SolverGPU
 # CLI name -> solver factory. ``cpu`` is the default everywhere: it needs no
 # extra deps or hardware, so it is the reproducible baseline against which
 # the hardware backends are compared. ``cuda`` and ``metal`` both build
-# :class:`SolverGPU`. ``quip`` is env-driven (no seed); see the module
-# docstring.
+# :class:`SolverGPU`, with a larger read and sweep budget than its defaults.
+# ``quip`` is env-driven (no seed); see the module docstring.
 SOLVERS: dict[str, Callable[..., Solver]] = {
     "cpu": SolverCPU,
-    "cuda": partial(SolverGPU, engine="cuda"),
-    "metal": partial(SolverGPU, engine="metal"),
+    "cuda": partial(SolverGPU, engine="cuda", num_reads=200, num_sweeps=2000),
+    "metal": partial(SolverGPU, engine="metal", num_reads=200, num_sweeps=2000),
     "dwave": SolverDWave,
     "quip": SolverQuip,
 }
@@ -83,8 +83,6 @@ def build_solver(name: str, *, seed: int | None = None) -> Solver:
     if name not in SOLVERS:
         raise ValueError(f"Unknown solver {name!r}. Choose one of: {', '.join(sorted(SOLVERS))}.")
     factory = SOLVERS[name]
-    if name in ("cuda", "metal"):
-        return factory(num_reads=200, num_sweeps=2000, seed=seed)
     if name in _SEEDED:
         return factory(seed=seed)
     return factory()

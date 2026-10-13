@@ -3,7 +3,7 @@
 ## Solver Base Class
 
 ```python
-class Solver(ABC):
+class Solver:
     def __init__(self, impl: Implementation, **selectors: str) -> None:
         self._impl = impl
         self._selectors = selectors

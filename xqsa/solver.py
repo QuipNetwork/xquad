@@ -86,7 +86,7 @@ class Implementation(ABC):
         ...
 
 
-class Solver(ABC):
+class Solver:
     """Solver base class for XQMX quadratic models.
 
     Subclasses pass the :class:`Implementation` they run and the selectors

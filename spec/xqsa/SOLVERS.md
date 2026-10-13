@@ -130,7 +130,7 @@ The public classes live in `solvers.py`, except `SolverQuip` in the `quip/` pack
 
 ## Selecting by Name
 
-`xqsa.build_solver(name, *, seed=None)` constructs a solver from a short, CLI-friendly name, decoupling callers (example runners, the smoke harness, `--solver` flags) from concrete class names. `xqsa.SOLVERS` is the authoritative name -> factory map and `xqsa.DEFAULT_SOLVER` is the baseline. A factory is a class or a `functools.partial` of one, so `cuda` and `metal` both build `SolverGPU`. `seed` is forwarded only to the classical SA backends; the QPU is physical hardware and `quip` is configured from the environment, so both take no seed. `build_solver` gives the GPU backends `num_reads=200` and `num_sweeps=2000`.
+`xqsa.build_solver(name, *, seed=None)` constructs a solver from a short, CLI-friendly name, decoupling callers (example runners, the smoke harness, `--solver` flags) from concrete class names. `xqsa.SOLVERS` is the authoritative name -> factory map and `xqsa.DEFAULT_SOLVER` is the baseline. A factory is a class or a `functools.partial` of one, so `cuda` and `metal` both build `SolverGPU`. `seed` is forwarded only to the classical SA backends; the QPU is physical hardware and `quip` is configured from the environment, so both take no seed. The `cuda` and `metal` entries bind `num_reads=200` and `num_sweeps=2000`, so `SOLVERS["cuda"]()` and `build_solver("cuda")` build the same solver; a keyword passed to the factory overrides them.
 
 | Name | Builds |
 |------|--------|

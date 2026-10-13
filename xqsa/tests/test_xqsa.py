@@ -81,10 +81,10 @@ class TestSolverResult:
 
 
 class TestSolver:
-    """Tests for the abstract Solver base class."""
+    """Tests for the Solver base class."""
 
     def test_cannot_instantiate(self) -> None:
-        """Solver is abstract and needs an implementation, so it cannot be built bare."""
+        """Solver needs an implementation, so it cannot be built bare."""
         with pytest.raises(TypeError):
             Solver()
 

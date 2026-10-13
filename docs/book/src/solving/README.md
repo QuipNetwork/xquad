@@ -16,7 +16,7 @@ care which one samples it.
 Every backend is called through the same single method:
 
 ```python
-class Solver(ABC):
+class Solver:
     def solve(self, model: XqmxModel, **kwargs: Any) -> SolverResult: ...
 ```
 
@@ -101,11 +101,12 @@ result = solver.solve(model)
 (physical hardware has no seed) and `quip` (configured from the
 environment; the miner's own randomness is out of the caller's control).
 
-`build_solver` otherwise uses each backend's own constructor defaults,
-with one exception: for `cuda` and `metal` it raises `num_reads`
+The registry otherwise uses each backend's own constructor defaults,
+with one exception: its `cuda` and `metal` entries raise `num_reads`
 to 200 and `num_sweeps` to 2000, rather than the 100 and 1000 the bare
-constructor defaults to. `cuda` and `metal` build
-`SolverGPU(engine="cuda")` and `SolverGPU(engine="metal")`.
+constructor defaults to. They build
+`SolverGPU(engine="cuda", num_reads=200, num_sweeps=2000)` and the same
+with `engine="metal"`.
 [Local Solvers](local.md#gpu-backends-solvergpu)
 has the constructor defaults for every backend.
 
@@ -118,7 +119,7 @@ result with whichever solver `--solver` names, built through
 `build_solver`. Run it against two different backends -- `cpu`
 (CPU simulated annealing, 100 reads and 1000 sweeps) and `metal` (an
 Apple Silicon GPU kernel, a different process on different hardware, and
--- per `build_solver`'s override above -- 200 reads and 2000 sweeps) --
+-- per the registry's override above -- 200 reads and 2000 sweeps) --
 and nothing about the model or the encoder changes:
 
 ```sh
