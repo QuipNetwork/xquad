@@ -1010,6 +1010,33 @@ class TestSolverGPUCudaMocked:
 # ---------------------------------------------------------------------------
 
 
+class TestSolverGPUCudaPlumbing:
+    """SolverGPU(engine="cuda") settings reach the sampler (cupy and kernels faked)."""
+
+    def test_settings_reach_the_sampler(self, monkeypatch) -> None:
+        """Constructor values, per-call overrides and selectors flow through run()."""
+        from xqsa.cuda_gpu import InProcessCuda
+
+        fake_cupy = types.ModuleType("cupy")
+        fake_cupy.cuda = types.SimpleNamespace(runtime=types.SimpleNamespace(getDeviceCount=lambda: 1))
+        monkeypatch.setitem(sys.modules, "cupy", fake_cupy)
+        monkeypatch.setattr(InProcessCuda, "_to_dense_arrays", lambda self, model: (None, None))
+        run_sa = MagicMock(return_value=({0: 1, 1: 0}, -1.0))
+        monkeypatch.setattr(InProcessCuda, "_run_sa", run_sa)
+
+        solver = SolverGPU(engine="cuda", num_sweeps=40, seed=3)
+        result = solver.solve(XqmxModel.binary(2), num_reads=7, num_sweeps_per_beta=4)
+
+        sa = run_sa.call_args.kwargs
+        assert (sa["num_reads"], sa["num_sweeps"], sa["num_sweeps_per_beta"], sa["num_betas"]) == (7, 40, 4, 10)
+        assert (sa["beta_schedule_type"], sa["beta_range"], sa["seed"]) == ("linear", None, 3)
+        assert result.metadata["seed"] == 3
+        assert result.metadata["reads"] == 7
+        params = result.metadata["params"]
+        assert (params["engine"], params["algorithm"], params["num_sweeps"]) == ("cuda", "sa", 40)
+        assert params["raw_energy"] == -1.0
+
+
 _has_cupy = True
 try:
     import cupy  # noqa: F401

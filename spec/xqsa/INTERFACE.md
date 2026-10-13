@@ -128,7 +128,7 @@ Every solver whose `solve()` is the template returns `SolverResult.metadata` wit
 | `reads` | `int` | Number of samples/reads taken. |
 | `params` | `dict[str, Any]` | The selectors that chose the implementation, the parameters the run used, and backend diagnostics. |
 
-`params` always records the selectors: `algorithm` for `SolverCPU` and `SolverGPU`, `engine` for `SolverGPU`, `mode` for `SolverDWave`. Its other keys are backend-specific; [SOLVERS.md](SOLVERS.md) lists them per backend. Diagnostics that used to sit at the top level, such as the QPU's `solver` and `qpu_timing`, live under `params`.
+`params` always records the selectors: `algorithm` for `SolverCPU` and `SolverGPU`, `engine` for `SolverGPU`, `mode` for `SolverDWave`. Its other keys are backend-specific; [SOLVERS.md](SOLVERS.md) lists them per backend.
 
 `SolverQuip` is the exception until it moves onto the template. It returns its own top-level keys -- `order_id`, `solver`, `best_energy_milli`, `energy_matches_chain`, `leader_read`, `leader`, `num_submissions`, `num_solutions`, `quantization_error` -- with no `seed`, `reads`, or `params` key. A caller handling `SolverQuip` results must index them by those keys.
 

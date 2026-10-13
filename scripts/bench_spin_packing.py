@@ -60,7 +60,7 @@ def build_instance(n: int, seed: int) -> tuple[XqmxModel, np.ndarray, np.ndarray
     """Seeded spin instance: each node couples to its next COUPLINGS_PER_NODE
     neighbours with random +/-1. Returns the XqmxModel (for the stock solver) and
     the matching dense (h, J) arrays (for the packed prototype). J is stored
-    symmetric-full, mirroring the layout SolverGPU(engine="cuda") builds internally —
+    symmetric-full, mirroring the layout SolverGPU(engine="cuda") builds internally --
     verified end-to-end by Task 2's exact-trajectory check."""
     rng = random.Random(seed)
     model = XqmxModel.spin(n)
