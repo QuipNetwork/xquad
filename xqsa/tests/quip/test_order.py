@@ -716,10 +716,20 @@ class TestAccess:
             {"Bid": {"miners": None, "miner_types": [1]}},
             {"Bid": 5},
             {"Open": 1},
+            {"FutureRule": 1},
         ],
-        ids=["nine-types", "20-byte-account", "int-account", "empty", "non-str-type", "not-a-struct", "open-value"],
+        ids=[
+            "nine-types",
+            "20-byte-account",
+            "int-account",
+            "empty",
+            "non-str-type",
+            "not-a-struct",
+            "open-value",
+            "no-rule",
+        ],
     )
-    def test_raw_dict_naming_a_rule_that_does_not_decode_refused(self, raw) -> None:
+    def test_raw_dict_that_does_not_decode_refused(self, raw) -> None:
         with (
             pytest.warns(DeprecationWarning),
             pytest.raises(QuipOrderOptionError, match="it cannot be read as an access rule") as info,
@@ -727,10 +737,18 @@ class TestAccess:
             _merge(strict=False, access=raw)
         assert info.value.option == "access"
 
-    def test_raw_dict_naming_no_rule_passes_unchecked(self) -> None:
-        with pytest.warns(DeprecationWarning, match="raw chain value is deprecated; pass a typed option") as record:
-            assert _merge(strict=False, access={"FutureRule": 1}).access == {"FutureRule": 1}
-        assert not any("unchecked" in str(w.message) for w in record)
+    def test_raw_bid_with_an_unknown_field_refused(self) -> None:
+        raw = {"Bid": {"miners": [ALICE_HEX], "miner_type": ["Cpu"]}}
+        with (
+            pytest.warns(DeprecationWarning),
+            pytest.raises(QuipOrderOptionError, match="Bid has no field 'miner_type'") as info,
+        ):
+            _merge(strict=False, access=raw)
+        assert info.value.option == "access"
+
+    def test_client_default_raw_dict_naming_no_rule_refused_at_construction(self, monkeypatch) -> None:
+        with pytest.raises(QuipOrderOptionError, match="cannot be read as an access rule"):
+            _ready(monkeypatch, access={"FutureRule": 1})
 
     def test_create_order_encodes_the_allowlist(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
@@ -782,7 +800,7 @@ class TestAccess:
         solver, captured = _ready(monkeypatch)
         with (
             pytest.warns(DeprecationWarning),
-            pytest.raises(QuipOrderOptionError, match="not an access rule the chain takes") as info,
+            pytest.raises(QuipOrderOptionError, match="cannot be read as an access rule") as info,
         ):
             getattr(solver, shortcut)(_model(), access={"FutureRule": 1})
         assert info.value.option == "access"

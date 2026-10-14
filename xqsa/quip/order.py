@@ -40,7 +40,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 from xqsa.quip import chain
-from xqsa.quip.access import VARIANTS as ACCESS_VARIANTS
 from xqsa.quip.access import Access, AccessAllow, coerce_access
 from xqsa.quip.access import from_chain as access_from_chain
 from xqsa.quip.codec import MILLI_SCALE, _to_milli, energy_ceiling_milli
@@ -250,26 +249,34 @@ def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: in
         )
 
 
+# The fields of ``JobMode::Bid``; a raw dict with any other is refused, not dropped at encoding.
+_BID_FIELDS = frozenset({"miners", "miner_types"})
+
+
 def _check_access(access: Any, limits: ChainLimits, iface: Any, *, stacklevel: int) -> None:
     """Refuse an allowlist the chain cannot take: over ``MaxBidMiners`` accounts, or an unknown solver type.
 
     An over-cap list traps the runtime with no fee and no readable error, and
     an unknown type fails to encode, so both are refused here. A raw chain
-    dict is read as the rule it names and checked the same way. One that names
-    a rule but cannot be read as it is refused; one that names no rule passes
-    unchecked. A bound the runtime does not expose is not checked.
+    dict is read as the rule it names and checked the same way; one that
+    cannot be read as a rule, or a ``Bid`` with a field the chain does not
+    take, is refused, since encoding would drop or refuse it. A bound the
+    runtime does not expose is not checked.
 
     With ``iface``, each listed account that is not a registered solver warns
     once. It never raises: the chain does not check registration, and an
     operator may register after the order is posted.
     """
     if isinstance(access, Mapping):
+        bid = access.get("Bid")
+        if isinstance(bid, Mapping) and (extra := set(bid) - _BID_FIELDS):
+            raise QuipOrderOptionError(
+                "access", f"Bid has no field {', '.join(map(repr, sorted(extra)))}; it takes miners and miner_types"
+            )
         try:
             access = access_from_chain(access)
         except (ValueError, TypeError) as exc:
-            if len(access) == 1 and next(iter(access)) in ACCESS_VARIANTS:
-                raise QuipOrderOptionError("access", f"{exc}; it cannot be read as an access rule") from None
-            return
+            raise QuipOrderOptionError("access", f"{exc}; it cannot be read as an access rule") from None
     if not isinstance(access, AccessAllow):
         return
     cap = limits.max_bid_miners

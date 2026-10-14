@@ -148,7 +148,8 @@ class SolverQuip(Solver):
             connecting).
         TypeError: if both ``access`` and the deprecated ``mode`` are given.
         QuipOrderOptionError: if an ``access`` allowlist is outside the
-            chain's limits. Each listed account that is not a registered
+            chain's limits, or a raw ``access`` dict cannot be read as an
+            access rule. Each listed account that is not a registered
             solver warns once, here rather than on every order.
         QuipConnectionError: if the node is unreachable or the configured Ising
             spec is not registered on-chain.
@@ -956,8 +957,8 @@ class SolverQuip(Solver):
         """Build a draft from the client defaults and ``options``.
 
         ``strict=False`` is the deprecated ``solve``/``quote`` path: unknown
-        options and raw chain dicts warn instead of raising, though a dict that
-        names no access rule is refused at encoding. QUI-1608 removes it.
+        options and raw chain dicts warn instead of raising, though an access
+        dict that cannot be read as a rule is refused. QUI-1608 removes it.
         """
         self._validate_model(model)
         merged = merge_options(
@@ -1161,7 +1162,7 @@ class SolverQuip(Solver):
         Raises:
             ValueError: if ``mapping`` is given with ``topology="native"``.
             QuipOrderOptionError: if an option is outside its chain limit, or a
-                raw ``access`` dict names no access rule.
+                raw ``access`` dict cannot be read as an access rule.
             QuipConnectionError: if a chain read faults while resolving the
                 topology or the account balance.
             QuipSubmissionError: if the extrinsic cannot be built.
@@ -1202,8 +1203,8 @@ class SolverQuip(Solver):
             TypeError: if both ``access`` and the deprecated ``mode`` are given.
             ValueError: if ``mapping`` is given with ``topology="native"``.
             QuipOrderOptionError: if an option is outside its chain limit, or a
-                raw ``access`` dict names no access rule, before anything is
-                signed.
+                raw ``access`` dict cannot be read as an access rule, before
+                anything is signed.
             QuipConnectionError: if a chain read faults (transport/decode) while
                 resolving the topology, the order, or the account balance.
             QuipSubmissionError: if the account cannot cover the quote and no
