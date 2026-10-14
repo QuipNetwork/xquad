@@ -1110,7 +1110,11 @@ class SolverQuip(Solver):
         """
         # No amount: the faucet's default drip. solve() only gets here when the
         # shortfall fits in one, so a mistyped reward is never funded.
-        fund_from_faucet("0x" + bytes(self._signer.account_id).hex(), url=self._faucet)
+        fund_from_faucet(
+            "0x" + bytes(self._signer.account_id).hex(),
+            url=self._faucet,
+            dest_label=chain.ss58_address(self._iface, self._signer.account_id),
+        )
         deadline = time.monotonic() + FUND_WAIT_SECONDS
         while (balance := self._free_balance()) < quote.total_planck:
             if time.monotonic() >= deadline:

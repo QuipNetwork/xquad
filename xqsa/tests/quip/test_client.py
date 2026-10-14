@@ -3331,7 +3331,7 @@ class TestAccountDisplaysInSs58:
     def test_autofund_prompt(self, monkeypatch) -> None:
         solver, iface = _solve_ready_short(monkeypatch, autofund=False)
 
-        def fake_fund(dest, *, url, amount=None):
+        def fake_fund(dest, *, url, amount=None, dest_label=None):
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
 
@@ -3343,6 +3343,38 @@ class TestAccountDisplaysInSs58:
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         solver.solve(_model())
         assert f"Fund {self._ss58(solver)} from " in "".join(stderr.written)
+
+    def test_fund_labels_the_hex_dest(self, monkeypatch) -> None:
+        solver, iface = _solve_ready_short(monkeypatch)
+        calls: list[tuple] = []
+
+        def fake_fund(dest, **kwargs):
+            calls.append((dest, kwargs))
+            iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
+            return {}
+
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", fake_fund)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        solver.solve(_model())
+        [(dest, kwargs)] = calls
+        assert dest == "0x" + bytes(solver._signer.account_id).hex()
+        assert kwargs["dest_label"] == self._ss58(solver)
+
+    def test_faucet_refusal(self, monkeypatch) -> None:
+        from xqsa.quip.faucet import QuipFaucetError
+
+        solver, _iface = _solve_ready_short(monkeypatch)
+        sent: list[str] = []
+
+        def post(url, dest, amount, timeout):
+            sent.append(dest)
+            return 403, {}
+
+        monkeypatch.setattr("xqsa.quip.faucet._post_request", post)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipFaucetError, match=f"refused {self._ss58(solver)}: already funded"):
+            solver.solve(_model())
+        assert sent == ["0x" + bytes(solver._signer.account_id).hex()]
 
 
 class TestSolverQuipInsufficientBalance:
@@ -3718,7 +3750,7 @@ class TestSolveAutofundGate:
         solver, iface = _solve_ready_short(monkeypatch)
         calls: list[tuple] = []
 
-        def fake_fund(dest, *, url, amount=None):
+        def fake_fund(dest, *, url, amount=None, dest_label=None):
             calls.append((dest, url, amount))
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
@@ -3756,7 +3788,8 @@ class TestSolveAutofundGate:
         monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", fake_fund)
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         solver.solve(_model())
-        assert calls == [{"url": "http://faucet"}]
+        label = quip_chain.ss58_address(solver._iface, solver._signer.account_id)
+        assert calls == [{"url": "http://faucet", "dest_label": label}]
 
     def test_shortfall_beyond_one_drip_raises_without_asking(self, monkeypatch) -> None:
         from xqsa.quip import QuipSubmissionError
@@ -3817,7 +3850,7 @@ class TestSolveAutofundGate:
 
         solver, _iface = _solve_ready_short(monkeypatch)
 
-        def refuse(dest, *, url, amount=None):
+        def refuse(dest, *, url, amount=None, dest_label=None):
             raise QuipFaucetError(403, {"error": "destination already funded"}, "refused")
 
         monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", refuse)
@@ -3829,7 +3862,7 @@ class TestSolveAutofundGate:
     def test_prompt_goes_to_stderr(self, monkeypatch) -> None:
         solver, iface = _solve_ready_short(monkeypatch, autofund=False)
 
-        def fake_fund(dest, *, url, amount=None):
+        def fake_fund(dest, *, url, amount=None, dest_label=None):
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
 
@@ -3847,7 +3880,7 @@ class TestSolveAutofundGate:
     def test_prompt_goes_to_stdout_when_stderr_is_redirected(self, monkeypatch) -> None:
         solver, iface = _solve_ready_short(monkeypatch, autofund=False)
 
-        def fake_fund(dest, *, url, amount=None):
+        def fake_fund(dest, *, url, amount=None, dest_label=None):
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
 
