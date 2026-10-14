@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import warnings
 from dataclasses import replace
@@ -1214,11 +1215,19 @@ class TestJobOrderSendOutcomes:
         failed = solver.create_order(_model())
         with pytest.raises(QuipSubmissionError):
             failed.submit()
+        reads: list[tuple[str, str]] = []
+        monkeypatch.setattr(chain, "extrinsic_fee", lambda _iface, block, ext: reads.append((block, ext)) or 7)
         text = str(failed)
+        rows = _box_rows(text)
         assert text.startswith("╭─ Job order (failed) ")
-        assert "│ Quoted      1.002182560255 AGLS total, block 200 " in text
+        start = rows.index("Paid        0.000000000007 AGLS fee")
+        # A failed order reserved no reward, so the row has none.
+        assert rows[start + 1] == "            quoted 1.002182560255 AGLS total, block 200"
+        assert not any("reward" in row for row in rows[start:])
         assert "affordable" not in text
         assert f"│ Receipt     failed in block {solver._iface.head}: QuantumComputeMempool." in text
+        assert reads == [("0xblock", "0xext")]
+        assert {len(line) for line in text.splitlines()} == {72}
 
 
 class TestJobOrderSignedBytesStayPrivate:
@@ -1358,35 +1367,36 @@ class TestJobOrderDisplay:
         order.quote()
         assert "│ Quote       1.002182560255 AGLS total, affordable, block 200 " in str(order)
         order.submit()
-        monkeypatch.setattr(order.receipt(), "_facts", lambda: SimpleNamespace(fee=1_907_881_410))
+        monkeypatch.setattr(chain, "proposal_fee", lambda _iface, _block, _order_id: 1_907_881_410)
         rows = _box_rows(str(order))
         assert str(order).startswith("╭─ Job order (submitted) ")
         start = rows.index("Paid        0.001907881410 AGLS fee")
         assert rows[start + 1 : start + 4] == [
             "            1.000000000000 AGLS reward",
-            "            quoted 1.002182560255 AGLS total at block 200",
+            "            quoted 1.002182560255 AGLS total, block 200",
             "Receipt     order 1, included in block 200, final",
         ]
         assert not any("affordable" in row for row in rows)
         assert {len(line) for line in str(order).splitlines()} == {72}
 
-    @pytest.mark.parametrize("fault", ["fee", "facts"])
-    def test_paid_row_keeps_the_fee_unknown_when_its_read_faults(self, monkeypatch, fault) -> None:
+    def test_paid_row_keeps_the_fee_unknown_when_its_read_faults(self, monkeypatch, caplog) -> None:
         solver, _ = _ready(monkeypatch)
         order = solver.create_order(_model()).submit()
 
-        def _boom():
+        def _boom(*_args):
             raise QuipConnectionError("node gone")
 
-        # _facts() reports a faulted fee read as fee=None; any other fault raises out of it.
-        facts = (lambda: SimpleNamespace(fee=None)) if fault == "fee" else _boom
-        monkeypatch.setattr(order.receipt(), "_facts", facts)
-        rows = _box_rows(str(order))
+        monkeypatch.setattr(chain, "proposal_fee", _boom)
+        with caplog.at_level(logging.WARNING, logger="xqsa.quip"):
+            rows = _box_rows(str(order))
+            str(order)
         start = rows.index("Paid        fee unknown")
         assert rows[start + 1 : start + 3] == [
             "            1.000000000000 AGLS reward",
-            "            quoted 1.002182560255 AGLS total at block 200",
+            "            quoted 1.002182560255 AGLS total, block 200",
         ]
+        # The row already says the fee is unknown; a print in a loop must not log on every pass.
+        assert "fee" not in caplog.text
 
     def test_paid_row_keeps_a_read_fee_and_retries_a_failed_read(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
@@ -1394,11 +1404,13 @@ class TestJobOrderDisplay:
         fees = iter([None, 1_907_881_410])
         reads: list[int | None] = []
 
-        def facts() -> SimpleNamespace:
+        def proposal_fee(_iface, _block, _order_id) -> int:
             reads.append(fee := next(fees))
-            return SimpleNamespace(fee=fee)
+            if fee is None:
+                raise QuipConnectionError("node gone")
+            return fee
 
-        monkeypatch.setattr(order.receipt(), "_facts", facts)
+        monkeypatch.setattr(chain, "proposal_fee", proposal_fee)
         assert "Paid        fee unknown" in _box_rows(str(order))
         assert "Paid        0.001907881410 AGLS fee" in _box_rows(str(order))
         str(order)

@@ -43,6 +43,7 @@ from xqsa.quip.chain import (
     block_hash,
     block_time_ms,
     block_timestamp,
+    extrinsic_fee,
     front_runner,
     proposal_fee,
     proposer_orders,
@@ -108,6 +109,15 @@ class _HashStub:
         if self.raises is not None:
             raise self.raises
         return self.result
+
+
+class _BlockSubstrate(FakeSubstrate):
+    def __init__(self, extrinsics: list, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.extrinsics = extrinsics
+
+    def get_block(self, block_hash=None, **_kwargs):
+        return {"extrinsics": self.extrinsics}
 
 
 class _RecordingSubstrate(FakeSubstrate):
@@ -247,6 +257,22 @@ class TestChainReaders:
     def test_proposal_fee_missing_fee_raises(self, events):
         with pytest.raises(QuipConnectionError, match="TransactionFeePaid"):
             proposal_fee(FakeSubstrate(events=events), BLOCK, 10)
+
+    def test_extrinsic_fee_matches_the_extrinsic_phase(self):
+        extrinsics = [{"extrinsic_hash": "0xaa"}, SimpleNamespace(extrinsic_hash="0xBB")]
+        iface = _BlockSubstrate(extrinsics, events=[_fee(0, 111), _fee(1, 222)])
+        assert extrinsic_fee(iface, BLOCK, "0xaa") == 111
+        assert extrinsic_fee(iface, BLOCK, "0xbb") == 222
+
+    def test_extrinsic_fee_unknown_extrinsic_raises(self):
+        iface = _BlockSubstrate([{"extrinsic_hash": "0xaa"}], events=[_fee(0, 111)])
+        with pytest.raises(QuipConnectionError, match="does not hold extrinsic 0xcc"):
+            extrinsic_fee(iface, BLOCK, "0xcc")
+
+    def test_extrinsic_fee_missing_fee_raises(self):
+        iface = _BlockSubstrate([{"extrinsic_hash": "0xaa"}], events=[_fee(1, 111)])
+        with pytest.raises(QuipConnectionError, match="TransactionFeePaid"):
+            extrinsic_fee(iface, BLOCK, "0xaa")
 
     def test_account_bytes_forms(self):
         raw = bytes(range(32))

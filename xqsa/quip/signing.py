@@ -60,7 +60,7 @@ from typing import TYPE_CHECKING, Any
 
 import quip_signer
 
-from xqsa.quip.codec import _as_int_or_none, _canonical_hex, _event_ids, _phase_extrinsic_index, _strip_0x
+from xqsa.quip.codec import _as_int_or_none, _event_ids, _extrinsic_index, _phase_extrinsic_index, _strip_0x
 from xqsa.quip.errors import QuipSigningError
 
 if TYPE_CHECKING:
@@ -714,16 +714,9 @@ def _fetch_dispatch_error(iface: Any, *, block_hash: str, ext_hash: str) -> str 
     if not block:
         return f"{UNCLASSIFIED_PREFIX}get_block returned no block for {block_hash}"
 
-    target = _strip_0x(ext_hash).lower()
-    ext_idx: int | None = None
-    for idx, ext in enumerate(block.get("extrinsics") or []):
-        candidate = getattr(ext, "extrinsic_hash", None)
-        if candidate is None and isinstance(ext, dict):
-            candidate = ext.get("extrinsic_hash")
-        if _canonical_hex(candidate) == target:
-            ext_idx = idx
-            break
+    ext_idx = _extrinsic_index(block, ext_hash)
     if ext_idx is None:
+        target = _strip_0x(ext_hash).lower()
         return f"{UNCLASSIFIED_PREFIX}extrinsic {target[:16]} not found in block {_strip_0x(block_hash)[:16]}"
 
     try:

@@ -477,6 +477,14 @@ class _Sent:
     error: str | None = None
 
 
+def _quote_text(quote: JobQuote, symbol: str, decimals: int, afford: str | None = None) -> str:
+    """A quote as ``X AGLS total``, then ``afford`` and the block it was taken at, comma-separated."""
+    parts = [f"{_format_planck(quote.total_planck, decimals)} {symbol} total", afford]
+    if quote.quoted_at_block:
+        parts.append(f"block {quote.quoted_at_block}")
+    return ", ".join(part for part in parts if part)
+
+
 class JobOrder:
     """One Quip order: its model, placement and options, from draft to finalized.
 
@@ -527,7 +535,7 @@ class JobOrder:
         self._signed: _SignedCall | None = None
         # The most recent quote, from quote() or submit(); shown, never gated on.
         self._last_quote: JobQuote | None = None
-        # The fee the order paid, kept once a read returns it; a failed read is retried on the next print.
+        # The fee the sent extrinsic paid, kept once a read returns it; a failed read is retried on the next print.
         self._paid_fee: int | None = None
         self._order_id: int | None = None
         self._included_block: int | None = None
@@ -845,25 +853,38 @@ class JobOrder:
 
     # -- display ---------------------------------------------------------
 
-    def _paid_text(self, symbol: str, decimals: int, quote: JobQuote | None) -> str:
-        """The Paid row: the fee the chain charged and the reward, then the quote for comparison.
+    def _read_fee(self) -> int | None:
+        """The fee the sent extrinsic paid, read once from its ``TransactionFeePaid`` event, or ``None``.
 
-        The quote's fee is an estimate at the head block; the charged one is
-        read from the order's ``TransactionFeePaid`` event, best-effort.
+        By order id when the dispatch succeeded, else by extrinsic hash: a
+        failed dispatch paid the fee too. Display only, so a fault logs at
+        debug level and the next print retries.
         """
-        if self._paid_fee is None:
+        if self._paid_fee is None and self._block_hash is not None:
+            iface = self._client._iface
             try:
-                self._paid_fee = self.receipt()._facts().fee
-            except Exception:  # noqa: BLE001 -- display only; a read fault shows the fee as unknown.
-                pass
-        fee = self._paid_fee
-        fee_text = "fee unknown" if fee is None else f"{_format_planck(fee, decimals)} {symbol} fee"
+                if self._order_id is not None:
+                    self._paid_fee = chain.proposal_fee(iface, self._block_hash, self._order_id)
+                elif self._ext_hash is not None:
+                    self._paid_fee = chain.extrinsic_fee(iface, self._block_hash, self._ext_hash)
+            except Exception as exc:  # noqa: BLE001 -- display only; the row says "fee unknown".
+                logger.debug("could not read the fee of extrinsic %s: %s", self._ext_hash, exc)
+        return self._paid_fee
+
+    def _paid_text(self, symbol: str, decimals: int, quote: JobQuote | None) -> str:
+        """The Paid row: the fee the chain charged and any reward, then the quote for comparison.
+
+        The quote's fee is an estimate at the head block. A failed order
+        placed nothing, so it reserved no reward.
+        """
+        fee = self._read_fee()
+        lines = ["fee unknown" if fee is None else f"{_format_planck(fee, decimals)} {symbol} fee"]
         # One amount per line: both on one line overflow the box's 56-column value at 12 decimals.
-        paid = f"{fee_text}\n{_format_planck(self._options.reward, decimals)} {symbol} reward"
-        if quote is None:
-            return paid
-        at_block = f" at block {quote.quoted_at_block}" if quote.quoted_at_block else ""
-        return f"{paid}\nquoted {_format_planck(quote.total_planck, decimals)} {symbol} total{at_block}"
+        if self._state != "failed":
+            lines.append(f"{_format_planck(self._options.reward, decimals)} {symbol} reward")
+        if quote is not None:
+            lines.append(f"quoted {_quote_text(quote, symbol, decimals)}")
+        return "\n".join(lines)
 
     def __str__(self) -> str:
         """Render the order as a box: network, problem, terms, then its quote and receipt."""
@@ -893,11 +914,9 @@ class JobOrder:
         if quote is None:
             quoted = "not quoted"
         else:
-            total = f"{_format_planck(quote.total_planck, decimals)} {symbol} total"
-            at_block = f"block {quote.quoted_at_block}" if quote.quoted_at_block else None
             # Affordability only matters before sending; after, it describes a balance that has moved.
-            afford = ["affordable" if quote.affordable else "not affordable"] if self._state == "draft" else []
-            quoted = ", ".join([total, *afford] + ([at_block] if at_block else []))
+            afford = ("affordable" if quote.affordable else "not affordable") if self._state == "draft" else None
+            quoted = _quote_text(quote, symbol, decimals, afford)
         block = f"block {self._included_block}" if self._included_block is not None else None
         if self._state == "draft":
             receipt = "not submitted"
@@ -916,7 +935,7 @@ class JobOrder:
                 receipt += f", {outcome.status}{leader}"
         if self._state == "draft":
             summary = [("Quote", quoted), ("Receipt", receipt)]
-        elif self._state in ("failed", "unconfirmed"):  # no order id, so no JobProposed event to read a fee from.
+        elif self._state == "unconfirmed":  # the outcome is unknown, so it is not known to have paid.
             summary = [("Quoted", quoted), ("Receipt", receipt)]
         else:
             summary = [("Paid", self._paid_text(symbol, decimals, quote)), ("Receipt", receipt)]
