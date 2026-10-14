@@ -338,9 +338,11 @@ def connect(url: str, **kwargs: Any) -> Any:
 
     The ``wss://`` connection checks the certificate chain, host name and
     validity dates, and does not check revocation (no CRL, no OCSP). A caller
-    that needs revocation checking supplies its own ``ssl.SSLContext`` through
-    ``ws_options["sslopt"]["context"]``, or uses a TLS stack that checks OCSP
-    or a CRL and fails closed when the check cannot complete.
+    can pass its own ``ssl.SSLContext`` through
+    ``ws_options["sslopt"]["context"]``, but a stdlib context checks only CRLs
+    the caller fetches and loads itself, with ``VERIFY_CRL_CHECK_LEAF`` or
+    ``VERIFY_CRL_CHECK_CHAIN`` set (without a loaded CRL every handshake
+    fails), and cannot check OCSP at all; OCSP needs a different TLS stack.
 
     Raises:
         ImportError: if ``substrate-interface`` is not installed, or ``certifi``

@@ -29,9 +29,11 @@ The request verifies TLS against the same CA default as
 names an existing file or directory, otherwise the system trust store, or
 certifi's bundle on a macOS Python whose store is empty. It checks the
 certificate chain, host name and validity dates, and does not check
-revocation (no CRL, no OCSP). A caller that needs revocation checking uses a
-TLS stack that checks OCSP or a CRL and fails closed when the check cannot
-complete.
+revocation (no CRL, no OCSP), and offers no hook to change that: it builds
+its own ``ssl.SSLContext`` and takes none from the caller, and
+``SolverQuip``'s ``autofund`` always goes through it. A caller that needs
+revocation checking leaves ``autofund`` off and sends the
+``POST <url>/request`` itself over a TLS stack that checks OCSP or a CRL.
 """
 
 from __future__ import annotations

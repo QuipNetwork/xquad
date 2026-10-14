@@ -486,6 +486,11 @@ class SolverQuip(Solver):
         """See :func:`xqsa.quip.chain.mineable_topologies`."""
         return chain.mineable_topologies(self._iface)
 
+    @property
+    def _account_ss58(self) -> str:
+        """The signer's account in SS58, as every message names it."""
+        return chain.ss58_address(self._iface, self._signer.account_id)
+
     def _free_balance(self) -> int:
         """See :func:`xqsa.quip.chain.free_balance`."""
         return chain.free_balance(self._iface, self._signer.account_id)
@@ -527,7 +532,7 @@ class SolverQuip(Solver):
         else:
             remedy = "Pass faucet=, set QUIP_FAUCET_URL, or build with SolverQuip.for_network(...) to name a faucet."
         return QuipSubmissionError(
-            f"insufficient balance: account {chain.ss58_address(self._iface, self._signer.account_id)} holds "
+            f"insufficient balance: account {self._account_ss58} holds "
             f"{amount(quote.balance_planck)} but the job needs {amount(quote.total_planck)} "
             f"(reward plus fee), {amount(quote.shortfall_planck)} short. {remedy}"
         )
@@ -985,7 +990,7 @@ class SolverQuip(Solver):
             balance_planck=self._free_balance(),
             token_symbol=symbol,
             token_decimals=decimals,
-            account=chain.ss58_address(self._iface, self._signer.account_id),
+            account=self._account_ss58,
             quoted_at_block=self._current_block(),
             num_variables=len(job.mapping),
             num_spins=job.topology.num_nodes,
@@ -1113,7 +1118,7 @@ class SolverQuip(Solver):
         fund_from_faucet(
             "0x" + bytes(self._signer.account_id).hex(),
             url=self._faucet,
-            dest_label=chain.ss58_address(self._iface, self._signer.account_id),
+            dest_label=self._account_ss58,
         )
         deadline = time.monotonic() + FUND_WAIT_SECONDS
         while (balance := self._free_balance()) < quote.total_planck:
@@ -1153,7 +1158,7 @@ class SolverQuip(Solver):
                 self._autofund,
                 quote,
                 name="autofund",
-                question=f"Fund {chain.ss58_address(self._iface, self._signer.account_id)} from {self._faucet}?",
+                question=f"Fund {self._account_ss58} from {self._faucet}?",
             )
             self._fund(quote)
 
