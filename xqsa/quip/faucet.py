@@ -24,11 +24,14 @@ one drip, and rate-limits per destination. :func:`fund_from_faucet` wraps the
 ``POST <url>/request`` contract, including the one automatic retry on a
 429 rate limit; a 403 (balance already above one drip) is never retried.
 
-The request verifies TLS against the CA default (certifi, or
-``WEBSOCKET_CLIENT_CA_BUNDLE``): it checks the certificate chain, host name
-and validity dates, and does not check revocation (no CRL, no OCSP). A
-caller that needs revocation checking uses a TLS stack that checks OCSP or a
-CRL and fails closed when the check cannot complete.
+The request verifies TLS against the same CA default as
+:func:`xqsa.quip.metadata.connect`: ``WEBSOCKET_CLIENT_CA_BUNDLE`` when it
+names an existing file or directory, otherwise the system trust store, or
+certifi's bundle on a macOS Python whose store is empty. It checks the
+certificate chain, host name and validity dates, and does not check
+revocation (no CRL, no OCSP). A caller that needs revocation checking uses a
+TLS stack that checks OCSP or a CRL and fails closed when the check cannot
+complete.
 """
 
 from __future__ import annotations
