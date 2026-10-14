@@ -336,6 +336,12 @@ def connect(url: str, **kwargs: Any) -> Any:
     Other caller ``ws_options`` are kept, and the caller's dicts are copied, not
     modified. Everywhere else the existing trust store applies.
 
+    The ``wss://`` connection checks the certificate chain, host name and
+    validity dates, and does not check revocation (no CRL, no OCSP). A caller
+    that needs revocation checking supplies its own ``ssl.SSLContext`` through
+    ``ws_options["sslopt"]["context"]``, or uses a TLS stack that checks OCSP
+    or a CRL and fails closed when the check cannot complete.
+
     Raises:
         ImportError: if ``substrate-interface`` is not installed, or ``certifi``
             is not installed and the certifi default applies.

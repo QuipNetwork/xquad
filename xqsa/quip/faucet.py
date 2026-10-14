@@ -23,6 +23,12 @@ dispenses a fixed drip once a destination's on-chain balance is at or below
 one drip, and rate-limits per destination. :func:`fund_from_faucet` wraps the
 ``POST <url>/request`` contract, including the one automatic retry on a
 429 rate limit; a 403 (balance already above one drip) is never retried.
+
+The request verifies TLS against the CA default (certifi, or
+``WEBSOCKET_CLIENT_CA_BUNDLE``): it checks the certificate chain, host name
+and validity dates, and does not check revocation (no CRL, no OCSP). A
+caller that needs revocation checking uses a TLS stack that checks OCSP or a
+CRL and fails closed when the check cannot complete.
 """
 
 from __future__ import annotations
