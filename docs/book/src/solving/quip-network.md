@@ -142,9 +142,9 @@ before a miner subscribed stays invisible to it. A miner that accepts
 solves it on its own hardware with its own algorithm and submits a
 solution.
 
-No on-chain hook closes an order; its status changes only when an
-extrinsic touches it. `SolverQuip` computes finality itself from block
-height instead of waiting for an `OrderClosed` event:
+The chain marks an order `Expired` at its effective expiry, and only a
+claim or a reclaim closes it. `SolverQuip` computes finality itself from
+block height instead of waiting for an `OrderClosed` event:
 
 ```text
 effective_expiry = min(created_at + deadline_blocks, first_solution_at + block_wait)
