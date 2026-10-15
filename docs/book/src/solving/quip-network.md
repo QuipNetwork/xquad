@@ -35,9 +35,19 @@ from source with a local Rust toolchain on macOS and Windows. Both
 guards are lazy: `import xqsa` and every other solver in this chapter
 work without the extra installed; only constructing `SolverQuip` needs
 it.
+
 Both the chain RPC connection over `wss://` and the faucet request
 verify the certificate chain, host name and validity dates, and neither
-checks revocation (no CRL, no OCSP).
+checks revocation (no CRL, no OCSP). A caller that needs revocation
+checking can pass its own `ssl.SSLContext` for the RPC connection
+through `ws_options["sslopt"]["context"]` (see `connect` in
+`xqsa.quip.metadata`). A standard-library context checks only
+revocation lists the caller fetches and loads itself, with
+`VERIFY_CRL_CHECK_LEAF` or `VERIFY_CRL_CHECK_CHAIN` set, and fails every
+handshake without one. It cannot check OCSP, which needs a different TLS
+stack that fails closed when the check does not finish. The faucet
+request takes no custom context: leave `autofund` off and send the
+faucet request yourself over such a stack.
 
 Configuration resolves from constructor arguments first, then
 environment variables:
