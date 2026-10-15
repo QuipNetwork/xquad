@@ -818,7 +818,7 @@ def test_encoded_problem_argmin_decodes_to_optimum(domain: XQMXDomain) -> None:
 
 
 class TestExpiry:
-    """effective_expiry and is_final mirror the on-chain lazy lifecycle."""
+    """effective_expiry and is_final mirror the on-chain order lifecycle."""
 
     def test_hard_deadline_without_solution(self) -> None:
         """With no first solution, expiry is created_at + deadline_blocks."""

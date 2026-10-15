@@ -428,12 +428,15 @@ print(receipt.status())
 ```
 
 `chain_status` is `Expired`: the chain marked the order expired at its
-effective expiry, and it turns `Closed` once the winner claims, when
-`print(receipt)` shows the `Winner` row as `claimed`. The list leaves
-out orders 22 and 25: they went unanswered and were reclaimed, and the
-chain drops a reclaimed order from the account's list. A receipt also
-lists the solvers that answered and their raw spin vectors, shows the
-settlement, and reclaims an unanswered order with `receipt.reclaim()`.
+effective expiry. It turns `Closed` once someone claims it, and
+`print(receipt)` then shows the `Winner` row as `claimed`. A closed
+order drops out of `list_orders()`, which lists only orders not yet
+closed, but its receipt still rebuilds from the id. Orders 21 and 22
+were placed for the examples on [Job Orders](quip-orders.md). Orders 22
+and 25 are already missing: they went unanswered and were reclaimed. A
+receipt also lists the solvers that answered and their raw spin vectors,
+shows the settlement, and reclaims an unanswered order with
+`receipt.reclaim()`.
 
 A receipt does not hold your model, so it cannot decode an answer into a
 tour. Decoding needs the `JobOrder` from the session that submitted it.

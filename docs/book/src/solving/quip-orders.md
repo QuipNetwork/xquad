@@ -403,12 +403,13 @@ print(receipt.status())
 order
 (`order 1000000000 not found on-chain (QuantumComputeMempool.JobOrders)`).
 
-`list_orders(state=None, account=None)` returns an account's order ids,
-newest first. The chain drops a reclaimed order from the account's
-list, so a reclaimed order is missing from it. `state` is `"submitted"`, `"finalized"` or `None`, and any
-other value raises `ValueError`; `account` is SS58, `0x` hex or bytes,
-and defaults to the signer. It returns at most the newest 32 ids, after
-the `state` filter, and warns when there are more:
+`list_orders(state=None, account=None)` returns the ids of an account's
+orders that are not yet closed, newest first: the chain drops an order
+from the account's list once a claim or a reclaim closes it. `state` is
+`"submitted"`, `"finalized"` or `None`, and any other value raises
+`ValueError`; `account` is SS58, `0x` hex or bytes, and defaults to the
+signer. It returns at most the newest 32 ids, after the `state` filter,
+and warns when there are more:
 `showing 32 of N orders on this account. This 32-order page limit was imposed for the old protocol cap of 32 orders per account; please flag it to the xquad team so it can be lifted.`
 
 The receipt and the in-session `JobOrder` share these methods:
@@ -425,10 +426,12 @@ The receipt and the in-session `JobOrder` share these methods:
 `chain_status` and `state` answer different questions. `state` is
 `finalized` once the chain head passes the order's effective expiry,
 while `chain_status` is the chain's own record: `Opened` until the
-effective expiry, `Expired` from that block, and `Closed` once a
-winner's claim or a reclaim touches the order. The deprecated
-`SolverQuip.status()` returns the old keys, `status` and `is_final`, in
-place of `state` and `chain_status`.
+effective expiry, `Expired` from then, and `Closed` once a claim or a
+reclaim closes the order. The chain expires a bounded number of orders
+per block, so when many expire at once an order can read `Opened` for a
+few blocks past its expiry. The deprecated `SolverQuip.status()` returns
+the old keys, `status` and `is_final`, in place of `state` and
+`chain_status`.
 
 `wait()` raises `QuipTimeoutError` with the receipt attached, so the
 caller can wait again instead of rebuilding it:

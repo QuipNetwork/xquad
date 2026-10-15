@@ -38,16 +38,16 @@ it.
 
 Both the chain RPC connection over `wss://` and the faucet request
 verify the certificate chain, host name and validity dates, and neither
-checks revocation (no CRL, no OCSP). A caller that needs revocation
-checking can pass its own `ssl.SSLContext` for the RPC connection
-through `ws_options["sslopt"]["context"]` (see `connect` in
-`xqsa.quip.metadata`). A standard-library context checks only
-revocation lists the caller fetches and loads itself, with
+checks revocation (no CRL, no OCSP). `SolverQuip` takes no TLS context,
+so it cannot check revocation. Code that opens its own chain connection
+with `connect` in `xqsa.quip.metadata` can pass an `ssl.SSLContext`
+through `ws_options["sslopt"]["context"]`. A standard-library context
+checks only revocation lists the caller fetches and loads itself, with
 `VERIFY_CRL_CHECK_LEAF` or `VERIFY_CRL_CHECK_CHAIN` set, and fails every
 handshake without one. It cannot check OCSP, which needs a different TLS
 stack that fails closed when the check does not finish. The faucet
-request takes no custom context: leave `autofund` off and send the
-faucet request yourself over such a stack.
+request takes no custom context either: leave `autofund` off and send it
+yourself over such a stack.
 
 Configuration resolves from constructor arguments first, then
 environment variables:
@@ -83,9 +83,8 @@ or `JobOrder.set()` override them for that order. The quality floors
 only, never as client defaults. [Job Orders](quip-orders.md) covers each
 option, including the [payout rules](quip-orders.md#payout-rules) and
 [access rules](quip-orders.md#access). `delivery` accepts only
-`"OnChainOnly"`: the pallet's `Callback` delivery fires its
-`ResultReady` event only when a reward is claimed, which network solvers
-do not do.
+`"OnChainOnly"`: the client has no subscriber for the `ResultReady`
+event the pallet's `Callback` delivery emits when the order expires.
 
 Before connecting, the constructor raises `ValueError` for a `delivery`
 other than `"OnChainOnly"`, and for an `access` or `resolution` that is
@@ -131,7 +130,7 @@ the larger share.
 Moving a network to runtime 119 starts it afresh instead of upgrading it
 in place. Orders placed before the move do not carry over, so an order
 id recorded before it does not name the same order after it. `aglais`
-runs runtime 119 since its relaunch on 2026-10-15.
+has run runtime 119 since its relaunch on 2026-10-15.
 
 ## Job Lifecycle
 
@@ -142,9 +141,10 @@ before a miner subscribed stays invisible to it. A miner that accepts
 solves it on its own hardware with its own algorithm and submits a
 solution.
 
-The chain marks an order `Expired` at its effective expiry, and only a
-claim or a reclaim closes it. `SolverQuip` computes finality itself from
-block height instead of waiting for an `OrderClosed` event:
+The chain marks an order `Expired` at its effective expiry, or a few
+blocks later when many orders expire at once, and only a claim or a
+reclaim closes it. `SolverQuip` computes finality itself from block
+height instead of waiting for an `OrderClosed` event:
 
 ```text
 effective_expiry = min(created_at + deadline_blocks, first_solution_at + block_wait)
