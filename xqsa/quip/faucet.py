@@ -23,6 +23,17 @@ dispenses a fixed drip once a destination's on-chain balance is at or below
 one drip, and rate-limits per destination. :func:`fund_from_faucet` wraps the
 ``POST <url>/request`` contract, including the one automatic retry on a
 429 rate limit; a 403 (balance already above one drip) is never retried.
+
+The request verifies TLS against the same CA default as
+:func:`xqsa.quip.metadata.connect`: ``WEBSOCKET_CLIENT_CA_BUNDLE`` when it
+names an existing file or directory, otherwise the system trust store, or
+certifi's bundle on a macOS Python whose store is empty. It checks the
+certificate chain, host name and validity dates, and does not check
+revocation (no CRL, no OCSP), and offers no hook to change that: it builds
+its own ``ssl.SSLContext`` and takes none from the caller, and
+``SolverQuip``'s ``autofund`` always goes through it. A caller that needs
+revocation checking leaves ``autofund`` off and sends the
+``POST <url>/request`` itself over a TLS stack that checks OCSP or a CRL.
 """
 
 from __future__ import annotations
@@ -101,7 +112,9 @@ def _json_object(raw: bytes) -> dict:
     return body if isinstance(body, dict) else {}
 
 
-def fund_from_faucet(dest: str, *, url: str, amount: int | None = None, timeout: float = 40.0) -> dict:
+def fund_from_faucet(
+    dest: str, *, url: str, amount: int | None = None, timeout: float = 40.0, dest_label: str | None = None
+) -> dict:
     """Request faucet funding for ``dest`` and return the drip's JSON body.
 
     Retries exactly once on a 429 rate limit, sleeping for the server's
@@ -116,6 +129,8 @@ def fund_from_faucet(dest: str, *, url: str, amount: int | None = None, timeout:
         amount: Requested drip size in plancks. Omitted from the request body
             when ``None``, letting the faucet apply its own default.
         timeout: Per-attempt socket timeout in seconds.
+        dest_label: The account as messages and logs name it (e.g. its SS58
+            address). Defaults to ``dest``; never sent to the faucet.
 
     Returns:
         The faucet's parsed JSON response body on success.
@@ -125,6 +140,7 @@ def fund_from_faucet(dest: str, *, url: str, amount: int | None = None, timeout:
             non-2xx status, or a transport-level failure.
     """
     request_url = url.rstrip("/") + "/request"
+    shown = dest_label or dest
     status, body = _post_request(request_url, dest, amount, timeout)
 
     if status == 429:
@@ -134,14 +150,14 @@ def fund_from_faucet(dest: str, *, url: str, amount: int | None = None, timeout:
             retry_after = 5.0
         if retry_after > MAX_RETRY_AFTER_SECONDS:
             raise QuipFaucetError(
-                status, body, f"faucet {request_url} rate limited {dest} for {retry_after:.0f}s; try again later"
+                status, body, f"faucet {request_url} rate limited {shown} for {retry_after:.0f}s; try again later"
             )
-        logger.debug("faucet %s rate limited %s, retrying after %ss", request_url, dest, retry_after)
+        logger.debug("faucet %s rate limited %s, retrying after %ss", request_url, shown, retry_after)
         time.sleep(retry_after)
         status, body = _post_request(request_url, dest, amount, timeout)
 
     if 200 <= status < 300:
-        logger.info("faucet %s funded %s: %s planck", request_url, dest, body.get("amount"))
+        logger.info("faucet %s funded %s: %s planck", request_url, shown, body.get("amount"))
         return body
 
     if status == 403:
@@ -150,8 +166,8 @@ def fund_from_faucet(dest: str, *, url: str, amount: int | None = None, timeout:
         raise QuipFaucetError(
             status,
             body,
-            f"faucet {request_url} refused {dest}: already funded above one drip{suffix}",
+            f"faucet {request_url} refused {shown}: already funded above one drip{suffix}",
         )
 
     error = body.get("error", f"HTTP {status}")
-    raise QuipFaucetError(status, body, f"faucet {request_url} refused {dest}: {error}")
+    raise QuipFaucetError(status, body, f"faucet {request_url} refused {shown}: {error}")

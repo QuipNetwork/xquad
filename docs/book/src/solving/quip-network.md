@@ -35,6 +35,9 @@ from source with a local Rust toolchain on macOS and Windows. Both
 guards are lazy: `import xqsa` and every other solver in this chapter
 work without the extra installed; only constructing `SolverQuip` needs
 it.
+Both the chain RPC connection over `wss://` and the faucet request
+verify the certificate chain, host name and validity dates, and neither
+checks revocation (no CRL, no OCSP).
 
 Configuration resolves from constructor arguments first, then
 environment variables:
