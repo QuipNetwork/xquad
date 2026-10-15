@@ -613,8 +613,9 @@ def proposer_orders(iface: Any, account_id: Any) -> list[int]:
     """Return the ids of the orders ``account_id`` proposed, oldest first.
 
     ``ProposerOrders`` is a value-query ``BoundedVec<u64>`` the pallet pushes
-    to on each proposal, so an account with no orders reads as empty and
-    reversing the list gives newest first.
+    to on each proposal and removes an order from when a claim or a reclaim
+    closes it, so it holds only orders not yet closed. An account with none
+    reads as empty, and reversing the list gives newest first.
     """
     entry = iface.query(MEMPOOL_PALLET, PROPOSER_ORDERS_STORAGE, [account_id])
     return [int(order_id) for order_id in getattr(entry, "value", None) or []]

@@ -159,9 +159,10 @@ class JobOrderReceipt:
         """Block until the order is final, polling at the client's ``poll_interval``.
 
         An order is final ``block_wait`` blocks after its first accepted
-        answer, or at its deadline if nobody answers. The chain flips an
-        expired order's status lazily, so finality is decided by block height
-        and never by waiting for the status to change. Waiting never reclaims.
+        answer, or at its deadline if nobody answers. The chain can report an
+        order as ``Opened`` for some blocks past its expiry, so finality is
+        decided by block height and never by waiting for the status to change.
+        Waiting never reclaims.
 
         Raises:
             QuipTimeoutError: if the order is not final within the client's

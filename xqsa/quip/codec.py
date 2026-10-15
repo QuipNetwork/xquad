@@ -850,9 +850,12 @@ def is_final(status: str, current_block: int, expiry: int) -> bool:
     """Whether an order is final and will accept no further solutions.
 
     Final when the chain status is terminal (``Expired``/``Closed``) or the
-    current block has reached the effective expiry. The lazy lifecycle means an
-    order can be past expiry while still reported ``Opened``, so the height
-    check is what actually decides finality (mirrors ``lifecycle::is_expired``).
+    current block has reached the effective expiry. The chain marks an order
+    ``Expired`` only at or after its effective expiry (runtime 119 expires a
+    bounded number per block; older runtimes only when an extrinsic touched
+    it), so an order can be past expiry while still reported ``Opened``, and
+    the height check is what actually decides finality (mirrors
+    ``lifecycle::is_expired``).
     """
     if status in _TERMINAL_STATUSES:
         return True

@@ -1295,10 +1295,12 @@ class SolverQuip(Solver):
         """Return the ids of an account's orders, newest first.
 
         Reads the chain's per-account order list, so it includes orders
-        placed from any session. ``state`` keeps only the orders still open
-        (``"submitted"``) or final (``"finalized"``), at one more read per
-        order. ``account`` lists another account's orders instead of this
-        client's signer, as SS58 text, ``0x`` hex or bytes.
+        placed from any session. The chain drops an order from that list once
+        a claim or a reclaim closes it, so closed orders are not listed.
+        ``state`` keeps only the orders still open (``"submitted"``) or final
+        (``"finalized"``), at one more read per order. ``account`` lists
+        another account's orders instead of this client's signer, as SS58
+        text, ``0x`` hex or bytes.
 
         At most :data:`LIST_ORDERS_LIMIT` (32) ids are returned; past that it
         warns and returns the newest 32.

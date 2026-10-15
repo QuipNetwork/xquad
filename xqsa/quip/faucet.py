@@ -33,7 +33,8 @@ revocation (no CRL, no OCSP), and offers no hook to change that: it builds
 its own ``ssl.SSLContext`` and takes none from the caller, and
 ``SolverQuip``'s ``autofund`` always goes through it. A caller that needs
 revocation checking leaves ``autofund`` off and sends the
-``POST <url>/request`` itself over a TLS stack that checks OCSP or a CRL.
+``POST <url>/request`` itself over a TLS stack that checks OCSP or a CRL
+and fails closed when the check does not finish.
 """
 
 from __future__ import annotations
