@@ -9,13 +9,6 @@ runtime `specVersion 118`. [Quip Network](quip-network.md) is the
 reference for the mechanism and [Job Orders](quip-orders.md) for the
 order surface; this page is the walkthrough.
 
-<!-- xquad:defect QUI-1823 -->
-> **Not yet verified on runtime 119.** These outputs were captured on
-> `aglais` at runtime 118. No network ran runtime 119 when this page was
-> written, so the same steps may behave differently there. Report
-> problems at the [issue
-> tracker](https://gitlab.com/quip.network/xquad/-/issues).
-
 ## Install
 
 ```sh

@@ -105,13 +105,6 @@ override a preset.
 
 ### Runtime compatibility
 
-<!-- xquad:defect QUI-1823 -->
-> **Not yet verified on runtime 119.** This page was tested on `aglais`
-> at runtime 118 only. No network ran runtime 119 when it was written,
-> so proposing an order there, and the rest of this section, may behave
-> differently. Report problems at the [issue
-> tracker](https://gitlab.com/quip.network/xquad/-/issues).
-
 `SolverQuip` reads the runtime's `specVersion` once, when it connects; a
 client that stays connected across an upgrade keeps the version it read
 until it reconnects. Runtime 119 renamed the order's energy-ceiling
@@ -128,7 +121,7 @@ the larger share.
 Moving a network to runtime 119 starts it afresh instead of upgrading it
 in place. Orders placed before the move do not carry over, so an order
 id recorded before it does not name the same order after it. `aglais`
-runs runtime 118 as of 2026-10-12.
+runs runtime 119 since its relaunch on 2026-10-15.
 
 ## Job Lifecycle
 
