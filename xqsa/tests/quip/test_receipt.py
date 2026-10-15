@@ -43,12 +43,13 @@ from xqsa.quip.chain import (
     block_hash,
     block_time_ms,
     block_timestamp,
+    extrinsic_fee,
     front_runner,
     proposal_fee,
     proposer_orders,
     top_solvers,
 )
-from xqsa.quip.display import Floors, floors_text, terms_rows, variant_text
+from xqsa.quip.display import Floors, count, floors_text, terms_rows, variant_text
 from xqsa.quip.receipt import JobOrderReceipt
 from xqsa.quip.resolution import ResolutionTopNEqual
 
@@ -108,6 +109,15 @@ class _HashStub:
         if self.raises is not None:
             raise self.raises
         return self.result
+
+
+class _BlockSubstrate(FakeSubstrate):
+    def __init__(self, extrinsics: list, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.extrinsics = extrinsics
+
+    def get_block(self, block_hash=None, **_kwargs):
+        return {"extrinsics": self.extrinsics}
 
 
 class _RecordingSubstrate(FakeSubstrate):
@@ -247,6 +257,22 @@ class TestChainReaders:
     def test_proposal_fee_missing_fee_raises(self, events):
         with pytest.raises(QuipConnectionError, match="TransactionFeePaid"):
             proposal_fee(FakeSubstrate(events=events), BLOCK, 10)
+
+    def test_extrinsic_fee_matches_the_extrinsic_phase(self):
+        extrinsics = [{"extrinsic_hash": "0xaa"}, SimpleNamespace(extrinsic_hash="0xBB")]
+        iface = _BlockSubstrate(extrinsics, events=[_fee(0, 111), _fee(1, 222)])
+        assert extrinsic_fee(iface, BLOCK, "0xaa") == 111
+        assert extrinsic_fee(iface, BLOCK, "0xbb") == 222
+
+    def test_extrinsic_fee_unknown_extrinsic_raises(self):
+        iface = _BlockSubstrate([{"extrinsic_hash": "0xaa"}], events=[_fee(0, 111)])
+        with pytest.raises(QuipConnectionError, match="does not hold extrinsic 0xcc"):
+            extrinsic_fee(iface, BLOCK, "0xcc")
+
+    def test_extrinsic_fee_missing_fee_raises(self):
+        iface = _BlockSubstrate([{"extrinsic_hash": "0xaa"}], events=[_fee(1, 111)])
+        with pytest.raises(QuipConnectionError, match="TransactionFeePaid"):
+            extrinsic_fee(iface, BLOCK, "0xaa")
 
     def test_account_bytes_forms(self):
         raw = bytes(range(32))
@@ -659,7 +685,7 @@ class TestJobOrderReceiptReclaim:
                 {"solution_count": 2},
                 200,
                 None,
-                r"^order 1 was answered by 2 solvers; its reward awaits the winner's claim and cannot be reclaimed$",
+                r"^order 1 was answered by 2 solvers; its reward awaits a claim and cannot be reclaimed$",
                 id="answered-2",
             ),
             pytest.param({"solution_count": 1}, 200, None, r"^order 1 was answered by 1 solver; its", id="answered-1"),
@@ -1121,6 +1147,11 @@ class TestDisplayHelpers:
             ("Block wait", "10 blocks"),
             ("Reward", "1 AGLS"),
         ]
+
+
+@pytest.mark.parametrize(("n", "text"), [(0, "0 spins"), (1, "1 spin"), (2, "2 spins")])
+def test_count_is_singular_only_at_one(n, text) -> None:
+    assert count(n, "spin") == text
 
 
 class TestFloorsText:

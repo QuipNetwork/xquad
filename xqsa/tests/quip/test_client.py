@@ -39,6 +39,7 @@ import pytest
 dimod = pytest.importorskip("dimod", reason="dwave-samplers / dimod not installed")
 
 from xqffi.vm import Domain, XqmxModel, XqmxSample
+from xqsa.quip import chain as quip_chain
 from xqsa.quip.codec import (
     DEFAULT_ISING_SPEC_ID,
     I32_MAX,
@@ -725,7 +726,7 @@ def test_encoded_problem_argmin_decodes_to_optimum(domain: Domain) -> None:
 
 
 class TestExpiry:
-    """effective_expiry and is_final mirror the on-chain lazy lifecycle."""
+    """effective_expiry and is_final mirror the on-chain order lifecycle."""
 
     def test_hard_deadline_without_solution(self) -> None:
         """With no first solution, expiry is created_at + deadline_blocks."""
@@ -1753,7 +1754,8 @@ class TestSolverQuipChainReads:
         from xqsa.quip import QuipConnectionError
 
         solver = _make_solver(monkeypatch, iface=_default_iface())  # no System.Account entry
-        with pytest.raises(QuipConnectionError, match="could not read the free balance"):
+        account = quip_chain.ss58_address(solver._iface, solver._signer.account_id)
+        with pytest.raises(QuipConnectionError, match=f"could not read the free balance of {account} from"):
             solver._free_balance()
 
 
@@ -3184,6 +3186,85 @@ class TestSolverQuipQuote:
         assert "│ Network     aglais " in str(quote)
 
 
+class TestAccountDisplaysInSs58:
+    """The prompt and errors name the account through a stubbed ``chain.ss58_address``; no scalecodec needed."""
+
+    @pytest.fixture(autouse=True)
+    def _marker(self, monkeypatch) -> None:
+        # bytes() refuses a hex string, so a caller that skips account_bytes fails here.
+        monkeypatch.setattr(quip_chain, "ss58_address", lambda iface, account_id: f"<ss58:{bytes(account_id).hex()}>")
+
+    @staticmethod
+    def _ss58(solver) -> str:
+        return f"<ss58:{bytes(solver._signer.account_id).hex()}>"
+
+    def test_balance_read_error(self, monkeypatch) -> None:
+        from xqsa.quip import QuipConnectionError
+
+        solver = _make_solver(monkeypatch, iface=_default_iface())  # no System.Account entry
+        with pytest.raises(QuipConnectionError, match=f"free balance of {self._ss58(solver)} from") as info:
+            solver._free_balance()
+        assert "0x" not in str(info.value).split(" from ")[0]
+
+    def test_insufficient_balance_error(self, monkeypatch) -> None:
+        iface = _chain_iface(order=_order(), head=200, balance=0)
+        solver = _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH, faucet="http://myfaucet")
+        _patch_signing(monkeypatch, solver)
+        with pytest.warns(DeprecationWarning):
+            quote = solver.quote(_model())
+        assert str(solver._insufficient_error(quote)).startswith(
+            f"insufficient balance: account {self._ss58(solver)} holds "
+        )
+
+    def test_autofund_prompt(self, monkeypatch) -> None:
+        solver, iface = _solve_ready_short(monkeypatch, autofund=False)
+
+        def fake_fund(dest, *, url, amount=None, dest_label=None):
+            iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
+            return {}
+
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", fake_fund)
+        monkeypatch.setattr(sys, "stdin", _FakeTTY(isatty=True))
+        stderr = _FakeTTY(isatty=True)
+        monkeypatch.setattr(sys, "stderr", stderr)
+        monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        solver.solve(_model())
+        assert f"Fund {self._ss58(solver)} from " in "".join(stderr.written)
+
+    def test_fund_labels_the_hex_dest(self, monkeypatch) -> None:
+        solver, iface = _solve_ready_short(monkeypatch)
+        calls: list[tuple] = []
+
+        def fake_fund(dest, **kwargs):
+            calls.append((dest, kwargs))
+            iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
+            return {}
+
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", fake_fund)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        solver.solve(_model())
+        [(dest, kwargs)] = calls
+        assert dest == "0x" + bytes(solver._signer.account_id).hex()
+        assert kwargs["dest_label"] == self._ss58(solver)
+
+    def test_faucet_refusal(self, monkeypatch) -> None:
+        from xqsa.quip.faucet import QuipFaucetError
+
+        solver, _iface = _solve_ready_short(monkeypatch)
+        sent: list[str] = []
+
+        def post(url, dest, amount, timeout):
+            sent.append(dest)
+            return 403, {}
+
+        monkeypatch.setattr("xqsa.quip.faucet._post_request", post)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        with pytest.raises(QuipFaucetError, match=f"refused {self._ss58(solver)}: already funded"):
+            solver.solve(_model())
+        assert sent == ["0x" + bytes(solver._signer.account_id).hex()]
+
+
 class TestSolverQuipInsufficientBalance:
     """_insufficient_error names a remedy, tailored to whether a faucet is known."""
 
@@ -3197,7 +3278,7 @@ class TestSolverQuipInsufficientBalance:
         error = solver._insufficient_error(quote)
         assert isinstance(error, QuipSubmissionError)
         message = str(error)
-        assert message.startswith("insufficient balance")
+        assert message.startswith(f"insufficient balance: account {quote.account} holds ")
         assert "http://myfaucet" in message
 
     def test_mentions_for_network_when_faucet_unset(self, monkeypatch) -> None:
@@ -3557,7 +3638,7 @@ class TestSolveAutofundGate:
         solver, iface = _solve_ready_short(monkeypatch)
         calls: list[tuple] = []
 
-        def fake_fund(dest, *, url, amount=None):
+        def fake_fund(dest, *, url, amount=None, dest_label=None):
             calls.append((dest, url, amount))
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
@@ -3595,7 +3676,8 @@ class TestSolveAutofundGate:
         monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", fake_fund)
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         solver.solve(_model())
-        assert calls == [{"url": "http://faucet"}]
+        label = quip_chain.ss58_address(solver._iface, solver._signer.account_id)
+        assert calls == [{"url": "http://faucet", "dest_label": label}]
 
     def test_shortfall_beyond_one_drip_raises_without_asking(self, monkeypatch) -> None:
         from xqsa.quip import QuipSubmissionError
@@ -3656,7 +3738,7 @@ class TestSolveAutofundGate:
 
         solver, _iface = _solve_ready_short(monkeypatch)
 
-        def refuse(dest, *, url, amount=None):
+        def refuse(dest, *, url, amount=None, dest_label=None):
             raise QuipFaucetError(403, {"error": "destination already funded"}, "refused")
 
         monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", refuse)
@@ -3668,7 +3750,7 @@ class TestSolveAutofundGate:
     def test_prompt_goes_to_stderr(self, monkeypatch) -> None:
         solver, iface = _solve_ready_short(monkeypatch, autofund=False)
 
-        def fake_fund(dest, *, url, amount=None):
+        def fake_fund(dest, *, url, amount=None, dest_label=None):
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
 
@@ -3679,12 +3761,14 @@ class TestSolveAutofundGate:
         monkeypatch.setattr("builtins.input", lambda prompt="": "y")
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         solver.solve(_model())
-        assert "Fund 0x" in "".join(stderr.written)
+        # The prompt names the account as the quote box does: SS58 with scalecodec.
+        account = quip_chain.ss58_address(solver._iface, solver._signer.account_id)
+        assert f"Fund {account} from " in "".join(stderr.written)
 
     def test_prompt_goes_to_stdout_when_stderr_is_redirected(self, monkeypatch) -> None:
         solver, iface = _solve_ready_short(monkeypatch, autofund=False)
 
-        def fake_fund(dest, *, url, amount=None):
+        def fake_fund(dest, *, url, amount=None, dest_label=None):
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
 
@@ -3697,7 +3781,7 @@ class TestSolveAutofundGate:
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         solver.solve(_model())
         shown = "".join(stdout.written)
-        assert "Fund 0x" in shown
+        assert f"Fund {quip_chain.ss58_address(solver._iface, solver._signer.account_id)} from " in shown
         assert "╭─ Job quote " in shown
         assert stderr.written == []
 

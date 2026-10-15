@@ -36,6 +36,19 @@ guards are lazy: `import xqsa` and every other solver in this chapter
 work without the extra installed; only constructing `SolverQuip` needs
 it.
 
+Both the chain RPC connection over `wss://` and the faucet request
+verify the certificate chain, host name and validity dates, and neither
+checks revocation (no CRL, no OCSP). `SolverQuip` takes no TLS context,
+so it cannot check revocation. Code that opens its own chain connection
+with `connect` in `xqsa.quip.metadata` can pass an `ssl.SSLContext`
+through `ws_options["sslopt"]["context"]`. A standard-library context
+checks only revocation lists the caller fetches and loads itself, with
+`VERIFY_CRL_CHECK_LEAF` or `VERIFY_CRL_CHECK_CHAIN` set, and fails every
+handshake without one. It cannot check OCSP, which needs a different TLS
+stack that fails closed when the check does not finish. The faucet
+request takes no custom context either: leave `autofund` off and send it
+yourself over such a stack.
+
 Configuration resolves from constructor arguments first, then
 environment variables:
 
@@ -70,9 +83,8 @@ or `JobOrder.set()` override them for that order. The quality floors
 only, never as client defaults. [Job Orders](quip-orders.md) covers each
 option, including the [payout rules](quip-orders.md#payout-rules) and
 [access rules](quip-orders.md#access). `delivery` accepts only
-`"OnChainOnly"`: the pallet's `Callback` delivery fires its
-`ResultReady` event only when a reward is claimed, which network solvers
-do not do.
+`"OnChainOnly"`: the client has no subscriber for the `ResultReady`
+event the pallet's `Callback` delivery emits when the order expires.
 
 Before connecting, the constructor raises `ValueError` for a `delivery`
 other than `"OnChainOnly"`, and for an `access` or `resolution` that is
@@ -102,13 +114,6 @@ override a preset.
 
 ### Runtime compatibility
 
-<!-- xquad:defect QUI-1823 -->
-> **Not yet verified on runtime 119.** This page was tested on `aglais`
-> at runtime 118 only. No network ran runtime 119 when it was written,
-> so proposing an order there, and the rest of this section, may behave
-> differently. Report problems at the [issue
-> tracker](https://gitlab.com/quip.network/xquad/-/issues).
-
 `SolverQuip` reads the runtime's `specVersion` once, when it connects; a
 client that stays connected across an upgrade keeps the version it read
 until it reconnects. Runtime 119 renamed the order's energy-ceiling
@@ -125,7 +130,7 @@ the larger share.
 Moving a network to runtime 119 starts it afresh instead of upgrading it
 in place. Orders placed before the move do not carry over, so an order
 id recorded before it does not name the same order after it. `aglais`
-runs runtime 118 as of 2026-10-12.
+has run runtime 119 since its relaunch on 2026-10-15.
 
 ## Job Lifecycle
 
@@ -136,8 +141,9 @@ before a miner subscribed stays invisible to it. A miner that accepts
 solves it on its own hardware with its own algorithm and submits a
 solution.
 
-No on-chain hook closes an order; its status changes only when an
-extrinsic touches it. `SolverQuip` computes finality itself from block
+The chain marks an order `Expired` at its effective expiry, or a few
+blocks later when many orders expire at once, and only a claim or a
+reclaim closes it. `SolverQuip` computes finality itself from block
 height instead of waiting for an `OrderClosed` event:
 
 ```text

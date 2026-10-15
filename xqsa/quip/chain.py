@@ -36,6 +36,7 @@ from xqsa.quip.codec import (
     _as_int_or_none,
     _canonical_hex,
     _event_ids,
+    _extrinsic_index,
     _phase_extrinsic_index,
     effective_expiry,
     is_final,
@@ -306,7 +307,7 @@ def free_balance(iface: Any, account_id: Any) -> int:
         # or decode fault, not a funded-to-zero account -- surface it rather
         # than defaulting free=0 and blaming the user for "insufficient balance".
         raise QuipConnectionError(
-            f"could not read the free balance of {_as_hex(account_id)} from "
+            f"could not read the free balance of {ss58_address(iface, account_id)} from "
             f"System.Account (got {value!r}); cannot verify funding"
         ) from exc
     return free
@@ -612,8 +613,9 @@ def proposer_orders(iface: Any, account_id: Any) -> list[int]:
     """Return the ids of the orders ``account_id`` proposed, oldest first.
 
     ``ProposerOrders`` is a value-query ``BoundedVec<u64>`` the pallet pushes
-    to on each proposal, so an account with no orders reads as empty and
-    reversing the list gives newest first.
+    to on each proposal and removes an order from when a claim or a reclaim
+    closes it, so it holds only orders not yet closed. An account with none
+    reads as empty, and reversing the list gives newest first.
     """
     entry = iface.query(MEMPOOL_PALLET, PROPOSER_ORDERS_STORAGE, [account_id])
     return [int(order_id) for order_id in getattr(entry, "value", None) or []]
@@ -713,14 +715,43 @@ def proposal_fee(iface: Any, block_hash: str, order_id: int) -> int:
     )
     if phase is None:
         raise QuipConnectionError(f"block {block_hash} holds no {JOB_PROPOSED_EVENT} event for order {order_id}")
+    fee = _phase_fee(events, phase)
+    if fee is None:
+        raise QuipConnectionError(
+            f"block {block_hash} holds no {TRANSACTION_FEE_PAID_EVENT} event for the propose_job of order {order_id}"
+        )
+    return fee
+
+
+def extrinsic_fee(iface: Any, block_hash: str, ext_hash: str) -> int:
+    """Return the fee, in planck, that the extrinsic ``ext_hash`` paid in block ``block_hash``.
+
+    For an extrinsic with no order to find it by, such as a ``propose_job``
+    whose dispatch failed: the chain charges the fee either way. Finds the
+    extrinsic's index in the block, then its ``TransactionFeePaid`` event.
+
+    Raises:
+        QuipConnectionError: if the block does not hold ``ext_hash``, or no fee
+            event in its phase.
+    """
+    block = iface.get_block(block_hash=block_hash, include_author=False, ignore_decoding_errors=True) or {}
+    index = _extrinsic_index(block, ext_hash)
+    if index is None:
+        raise QuipConnectionError(f"block {block_hash} does not hold extrinsic {ext_hash}")
+    fee = _phase_fee(list(_events(iface, block_hash)), index)
+    if fee is None:
+        raise QuipConnectionError(f"block {block_hash} holds no {TRANSACTION_FEE_PAID_EVENT} event for {ext_hash}")
+    return fee
+
+
+def _phase_fee(events: list[tuple[int | None, object, object, object]], phase: int) -> int | None:
+    """Return the ``actual_fee`` of the ``TransactionFeePaid`` event in ``phase``, or ``None`` if there is none."""
     for event_phase, module_id, event_id, attrs in events:
         if (event_phase, module_id, event_id) == (phase, TRANSACTION_PAYMENT_PALLET, TRANSACTION_FEE_PAID_EVENT):
             fee = _as_int_or_none(_attribute(attrs, "actual_fee"))
             if fee is not None:
                 return fee
-    raise QuipConnectionError(
-        f"block {block_hash} holds no {TRANSACTION_FEE_PAID_EVENT} event for the propose_job of order {order_id}"
-    )
+    return None
 
 
 def fetch_solutions(iface: Any, order_id: int) -> list[Mapping[str, Any]]:

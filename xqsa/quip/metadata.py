@@ -336,6 +336,15 @@ def connect(url: str, **kwargs: Any) -> Any:
     Other caller ``ws_options`` are kept, and the caller's dicts are copied, not
     modified. Everywhere else the existing trust store applies.
 
+    The ``wss://`` connection checks the certificate chain, host name and
+    validity dates, and does not check revocation (no CRL, no OCSP). A caller
+    can pass its own ``ssl.SSLContext`` through
+    ``ws_options["sslopt"]["context"]``, but a stdlib context checks only CRLs
+    the caller fetches and loads itself, with ``VERIFY_CRL_CHECK_LEAF`` or
+    ``VERIFY_CRL_CHECK_CHAIN`` set (without a loaded CRL every handshake
+    fails), and cannot check OCSP at all; OCSP needs a different TLS stack,
+    one that fails closed when the check does not finish.
+
     Raises:
         ImportError: if ``substrate-interface`` is not installed, or ``certifi``
             is not installed and the certifi default applies.

@@ -4,17 +4,10 @@ This page submits one job to `aglais`, the public Quip test network,
 from an empty account: define a four-city Travelling Salesman Problem in
 XQCP, run its encoder on the XQVM locally, and hand the resulting model
 to `SolverQuip` as a job order. Every output block below was captured
-from the code on this page, run against `aglais` on 2026-10-12 at
-runtime `specVersion 118`. [Quip Network](quip-network.md) is the
+from the code on this page, run against `aglais` on 2026-10-15 at
+runtime `specVersion 119`. [Quip Network](quip-network.md) is the
 reference for the mechanism and [Job Orders](quip-orders.md) for the
 order surface; this page is the walkthrough.
-
-<!-- xquad:defect QUI-1823 -->
-> **Not yet verified on runtime 119.** These outputs were captured on
-> `aglais` at runtime 118. No network ran runtime 119 when this page was
-> written, so the same steps may behave differently there. Report
-> problems at the [issue
-> tracker](https://gitlab.com/quip.network/xquad/-/issues).
 
 ## Install
 
@@ -105,18 +98,18 @@ print(order.quote())
 ╰──────────────────────────────────────────────────────────────────────╯
 ╭─ Job quote ──────────────────────────────────────────────────────────╮
 │ Network     aglais                                                   │
-│ Account     5FdrtfYWZKnRQJT356sXLne1V2GSCWs9DTs7vkXht35bSFgb         │
-│ Quoted at   block 580495                                             │
+│ Account     5DL9B7rhMw1cg7kXzqmdj5QZ1V67vBvfYPq2bTEgZfSXiBSJ         │
+│ Quoted at   block 1896                                               │
 ├──────────────────────────────────────────────────────────────────────┤
 │ Problem     16 variables -> 16 spins, 96 couplings                   │
 │ Placed on   native                                                   │
 ├──────────────────────────────────────────────────────────────────────┤
 │ Reward      1.000000000000 AGLS  refunded if unanswered              │
-│ Fee         0.001907881410 AGLS  exact                               │
-│ Total       1.001907881410 AGLS                                      │
+│ Fee         0.002011933394 AGLS  exact                               │
+│ Total       1.002011933394 AGLS                                      │
 ╞══════════════════════════════════════════════════════════════════════╡
 │ Balance     0.000000000000 AGLS                                      │
-│ Shortfall   1.001907881410 AGLS                                      │
+│ Shortfall   1.002011933394 AGLS                                      │
 │ Affordable  no                                                       │
 ╰──────────────────────────────────────────────────────────────────────╯
 ```
@@ -157,8 +150,8 @@ those same bytes.
 
 ### What the figure means
 
-As of 2026-10-12, at `specVersion 118`, a job costs 1 AGLS in reward
-plus about 0.0019 AGLS in fee: about 1.0019 AGLS in total. The reward is
+As of 2026-10-15, at `specVersion 119`, a job costs 1 AGLS in reward
+plus about 0.0020 AGLS in fee: about 1.0020 AGLS in total. The reward is
 the chain's `MinReward`, a runtime constant. It is charged to gate
 submissions and maps to no measured compute: the runtime declares
 [`type VM = NoOpVm`](https://gitlab.com/quip.network/quip-validator/-/blob/161667b2ed7e375390ada523a459258f0f576f78/runtime/src/configs/mod.rs#L650),
@@ -176,18 +169,18 @@ order.submit()
 ```text
 ╭─ Job quote ──────────────────────────────────────────────────────────╮
 │ Network     aglais                                                   │
-│ Account     5FdrtfYWZKnRQJT356sXLne1V2GSCWs9DTs7vkXht35bSFgb         │
-│ Quoted at   block 580496                                             │
+│ Account     5DL9B7rhMw1cg7kXzqmdj5QZ1V67vBvfYPq2bTEgZfSXiBSJ         │
+│ Quoted at   block 1896                                               │
 ├──────────────────────────────────────────────────────────────────────┤
 │ Problem     16 variables -> 16 spins, 96 couplings                   │
 │ Placed on   native                                                   │
 ├──────────────────────────────────────────────────────────────────────┤
 │ Reward      1.000000000000 AGLS  refunded if unanswered              │
-│ Fee         0.001907881410 AGLS  exact                               │
-│ Total       1.001907881410 AGLS                                      │
+│ Fee         0.002011933394 AGLS  exact                               │
+│ Total       1.002011933394 AGLS                                      │
 ╞══════════════════════════════════════════════════════════════════════╡
 │ Balance     0.000000000000 AGLS                                      │
-│ Shortfall   1.001907881410 AGLS                                      │
+│ Shortfall   1.002011933394 AGLS                                      │
 │ Affordable  no                                                       │
 ╰──────────────────────────────────────────────────────────────────────╯
 ```
@@ -217,21 +210,22 @@ print(list(vm.outputs()[0]))
 ```
 
 ```text
--723
-5DXr9LokuLE5bs2ZZyhDwbJfR9SqceL7kohQbgMebDcymhfD True -1817000
-[0, 1, 2, 3]
+-696
+5GqG8c8zWHX33ruGJX4FDokxCTFrASVi268einKJY1XnHNYn True -1790000
+[0, 1, 3, 2]
 ```
 
 `wait()` blocks until the order is final by block height. Here the first
-answer arrived one block after the order was included, and the order was
-final ten blocks later, at the end of its 10-block wait; the script
-returned about 94 seconds after it started.
+answer arrived six blocks after the order was included, and the order
+was final ten blocks later, at the end of its 10-block wait; the script
+returned about 122 seconds after it started.
 
-- The decoded tour visits cities 0, 1, 2, 3 and returns to 0. Its length
-  is 12 + 25 + 22 + 18 = 77, the shortest of the three distinct tours on
-  four cities. The same tour can come back in another rotation or
-  direction (`[1, 2, 3, 0]` and `[0, 3, 2, 1]` in other runs); its
-  length and energy are the same.
+- The decoded tour visits cities 0, 1, 3, 2 and returns to 0. Its length
+  is 12 + 40 + 22 + 30 = 104. It is a valid tour but not the shortest:
+  of the three distinct tours on four cities, 0, 1, 2, 3 is shortest, at
+  77, with energy -723. The network pays for the best answer it
+  receives, not for the optimum, and here the two answers that arrived
+  missed it. The one-call form below came back with the shortest tour.
 - `solution.energy` is that length plus -800, the constant the eight
   one-hot penalties contribute at any valid assignment. It is recomputed
   on your model.
@@ -250,10 +244,10 @@ print(order.receipt())
 ```
 
 ```text
-╭─ Job order 325 receipt ──────────────────────────────────────────────╮
+╭─ Job order 20 receipt ───────────────────────────────────────────────╮
 │ Network     aglais                                                   │
-│ Proposer    5FdrtfYWZKnRQJT356sXLne1V2GSCWs9DTs7vkXht35bSFgb         │
-│ Submitted   block 580498, 2026-10-12 17:11:24 UTC                    │
+│ Proposer    5DL9B7rhMw1cg7kXzqmdj5QZ1V67vBvfYPq2bTEgZfSXiBSJ         │
+│ Submitted   block 1898, 2026-10-15 04:22:24 UTC                      │
 ├──────────────────────────────────────────────────────────────────────┤
 │ Problem     16 spins, 96 couplings                                   │
 │ Spec        0x8f46f3a31321d1d093314fc769c42cbe7a83d71a0b69e6571a0f68 │
@@ -267,16 +261,16 @@ print(order.receipt())
 │ Reward      1.000000000000 AGLS                                      │
 ├──────────────────────────────────────────────────────────────────────┤
 │ Status      final                                                    │
-│ Answers     9                                                        │
-│ Leader      5DXr9LokuLE5bs2ZZyhDwbJfR9SqceL7kohQbgMebDcymhfD         │
-│ Energy      -1817                                                    │
+│ Answers     2                                                        │
+│ Leader      5GqG8c8zWHX33ruGJX4FDokxCTFrASVi268einKJY1XnHNYn         │
+│ Energy      -1790                                                    │
 ╞══════════════════════════════════════════════════════════════════════╡
-│ Fee         0.001907881410 AGLS                                      │
+│ Fee         0.002011933394 AGLS                                      │
 │ Winner      1.000000000000 AGLS, awaiting claim                      │
 ╰──────────────────────────────────────────────────────────────────────╯
 ```
 
-Nine solvers answered; the leader wins the whole reward, which it
+Two solvers answered; the leader wins the whole reward, which it
 receives once a claim is made. The account now holds the drip less one
 job's total.
 
@@ -294,7 +288,7 @@ print(result.metadata)
 
 ```text
 -723
-{'order_id': 328, 'solver': '5DPhy7jpFj3ikUZgVpwkrXnjFLYXqsWWPNUCrEvmzq2AEwFJ', 'best_energy_milli': -1817000, 'energy_matches_chain': True, 'leader_read': True, 'leader': True, 'num_submissions': 9, 'num_solutions': 1, 'quantization_error': 0.0}
+{'order_id': 23, 'solver': '5GqG8c8zWHX33ruGJX4FDokxCTFrASVi268einKJY1XnHNYn', 'best_energy_milli': -1817000, 'energy_matches_chain': True, 'leader_read': True, 'leader': True, 'num_submissions': 1, 'num_solutions': 1, 'quantization_error': 0.0}
 ```
 
 `solve()` prints the quote box the same way `submit()` does.
@@ -320,23 +314,23 @@ except QuipCancelledError as exc:
 ```text
 ╭─ Job quote ──────────────────────────────────────────────────────────╮
 │ Network     aglais                                                   │
-│ Account     5FdrtfYWZKnRQJT356sXLne1V2GSCWs9DTs7vkXht35bSFgb         │
-│ Quoted at   block 580615                                             │
+│ Account     5DL9B7rhMw1cg7kXzqmdj5QZ1V67vBvfYPq2bTEgZfSXiBSJ         │
+│ Quoted at   block 1952                                               │
 ├──────────────────────────────────────────────────────────────────────┤
 │ Problem     16 variables -> 16 spins, 96 couplings                   │
 │ Placed on   native                                                   │
 ├──────────────────────────────────────────────────────────────────────┤
 │ Reward      1.000000000000 AGLS  refunded if unanswered              │
-│ Fee         0.001907881410 AGLS  exact                               │
-│ Total       1.001907881410 AGLS                                      │
+│ Fee         0.002011933394 AGLS  exact                               │
+│ Total       1.002011933394 AGLS                                      │
 ╞══════════════════════════════════════════════════════════════════════╡
-│ Balance     5.989382109201 AGLS                                      │
+│ Balance     4.989940332991 AGLS                                      │
 │ Shortfall   0.000000000000 AGLS                                      │
 │ Affordable  yes                                                      │
 ╰──────────────────────────────────────────────────────────────────────╯
-[quip] Submit this job for 1.001907881410 AGLS? [y/N] n
+[quip] Submit this job for 1.002011933394 AGLS? [y/N] n
 cancelled: autoconfirm declined: answered 'n' at the prompt
-1001907881410
+1002011933394
 ```
 
 The same gate runs in `order.submit()`. With no terminal to ask on, a
@@ -361,21 +355,21 @@ print(result.metadata["order_id"], result.energy)
 ```text
 ╭─ Job quote ──────────────────────────────────────────────────────────╮
 │ Network     aglais                                                   │
-│ Account     5FdrtfYWZKnRQJT356sXLne1V2GSCWs9DTs7vkXht35bSFgb         │
-│ Quoted at   block 580595                                             │
+│ Account     5DL9B7rhMw1cg7kXzqmdj5QZ1V67vBvfYPq2bTEgZfSXiBSJ         │
+│ Quoted at   block 1936                                               │
 ├──────────────────────────────────────────────────────────────────────┤
 │ Problem     16 variables -> 16 spins, 96 couplings                   │
 │ Placed on   native                                                   │
 ├──────────────────────────────────────────────────────────────────────┤
 │ Reward      1.000000000000 AGLS  refunded if unanswered              │
-│ Fee         0.001907881410 AGLS  exact                               │
-│ Total       1.001907881410 AGLS                                      │
+│ Fee         0.002011933394 AGLS  exact                               │
+│ Total       1.002011933394 AGLS                                      │
 ╞══════════════════════════════════════════════════════════════════════╡
-│ Balance     6.991289990611 AGLS                                      │
+│ Balance     5.991952266385 AGLS                                      │
 │ Shortfall   0.000000000000 AGLS                                      │
 │ Affordable  yes                                                      │
 ╰──────────────────────────────────────────────────────────────────────╯
-329 -723
+24 -723
 ```
 
 ## What a Failed Job Costs
@@ -387,12 +381,12 @@ reclaimed. `solve()` reclaims it for you and raises
 whether the reclaim succeeded:
 
 ```text
-QuipJobFailedError: order 330 finalized with no solutions; only allowlisted solvers could answer (accounts 5Fdr..SFgb) and none did; the reserved reward was reclaimed
+QuipJobFailedError: order 25 finalized with no solutions; only allowlisted solvers could answer (accounts 5DL9..iBSJ) and none did; the reserved reward was reclaimed
 ```
 
 That order was restricted to an account that is not a registered solver,
 so nobody could answer it. Its total cost was the proposal fee plus the
-reclaim fee, about 0.003 AGLS. A faucet drip drawn for a job stays in
+reclaim fee, about 0.004 AGLS. A faucet drip drawn for a job stays in
 the account either way.
 
 On an order you submitted yourself, `wait()` and `best()` never reclaim.
@@ -424,19 +418,25 @@ account's orders and rebuilds any one's receipt from its id:
 ```python
 solver = SolverQuip.for_network("aglais")
 print(solver.list_orders())
-receipt = solver.get_receipt(325)
+receipt = solver.get_receipt(20)
 print(receipt.status())
 ```
 
 ```text
-[330, 329, 328, 327, 326, 325]
-{'state': 'finalized', 'order_id': 325, 'chain_status': 'Closed', 'created_at': 580498, 'first_solution_at': 580499, 'effective_expiry': 580509, 'current_block': 580657, 'solution_count': 9}
+[24, 23, 21, 20]
+{'state': 'finalized', 'order_id': 20, 'chain_status': 'Expired', 'created_at': 1898, 'first_solution_at': 1904, 'effective_expiry': 1914, 'current_block': 2219, 'solution_count': 2}
 ```
 
-`chain_status` is now `Closed`: the winner has claimed, and
-`print(receipt)` shows the `Winner` row as `claimed`. A receipt also
-lists the solvers that answered and their raw spin vectors, shows the
-settlement, and reclaims an unanswered order with `receipt.reclaim()`.
+`chain_status` is `Expired`: the chain marked the order expired at its
+effective expiry. It turns `Closed` once someone claims it, and
+`print(receipt)` then shows the `Winner` row as `claimed`. A closed
+order drops out of `list_orders()`, which lists only orders not yet
+closed, but its receipt still rebuilds from the id. Orders 21 and 22
+were placed for the examples on [Job Orders](quip-orders.md). Orders 22
+and 25 are already missing: they went unanswered and were reclaimed. A
+receipt also lists the solvers that answered and their raw spin vectors,
+shows the settlement, and reclaims an unanswered order with
+`receipt.reclaim()`.
 
 A receipt does not hold your model, so it cannot decode an answer into a
 tour. Decoding needs the `JobOrder` from the session that submitted it.

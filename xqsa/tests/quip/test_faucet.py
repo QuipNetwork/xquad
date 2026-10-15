@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import urllib.error
 from unittest.mock import patch
 
@@ -245,3 +246,52 @@ def test_scheme_less_url_raises_faucet_error():
     with pytest.raises(QuipFaucetError) as excinfo:
         fund_from_faucet(DEST, url="faucet.example")
     assert excinfo.value.status is None
+
+
+LABEL = "5Label"
+
+
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
+def test_label_names_account_in_already_funded_error(mock_urlopen):
+    mock_urlopen.side_effect = _http_error(403, {"free_balance_plancks": 1})
+    with pytest.raises(QuipFaucetError) as excinfo:
+        fund_from_faucet(DEST, url=URL, dest_label=LABEL)
+    assert f"refused {LABEL}: already funded" in str(excinfo.value)
+    assert DEST not in str(excinfo.value)
+
+
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
+def test_label_names_account_in_other_refusal(mock_urlopen):
+    mock_urlopen.side_effect = _http_error(400, {"error": "bad"})
+    with pytest.raises(QuipFaucetError) as excinfo:
+        fund_from_faucet(DEST, url=URL, dest_label=LABEL)
+    assert f"refused {LABEL}: bad" in str(excinfo.value)
+    assert DEST not in str(excinfo.value)
+
+
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
+def test_label_names_account_in_long_rate_limit(mock_urlopen):
+    mock_urlopen.side_effect = [_http_error(429, {"retry_after_seconds": 86400})]
+    with pytest.raises(QuipFaucetError) as excinfo:
+        fund_from_faucet(DEST, url=URL, dest_label=LABEL)
+    assert f"rate limited {LABEL} for" in str(excinfo.value)
+    assert DEST not in str(excinfo.value)
+
+
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
+def test_label_is_never_sent(mock_urlopen):
+    mock_urlopen.return_value = _Ctx(_response({"amount": 1}))
+    fund_from_faucet(DEST, url=URL, dest_label=LABEL)
+    assert json.loads(mock_urlopen.call_args[0][0].data) == {"dest": DEST}
+
+
+@patch("xqsa.quip.faucet.time.sleep")
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
+def test_label_names_account_in_logs(mock_urlopen, mock_sleep, caplog):
+    mock_urlopen.side_effect = [_http_error(429, {"retry_after_seconds": 1}), _Ctx(_response({"amount": 1}))]
+    with caplog.at_level(logging.DEBUG, logger="xqsa.quip.faucet"):
+        fund_from_faucet(DEST, url=URL, dest_label=LABEL)
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(f"rate limited {LABEL}, retrying" in m for m in messages)
+    assert any(f"funded {LABEL}:" in m for m in messages)
+    assert not any(DEST in m for m in messages)

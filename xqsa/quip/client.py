@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, Literal, Self
 from xqsa.quip import chain
 from xqsa.quip import metadata as quip_metadata
 from xqsa.quip.access import Access, AccessOpen, coerce_access
+from xqsa.quip.access import from_chain as access_from_chain
 from xqsa.quip.chain import (  # noqa: F401 -- FEE_HEADROOM_PLANCK and the pallet names stay importable from here.
     FEE_HEADROOM_PLANCK,
     JOB_ORDERS_STORAGE,
@@ -147,7 +148,8 @@ class SolverQuip(Solver):
             connecting).
         TypeError: if both ``access`` and the deprecated ``mode`` are given.
         QuipOrderOptionError: if an ``access`` allowlist is outside the
-            chain's limits. Each listed account that is not a registered
+            chain's limits, or a raw ``access`` dict cannot be read as an
+            access rule. Each listed account that is not a registered
             solver warns once, here rather than on every order.
         QuipConnectionError: if the node is unreachable or the configured Ising
             spec is not registered on-chain.
@@ -484,6 +486,11 @@ class SolverQuip(Solver):
         """See :func:`xqsa.quip.chain.mineable_topologies`."""
         return chain.mineable_topologies(self._iface)
 
+    @property
+    def _account_ss58(self) -> str:
+        """The signer's account in SS58, as every message names it."""
+        return chain.ss58_address(self._iface, self._signer.account_id)
+
     def _free_balance(self) -> int:
         """See :func:`xqsa.quip.chain.free_balance`."""
         return chain.free_balance(self._iface, self._signer.account_id)
@@ -525,7 +532,7 @@ class SolverQuip(Solver):
         else:
             remedy = "Pass faucet=, set QUIP_FAUCET_URL, or build with SolverQuip.for_network(...) to name a faucet."
         return QuipSubmissionError(
-            f"insufficient balance: account {_as_hex(self._signer.account_id)} holds "
+            f"insufficient balance: account {self._account_ss58} holds "
             f"{amount(quote.balance_planck)} but the job needs {amount(quote.total_planck)} "
             f"(reward plus fee), {amount(quote.shortfall_planck)} short. {remedy}"
         )
@@ -607,9 +614,9 @@ class SolverQuip(Solver):
             # Unit enum variants encode from their bare variant name (the same
             # form they decode to -- see the miner's _decode_result_delivery),
             # access and payout rules through to_chain(). A raw dict from the
-            # deprecated solve() path goes out as given. Callback* delivery is
-            # not supported.
-            "mode": options.access.to_chain() if isinstance(options.access, Access) else options.access,
+            # deprecated solve() path is read as the rule it names and encoded
+            # the same way. Callback* delivery is not supported.
+            "mode": _access_to_chain(options.access),
             "resolution": (
                 options.resolution.to_chain() if isinstance(options.resolution, Resolution) else options.resolution
             ),
@@ -955,7 +962,8 @@ class SolverQuip(Solver):
         """Build a draft from the client defaults and ``options``.
 
         ``strict=False`` is the deprecated ``solve``/``quote`` path: unknown
-        options and raw chain dicts warn instead of raising. QUI-1608 removes it.
+        options and raw chain dicts warn instead of raising, though an access
+        dict that cannot be read as a rule is refused. QUI-1608 removes it.
         """
         self._validate_model(model)
         merged = merge_options(
@@ -982,7 +990,7 @@ class SolverQuip(Solver):
             balance_planck=self._free_balance(),
             token_symbol=symbol,
             token_decimals=decimals,
-            account=chain.ss58_address(self._iface, self._signer.account_id),
+            account=self._account_ss58,
             quoted_at_block=self._current_block(),
             num_variables=len(job.mapping),
             num_spins=job.topology.num_nodes,
@@ -1107,7 +1115,11 @@ class SolverQuip(Solver):
         """
         # No amount: the faucet's default drip. solve() only gets here when the
         # shortfall fits in one, so a mistyped reward is never funded.
-        fund_from_faucet("0x" + bytes(self._signer.account_id).hex(), url=self._faucet)
+        fund_from_faucet(
+            "0x" + bytes(self._signer.account_id).hex(),
+            url=self._faucet,
+            dest_label=self._account_ss58,
+        )
         deadline = time.monotonic() + FUND_WAIT_SECONDS
         while (balance := self._free_balance()) < quote.total_planck:
             if time.monotonic() >= deadline:
@@ -1146,7 +1158,7 @@ class SolverQuip(Solver):
                 self._autofund,
                 quote,
                 name="autofund",
-                question=f"Fund {_as_hex(self._signer.account_id)} from {self._faucet}?",
+                question=f"Fund {self._account_ss58} from {self._faucet}?",
             )
             self._fund(quote)
 
@@ -1158,7 +1170,8 @@ class SolverQuip(Solver):
 
         Raises:
             ValueError: if ``mapping`` is given with ``topology="native"``.
-            QuipOrderOptionError: if an option is outside its chain limit.
+            QuipOrderOptionError: if an option is outside its chain limit, or a
+                raw ``access`` dict cannot be read as an access rule.
             QuipConnectionError: if a chain read faults while resolving the
                 topology or the account balance.
             QuipSubmissionError: if the extrinsic cannot be built.
@@ -1187,6 +1200,7 @@ class SolverQuip(Solver):
 
         Unlike :meth:`create_order`, an unknown option or a raw chain dict
         warns with a ``DeprecationWarning`` instead of raising, until QUI-1608.
+        A raw ``access`` dict is read as the rule it names.
 
         Keyword args:
             reward, deadline_blocks, block_wait, topology, mapping, access,
@@ -1197,8 +1211,9 @@ class SolverQuip(Solver):
         Raises:
             TypeError: if both ``access`` and the deprecated ``mode`` are given.
             ValueError: if ``mapping`` is given with ``topology="native"``.
-            QuipOrderOptionError: if an option is outside its chain limit,
-                before anything is signed.
+            QuipOrderOptionError: if an option is outside its chain limit, or a
+                raw ``access`` dict cannot be read as an access rule, before
+                anything is signed.
             QuipConnectionError: if a chain read faults (transport/decode) while
                 resolving the topology, the order, or the account balance.
             QuipSubmissionError: if the account cannot cover the quote and no
@@ -1280,10 +1295,12 @@ class SolverQuip(Solver):
         """Return the ids of an account's orders, newest first.
 
         Reads the chain's per-account order list, so it includes orders
-        placed from any session. ``state`` keeps only the orders still open
-        (``"submitted"``) or final (``"finalized"``), at one more read per
-        order. ``account`` lists another account's orders instead of this
-        client's signer, as SS58 text, ``0x`` hex or bytes.
+        placed from any session. The chain drops an order from that list once
+        a claim or a reclaim closes it, so closed orders are not listed.
+        ``state`` keeps only the orders still open (``"submitted"``) or final
+        (``"finalized"``), at one more read per order. ``account`` lists
+        another account's orders instead of this client's signer, as SS58
+        text, ``0x`` hex or bytes.
 
         At most :data:`LIST_ORDERS_LIMIT` (32) ids are returned; past that it
         warns and returns the newest 32.
@@ -1382,6 +1399,21 @@ def _take_mode(access: Any, mode: Any, *, stacklevel: int) -> Any:
     message = "mode= is deprecated, use access= (removed in QUI-1608)"
     warnings.warn(message, DeprecationWarning, stacklevel=stacklevel + 1)
     return mode
+
+
+def _access_to_chain(access: Any) -> Any:
+    """Encode ``access`` as ``JobMode``, reading a raw chain dict as the rule it names.
+
+    Raises:
+        QuipOrderOptionError: for a dict that is not an access rule, before
+            anything is signed.
+    """
+    if isinstance(access, Access):
+        return access.to_chain()
+    try:
+        return access_from_chain(access).to_chain()
+    except (ValueError, TypeError) as exc:
+        raise QuipOrderOptionError("access", f"access={access!r} is not an access rule the chain takes: {exc}") from exc
 
 
 def _pop_mode(kwargs: dict[str, Any], *, stacklevel: int) -> None:

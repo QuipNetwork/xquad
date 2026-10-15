@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import warnings
 from dataclasses import replace
@@ -35,6 +36,7 @@ from xqsa.quip import (
     QuipOrderOptionError,
     QuipSubmissionError,
     QuipUnconfirmedError,
+    chain,
 )
 from xqsa.quip.access import AccessAllow, AccessOpen
 from xqsa.quip.chain import ChainLimits, unregistered_solvers
@@ -523,6 +525,11 @@ BOB_HEX = "0x" + "8e" * 32
 CAROL_HEX = "0x" + "90" * 32
 
 
+def _ss58(account_hex: str) -> str:
+    """``account_hex`` as warnings name it: SS58 in the fake chain's format, or hex without ``scalecodec``."""
+    return chain.ss58_address(SimpleNamespace(ss58_format=42), bytes.fromhex(account_hex[2:]))
+
+
 class _SolversIface:
     """Answers ``Solvers`` reads from ``registered``, recording each account read."""
 
@@ -574,14 +581,22 @@ class TestUnregisteredSolvers:
 
     def test_create_order_warns_and_set_rechecks_only_a_new_list(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
-        with pytest.warns(UserWarning, match=f"{ALICE_HEX} is not a registered solver") as record:
+        with pytest.warns(UserWarning, match=f"access: {_ss58(ALICE_HEX)} is not a registered solver") as record:
             order = solver.create_order(_model(), access=AccessAllow(accounts=[ALICE_HEX]))
         assert record[0].filename == __file__
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             order.set(reward=2 * UNIT)
-        with pytest.warns(UserWarning, match=f"{BOB_HEX} is not a registered solver"):
+        with pytest.warns(UserWarning, match=f"access: {_ss58(BOB_HEX)} is not a registered solver"):
             order.set(access=AccessAllow(accounts=[BOB_HEX]))
+
+    def test_warning_names_the_account_through_ss58_address(self, monkeypatch) -> None:
+        # A marker stands in for the encoder, so this runs without scalecodec; bytes() refuses a hex string.
+        monkeypatch.setattr(chain, "ss58_address", lambda iface, account_id: f"<ss58:{bytes(account_id).hex()}>")
+        solver, _ = _ready(monkeypatch)
+        with pytest.warns(UserWarning, match="is not a registered solver") as record:
+            solver.create_order(_model(), access=AccessAllow(accounts=[ALICE_HEX]))
+        assert str(record[0].message).split()[1] == f"<ss58:{ALICE_HEX[2:]}>"
 
     def test_set_with_the_same_allowlist_reads_nothing(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
@@ -597,14 +612,14 @@ class TestUnregisteredSolvers:
     def test_client_default_allowlist_is_looked_up_once_at_construction(self, monkeypatch) -> None:
         with pytest.warns(UserWarning, match="is not a registered solver") as record:
             solver, _ = _ready(monkeypatch, access=AccessAllow(accounts=[ALICE_HEX, BOB_HEX]))
-        assert [str(w.message).split()[1] for w in record] == [ALICE_HEX, BOB_HEX]
+        assert [str(w.message).split()[1] for w in record] == [_ss58(ALICE_HEX), _ss58(BOB_HEX)]
         reads = _count_solvers_reads(solver)
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             for _ in range(3):
                 solver.create_order(_model())
         assert reads == []
-        with pytest.warns(UserWarning, match=f"{CAROL_HEX} is not a registered solver"):
+        with pytest.warns(UserWarning, match=f"access: {_ss58(CAROL_HEX)} is not a registered solver"):
             solver.create_order(_model(), access=AccessAllow(accounts=[CAROL_HEX]))
         assert reads == [CAROL_HEX]
 
@@ -679,10 +694,20 @@ class TestAccess:
             {"Bid": {"miners": None, "miner_types": [1]}},
             {"Bid": 5},
             {"Open": 1},
+            {"FutureRule": 1},
         ],
-        ids=["nine-types", "20-byte-account", "int-account", "empty", "non-str-type", "not-a-struct", "open-value"],
+        ids=[
+            "nine-types",
+            "20-byte-account",
+            "int-account",
+            "empty",
+            "non-str-type",
+            "not-a-struct",
+            "open-value",
+            "no-rule",
+        ],
     )
-    def test_raw_dict_naming_a_rule_that_does_not_decode_refused(self, raw) -> None:
+    def test_raw_dict_that_does_not_decode_refused(self, raw) -> None:
         with (
             pytest.warns(DeprecationWarning),
             pytest.raises(QuipOrderOptionError, match="it cannot be read as an access rule") as info,
@@ -690,10 +715,18 @@ class TestAccess:
             _merge(strict=False, access=raw)
         assert info.value.option == "access"
 
-    def test_raw_dict_naming_no_rule_passes_unchecked(self) -> None:
-        with pytest.warns(DeprecationWarning, match="raw chain value is deprecated; pass a typed option") as record:
-            assert _merge(strict=False, access={"FutureRule": 1}).access == {"FutureRule": 1}
-        assert not any("unchecked" in str(w.message) for w in record)
+    def test_raw_bid_with_an_unknown_field_refused(self) -> None:
+        raw = {"Bid": {"miners": [ALICE_HEX], "miner_type": ["Cpu"]}}
+        with (
+            pytest.warns(DeprecationWarning),
+            pytest.raises(QuipOrderOptionError, match="Bid has no field 'miner_type'") as info,
+        ):
+            _merge(strict=False, access=raw)
+        assert info.value.option == "access"
+
+    def test_client_default_raw_dict_naming_no_rule_refused_at_construction(self, monkeypatch) -> None:
+        with pytest.raises(QuipOrderOptionError, match="cannot be read as an access rule"):
+            _ready(monkeypatch, access={"FutureRule": 1})
 
     def test_create_order_encodes_the_allowlist(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
@@ -731,6 +764,25 @@ class TestAccess:
             warnings.simplefilter("error")
             solver.solve(_model(), access=AccessAllow(types=["Cpu"]))
         assert captured["call_params"]["mode"] == {"Bid": {"miners": None, "miner_types": (["Cpu"],)}}
+
+    @pytest.mark.parametrize("default", [False, True], ids=["per-call", "client-default"])
+    def test_solve_encodes_a_raw_dict(self, monkeypatch, default) -> None:
+        raw = {"Bid": {"miners": None, "miner_types": ["Cpu"]}}
+        solver, captured = _ready(monkeypatch, **({"access": raw} if default else {}))
+        with pytest.warns(DeprecationWarning, match="raw chain value"):
+            solver.solve(_model(), **({} if default else {"access": raw}))
+        assert captured["call_params"]["mode"] == {"Bid": {"miners": None, "miner_types": (["Cpu"],)}}
+
+    @pytest.mark.parametrize("shortcut", ["solve", "quote"])
+    def test_shortcut_refuses_a_raw_dict_naming_no_rule_before_signing(self, monkeypatch, shortcut) -> None:
+        solver, captured = _ready(monkeypatch)
+        with (
+            pytest.warns(DeprecationWarning),
+            pytest.raises(QuipOrderOptionError, match="cannot be read as an access rule") as info,
+        ):
+            getattr(solver, shortcut)(_model(), access={"FutureRule": 1})
+        assert info.value.option == "access"
+        assert captured["builds"] == 0
 
     @pytest.mark.parametrize("value", [None, 5, ["Open"]])
     def test_non_rule_refused(self, monkeypatch, value) -> None:
@@ -1150,6 +1202,7 @@ class TestJobOrderSendOutcomes:
             unconfirmed.submit()
         text = str(unconfirmed)
         assert text.startswith("╭─ Job order (unconfirmed) ")
+        assert "│ Quoted      1.002182560255 AGLS total, block 200 " in text
         assert "│ Receipt     unconfirmed, extrinsic " in text
         assert {len(line) for line in text.splitlines()} == {72}
 
@@ -1158,9 +1211,19 @@ class TestJobOrderSendOutcomes:
         failed = solver.create_order(_model())
         with pytest.raises(QuipSubmissionError):
             failed.submit()
+        reads: list[tuple[str, str]] = []
+        monkeypatch.setattr(chain, "extrinsic_fee", lambda _iface, block, ext: reads.append((block, ext)) or 7)
         text = str(failed)
+        rows = _box_rows(text)
         assert text.startswith("╭─ Job order (failed) ")
+        start = rows.index("Paid        0.000000000007 AGLS fee")
+        # A failed order reserved no reward, so the row has none.
+        assert rows[start + 1] == "            quoted 1.002182560255 AGLS total, block 200"
+        assert not any("reward" in row for row in rows[start:])
+        assert "affordable" not in text
         assert f"│ Receipt     failed in block {solver._iface.head}: QuantumComputeMempool." in text
+        assert reads == [("0xblock", "0xext")]
+        assert {len(line) for line in text.splitlines()} == {72}
 
 
 class TestJobOrderSignedBytesStayPrivate:
@@ -1261,7 +1324,7 @@ class TestJobOrderDisplay:
                 "╭─ Job order (draft) ──────────────────────────────────────────────────╮",
                 "│ Network     custom endpoint                                          │",
                 "├──────────────────────────────────────────────────────────────────────┤",
-                "│ Model       2 variables, 1 couplings, spin                           │",
+                "│ Model       2 variables, 1 coupling, spin                            │",
                 "│ Placed      native, 2 spins                                          │",
                 "├──────────────────────────────────────────────────────────────────────┤",
                 "│ Payout      single best                                              │",
@@ -1286,6 +1349,10 @@ class TestJobOrderDisplay:
         start = rows.index("Floors      energy <= -2 (chain -1.25), 5 solutions, diversity >=")
         assert rows[start + 1] == "            0.4"  # wrapped onto a blank-label line.
 
+    def test_block_wait_of_one_is_singular(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        assert "Block wait  1 block" in _box_rows(str(solver.create_order(_model(), block_wait=1)))
+
     def test_spin_floors_row_has_no_chain_value(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
         assert "Floors      energy <= -3" in _box_rows(str(solver.create_order(_model(), max_energy=-3)))
@@ -1296,10 +1363,54 @@ class TestJobOrderDisplay:
         order.quote()
         assert "│ Quote       1.002182560255 AGLS total, affordable, block 200 " in str(order)
         order.submit()
-        text = str(order)
-        assert text.startswith("╭─ Job order (submitted) ")
-        assert "│ Receipt     order 1, included in block 200, final " in text
-        assert {len(line) for line in text.splitlines()} == {72}
+        monkeypatch.setattr(chain, "proposal_fee", lambda _iface, _block, _order_id: 1_907_881_410)
+        rows = _box_rows(str(order))
+        assert str(order).startswith("╭─ Job order (submitted) ")
+        start = rows.index("Paid        0.001907881410 AGLS fee")
+        assert rows[start + 1 : start + 4] == [
+            "            1.000000000000 AGLS reward",
+            "            quoted 1.002182560255 AGLS total, block 200",
+            "Receipt     order 1, included in block 200, final",
+        ]
+        assert not any("affordable" in row for row in rows)
+        assert {len(line) for line in str(order).splitlines()} == {72}
+
+    def test_paid_row_keeps_the_fee_unknown_when_its_read_faults(self, monkeypatch, caplog) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model()).submit()
+
+        def _boom(*_args):
+            raise QuipConnectionError("node gone")
+
+        monkeypatch.setattr(chain, "proposal_fee", _boom)
+        with caplog.at_level(logging.WARNING, logger="xqsa.quip"):
+            rows = _box_rows(str(order))
+            str(order)
+        start = rows.index("Paid        fee unknown")
+        assert rows[start + 1 : start + 3] == [
+            "            1.000000000000 AGLS reward",
+            "            quoted 1.002182560255 AGLS total, block 200",
+        ]
+        # The row already says the fee is unknown; a print in a loop must not log on every pass.
+        assert "fee" not in caplog.text
+
+    def test_paid_row_keeps_a_read_fee_and_retries_a_failed_read(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        order = solver.create_order(_model()).submit()
+        fees = iter([None, 1_907_881_410])
+        reads: list[int | None] = []
+
+        def proposal_fee(_iface, _block, _order_id) -> int:
+            reads.append(fee := next(fees))
+            if fee is None:
+                raise QuipConnectionError("node gone")
+            return fee
+
+        monkeypatch.setattr(chain, "proposal_fee", proposal_fee)
+        assert "Paid        fee unknown" in _box_rows(str(order))
+        assert "Paid        0.001907881410 AGLS fee" in _box_rows(str(order))
+        str(order)
+        assert reads == [None, 1_907_881_410]  # the third print reads nothing.
 
     def test_receipt_row_keeps_the_plain_text_when_the_live_read_faults(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)

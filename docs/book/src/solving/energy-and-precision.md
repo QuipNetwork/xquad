@@ -146,14 +146,6 @@ belongs to
 
 ## An Energy Ceiling on the Quip Network
 
-<!-- xquad:defect QUI-1823 -->
-> **Not yet verified on runtime 119.** Runtime 119 renames the order
-> field that carries the ceiling, and this section was tested on
-> `aglais` at runtime 118 only. No network ran runtime 119 when it was
-> written, so the ceiling may behave differently there. Report problems
-> at the [issue
-> tracker](https://gitlab.com/quip.network/xquad/-/issues).
-
 `SolverQuip`'s `max_energy` order option (see [Quality
 floors](quip-orders.md#quality-floors)) is an energy ceiling, and it is
 in model units: the same units as `compute_energy()` and

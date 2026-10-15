@@ -41,7 +41,7 @@ from xqsa.quip.access import Access
 from xqsa.quip.access import from_chain as access_from_chain
 from xqsa.quip.chain import MEMPOOL_PALLET, RECLAIM_ORDER_CALL, _coerce_block_number, _status_str
 from xqsa.quip.codec import _TERMINAL_STATUSES, ORDER_STATUS_CLOSED
-from xqsa.quip.display import Floors, box, floors_text, terms_rows
+from xqsa.quip.display import Floors, box, count, floors_text, terms_rows
 from xqsa.quip.errors import QuipReclaimRefusedError, QuipSubmissionError, QuipTimeoutError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
 from xqsa.quip.resolution import (
@@ -159,9 +159,10 @@ class JobOrderReceipt:
         """Block until the order is final, polling at the client's ``poll_interval``.
 
         An order is final ``block_wait`` blocks after its first accepted
-        answer, or at its deadline if nobody answers. The chain flips an
-        expired order's status lazily, so finality is decided by block height
-        and never by waiting for the status to change. Waiting never reclaims.
+        answer, or at its deadline if nobody answers. The chain can report an
+        order as ``Opened`` for some blocks past its expiry, so finality is
+        decided by block height and never by waiting for the status to change.
+        Waiting never reclaims.
 
         Raises:
             QuipTimeoutError: if the order is not final within the client's
@@ -314,9 +315,8 @@ class JobOrderReceipt:
             )
         answers = _solution_count(order)
         if answers:
-            solvers = "solver" if answers == 1 else "solvers"
             raise QuipReclaimRefusedError(
-                f"order {order_id} was answered by {answers} {solvers}; its reward awaits the winner's claim "
+                f"order {order_id} was answered by {count(answers, 'solver')}; its reward awaits a claim "
                 "and cannot be reclaimed"
             )
 
@@ -486,7 +486,10 @@ class JobOrderReceipt:
             ("Proposer", facts.proposer),
             ("Submitted", submitted),
         ]
-        problem = [("Problem", f"{facts.num_spins} spins, {facts.num_couplings} couplings"), ("Spec", facts.spec_id)]
+        problem = [
+            ("Problem", f"{count(facts.num_spins, 'spin')}, {count(facts.num_couplings, 'coupling')}"),
+            ("Spec", facts.spec_id),
+        ]
         terms = terms_rows(
             resolution=facts.resolution,
             access=facts.access,

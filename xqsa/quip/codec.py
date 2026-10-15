@@ -846,9 +846,12 @@ def is_final(status: str, current_block: int, expiry: int) -> bool:
     """Whether an order is final and will accept no further solutions.
 
     Final when the chain status is terminal (``Expired``/``Closed``) or the
-    current block has reached the effective expiry. The lazy lifecycle means an
-    order can be past expiry while still reported ``Opened``, so the height
-    check is what actually decides finality (mirrors ``lifecycle::is_expired``).
+    current block has reached the effective expiry. The chain marks an order
+    ``Expired`` only at or after its effective expiry (runtime 119 expires a
+    bounded number per block; older runtimes only when an extrinsic touched
+    it), so an order can be past expiry while still reported ``Opened``, and
+    the height check is what actually decides finality (mirrors
+    ``lifecycle::is_expired``).
     """
     if status in _TERMINAL_STATUSES:
         return True
@@ -939,6 +942,18 @@ def _phase_extrinsic_index(phase: object) -> int | None:
         return _as_int_or_none(applied)
     if isinstance(phase, (int, str)):
         return _as_int_or_none(phase)
+    return None
+
+
+def _extrinsic_index(block: Mapping[str, object], ext_hash: str) -> int | None:
+    """Return the index of the extrinsic ``ext_hash`` in a ``get_block`` result, or ``None`` if absent."""
+    target = _strip_0x(ext_hash).lower()
+    for idx, ext in enumerate(block.get("extrinsics") or []):
+        candidate = getattr(ext, "extrinsic_hash", None)
+        if candidate is None and isinstance(ext, dict):
+            candidate = ext.get("extrinsic_hash")
+        if _canonical_hex(candidate) == target:
+            return idx
     return None
 
 
