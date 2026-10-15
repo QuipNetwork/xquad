@@ -40,11 +40,10 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 from xqsa.quip import chain
-from xqsa.quip.access import VARIANTS as ACCESS_VARIANTS
 from xqsa.quip.access import Access, AccessAllow, coerce_access
 from xqsa.quip.access import from_chain as access_from_chain
 from xqsa.quip.codec import MILLI_SCALE, _to_milli, energy_ceiling_milli
-from xqsa.quip.display import Floors, _decimal_text, box, floors_text, terms_rows
+from xqsa.quip.display import Floors, _decimal_text, box, count, floors_text, terms_rows
 from xqsa.quip.errors import EncodingError, QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
 from xqsa.quip.quote import _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
@@ -250,26 +249,34 @@ def _check_limits(options: _OrderOptions, limits: ChainLimits, *, stacklevel: in
         )
 
 
+# The fields of ``JobMode::Bid``; a raw dict with any other is refused, not dropped at encoding.
+_BID_FIELDS = frozenset({"miners", "miner_types"})
+
+
 def _check_access(access: Any, limits: ChainLimits, iface: Any, *, stacklevel: int) -> None:
     """Refuse an allowlist the chain cannot take: over ``MaxBidMiners`` accounts, or an unknown solver type.
 
     An over-cap list traps the runtime with no fee and no readable error, and
     an unknown type fails to encode, so both are refused here. A raw chain
-    dict is read as the rule it names and checked the same way. One that names
-    a rule but cannot be read as it is refused; one that names no rule passes
-    unchecked. A bound the runtime does not expose is not checked.
+    dict is read as the rule it names and checked the same way; one that
+    cannot be read as a rule, or a ``Bid`` with a field the chain does not
+    take, is refused, since encoding would drop or refuse it. A bound the
+    runtime does not expose is not checked.
 
     With ``iface``, each listed account that is not a registered solver warns
     once. It never raises: the chain does not check registration, and an
     operator may register after the order is posted.
     """
     if isinstance(access, Mapping):
+        bid = access.get("Bid")
+        if isinstance(bid, Mapping) and (extra := set(bid) - _BID_FIELDS):
+            raise QuipOrderOptionError(
+                "access", f"Bid has no field {', '.join(map(repr, sorted(extra)))}; it takes miners and miner_types"
+            )
         try:
             access = access_from_chain(access)
         except (ValueError, TypeError) as exc:
-            if len(access) == 1 and next(iter(access)) in ACCESS_VARIANTS:
-                raise QuipOrderOptionError("access", f"{exc}; it cannot be read as an access rule") from None
-            return
+            raise QuipOrderOptionError("access", f"{exc}; it cannot be read as an access rule") from None
     if not isinstance(access, AccessAllow):
         return
     cap = limits.max_bid_miners
@@ -292,8 +299,9 @@ def _check_access(access: Any, limits: ChainLimits, iface: Any, *, stacklevel: i
         logger.warning("could not check whether the allowlisted accounts are registered solvers: %s", exc)
         return
     for account in missing:
+        name = chain.ss58_address(iface, chain.account_bytes(account))
         warnings.warn(
-            f"access: {account} is not a registered solver, so it cannot answer until it registers",
+            f"access: {name} is not a registered solver, so it cannot answer until it registers",
             UserWarning,
             stacklevel=stacklevel,
         )
@@ -476,6 +484,14 @@ class _Sent:
     error: str | None = None
 
 
+def _quote_text(quote: JobQuote, symbol: str, decimals: int, afford: str | None = None) -> str:
+    """A quote as ``X AGLS total``, then ``afford`` and the block it was taken at, comma-separated."""
+    parts = [f"{_format_planck(quote.total_planck, decimals)} {symbol} total", afford]
+    if quote.quoted_at_block:
+        parts.append(f"block {quote.quoted_at_block}")
+    return ", ".join(part for part in parts if part)
+
+
 class JobOrder:
     """One Quip order: its model, placement and options, from draft to finalized.
 
@@ -526,6 +542,8 @@ class JobOrder:
         self._signed: _SignedCall | None = None
         # The most recent quote, from quote() or submit(); shown, never gated on.
         self._last_quote: JobQuote | None = None
+        # The fee the sent extrinsic paid, kept once a read returns it; a failed read is retried on the next print.
+        self._paid_fee: int | None = None
         self._order_id: int | None = None
         self._included_block: int | None = None
         # The sent extrinsic's hash and inclusion block, and the chain's error when its dispatch failed.
@@ -842,21 +860,52 @@ class JobOrder:
 
     # -- display ---------------------------------------------------------
 
+    def _read_fee(self) -> int | None:
+        """The fee the sent extrinsic paid, read once from its ``TransactionFeePaid`` event, or ``None``.
+
+        By order id when the dispatch succeeded, else by extrinsic hash: a
+        failed dispatch paid the fee too. Display only, so a fault logs at
+        debug level and the next print retries.
+        """
+        if self._paid_fee is None and self._block_hash is not None:
+            iface = self._client._iface
+            try:
+                if self._order_id is not None:
+                    self._paid_fee = chain.proposal_fee(iface, self._block_hash, self._order_id)
+                elif self._ext_hash is not None:
+                    self._paid_fee = chain.extrinsic_fee(iface, self._block_hash, self._ext_hash)
+            except Exception as exc:  # noqa: BLE001 -- display only; the row says "fee unknown".
+                logger.debug("could not read the fee of extrinsic %s: %s", self._ext_hash, exc)
+        return self._paid_fee
+
+    def _paid_text(self, symbol: str, decimals: int, quote: JobQuote | None) -> str:
+        """The Paid row: the fee the chain charged and any reward, then the quote for comparison.
+
+        The quote's fee is an estimate at the head block. A failed order
+        placed nothing, so it reserved no reward.
+        """
+        fee = self._read_fee()
+        lines = ["fee unknown" if fee is None else f"{_format_planck(fee, decimals)} {symbol} fee"]
+        # One amount per line: both on one line overflow the box's 56-column value at 12 decimals.
+        if self._state != "failed":
+            lines.append(f"{_format_planck(self._options.reward, decimals)} {symbol} reward")
+        if quote is not None:
+            lines.append(f"quoted {_quote_text(quote, symbol, decimals)}")
+        return "\n".join(lines)
+
     def __str__(self) -> str:
         """Render the order as a box: network, problem, terms, then its quote and receipt."""
         symbol, decimals = self._client._token()
         options = self._options
         topology = self._job.topology
-        placed = (
-            f"native, {topology.num_nodes} spins"
-            if options.topology == "native"
-            else f"topology, {topology.num_nodes} spins\n{options.topology}"
-        )
+        spins = count(topology.num_nodes, "spin")
+        placed = f"native, {spins}" if options.topology == "native" else f"topology, {spins}\n{options.topology}"
         model = self._model
         problem = [
             (
                 "Model",
-                f"{model.size} variables, {len(model.quadratic)} couplings, {model.domain.name.lower()}",
+                f"{count(model.size, 'variable')}, {count(len(model.quadratic), 'coupling')}, "
+                f"{model.domain.name.lower()}",
             ),
             ("Placed", placed),
         ]
@@ -868,15 +917,13 @@ class JobOrder:
             block_wait=options.block_wait,
             reward=f"{_format_planck(options.reward, decimals)} {symbol}",
         )
-        if self._last_quote is None:
+        quote = self._last_quote
+        if quote is None:
             quoted = "not quoted"
         else:
-            quote = self._last_quote
-            total = f"{_format_planck(quote.total_planck, decimals)} {symbol}"
-            afford = "affordable" if quote.affordable else "not affordable"
-            quoted = ", ".join(
-                [f"{total} total", afford] + ([f"block {quote.quoted_at_block}"] if quote.quoted_at_block else [])
-            )
+            # Affordability only matters before sending; after, it describes a balance that has moved.
+            afford = ("affordable" if quote.affordable else "not affordable") if self._state == "draft" else None
+            quoted = _quote_text(quote, symbol, decimals, afford)
         block = f"block {self._included_block}" if self._included_block is not None else None
         if self._state == "draft":
             receipt = "not submitted"
@@ -893,6 +940,11 @@ class JobOrder:
             else:
                 leader = f", leader {outcome.leader}" if outcome.leader else ""
                 receipt += f", {outcome.status}{leader}"
+        if self._state == "draft":
+            summary = [("Quote", quoted), ("Receipt", receipt)]
+        elif self._state == "unconfirmed":  # the outcome is unknown, so it is not known to have paid.
+            summary = [("Quoted", quoted), ("Receipt", receipt)]
+        else:
+            summary = [("Paid", self._paid_text(symbol, decimals, quote)), ("Receipt", receipt)]
         network = [("Network", self._client._network or "custom endpoint")]
-        summary = [("Quote", quoted), ("Receipt", receipt)]
         return box(f"Job order ({self._state})", [network, problem, terms, summary])

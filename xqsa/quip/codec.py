@@ -946,6 +946,18 @@ def _phase_extrinsic_index(phase: object) -> int | None:
     return None
 
 
+def _extrinsic_index(block: Mapping[str, object], ext_hash: str) -> int | None:
+    """Return the index of the extrinsic ``ext_hash`` in a ``get_block`` result, or ``None`` if absent."""
+    target = _strip_0x(ext_hash).lower()
+    for idx, ext in enumerate(block.get("extrinsics") or []):
+        candidate = getattr(ext, "extrinsic_hash", None)
+        if candidate is None and isinstance(ext, dict):
+            candidate = ext.get("extrinsic_hash")
+        if _canonical_hex(candidate) == target:
+            return idx
+    return None
+
+
 def _event_ids(inner: Mapping[str, object]) -> tuple[object, object]:
     """Extract ``(module_id, event_id)`` from a decoded event mapping.
 

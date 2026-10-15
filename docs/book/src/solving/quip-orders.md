@@ -181,9 +181,15 @@ the receipt:
 ╰──────────────────────────────────────────────────────────────────────╯
 ```
 
-The `Quote` row keeps the last quote taken, including the one `submit()`
-takes before an `autofund` drip, so a funded order can still read
-`not affordable` after it was submitted.
+On a draft, the `Quote` row shows the last quote taken and whether the
+account can afford it. Once the order has an id, a `Paid` row replaces
+it: the fee the chain charged, read from the order's
+`TransactionFeePaid` event, the reward, and the quote's total beside
+them for comparison. The quoted fee is an estimate at the head block, so
+the two can differ. When the fee cannot be read, the row says
+`fee unknown`. A failed order paid the fee but placed nothing, so its
+`Paid` row shows the fee and the quote with no reward. An unconfirmed
+order's outcome is unknown, so its `Quoted` row shows the quote alone.
 
 ## Payout rules
 
@@ -315,10 +321,10 @@ value for `access` raises `ValueError` on the constructor and
 `access='Bid' is not an access rule; pass 'Open' or one of AccessOpen(), AccessAllow(accounts=[...], types=[...])`.
 
 An allowlisted account that is not a registered solver is never refused,
-but it warns, naming the account in `0x` hex:
+but it warns, naming the account in SS58:
 
 ```text
-UserWarning: access: 0x9dfe3616d2f32ad5a46ca94262e36b6b6d1fc6ecd15691dc0810b20f583e5188 is not a registered solver, so it cannot answer until it registers
+UserWarning: access: 5FdrtfYWZKnRQJT356sXLne1V2GSCWs9DTs7vkXht35bSFgb is not a registered solver, so it cannot answer until it registers
 ```
 
 The constructor warns for its default `access`, and `create_order()` and
@@ -502,8 +508,8 @@ signing, with `QuipReclaimRefusedError`, in this order:
 1. `order N was proposed by <account>, not by this account`
 2. `order N is already closed (reclaimed or settled)`
 3. `order N is open until block B (about M min); reclaim after it closes`
-4. `order N was answered by K solvers; its reward awaits the winner's
-   claim and cannot be reclaimed`
+4. `order N was answered by K solvers; its reward awaits a claim and
+   cannot be reclaimed`
 
 If the chain refuses the reclaim, it raises `QuipReclaimRefusedError`
 naming the block and the chain's error, and the fee is charged. If the
