@@ -40,10 +40,12 @@ plus a signer; see :mod:`xqsa.quip`), takes no RNG ``seed``, and requires the
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from functools import partial
 from typing import Any
 
+from .binary import BinaryImplementation
 from .inprocess.cpu import InProcessCPU
 from .quip import SolverQuip
 from .solver import Implementation, Solver
@@ -71,6 +73,13 @@ class SolverCPU(Solver):
 
     def __init__(self, *, algorithm: str = "sa", **params: Any) -> None:
         super().__init__(InProcessCPU(algorithm=algorithm, **params), algorithm=algorithm)
+
+    @classmethod
+    def _binary(cls, path: str | os.PathLike[str], *, algorithm: str = "sa", **params: Any) -> SolverCPU:
+        """Build a SolverCPU on a solver-core binary instead of in-process code. Private: tests only until QUI-1637."""
+        self = cls.__new__(cls)
+        Solver.__init__(self, BinaryImplementation(path, algorithm=algorithm, **params), algorithm=algorithm)
+        return self
 
 
 class SolverGPU(Solver):

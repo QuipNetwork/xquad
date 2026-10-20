@@ -76,4 +76,5 @@ markers = [
     "cuda: real NVIDIA CUDA GPU tests (require cupy + a CUDA device)",
     "metal: real Apple Metal GPU tests (require macOS + a Metal device)",
     "quip: live Quip Network devnet tests (require QUIP_RPC_URL)",
+    "quip_cpu: real quip-cpu-sa binary tests (require XQSA_QUIP_CPU_SA=<path to the binary>)",
 ]
