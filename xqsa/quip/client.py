@@ -65,6 +65,7 @@ from xqsa.quip.errors import (  # noqa: F401 -- the Quip* errors stay importable
     QuipOrderOptionError,
     QuipReclaimRefusedError,
     QuipSubmissionError,
+    QuipSubmitIncompleteError,
     QuipTimeoutError,
     QuipTopologyError,
     QuipUnconfirmedError,
@@ -682,8 +683,8 @@ class SolverQuip(Solver):
             raise QuipConnectionError(f"could not read the best block: {exc}") from exc
         return signed.window_end - best < self._inclusion_window_blocks // 2
 
-    def _propose(self, signed: _SignedCall, call_params: dict, reward: int) -> _Sent:
-        """Send ``signed`` if its nonce is still current, else re-sign once, and report the outcome.
+    def _send_ready(self, signed: _SignedCall, call_params: dict) -> _SignedCall:
+        """Return ``signed`` if it can still be sent as is, else ``call_params`` signed afresh, once.
 
         The nonce is read just before sending. If it moved since ``signed``
         was signed, another transaction from this account used it, so the
@@ -695,11 +696,9 @@ class SolverQuip(Solver):
         that surfaces as a :class:`QuipSubmissionError` from the send.
 
         Raises:
-            QuipSubmissionError: if the nonce moves twice, signing fails, or the
-                extrinsic certainly did not land. Nothing was placed.
-            QuipUnconfirmedError: if it was sent but could not be settled by its
-                window's end (see :meth:`_settle`).
-            QuipConnectionError: if the nonce cannot be read.
+            QuipSubmissionError: if the nonce moves twice or signing fails.
+                Nothing was sent.
+            QuipConnectionError: if the nonce or the best block cannot be read.
         """
         current = self._account_nonce()
         moved = current != signed.nonce
@@ -714,7 +713,7 @@ class SolverQuip(Solver):
                     "account nonce moved twice while submitting; another client is sending from this account. "
                     "Nothing was sent."
                 )
-        return self._propose_job(signed, reward)
+        return signed
 
     def _propose_job(self, signed: _SignedCall, reward: int) -> _Sent:
         """Send a signed ``propose_job`` and report what it placed, read from finalized state.
@@ -728,8 +727,8 @@ class SolverQuip(Solver):
         Raises:
             QuipSubmissionError: if the extrinsic certainly did not land: the
                 node refused it, or its window ended with it never on chain.
-            QuipUnconfirmedError: if it could not be settled by its window's
-                end (see :meth:`_settle`).
+            QuipSubmitIncompleteError: if it could not be settled by its
+                window's end (see :meth:`_settle`).
         """
         signing = self._quip_signing
         try:
@@ -771,21 +770,14 @@ class SolverQuip(Solver):
         of that block plus :data:`SETTLE_GRACE_BLOCKS`.
 
         Raises:
-            QuipUnconfirmedError: if it cannot be settled by then, the
+            QuipSubmitIncompleteError: if it cannot be settled by then, the
                 specific error chained as its cause.
         """
         deadline = self._settle_deadline(signed)
         failures = 0
         while True:
             try:
-                outcome = chain.settle_proposal(
-                    self._iface,
-                    self._signer.account_id,
-                    signed.ext_hash,
-                    signed.nonce,
-                    signed.checkpoint,
-                    signed.window_end,
-                )
+                outcome = self._settle_round(signed)
             except QuipMetadataError as exc:
                 raise self._unsettled(signed, exc) from exc
             except Exception as exc:  # noqa: BLE001 -- a fault while reading; reconnect and read again.
@@ -796,16 +788,8 @@ class SolverQuip(Solver):
                 self._reconnect()
                 continue
             failures = 0
-            if outcome == "never":
-                return None
-            if isinstance(outcome, chain.Landed):
-                return _Sent(
-                    ext_hash=signed.ext_hash,
-                    block_hash=outcome.block_hash,
-                    included_block=outcome.block_number,
-                    order_id=outcome.order_id,
-                    error=outcome.error,
-                )
+            if outcome != "pending":
+                return outcome
             if not self._pause(deadline, self._poll_interval):
                 stall = QuipConnectionError(
                     f"finality did not reach the window's end block {signed.window_end} in time"
@@ -813,6 +797,52 @@ class SolverQuip(Solver):
                 raise self._unsettled(signed, stall) from stall
             with contextlib.suppress(Exception):  # a refusal changes nothing: the nonce decides.
                 self._quip_signing.submit_and_watch(self._iface, signed.wire, signed.ext_hash, wait_for="sent")
+
+    def _settle_once(self, signed: _SignedCall) -> _Sent | None:
+        """Make one attempt to settle the sent ``signed``, reconnecting once if a read fails.
+
+        Returns what :meth:`_settle` returns, without waiting or sending.
+
+        Raises:
+            QuipSubmitIncompleteError: if it may still land, or cannot be
+                read; the reason chained as its cause.
+        """
+        try:
+            try:
+                outcome = self._settle_round(signed)
+            except QuipMetadataError:
+                raise
+            except Exception:  # noqa: BLE001 -- the connection may be stale; reopen it and read once more.
+                self._reconnect()
+                outcome = self._settle_round(signed)
+        except Exception as exc:  # noqa: BLE001 -- the order stays sending; the cause says why.
+            raise self._unsettled(signed, exc) from exc
+        if outcome == "pending":
+            pending = QuipSubmissionError(f"it may still land up to block {signed.window_end}")
+            raise self._unsettled(signed, pending) from pending
+        return outcome
+
+    def _settle_round(self, signed: _SignedCall) -> _Sent | None | Literal["pending"]:
+        """Read once what finalized state says of ``signed``; see :func:`xqsa.quip.chain.settle_proposal`.
+
+        Raises:
+            QuipConnectionError: if a chain read fails.
+            QuipMetadataError: if the inclusion block's events cannot be decoded.
+        """
+        outcome = chain.settle_proposal(
+            self._iface, self._signer.account_id, signed.ext_hash, signed.nonce, signed.checkpoint, signed.window_end
+        )
+        if outcome == "never":
+            return None
+        if outcome == "pending":
+            return outcome
+        return _Sent(
+            ext_hash=signed.ext_hash,
+            block_hash=outcome.block_hash,
+            included_block=outcome.block_number,
+            order_id=outcome.order_id,
+            error=outcome.error,
+        )
 
     def _settle_deadline(self, signed: _SignedCall) -> float:
         """The wall-clock time by which ``signed``'s window should be over and finalized.
@@ -850,10 +880,15 @@ class SolverQuip(Solver):
                 old.close()
 
     @staticmethod
-    def _unsettled(signed: _SignedCall, cause: Exception) -> QuipUnconfirmedError:
-        """The error for a sent ``propose_job`` that could not be settled by its window's end."""
-        return chain.unconfirmed_error(
-            signed.ext_hash, None, f"it could not be settled by its window's end block {signed.window_end}: {cause}"
+    def _unsettled(signed: _SignedCall, cause: Exception) -> QuipSubmitIncompleteError:
+        """The error for a sent ``propose_job`` that is not settled yet; :class:`JobOrder` attaches itself."""
+        return QuipSubmitIncompleteError(
+            signed.ext_hash,
+            signed.nonce,
+            signed.window_end,
+            f"propose_job {signed.ext_hash} (nonce {signed.nonce}) was sent but is not settled ({cause}). Its window "
+            f"ends at block {signed.window_end}. The order is sending: calling submit() again resumes it; it never "
+            "places a second order.",
         )
 
     def _included_block(self, block_hash: str | None) -> int | None:
@@ -1380,10 +1415,11 @@ class SolverQuip(Solver):
             QuipTimeoutError: if the order does not finalize within ``timeout``
                 (it carries the order's receipt; :meth:`get_receipt` rebuilds
                 it from the order id).
-            QuipUnconfirmedError: if the job was sent but could not be settled
-                by the end of its inclusion window (see :meth:`JobOrder.submit
-                <xqsa.quip.JobOrder.submit>`). It may be on chain, so do not
-                solve the same model again on that account without checking.
+            QuipSubmitIncompleteError: if the job was sent but could not be
+                settled by the end of its inclusion window (see
+                :meth:`JobOrder.submit <xqsa.quip.JobOrder.submit>`). It
+                carries the ``sending`` order: call ``submit()`` on it to
+                resume, never ``solve()`` again, which would sign a second job.
             QuipJobFailedError: if the order finalizes with no usable solution.
         """
         _pop_mode(kwargs, stacklevel=2)

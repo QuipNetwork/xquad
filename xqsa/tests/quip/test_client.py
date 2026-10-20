@@ -2325,15 +2325,15 @@ class TestSolverQuipSubmission:
         sent = solver._propose_job(_signed_call(solver), UNIT)
         assert (sent.order_id, sent.error) == (None, "System.ExtrinsicFailed: QuantumComputeMempool.RewardTooLow")
 
-    def test_propose_job_missing_event_is_unconfirmed(self, monkeypatch) -> None:
-        from xqsa.quip import QuipMetadataError, QuipUnconfirmedError
+    def test_propose_job_missing_event_is_incomplete(self, monkeypatch) -> None:
+        from xqsa.quip import QuipMetadataError, QuipSubmitIncompleteError
 
         solver = _make_solver(monkeypatch, iface=_default_iface(balance=10 * UNIT))
         solver._iface.events = []  # included and dispatched, but no JobProposed event.
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
-        with pytest.raises(QuipUnconfirmedError, match="no JobProposed") as info:
+        with pytest.raises(QuipSubmitIncompleteError, match="no JobProposed") as info:
             solver._propose_job(_signed_call(solver), UNIT)
-        assert info.value.extrinsic_hash == "0xext"
+        assert (info.value.extrinsic_hash, info.value.nonce, info.value.window_end) == ("0xext", 0, 63)
         assert isinstance(info.value.__cause__, QuipMetadataError)
 
     @pytest.mark.parametrize("attrs_form", ["mapping", "params"])

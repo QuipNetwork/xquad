@@ -28,6 +28,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from xqsa.quip.order import JobOrder
     from xqsa.quip.quote import JobQuote
     from xqsa.quip.receipt import JobOrderReceipt
 
@@ -136,6 +137,37 @@ class QuipUnconfirmedError(QuipSubmissionError):
         self.extrinsic_hash = extrinsic_hash
         self.block_hash = block_hash
         super().__init__(message)
+
+
+class QuipSubmitIncompleteError(QuipSubmissionError):
+    """Raised when a sent ``propose_job`` is not settled yet, and :meth:`~xqsa.quip.JobOrder.submit` must stop.
+
+    No node could be reached, finality stalled short of the proposal's
+    window, or its block's events could not be decoded; the specific error
+    is the ``__cause__``. The proposal may still be on chain, or land before
+    its window ends. The :class:`~xqsa.quip.JobOrder` is left ``sending``
+    with its signed bytes and nonce: calling ``submit()`` on it again
+    resumes settling and never places a second order.
+
+    Carries the ``order`` (``None`` after pickling, as the order holds a
+    live connection), the ``extrinsic_hash``, the ``nonce`` it was signed
+    with, and ``window_end``, the last block that can include it. A
+    :class:`QuipSubmissionError`, so existing handlers still catch it.
+    """
+
+    def __init__(
+        self, extrinsic_hash: str, nonce: int, window_end: int, message: str, order: JobOrder | None = None
+    ) -> None:
+        self.extrinsic_hash = extrinsic_hash
+        self.nonce = nonce
+        self.window_end = window_end
+        self.order = order
+        super().__init__(message)
+
+    def __reduce__(self) -> tuple:
+        """Pickle without the order; ``order`` comes back ``None``."""
+        state = {name: value for name, value in self.__dict__.items() if name != "order"}
+        return (type(self), (self.extrinsic_hash, self.nonce, self.window_end, str(self)), state)
 
 
 class QuipTopologyError(QuipError):

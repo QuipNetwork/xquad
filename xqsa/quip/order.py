@@ -44,7 +44,7 @@ from xqsa.quip.access import Access, AccessAllow, coerce_access
 from xqsa.quip.access import from_chain as access_from_chain
 from xqsa.quip.codec import MILLI_SCALE, _to_milli, energy_ceiling_milli
 from xqsa.quip.display import Floors, _decimal_text, box, count, floors_text, terms_rows
-from xqsa.quip.errors import EncodingError, QuipOrderOptionError, QuipSubmissionError, QuipUnconfirmedError
+from xqsa.quip.errors import EncodingError, QuipOrderOptionError, QuipSubmissionError, QuipSubmitIncompleteError
 from xqsa.quip.quote import _format_planck
 from xqsa.quip.receipt import JobOrderReceipt
 from xqsa.quip.resolution import VARIANTS as RESOLUTION_VARIANTS
@@ -67,7 +67,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("xqsa.quip")
 
-OrderState = Literal["draft", "submitted", "unconfirmed", "failed", "finalized"]
+OrderState = Literal["draft", "sending", "submitted", "unconfirmed", "failed", "finalized"]
 
 # The options an order accepts; ``delivery`` is a client default only.
 ORDER_OPTIONS = frozenset(
@@ -535,12 +535,15 @@ class JobOrder:
     :meth:`receipt`. :meth:`wait`, :meth:`solvers`, :meth:`raw_solutions`,
     :meth:`settlement` and :meth:`reclaim` pass through to it.
 
-    States: ``draft``; ``submitted`` once placed with a known order id, then
-    ``finalized`` once the chain closes it; ``failed`` when it was included but
-    its dispatch failed, so the fee was paid and no order exists; and
-    ``unconfirmed`` when it was sent but could not be settled from finalized
-    state by the end of its inclusion window. An ``unconfirmed`` order may be
-    on chain, so it is never sent again.
+    States: ``draft``; ``sending`` while a sent proposal is not settled yet;
+    ``submitted`` once placed with a known order id, then ``finalized`` once
+    the chain closes it; and ``failed`` when it was included but its dispatch
+    failed, so the fee was paid and no order exists. ``draft`` means the
+    proposal is not on the finalized chain and never was. A ``sending``
+    order keeps its signed bytes and nonce, also through pickling: every
+    other method settles it first, and :meth:`submit` resumes it, so it is
+    never signed again while those bytes can still land. ``unconfirmed``, an
+    order whose outcome was unknown, is no longer produced.
 
     The order caches its signed extrinsic, never a quote. :meth:`quote` signs
     once and re-prices the same bytes on every call, reading the fee, balance
@@ -660,12 +663,17 @@ class JobOrder:
         rechecks the quality floors against the placed model, and drops any
         cached quote. A refused change leaves the order as it was.
 
+        A ``sending`` order is settled first, as for :meth:`quote`.
+
         Raises:
+            QuipSubmitIncompleteError: if the order is ``sending`` and cannot
+                be settled yet.
             QuipSubmissionError: if the order is no longer a draft.
             TypeError: for an unknown option or a raw chain value.
             QuipOrderOptionError: if an option is outside its chain limit.
             ValueError: if ``mapping`` is combined with a native topology.
         """
+        self._settle_first()
         self._require_draft("set")
         merged = merge_options(
             self._options, options, self._client._limits, strict=True, stacklevel=3, iface=self._client._iface
@@ -688,11 +696,17 @@ class JobOrder:
         extrinsic it prices is reused until the next :meth:`set` or
         :meth:`submit`.
 
+        A ``sending`` order is settled first; once proven never on chain, it
+        is a draft again and is quoted as one.
+
         Raises:
+            QuipSubmitIncompleteError: if the order is ``sending`` and cannot
+                be settled yet.
             QuipSubmissionError: if the order is no longer a draft, or the
                 extrinsic cannot be built.
             QuipConnectionError: if a chain read faults.
         """
+        self._settle_first()
         self._require_draft("quote")
         return self._fresh_quote(self._signed_call())
 
@@ -702,8 +716,9 @@ class JobOrder:
         Quotes afresh, shows the quote, refuses a shortfall no faucet drip can
         cover, and asks the ``autoconfirm`` and, if short, ``autofund`` gates.
         It then sends the bytes :meth:`quote` signed if the account nonce has
-        not moved since, and re-signs otherwise. The cached extrinsic is
-        dropped whatever the outcome, so a retry signs anew.
+        not moved since and less than half their window is spent, and
+        re-signs otherwise. The cached extrinsic is dropped unless the order
+        is left ``sending``, so a retry of a draft signs anew.
 
         The proposal is signed mortal (see ``inclusion_window_blocks`` on
         :class:`~xqsa.quip.SolverQuip`), and its outcome is read from
@@ -712,8 +727,14 @@ class JobOrder:
         finalized. While it may still land, the same bytes are sent again and
         a lost connection is reopened. A refusal by the node, or a window
         that ends with the proposal never on chain, leaves the order a
-        draft. Only if it cannot be settled by the window's end is the order
-        ``unconfirmed``.
+        draft. If it cannot be settled by the window's end, the order is left
+        ``sending``.
+
+        On a ``sending`` order, it resumes instead: it settles the bytes
+        already sent, up to their window's end, and signs nothing. Landed,
+        the order is ``submitted`` (or ``failed``, raised as below). Proven
+        never on chain, it is a draft again and is quoted, gated, signed and
+        sent as one.
 
         Raises:
             QuipSubmissionError: if the order is no longer a draft, the account
@@ -721,13 +742,16 @@ class JobOrder:
                 or the extrinsic certainly did not land (the order stays a
                 draft); or if its dispatch failed on chain (the order is
                 ``failed`` and the fee was paid).
-            QuipUnconfirmedError: if it could not be settled by the end of its
-                window: no node could be reached, finality stalled, or the
-                block's events could not be read. The order is ``unconfirmed``
-                and must not be resubmitted.
+            QuipSubmitIncompleteError: if it could not be settled by the end
+                of its window: no node could be reached, finality stalled, or
+                the block's events could not be decoded. The order is
+                ``sending`` and the error carries it; calling ``submit()``
+                again resumes it.
             QuipCancelledError: if a consent gate declines.
             QuipFaucetError: if the faucet refuses or cannot be reached.
         """
+        if self._state == "sending" and self._settle_sending(self._client._settle):
+            return self  # it landed: nothing is signed or sent again.
         self._require_draft("submit")
         call_params = self._call_params()
         signed, self._signed = self._signed_call(call_params), None
@@ -735,13 +759,56 @@ class JobOrder:
         # reward was reserved; the gates judge the account as it is now.
         self._client._clear_gates(self._fresh_quote(signed))
         self._submitted_at = time.perf_counter()
+        signed = self._client._send_ready(signed, call_params)
         try:
-            sent = self._client._propose(signed, call_params, self.reward)
-        except QuipUnconfirmedError as exc:
-            self._state = "unconfirmed"
-            self._ext_hash, self._block_hash = exc.extrinsic_hash, exc.block_hash
-            self._included_block = self._client._included_block(exc.block_hash)
-            raise
+            sent = self._client._propose_job(signed, self.reward)
+        except QuipSubmitIncompleteError as exc:
+            raise self._sending(signed, exc) from exc.__cause__
+        self._record(sent)
+        return self
+
+    def _sending(self, signed: _SignedCall, error: QuipSubmitIncompleteError) -> QuipSubmitIncompleteError:
+        """Leave the order ``sending`` with ``signed`` kept, and return ``error`` carrying the order."""
+        self._state, self._signed, self._ext_hash = "sending", signed, signed.ext_hash
+        error.order = self
+        return error
+
+    def _settle_sending(self, settle: Any) -> bool:
+        """Settle a ``sending`` order with ``settle`` (a client settle method); ``True`` if it landed.
+
+        Landed, the order is ``submitted``, or ``failed`` and raises as
+        :meth:`submit` does. Proven never on chain, it is a ``draft`` again
+        and its dead signed bytes are dropped.
+
+        Raises:
+            QuipSubmitIncompleteError: if it is not settled yet; the order
+                stays ``sending``.
+            QuipSubmissionError: if it landed and its dispatch failed.
+        """
+        signed = self._signed
+        assert signed is not None  # a sending order keeps its signed bytes.
+        try:
+            sent = settle(signed)
+        except QuipSubmitIncompleteError as exc:
+            raise self._sending(signed, exc) from exc.__cause__
+        self._signed = None
+        if sent is None:
+            self._state, self._ext_hash = "draft", None
+            return False
+        self._record(sent)
+        return True
+
+    def _settle_first(self) -> None:
+        """Make one attempt to settle a ``sending`` order before acting on it; see :meth:`_settle_sending`."""
+        if self._state == "sending":
+            self._settle_sending(self._client._settle_once)
+
+    def _record(self, sent: _Sent) -> None:
+        """Record what a landed proposal placed: ``submitted``, or ``failed`` and raise.
+
+        Raises:
+            QuipSubmissionError: if its dispatch failed; the fee was paid.
+        """
         self._ext_hash, self._block_hash, self._included_block = sent.ext_hash, sent.block_hash, sent.included_block
         if sent.error is not None:
             self._state = "failed"
@@ -753,7 +820,6 @@ class JobOrder:
         self._order_id = sent.order_id
         self._receipt = JobOrderReceipt(self._client, sent.order_id, self._genesis_hash)
         self._state = "submitted"
-        return self
 
     def order_id(self) -> int | None:
         """Return the chain's order id, or ``None`` while the order is a draft."""
@@ -764,8 +830,13 @@ class JobOrder:
 
         - ``draft``: ``state``, ``options`` and ``inclusion_window_blocks``,
           the blocks a signed proposal stays valid for.
-        - ``unconfirmed``: ``state``, ``extrinsic_hash``, ``block_hash`` and
-          ``included_block`` (``None`` when unknown).
+        - ``sending``: it is settled first, with one read and no wait, and
+          reported in the state it settles to. While it cannot be,
+          ``state``, ``extrinsic_hash``, ``nonce`` and ``window_end``, the
+          last block that can include it. Never raises for it.
+        - ``unconfirmed`` (an order from before v0.4.5 only): ``state``,
+          ``extrinsic_hash``, ``block_hash`` and ``included_block``
+          (``None`` when unknown).
         - ``failed``: the same, plus the chain's dispatch ``error``.
         - ``submitted`` and ``finalized``: ``state``, ``order_id``,
           ``chain_status`` (the chain's ``OrderStatus``), the order's block
@@ -774,6 +845,20 @@ class JobOrder:
           ``solution_count``. Reading it moves a submitted order to
           ``finalized`` once the chain says it is final.
         """
+        if self._state == "sending":
+            try:
+                self._settle_first()
+            except QuipSubmitIncompleteError:
+                signed = self._signed
+                assert signed is not None
+                return {
+                    "state": self._state,
+                    "extrinsic_hash": signed.ext_hash,
+                    "nonce": signed.nonce,
+                    "window_end": signed.window_end,
+                }
+            except QuipSubmissionError:
+                pass  # it landed and failed: report it as failed below.
         if self._state == "draft":
             return {
                 "state": self._state,
@@ -795,10 +880,15 @@ class JobOrder:
     def receipt(self) -> JobOrderReceipt:
         """Return the order's receipt, its handle on the chain.
 
+        A ``sending`` order is settled first, with one read and no wait.
+
         Raises:
+            QuipSubmitIncompleteError: if the order is ``sending`` and cannot
+                be settled yet.
             QuipSubmissionError: if the order has no order id: it is a draft,
                 its dispatch failed, or its outcome is unconfirmed.
         """
+        self._settle_first()
         if self._receipt is None:
             why = {
                 "draft": "is a draft; submit() it first",
@@ -812,6 +902,8 @@ class JobOrder:
         """Block until the order is final; see :meth:`JobOrderReceipt.wait <xqsa.quip.JobOrderReceipt.wait>`.
 
         Raises:
+            QuipSubmitIncompleteError: if the order is ``sending`` and cannot
+                be settled yet; see :meth:`receipt`.
             QuipSubmissionError: if the order has no receipt; see :meth:`receipt`.
             QuipTimeoutError: if it is not final within the client's ``timeout``.
         """
@@ -891,9 +983,14 @@ class JobOrder:
         return self._last_quote
 
     def __getstate__(self) -> dict[str, Any]:
-        """Pickle and copy without the signed extrinsic: a copy signs its own."""
+        """Pickle and copy without the signed extrinsic, which a draft's copy signs afresh.
+
+        A ``sending`` order keeps it: those bytes, with their nonce, are the
+        only transaction that may use that nonce while they can still land.
+        """
         state = self.__dict__.copy()
-        state["_signed"] = None
+        if self._state != "sending":
+            state["_signed"] = None
         return state
 
     def _require_draft(self, action: str) -> None:
@@ -971,6 +1068,11 @@ class JobOrder:
         block = f"block {self._included_block}" if self._included_block is not None else None
         if self._state == "draft":
             receipt = "not submitted"
+        elif self._state == "sending" and self._signed is not None:
+            signed = self._signed
+            receipt = (
+                f"sending, extrinsic\n{signed.ext_hash}\nnonce {signed.nonce}, window ends at block {signed.window_end}"
+            )
         elif self._state == "unconfirmed":
             receipt = f"unconfirmed, extrinsic\n{self._ext_hash}" + (f"\nseen in {block}" if block else "")
         elif self._state == "failed":
@@ -986,7 +1088,7 @@ class JobOrder:
                 receipt += f", {outcome.status}{leader}"
         if self._state == "draft":
             summary = [("Quote", quoted), ("Receipt", receipt)]
-        elif self._state == "unconfirmed":  # the outcome is unknown, so it is not known to have paid.
+        elif self._state in ("sending", "unconfirmed"):  # the outcome is unknown, so it is not known to have paid.
             summary = [("Quoted", quoted), ("Receipt", receipt)]
         else:
             summary = [("Paid", self._paid_text(symbol, decimals, quote)), ("Receipt", receipt)]

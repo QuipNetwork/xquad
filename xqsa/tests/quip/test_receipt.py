@@ -783,7 +783,7 @@ class TestJobOrderPassThroughs:
         [
             pytest.param(None, "submit\\(\\) it first", id="draft"),
             pytest.param(_fail_dispatch, "failed on chain", id="failed"),
-            pytest.param(_lose_order_id, "is unconfirmed", id="unconfirmed"),
+            pytest.param(_lose_order_id, "is not settled", id="sending"),
         ],
     )
     def test_receipt_refused_without_an_order_id(self, monkeypatch, setup, match) -> None:
