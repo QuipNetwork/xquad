@@ -29,12 +29,13 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from xqsa.quip.codec import (
     _as_hex,
     _as_int_or_none,
     _canonical_hex,
+    _dispatch_error_text,
     _event_ids,
     _extrinsic_index,
     _phase_extrinsic_index,
@@ -597,6 +598,105 @@ def _proposed_order_id(events: list[tuple[int | None, object, object, object]], 
             if order_id is not None:
                 return order_id
     return None
+
+
+def account_nonce_at(iface: Any, account_id: Any, block_hash: str) -> int:
+    """Return the account's nonce in the state of block ``block_hash``.
+
+    Unlike :func:`account_nonce`, this counts only transactions included up
+    to that block, never the node's pool.
+
+    Raises:
+        QuipConnectionError: if the nonce cannot be read.
+    """
+    try:
+        value = getattr(iface.query("System", "Account", [account_id], block_hash=block_hash), "value", None)
+        return int(value["nonce"])
+    except QuipMetadataError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
+        raise QuipConnectionError(f"could not read the account nonce at block {block_hash}: {exc}") from exc
+
+
+def first_block_past_nonce(iface: Any, account_id: Any, nonce: int, low: int, high: int) -> int:
+    """Return the first block from ``low`` to ``high`` whose state has the account's nonce past ``nonce``.
+
+    The nonce never decreases, so a binary search over historical state
+    finds it in about log2(high - low) reads. ``high`` must be such a block.
+
+    Raises:
+        QuipConnectionError: if a block hash or nonce cannot be read.
+    """
+    while low < high:
+        middle = (low + high) // 2
+        if account_nonce_at(iface, account_id, block_hash(iface, middle)) > nonce:
+            high = middle
+        else:
+            low = middle + 1
+    return low
+
+
+@dataclass(frozen=True)
+class Landed:
+    """A ``propose_job`` in a finalized block: its order id, or the chain's error when its dispatch failed."""
+
+    block_hash: str
+    block_number: int
+    order_id: int | None = None
+    error: str | None = None
+
+
+def settle_proposal(
+    iface: Any, account_id: Any, ext_hash: str, nonce: int, checkpoint: int, window_end: int
+) -> Landed | Literal["never", "pending"]:
+    """Say from finalized state what became of a sent ``propose_job``, signed mortal with ``nonce``.
+
+    Reads the account nonce at the finalized head. Past ``nonce``, the block
+    that spent it is found; if it holds ``ext_hash`` the result is read from
+    its events, and otherwise another transaction used the nonce, so the
+    proposal can never land: ``"never"``. Not past ``nonce`` with the
+    finalized head at ``window_end`` or later, the era has expired unspent:
+    ``"never"`` too. Otherwise it may still land: ``"pending"``.
+
+    Raises:
+        QuipConnectionError: if a chain read fails; retrying may settle it.
+        QuipMetadataError: if the block holds ``ext_hash`` but its events
+            cannot be read as a dispatch result, or a successful dispatch
+            emitted no ``JobProposed`` in its phase: this client cannot read
+            the runtime's events.
+    """
+    head_number, head_hash = finalized_head(iface)
+    if account_nonce_at(iface, account_id, head_hash) <= nonce:
+        return "never" if head_number >= window_end else "pending"
+    number = first_block_past_nonce(iface, account_id, nonce, checkpoint, head_number)
+    spent_in = block_hash(iface, number)
+    try:
+        block = iface.get_block(block_hash=spent_in, include_author=False, ignore_decoding_errors=True) or {}
+        events = list(_events(iface, spent_in))
+    except QuipMetadataError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
+        raise QuipConnectionError(f"could not read block {spent_in}: {exc}") from exc
+    index = _extrinsic_index(block, ext_hash)
+    if index is None:
+        return "never"
+    for phase, module_id, event_id, attrs in events:
+        if (phase, module_id) != (index, "System"):
+            continue
+        if event_id == "ExtrinsicFailed":
+            return Landed(spent_in, number, error=f"System.ExtrinsicFailed: {_dispatch_error_text(iface, attrs)}")
+        if event_id == "ExtrinsicSuccess":
+            order_id = _proposed_order_id(events, index)
+            if order_id is None:
+                raise QuipMetadataError(
+                    f"propose_job {ext_hash} succeeded in block {spent_in} but no {JOB_PROPOSED_EVENT} event with "
+                    f"an order id was found in its phase {index}"
+                )
+            return Landed(spent_in, number, order_id=order_id)
+    raise QuipMetadataError(
+        f"block {spent_in} holds propose_job {ext_hash} at index {index}, but no System.ExtrinsicSuccess or "
+        "ExtrinsicFailed event in its phase could be read"
+    )
 
 
 def current_block(iface: Any) -> int:

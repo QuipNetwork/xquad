@@ -538,13 +538,15 @@ class JobOrder:
     States: ``draft``; ``submitted`` once placed with a known order id, then
     ``finalized`` once the chain closes it; ``failed`` when it was included but
     its dispatch failed, so the fee was paid and no order exists; and
-    ``unconfirmed`` when it was sent but its outcome or order id is unknown.
-    An ``unconfirmed`` order may be on chain, so it is never sent again.
+    ``unconfirmed`` when it was sent but could not be settled from finalized
+    state by the end of its inclusion window. An ``unconfirmed`` order may be
+    on chain, so it is never sent again.
 
     The order caches its signed extrinsic, never a quote. :meth:`quote` signs
     once and re-prices the same bytes on every call, reading the fee, balance
     and head block afresh. :meth:`submit` quotes afresh too, then sends the
-    cached bytes if the account nonce has not moved, and re-signs otherwise.
+    cached bytes if the account nonce has not moved and less than half their
+    inclusion window is spent, and re-signs otherwise.
     The cache is dropped on :meth:`set` and on every :meth:`submit`, whatever
     its outcome, and is never shown, logged, pickled or copied.
 
@@ -695,7 +697,7 @@ class JobOrder:
         return self._fresh_quote(self._signed_call())
 
     def submit(self) -> Self:
-        """Propose the draft and return once it is included in a block.
+        """Propose the draft and return once its inclusion block is finalized.
 
         Quotes afresh, shows the quote, refuses a shortfall no faucet drip can
         cover, and asks the ``autoconfirm`` and, if short, ``autofund`` gates.
@@ -703,10 +705,15 @@ class JobOrder:
         not moved since, and re-signs otherwise. The cached extrinsic is
         dropped whatever the outcome, so a retry signs anew.
 
-        A failure before the extrinsic certainly reaches the chain leaves the
-        order a draft. Once it reaches a block the order is ``submitted``, or
-        ``failed`` if its dispatch failed. If it was sent but its outcome or
-        order id is unknown, the order is ``unconfirmed``.
+        The proposal is signed mortal (see ``inclusion_window_blocks`` on
+        :class:`~xqsa.quip.SolverQuip`), and its outcome is read from
+        finalized state alone: the order is ``submitted`` with its order id,
+        or ``failed`` if its dispatch failed, once the block holding it is
+        finalized. While it may still land, the same bytes are sent again and
+        a lost connection is reopened. A refusal by the node, or a window
+        that ends with the proposal never on chain, leaves the order a
+        draft. Only if it cannot be settled by the window's end is the order
+        ``unconfirmed``.
 
         Raises:
             QuipSubmissionError: if the order is no longer a draft, the account
@@ -714,8 +721,10 @@ class JobOrder:
                 or the extrinsic certainly did not land (the order stays a
                 draft); or if its dispatch failed on chain (the order is
                 ``failed`` and the fee was paid).
-            QuipUnconfirmedError: if it was sent but its outcome or order id is
-                unknown; the order is ``unconfirmed`` and must not be resubmitted.
+            QuipUnconfirmedError: if it could not be settled by the end of its
+                window: no node could be reached, finality stalled, or the
+                block's events could not be read. The order is ``unconfirmed``
+                and must not be resubmitted.
             QuipCancelledError: if a consent gate declines.
             QuipFaucetError: if the faucet refuses or cannot be reached.
         """

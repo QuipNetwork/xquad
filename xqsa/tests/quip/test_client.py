@@ -1067,6 +1067,8 @@ class FakeSubstrate:
         self.nonce = 0
         # The extrinsic hashes of every block, in block order; events match them by phase index.
         self.extrinsics: list[str] = ["0xext"]
+        # The finalized height; None reads as ``head``, a chain that finalizes every block at once.
+        self.finalized: int | None = None
 
     def rpc_request(self, method: str, params: list | None = None):
         self.rpc_calls.append((method, params))
@@ -1102,6 +1104,8 @@ class FakeSubstrate:
         return list(self.maps.get((module, name), []))
 
     def get_block_header(self, block_hash: str | None = None, ignore_decoding_errors: bool = False):
+        if block_hash == "0xfinal" and self.finalized is not None:
+            return {"header": {"number": self.finalized}}
         return {"header": {"number": self.head}}
 
     def get_account_nonce(self, account_address: str) -> int:
@@ -1111,11 +1115,26 @@ class FakeSubstrate:
         return "0xfinal"  # its header reads as ``head``, like every block's.
 
     def get_block_hash(self, block_id: int | None = None) -> str | None:
-        assert block_id == 0, "only the genesis hash is read"
-        return self.genesis_hash
+        # Every other block reads as the one block this fake holds.
+        return self.genesis_hash if block_id == 0 else "0xblock"
 
     def get_events(self, block_hash: str | None = None):
         return self.events
+
+    def land(self, nonce: int, *, error: str | None = None, dispatch: bool = True) -> None:
+        """Include the propose_job signed with ``nonce`` as extrinsic 0 of the block, finalized at once.
+
+        Its ``System`` event is ``ExtrinsicFailed`` with ``error``, else
+        ``ExtrinsicSuccess``; ``dispatch=False`` leaves none, a result this
+        client cannot read.
+        """
+        self.nonce = max(self.nonce, nonce + 1)
+        self.storage.setdefault(("System", "Account"), {"data": {"free": 0}})["nonce"] = nonce + 1
+        if dispatch:
+            attrs = {"dispatch_error": error, "dispatch_info": {}} if error else {"dispatch_info": {}}
+            event = "ExtrinsicFailed" if error else "ExtrinsicSuccess"
+            body = {"module_id": "System", "event_id": event, "attributes": attrs}
+            self.events.append({"phase": {"ApplyExtrinsic": 0}, "event": body})
 
     def get_block(self, block_hash: str | None = None, include_author: bool = False, ignore_decoding_errors=False):
         return {"extrinsics": [{"extrinsic_hash": ext_hash} for ext_hash in self.extrinsics]}
@@ -1190,7 +1209,7 @@ def _default_iface(*, with_default_spec_const: bool = False, balance: int | None
         ("QuantumPow", "DefaultTopology"): DEFAULT_TOPOLOGY_HASH,
     }
     if balance is not None:
-        storage[("System", "Account")] = {"data": {"free": balance}}
+        storage[("System", "Account")] = {"nonce": 0, "data": {"free": balance}}
     return FakeSubstrate(constants=constants, storage=storage)
 
 
@@ -2083,12 +2102,30 @@ def _patch_signing(monkeypatch, solver, *, receipt=None, build_raises: Exception
         captured["wait_for"] = wait_for
         captured["submitted_wire"] = wire_bytes
         captured.setdefault("sent", []).append(wire_bytes)
-        return receipt(captured["call_function"]) if callable(receipt) else receipt
+        outcome = receipt(captured["call_function"]) if callable(receipt) else receipt
+        if wait_for == "sent" and outcome is not None:
+            # A proposal is sent without watching and settled from chain
+            # state: land it in the one block the fake holds, as ``outcome`` says.
+            unverified = bool(outcome.error) and outcome.error.startswith(qs.UNCLASSIFIED_PREFIX)
+            iface.land(
+                (captured.get("nonces") or [0])[-1] or 0,
+                error=None if unverified else outcome.error,
+                dispatch=not unverified,
+            )
+        return outcome
 
     monkeypatch.setattr(qs, "build_signed_extrinsic", fake_build)
     monkeypatch.setattr(qs, "disarm_extrinsic", lambda wire: b"disarmed:" + wire)
     monkeypatch.setattr(qs, "submit_and_watch", fake_submit)
     return captured
+
+
+def _signed_call(solver, nonce: int = 0):
+    """A signed proposal as ``SolverQuip._sign`` returns it, valid from the fake's head for 64 blocks."""
+    from xqsa.quip.order import _SignedCall
+
+    head = solver._iface.head
+    return _SignedCall(wire=b"\x00\x01", ext_hash="0xext", nonce=nonce, checkpoint=head, window_end=head + 63)
 
 
 def _ok_receipt(solver, *, error: str | None = None):
@@ -2274,27 +2311,30 @@ class TestSolverQuipSubmission:
         assert captured["eras"] == [None]
 
     def test_propose_job_returns_order_id(self, monkeypatch) -> None:
-        solver = _make_solver(monkeypatch)
+        solver = _make_solver(monkeypatch, iface=_default_iface(balance=10 * UNIT))
+        solver._iface.head = 10
         solver._iface.events = [_job_proposed_event(42)]
-        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
-        sent = solver._propose_job(b"\x00\x01", "0xext", UNIT)
-        assert (sent.order_id, sent.block_hash, sent.error) == (42, "0xblock", None)
+        captured = _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        sent = solver._propose_job(_signed_call(solver), UNIT)
+        assert (sent.order_id, sent.block_hash, sent.included_block, sent.error) == (42, "0xblock", 10, None)
+        assert captured["wait_for"] == "sent"  # settled from chain state, not watched.
 
     def test_propose_job_dispatch_failure_is_reported_not_raised(self, monkeypatch) -> None:
-        solver = _make_solver(monkeypatch)
-        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error="System.ExtrinsicFailed: {...}"))
-        sent = solver._propose_job(b"\x00\x01", "0xext", UNIT)
-        assert (sent.order_id, sent.error) == (None, "System.ExtrinsicFailed: {...}")
+        solver = _make_solver(monkeypatch, iface=_default_iface(balance=10 * UNIT))
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error="QuantumComputeMempool.RewardTooLow"))
+        sent = solver._propose_job(_signed_call(solver), UNIT)
+        assert (sent.order_id, sent.error) == (None, "System.ExtrinsicFailed: QuantumComputeMempool.RewardTooLow")
 
     def test_propose_job_missing_event_is_unconfirmed(self, monkeypatch) -> None:
-        from xqsa.quip import QuipUnconfirmedError
+        from xqsa.quip import QuipMetadataError, QuipUnconfirmedError
 
-        solver = _make_solver(monkeypatch)
-        solver._iface.events = []  # included, but no JobProposed event.
+        solver = _make_solver(monkeypatch, iface=_default_iface(balance=10 * UNIT))
+        solver._iface.events = []  # included and dispatched, but no JobProposed event.
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         with pytest.raises(QuipUnconfirmedError, match="no JobProposed") as info:
-            solver._propose_job(b"\x00\x01", "0xext", UNIT)
-        assert (info.value.extrinsic_hash, info.value.block_hash) == ("0xext", "0xblock")
+            solver._propose_job(_signed_call(solver), UNIT)
+        assert info.value.extrinsic_hash == "0xext"
+        assert isinstance(info.value.__cause__, QuipMetadataError)
 
     @pytest.mark.parametrize("attrs_form", ["mapping", "params"])
     def test_order_id_extraction_tolerates_attribute_shapes(self, monkeypatch, attrs_form) -> None:
@@ -4032,3 +4072,110 @@ def test_gates_and_display_survive_a_missing_stream(monkeypatch, stream) -> None
     # Not a terminal, so autoconfirm=False declines instead of raising AttributeError.
     with pytest.raises(QuipCancelledError, match="not a terminal"):
         solver.solve(_model())
+
+
+class _History:
+    """A chain with per-block state: each height has a hash, the account nonce after it, extrinsics and events."""
+
+    def __init__(self, nonces: list[int], *, finalized: int | None = None) -> None:
+        self.nonces = nonces
+        self.finalized = len(nonces) - 1 if finalized is None else finalized
+        self.blocks: dict[int, tuple[list[str], list[dict]]] = {}
+        self.reads: list[int] = []
+
+    def hash_of(self, number: int) -> str:
+        return "0x" + f"{number:064x}"
+
+    def get_chain_finalised_head(self) -> str:
+        return self.hash_of(self.finalized)
+
+    def get_block_header(self, block_hash=None, ignore_decoding_errors=False):
+        return {"header": {"number": int(block_hash, 16)}}
+
+    def get_block_hash(self, number: int) -> str:
+        return self.hash_of(number)
+
+    def query(self, module, name, params=None, block_hash=None):
+        number = int(block_hash, 16)
+        self.reads.append(number)
+        return _StorageEntry({"nonce": self.nonces[number]})
+
+    def get_block(self, block_hash=None, include_author=False, ignore_decoding_errors=False):
+        extrinsics, _ = self.blocks.get(int(block_hash, 16), ([], []))
+        return {"extrinsics": [{"extrinsic_hash": ext} for ext in extrinsics]}
+
+    def get_events(self, block_hash=None):
+        return self.blocks.get(int(block_hash, 16), ([], []))[1]
+
+
+def _system(phase: int, event: str, attrs: dict | None = None) -> dict:
+    body = {"module_id": "System", "event_id": event, "attributes": attrs or {}}
+    return {"phase": {"ApplyExtrinsic": phase}, "event": body}
+
+
+class TestSettleProposal:
+    """chain.settle_proposal: what finalized state says became of a mortal propose_job signed with nonce 5."""
+
+    @staticmethod
+    def _settle(history: _History, *, checkpoint: int = 0, window_end: int = 63):
+        return quip_chain.settle_proposal(history, b"\x00" * 32, "0xours", 5, checkpoint, window_end)
+
+    def test_landed_proposal_is_found_by_its_nonce(self) -> None:
+        history = _History([5] * 37 + [6] * 4)  # spent in block 37, finalized at 40.
+        history.blocks[37] = (["0xtimestamp", "0xtheirs", "0xours"], [_system(2, "ExtrinsicSuccess")])
+        history.blocks[37][1].extend([_job_proposed_event(8, phase=1), _job_proposed_event(9, phase=2)])
+        assert self._settle(history) == quip_chain.Landed(history.hash_of(37), 37, order_id=9)
+        assert len(history.reads) <= 1 + 6  # the head, then a binary search over 0..40.
+
+    def test_failed_dispatch_is_landed_with_the_error(self) -> None:
+        history = _History([5, 6])
+        history.blocks[1] = (["0xours"], [_system(0, "ExtrinsicFailed", {"dispatch_error": "BadOrigin"})])
+        assert self._settle(history) == quip_chain.Landed(
+            history.hash_of(1), 1, error="System.ExtrinsicFailed: BadOrigin"
+        )
+
+    def test_nonce_spent_by_another_transaction_never_lands(self) -> None:
+        history = _History([5, 5, 6])
+        history.blocks[2] = (["0xtheirs"], [_system(0, "ExtrinsicSuccess")])
+        assert self._settle(history) == "never"
+
+    def test_unspent_nonce_inside_the_window_is_pending(self) -> None:
+        assert self._settle(_History([5] * 63)) == "pending"  # finalized at 62, the window ends at 63.
+
+    def test_unspent_nonce_once_the_window_is_final_never_lands(self) -> None:
+        """A retracted inclusion that never came back looks the same: the finalized nonce never moved."""
+        assert self._settle(_History([5] * 64)) == "never"
+
+    def test_only_the_finalized_head_counts(self) -> None:
+        history = _History([5, 5, 6], finalized=1)  # spent in block 2, which is not final yet.
+        history.blocks[2] = (["0xours"], [_system(0, "ExtrinsicSuccess"), _job_proposed_event(1)])
+        assert self._settle(history) == "pending"
+
+    def test_events_without_a_dispatch_result_are_a_metadata_error(self) -> None:
+        from xqsa.quip import QuipMetadataError
+
+        history = _History([5, 6])
+        history.blocks[1] = (["0xours"], [_job_proposed_event(1)])
+        with pytest.raises(QuipMetadataError, match="no System.ExtrinsicSuccess or ExtrinsicFailed"):
+            self._settle(history)
+
+    def test_success_without_an_order_id_is_a_metadata_error(self) -> None:
+        from xqsa.quip import QuipMetadataError
+
+        history = _History([5, 6])
+        history.blocks[1] = (["0xours"], [_system(0, "ExtrinsicSuccess")])
+        with pytest.raises(QuipMetadataError, match="no JobProposed"):
+            self._settle(history)
+
+    def test_an_unreadable_nonce_is_a_connection_error(self) -> None:
+        from xqsa.quip import QuipConnectionError
+
+        history = _History([5, 6])
+        history.nonces = []  # every state read fails.
+        with pytest.raises(QuipConnectionError, match="could not read the account nonce"):
+            self._settle(history)
+
+    @pytest.mark.parametrize("spent", [0, 1, 17, 39, 40])
+    def test_binary_search_finds_the_first_block_past_the_nonce(self, spent) -> None:
+        history = _History([5] * spent + [6] * (41 - spent))
+        assert quip_chain.first_block_past_nonce(history, b"", 5, 0, 40) == spent
