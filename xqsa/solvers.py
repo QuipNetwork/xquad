@@ -27,10 +27,11 @@ passes every other keyword through to it, so an unknown parameter raises
 The module also holds the registry: :data:`SOLVERS` maps short, CLI-friendly
 names to solver factories, and :func:`build_solver` builds one by name, so
 example runners and the smoke harness can pick a backend with a single
-``--solver`` flag instead of hard-coding a class. Importing the classes is cheap and dependency-free; the
-optional deps (cupy, Metal, dwave-system, substrate-interface/quip_signer) are
-pulled in only when a solver is constructed or run, so an unavailable backend
-fails at build time with an actionable message rather than at import.
+``--solver`` flag instead of hard-coding a class. Importing the classes is
+cheap and dependency-free; the optional deps (cupy, Metal, dwave-system,
+substrate-interface/quip_signer) are pulled in only when a solver is
+constructed or run, so an unavailable backend fails at build time with an
+actionable message rather than at import.
 
 ``quip`` is the network-mempool backend (:class:`~xqsa.quip.SolverQuip`). Unlike
 the local solvers it is configured from environment variables (``QUIP_RPC_URL``

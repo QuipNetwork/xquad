@@ -28,7 +28,9 @@ stdout. Nothing here is specific to one solver family.
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import secrets
 import subprocess
 from collections import Counter
@@ -43,6 +45,8 @@ from .solver import Implementation, RunOutput, _check_anneal_params, _check_beta
 _PROTOCOL_VERSION = 2
 _I32_MIN, _I32_MAX = -(2**31), 2**31 - 1
 _SEED_LIMIT = 2**64
+_CAPABILITIES_TIMEOUT = 10.0  # seconds; --solve has none, since its run time scales with the model
+_STDERR_PREFIX = re.compile(r"\[quip-solver-[^\]]*\] ")
 _LIMIT_KEYS = ("maxNodes", "maxEdges", "maxDegree", "maxLocalFieldMilli", "exactResolutionMilli")
 _SAMPLER_KEYS = frozenset({"seed", "num_sweeps", "sweeps_per_beta", "beta_range", "beta_schedule_type"})
 
@@ -108,6 +112,7 @@ class BinaryImplementation(Implementation):
         _check_beta_schedule(beta_schedule_type)
         if seed is not None and not (_is_int(seed) and 0 <= seed < _SEED_LIMIT):
             raise ValueError(f"seed must be an int in [0, 2**64), got {seed!r}")
+        _check_beta_range(beta_range)
 
         ising = to_ising_milli(model)
         self._check_model(ising, beta_schedule_type)
@@ -140,20 +145,32 @@ class BinaryImplementation(Implementation):
             params={
                 "num_sweeps": sampler["num_sweeps"],
                 "num_sweeps_per_beta": sampler["sweeps_per_beta"],
-                "beta_range": sampler["beta_range"],
+                "beta_range": None if sampler["beta_range"] is None else tuple(sampler["beta_range"]),
                 "beta_schedule_type": sampler["beta_schedule_type"],
                 "timing": best["timing"],
             },
         )
 
-    def _spawn(self, flag: str, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+    def _spawn(
+        self, flag: str, stdin: str | None = None, timeout: float | None = None
+    ) -> subprocess.CompletedProcess[str]:
         try:
-            return subprocess.run([self.path, flag], input=stdin, capture_output=True, text=True, check=False)
+            return subprocess.run(
+                [self.path, flag],
+                input=stdin,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                check=False,
+            )
         except OSError as e:
             raise SolverUnavailableError(self.path, detail=f"cannot start: {e}") from e
+        except subprocess.TimeoutExpired as e:
+            raise SolverUnavailableError(self.path, detail=f"{flag} did not finish within {timeout} s") from e
 
     def _read_capabilities(self, algorithm: str) -> dict[str, Any]:
-        proc = self._spawn("--capabilities")
+        proc = self._spawn("--capabilities", timeout=_CAPABILITIES_TIMEOUT)
 
         def unavailable(detail: str) -> SolverUnavailableError:
             return SolverUnavailableError(self.path, exit_code=proc.returncode or None, detail=detail)
@@ -194,16 +211,17 @@ class BinaryImplementation(Implementation):
             if caps.get(key) and count > caps[key]:
                 raise reject(f"{count} {what} exceed the maximum of {caps[key]}")
 
-        degree: Counter[int] = Counter()
-        field = [abs(v) for v in ising.h]
-        for (a, b), j in zip(ising.edges, ising.j, strict=True):
-            degree.update((a, b))
-            field[a] += abs(j)
-            field[b] += abs(j)
-        if caps.get("maxDegree") and max(degree.values(), default=0) > caps["maxDegree"]:
-            raise reject(f"a node degree of {max(degree.values())} exceeds the maximum of {caps['maxDegree']}")
-        if caps.get("maxLocalFieldMilli") and max(field, default=0) > caps["maxLocalFieldMilli"]:
-            raise reject(f"a local field of {max(field)} milli exceeds the maximum of {caps['maxLocalFieldMilli']}")
+        if caps.get("maxDegree") or caps.get("maxLocalFieldMilli"):
+            degree: Counter[int] = Counter()
+            field = [abs(v) for v in ising.h]
+            for (a, b), j in zip(ising.edges, ising.j, strict=True):
+                degree.update((a, b))
+                field[a] += abs(j)
+                field[b] += abs(j)
+            if caps.get("maxDegree") and max(degree.values(), default=0) > caps["maxDegree"]:
+                raise reject(f"a node degree of {max(degree.values())} exceeds the maximum of {caps['maxDegree']}")
+            if caps.get("maxLocalFieldMilli") and max(field, default=0) > caps["maxLocalFieldMilli"]:
+                raise reject(f"a local field of {max(field)} milli exceeds the maximum of {caps['maxLocalFieldMilli']}")
 
         values = ising.h + ising.j
         resolution = caps.get("exactResolutionMilli")
@@ -246,14 +264,27 @@ def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _check_beta_range(beta_range: object) -> None:
+    """Refuse a beta_range that is not None or two finite positive numbers."""
+    if beta_range is None:
+        return
+    if not (
+        isinstance(beta_range, tuple | list)
+        and len(beta_range) == 2
+        and all(
+            isinstance(b, int | float) and not isinstance(b, bool) and math.isfinite(b) and b > 0 for b in beta_range
+        )
+    ):
+        raise ValueError(f"beta_range must be None or two finite positive numbers, got {beta_range!r}")
+
+
 def _wire(milli: int) -> int | float:
     """A milli coefficient in units: an int when whole, else an exact quarter."""
     return milli // 1000 if milli % 1000 == 0 else milli / 1000
 
 
 def _stderr_detail(stderr: str) -> str:
-    """The message of the binary's last tracing line, or all of stderr."""
+    """The last stderr line after solver-core's ``[quip-solver-<backend>]`` prefix, or all of stderr."""
     lines = [line for line in stderr.splitlines() if line.strip()]
-    if lines and "] " in lines[-1]:
-        return lines[-1].split("] ", 1)[1].strip()
-    return stderr.strip()
+    match = _STDERR_PREFIX.search(lines[-1]) if lines else None
+    return lines[-1][match.end() :].strip() if match else stderr.strip()

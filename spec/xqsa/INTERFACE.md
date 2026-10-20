@@ -62,7 +62,7 @@ The shipped implementations run in-process, in the Python interpreter that calls
 
 **Construction.** It runs `<path> --capabilities` once and caches the JSON object it prints. Construction raises `SolverUnavailableError` when:
 
-1. the binary cannot be started;
+1. the binary cannot be started, or `--capabilities` does not finish within 10 seconds;
 2. it exits non-zero, its stdout is not a JSON object, `supportedKinds` or `features` is not a list, or a limit (`maxNodes`, `maxEdges`, `maxDegree`, `maxLocalFieldMilli`, `exactResolutionMilli`) is not a non-negative integer;
 3. `protocolVersion` is not `2`;
 4. `algorithm` differs from the requested algorithm;
@@ -70,7 +70,7 @@ The shipped implementations run in-process, in the Python interpreter that calls
 
 **Model conversion.** A SPIN model is sent as it is, scaled to milli units. A BINARY model is converted to Ising with `x = (1 + s) / 2`: `h'_i = h_i / 2 + sum_j J_ij / 4`, `J'_ij = J_ij / 4`, and the constant is dropped. A diagonal term `(i, i)` is linear in BINARY and constant in SPIN, so it never becomes an edge. Every converted coefficient is a whole number of milli units, so the conversion is exact. Spins map back as `x = (s + 1) / 2`. The template recomputes the energy on the original model, so the dropped constant never reaches the caller.
 
-**Checks before spawning.** `run()` validates the parameters as `InProcessCPU` does, and requires `seed` to be `None` or an integer in `[0, 2**64)` (`ValueError` otherwise). It then raises `ModelRejectedError`, without starting the binary, when:
+**Checks before spawning.** `run()` validates the parameters as `InProcessCPU` does, requires `beta_range` to be `None` or two finite positive numbers, and requires `seed` to be `None` or an integer in `[0, 2**64)` (`ValueError` otherwise). It then raises `ModelRejectedError`, without starting the binary, when:
 
 - `beta_schedule_type` is `"linear"` and `features` lacks `linear-schedule`;
 - the node or edge count exceeds a non-zero `maxNodes` or `maxEdges`;
@@ -90,7 +90,7 @@ The shipped implementations run in-process, in the Python interpreter that calls
 | `seed` | As given; when `None`, a 64-bit seed drawn with `secrets`. |
 | `beta_schedule_type` | Sent only when `"linear"`. |
 
-**Exit codes.** On a non-zero exit, `run()` raises with the binary's `exit_code` and a `detail` taken from its last stderr line:
+**Exit codes.** On a non-zero exit, `run()` raises with the binary's `exit_code` and a `detail`: the text after the `[quip-solver-<backend>]` prefix on its last stderr line, or all of stderr when that line has none (both streams are decoded as UTF-8, with replacement characters for invalid bytes):
 
 | Exit | Error |
 |------|-------|

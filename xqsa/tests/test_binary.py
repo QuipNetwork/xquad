@@ -64,11 +64,12 @@ QUIP_CPU_SA_CAPS: dict[str, Any] = {
 }
 
 _STUB = """#!{python}
-import json, pathlib, sys
+import json, pathlib, sys, time
 
 here = pathlib.Path(__file__).parent
 cfg = json.loads((here / "stub.json").read_text())
 if sys.argv[1] == "--capabilities":
+    time.sleep(cfg["caps_sleep"])
     if cfg["caps_exit"]:
         sys.exit(cfg["caps_exit"])
     caps = cfg["caps"]
@@ -77,7 +78,7 @@ if sys.argv[1] == "--capabilities":
 req = json.loads(sys.stdin.read())
 (here / "request.json").write_text(json.dumps(req))
 if cfg["exit_code"]:
-    print(cfg["stderr"], file=sys.stderr)
+    sys.stderr.buffer.write(cfg["stderr"].encode("utf-8", "surrogateescape") + b"\\n")
     sys.exit(cfg["exit_code"])
 if cfg["stdout"] is not None:
     print(cfg["stdout"])
@@ -110,7 +111,7 @@ _FULL_READ: dict[str, Any] = {
 
 
 def _tracing(detail: str) -> str:
-    return f"2026-10-20T04:24:51.191345Z ERROR quip_solver_core::session: [stub] {detail}"
+    return f"2026-10-20T04:24:51.191345Z ERROR quip_solver_core::session: [quip-solver-stub] {detail}"
 
 
 def make_stub(
@@ -118,6 +119,7 @@ def make_stub(
     *,
     caps: dict[str, Any] | str = QUIP_CPU_SA_CAPS,
     caps_exit: int = 0,
+    caps_sleep: float = 0,
     exit_code: int = 0,
     stderr: str | None = None,
     reads: list[dict[str, Any]] | None = None,
@@ -127,6 +129,7 @@ def make_stub(
     config = {
         "caps": caps,
         "caps_exit": caps_exit,
+        "caps_sleep": caps_sleep,
         "exit_code": exit_code,
         "stderr": stderr if stderr is not None else _tracing(f"stub failure {exit_code}"),
         "stdout": stdout,
@@ -185,6 +188,11 @@ class TestConstruction:
         with pytest.raises(SolverUnavailableError, match=match):
             BinaryImplementation(make_stub(tmp_path, **stub))
 
+    def test_capabilities_timeout(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("xqsa.binary._CAPABILITIES_TIMEOUT", 0.5)
+        with pytest.raises(SolverUnavailableError, match="did not finish within 0.5 s"):
+            BinaryImplementation(make_stub(tmp_path, caps_sleep=30))
+
     def test_missing_binary(self, tmp_path: Path) -> None:
         with pytest.raises(SolverUnavailableError, match="cannot start") as excinfo:
             BinaryImplementation(tmp_path / "absent")
@@ -207,10 +215,11 @@ class TestWire:
 
     def test_linear_and_beta_range_are_sent(self, tmp_path: Path) -> None:
         solver = SolverCPU._binary(make_stub(tmp_path), beta_schedule_type="linear", beta_range=(0.1, 5.0))
-        solver.solve(_model())
+        result = solver.solve(_model())
         req = _request(tmp_path)
         assert req["beta_schedule_type"] == "linear"
         assert req["beta_range"] == [0.1, 5.0]
+        assert result.metadata["params"]["beta_range"] == (0.1, 5.0)
 
     def test_coefficients_are_ints_when_whole_and_quarters_otherwise(self, tmp_path: Path) -> None:
         solver = SolverCPU._binary(make_stub(tmp_path))
@@ -268,6 +277,14 @@ class TestPreChecks:
             SolverCPU._binary(make_stub(tmp_path)).solve(model)
         assert not (tmp_path / "request.json").exists()
 
+    def test_unbounded_limits_send_any_local_field(self, tmp_path: Path) -> None:
+        """With maxDegree and maxLocalFieldMilli at 0, a 3e9 milli local field still reaches the binary."""
+        model = XqmxModel.spin(4)
+        for other in (1, 2, 3):
+            model.set_quad(0, other, 1_000_000)
+        SolverCPU._binary(make_stub(tmp_path)).solve(model)
+        assert _request(tmp_path)["j"] == [1_000_000] * 3
+
     @pytest.mark.parametrize(
         "params",
         [
@@ -277,6 +294,10 @@ class TestPreChecks:
             {"seed": -1},
             {"seed": 2**64},
             {"seed": True},
+            {"beta_range": (float("nan"), 1.0)},
+            {"beta_range": (0.1, 1.0, 2.0)},
+            {"beta_range": ("a", "b")},
+            {"beta_range": (0, 1.0)},
         ],
     )
     def test_parameter_refusals(self, tmp_path: Path, params: dict[str, Any]) -> None:
@@ -312,6 +333,19 @@ class TestFailures:
         with pytest.raises(SolverFailedError) as excinfo:
             solver.solve(_model())
         assert excinfo.value.detail == "segfault"
+
+    def test_brackets_without_the_prefix_are_kept(self, tmp_path: Path) -> None:
+        stderr = "thread 'main' panicked at src/x.rs:1:2:\nerror: edge [3, 7] references node 7"
+        solver = SolverCPU._binary(make_stub(tmp_path, exit_code=101, stderr=stderr))
+        with pytest.raises(SolverFailedError) as excinfo:
+            solver.solve(_model())
+        assert excinfo.value.detail == stderr
+
+    def test_invalid_utf8_stderr_keeps_the_typed_error(self, tmp_path: Path) -> None:
+        solver = SolverCPU._binary(make_stub(tmp_path, exit_code=70, stderr="\udcff\udcfe panic"))
+        with pytest.raises(SolverFailedError) as excinfo:
+            solver.solve(_model())
+        assert excinfo.value.detail == "\ufffd\ufffd panic"
 
     @pytest.mark.parametrize(
         "stdout",
