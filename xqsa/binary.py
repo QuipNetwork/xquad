@@ -225,14 +225,18 @@ class BinaryImplementation(Implementation):
         for read in reads:
             if not (
                 isinstance(read, dict)
-                and isinstance(read.get("energy_milli"), int)
+                and _is_int(read.get("energy_milli"))
                 and isinstance(read.get("sampler"), dict)
                 and _SAMPLER_KEYS <= read["sampler"].keys()
                 and isinstance(read.get("timing"), dict)
             ):
                 raise failed("a read lacks energy_milli, timing or a sampler field")
             spins = read.get("spins")
-            if not isinstance(spins, list) or len(spins) != nodes or any(s not in (-1, 1) for s in spins):
+            if (
+                not isinstance(spins, list)
+                or len(spins) != nodes
+                or any(not _is_int(s) or s not in (-1, 1) for s in spins)
+            ):
                 raise failed(f"a read's spins are not {nodes} values of -1 or +1")
         return reads
 

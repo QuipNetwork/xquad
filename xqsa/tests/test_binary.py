@@ -97,6 +97,18 @@ print(json.dumps([{{**r, "timing": {{"sample_us": 1, "total_us": 2}}, "sampler":
 """
 
 
+_FULL_READ: dict[str, Any] = {
+    "timing": {"sample_us": 1, "total_us": 2},
+    "sampler": {
+        "seed": 1,
+        "num_sweeps": 1,
+        "sweeps_per_beta": 1,
+        "beta_range": None,
+        "beta_schedule_type": "geometric",
+    },
+}
+
+
 def _tracing(detail: str) -> str:
     return f"2026-10-20T04:24:51.191345Z ERROR quip_solver_core::session: [stub] {detail}"
 
@@ -309,6 +321,8 @@ class TestFailures:
             json.dumps([{"spins": [1, 1], "energy_milli": 0, "timing": {}, "sampler": {}}]),
             json.dumps([{"spins": [1, 0, 1], "energy_milli": 0, "timing": {}, "sampler": {}}]),
             json.dumps([{"spins": [1, 1, 1], "energy_milli": 0, "timing": {}, "sampler": {}}]),
+            json.dumps([{"spins": [1.0, 1.0, 1.0], "energy_milli": 0, **_FULL_READ}]),
+            json.dumps([{"spins": [1, 1, 1], "energy_milli": True, **_FULL_READ}]),
         ],
     )
     def test_bad_output(self, tmp_path: Path, stdout: str) -> None:
