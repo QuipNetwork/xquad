@@ -419,6 +419,14 @@ class TestConnectivity:
         assert const is not None
         assert const.value == DEFAULT_ISING_SPEC_ID
 
+    def test_endpoint_keeps_state_history(self, chain) -> None:
+        # Settling a sent propose_job reads the nonce and events of past
+        # blocks; a pruning node refuses them and every submit stops sending.
+        try:
+            chain.get_events(block_hash=chain.get_block_hash(1))
+        except Exception as exc:  # noqa: BLE001 -- the node's refusal is the finding.
+            pytest.fail(f"this endpoint prunes state; settling needs --state-pruning=archive ({exc})")
+
     @requires_hash_topology
     def test_topology_decodes_to_a_consistent_graph(self, make_solver) -> None:
         # Deliberately not an exact node/edge count. A count is a fingerprint of

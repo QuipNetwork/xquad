@@ -160,6 +160,11 @@ class SolverQuip(Solver):
     a submit take longer to settle. It is a client setting, not an order
     option.
 
+    Settling a sent ``propose_job`` reads past blocks' state, so the node at
+    ``url`` must keep full state history (``--state-pruning=archive``); the
+    :mod:`~xqsa.quip.networks` presets do. A pruning node stops a submit with
+    :class:`QuipSubmitIncompleteError`, the order left ``sending``.
+
     Raises:
         ImportError: if the ``[quip]`` extra is not installed
             (``pip install xqsa[quip]`` -- provides ``substrate-interface`` and
@@ -658,12 +663,22 @@ class SolverQuip(Solver):
         retracted, and lasts the client's ``inclusion_window_blocks``.
 
         Raises:
-            QuipSubmissionError: if assembly or signing fails.
-            QuipConnectionError: if the nonce or the finalized head cannot be read.
+            QuipSubmissionError: if assembly or signing fails, or finality lags
+                the best block by half the inclusion window or more: bytes
+                signed then could expire before their block is final.
+                Nothing was signed or sent.
+            QuipConnectionError: if the nonce, the finalized head or the best
+                block cannot be read.
         """
         if nonce is None:
             nonce = self._account_nonce()
         number, head = chain.finalized_head(self._iface)
+        window = self._inclusion_window_blocks
+        if (lag := self._best_block() - number) >= window // 2:
+            raise QuipSubmissionError(
+                f"finality lags {lag} blocks behind the best block, at least half the {window}-block inclusion "
+                "window; nothing was sent, try again once it catches up"
+            )
         era = self._quip_signing.MortalEra(self._inclusion_window_blocks, number, head)
         wire, ext_hash = self._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, call_params, nonce=nonce, era=era)
         return _SignedCall(wire=wire, ext_hash=ext_hash, nonce=nonce, checkpoint=number, window_end=era.last_block)
@@ -677,13 +692,20 @@ class SolverQuip(Solver):
         Raises:
             QuipConnectionError: if the best block cannot be read.
         """
+        return signed.window_end - self._best_block() < self._inclusion_window_blocks // 2
+
+    def _best_block(self) -> int:
+        """Read the best block's number.
+
+        Raises:
+            QuipConnectionError: if it cannot be read.
+        """
         try:
-            best = self._current_block()
+            return self._current_block()
         except QuipMetadataError:
             raise
         except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
             raise QuipConnectionError(f"could not read the best block: {exc}") from exc
-        return signed.window_end - best < self._inclusion_window_blocks // 2
 
     def _send_ready(self, signed: _SignedCall, call_params: dict) -> _SignedCall:
         """Return ``signed`` if it can still be sent as is, else ``call_params`` signed afresh, once.
@@ -766,23 +788,27 @@ class SolverQuip(Solver):
         :func:`xqsa.quip.chain.settle_proposal`). While the proposal may still
         land, the same bytes are sent again, so a node that lost them
         relearns them; the hash is the same, so they can land once at most.
-        A read that fails reconnects with backoff and retries. The rounds
-        stop once the finalized head passes the window's end block, or, if
-        the chain cannot be read or finality stalls, at a wall-clock estimate
-        of that block plus :data:`SETTLE_GRACE_BLOCKS`. Rounds are
-        ``poll_interval`` apart, and at least :data:`MIN_SETTLE_POLL_SECONDS`.
+        A read that fails reconnects with backoff and retries; a node that
+        cannot decode the blocks or has discarded the state stops it at once.
+        The rounds stop once the finalized head passes the window's end
+        block, or when finality made no progress over a wall-clock estimate
+        of that block plus :data:`SETTLE_GRACE_BLOCKS`; while finality
+        advances, the estimate is made again from the finalized head. Rounds
+        are ``poll_interval`` apart, and at least :data:`MIN_SETTLE_POLL_SECONDS`.
 
         Raises:
             QuipSubmitIncompleteError: if it cannot be settled by then, the
                 specific error chained as its cause.
         """
-        deadline = self._settle_deadline(signed)
+        seconds = self._block_seconds()
+        deadline = self._settle_deadline(signed, seconds)
+        last_final = self._finalized_number()
         poll = max(self._poll_interval, MIN_SETTLE_POLL_SECONDS)
         failures = 0
         while True:
             try:
                 outcome = self._settle_round(signed)
-            except QuipMetadataError as exc:
+            except (QuipMetadataError, chain.StatePruned) as exc:
                 raise self._unsettled(signed, exc) from exc
             except Exception as exc:  # noqa: BLE001 -- a fault while reading; reconnect and read again.
                 failures += 1
@@ -795,10 +821,16 @@ class SolverQuip(Solver):
             if outcome != "pending":
                 return outcome
             if not self._pause(deadline, poll):
-                stall = QuipConnectionError(
-                    f"finality did not reach the window's end block {signed.window_end} in time"
-                )
-                raise self._unsettled(signed, stall) from stall
+                final = self._finalized_number()
+                if final is None or (last_final is not None and final <= last_final):
+                    stall = QuipConnectionError(
+                        f"finality did not reach the window's end block {signed.window_end} in time"
+                    )
+                    raise self._unsettled(signed, stall) from stall
+                # Finality is moving, only slower than the estimate: wait for it from where it is now.
+                last_final = final
+                deadline = time.monotonic() + (max(signed.window_end - final, 0) + SETTLE_GRACE_BLOCKS) * seconds
+                continue
             with contextlib.suppress(Exception):  # a refusal changes nothing: the nonce decides.
                 self._quip_signing.submit_and_watch(self._iface, signed.wire, signed.ext_hash, wait_for="sent")
 
@@ -848,18 +880,28 @@ class SolverQuip(Solver):
             error=outcome.error,
         )
 
-    def _settle_deadline(self, signed: _SignedCall) -> float:
-        """The wall-clock time by which ``signed``'s window should be over and finalized.
+    def _settle_deadline(self, signed: _SignedCall, seconds: float) -> float:
+        """The wall-clock time by which ``signed``'s window should be over and finalized, at ``seconds`` a block.
 
         Counted from the best block when it can be read, else from the
-        checkpoint, at the chain's block time (6 s if unknown).
+        checkpoint.
         """
         try:
             best = self._current_block()
         except Exception:  # noqa: BLE001 -- the estimate falls back to the whole window.
             best = signed.checkpoint
-        seconds = (chain.block_time_ms(self._iface) or DEFAULT_BLOCK_TIME_MS) / 1000
         return time.monotonic() + (max(signed.window_end - best, 0) + SETTLE_GRACE_BLOCKS) * seconds
+
+    def _block_seconds(self) -> float:
+        """The chain's block time in seconds, 6 s if unknown."""
+        return (chain.block_time_ms(self._iface) or DEFAULT_BLOCK_TIME_MS) / 1000
+
+    def _finalized_number(self) -> int | None:
+        """The finalized head's number, or ``None`` if it cannot be read."""
+        try:
+            return chain.finalized_head(self._iface)[0]
+        except Exception:  # noqa: BLE001 -- a failed read counts as no progress.
+            return None
 
     @staticmethod
     def _pause(deadline: float, seconds: float) -> bool:
@@ -890,6 +932,11 @@ class SolverQuip(Solver):
             then = (
                 "this client cannot decode the runtime's blocks; upgrade xquad, then call submit() again. The order "
                 "keeps its signed bytes and nonce."
+            )
+        elif isinstance(cause, chain.StatePruned):
+            then = (
+                "the node has discarded the state this needs; settling needs a node that keeps full state history "
+                "(--state-pruning=archive), then call submit() again."
             )
         else:
             then = "calling submit() again resumes it; it never places a second order."

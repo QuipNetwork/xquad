@@ -29,6 +29,10 @@ https://aglais.quip.network publishes the testnet's current endpoints; check
 ``aglais`` against it when a connection fails. ``devnet`` is the default
 localdev stack, fronted by Caddy on port 20049.
 
+A preset's ``rpc`` keeps full state history (``--state-pruning=archive``),
+which settling a sent ``propose_job`` needs; ``aglais`` was verified archive
+on 2026-10-21.
+
 There is no mainnet entry because there is no Quip mainnet yet.
 """
 

@@ -40,7 +40,7 @@ from xqsa.quip import (
     chain,
 )
 from xqsa.quip.access import AccessAllow, AccessOpen
-from xqsa.quip.chain import ChainLimits, unregistered_solvers
+from xqsa.quip.chain import ChainLimits, StatePruned, unregistered_solvers
 from xqsa.quip.errors import QuipUnconfirmedError
 from xqsa.quip.order import JobOrder, _OrderOptions, check_client_defaults, merge_options
 from xqsa.quip.resolution import ResolutionSingleBest, ResolutionTopNEqual, ResolutionTopNWeighted
@@ -1310,6 +1310,43 @@ class TestJobOrderSendOutcomes:
         assert (info.value.extrinsic_hash, info.value.nonce, info.value.window_end) == ("0xext", 0, 263)
         assert order.status() == {"state": "sending", "extrinsic_hash": "0xext", "nonce": 0, "window_end": 263}
         assert len(set(captured["sent"])) == 1
+
+    def test_slow_finality_keeps_settling_while_it_advances(self, monkeypatch, virtual_clock) -> None:
+        """Finality moves one block every other round, half the estimate's pace, and still reaches the window's end."""
+        solver, captured = _ready(monkeypatch)
+        _stall_finality(monkeypatch, solver, captured)
+        send = solver._quip_signing.submit_and_watch
+
+        def slow(iface, *args, **kwargs):
+            send(iface, *args, **kwargs)
+            if len(captured["sent"]) % 2 == 0:
+                iface.finalized += 1
+
+        monkeypatch.setattr(solver._quip_signing, "submit_and_watch", slow)
+        with pytest.raises(QuipSubmissionError, match="never reached the chain") as info:
+            solver.create_order(_model()).submit()
+        assert not isinstance(info.value, QuipSubmitIncompleteError)
+        assert solver._iface.finalized == 263
+
+    def test_pruned_state_is_sending_at_once(self, monkeypatch, virtual_clock) -> None:
+        solver, captured = _ready(monkeypatch)
+        _send_raises(monkeypatch, solver, None, captured, lands_on=None)
+        query = solver._iface.query
+
+        def pruned(module, name, params=None, block_hash=None):
+            if block_hash is not None:
+                raise RuntimeError(f"State already discarded for {block_hash}")
+            return query(module, name, params, block_hash)
+
+        monkeypatch.setattr(solver._iface, "query", pruned)
+        connects: list[str] = []
+        monkeypatch.setattr(chain_module_metadata(), "connect", lambda url: connects.append(url) or solver._iface)
+        order = solver.create_order(_model())
+        with pytest.raises(QuipSubmitIncompleteError, match=r"\(--state-pruning=archive\), then call submit") as info:
+            order.submit()
+        assert isinstance(info.value.__cause__, StatePruned)
+        assert (connects, virtual_clock) == ([], [])  # no reconnect, no wait.
+        assert order.status()["state"] == "sending"
 
     def test_a_zero_poll_interval_does_not_spin(self, monkeypatch, virtual_clock) -> None:
         solver, captured = _ready(monkeypatch)

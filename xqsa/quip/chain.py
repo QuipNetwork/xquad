@@ -567,6 +567,10 @@ def _proposed_order_id(events: list[tuple[int | None, object, object, object]], 
     return None
 
 
+class StatePruned(QuipConnectionError):
+    """The node has discarded the state of a past block; a node that keeps full state history can read it."""
+
+
 def account_nonce_at(iface: Any, account_id: Any, block_hash: str) -> int:
     """Return the account's nonce in the state of block ``block_hash``.
 
@@ -574,6 +578,7 @@ def account_nonce_at(iface: Any, account_id: Any, block_hash: str) -> int:
     to that block, never the node's pool.
 
     Raises:
+        StatePruned: if the node has discarded that block's state.
         QuipConnectionError: if the nonce cannot be read.
     """
     try:
@@ -582,7 +587,8 @@ def account_nonce_at(iface: Any, account_id: Any, block_hash: str) -> int:
     except QuipMetadataError:
         raise
     except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
-        raise QuipConnectionError(f"could not read the account nonce at block {block_hash}: {exc}") from exc
+        error = StatePruned if _is_state_pruned(exc) else QuipConnectionError
+        raise error(f"could not read the account nonce at block {block_hash}: {exc}") from exc
 
 
 def first_block_past_nonce(iface: Any, account_id: Any, nonce: int, low: int, high: int) -> int:
@@ -626,6 +632,8 @@ def settle_proposal(
     ``"never"`` too. Otherwise it may still land: ``"pending"``.
 
     Raises:
+        StatePruned: if the node has discarded a past block's state this
+            reads; retrying the same node cannot settle it.
         QuipConnectionError: if a chain read fails; retrying may settle it.
         QuipMetadataError: if the block that spent ``nonce`` has extrinsics
             that do not decode, so ``ext_hash`` may be among them; or if it
@@ -661,7 +669,8 @@ def settle_proposal(
     except QuipMetadataError:
         raise
     except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
-        raise QuipConnectionError(f"could not read the events of block {spent_in}: {exc}") from exc
+        error = StatePruned if _is_state_pruned(exc) else QuipConnectionError
+        raise error(f"could not read the events of block {spent_in}: {exc}") from exc
     for phase, module_id, event_id, attrs in events:
         if (phase, module_id) != (index, "System"):
             continue
@@ -929,6 +938,11 @@ def _is_storage_absent(exc: BaseException) -> bool:
     except Exception:  # noqa: BLE001 -- extra not installed / stubbed in tests.
         return False
     return isinstance(exc, StorageFunctionNotFound)
+
+
+def _is_state_pruned(exc: BaseException) -> bool:
+    """Whether ``exc`` is the node refusing a read of state it has pruned (Substrate's "State already discarded")."""
+    return "State already discarded" in str(exc)
 
 
 def _status_str(value: object) -> str:

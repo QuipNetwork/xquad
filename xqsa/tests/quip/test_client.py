@@ -2304,6 +2304,21 @@ class TestSolverQuipSubmission:
         assert (era.period, era.checkpoint, era.checkpoint_hash) == (128, 74773, "0xfinal")
         assert (signed.checkpoint, signed.window_end) == (74773, 74773 + 127)
 
+    @pytest.mark.parametrize(("lag", "refused"), [(32, True), (31, False)])
+    def test_signing_is_refused_while_finality_lags_half_the_window(self, monkeypatch, lag, refused) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        solver = _make_solver(monkeypatch)  # a 64-block window: half is 32.
+        solver._iface.head, solver._iface.finalized = 1000, 1000 - lag
+        captured = _patch_signing(monkeypatch, solver)
+        params = solver._propose_call_params(self._simple_job(), solver._default_options())
+        if refused:
+            with pytest.raises(QuipSubmissionError, match="finality lags 32 blocks .* nothing was sent"):
+                solver._sign(params)
+            assert captured["builds"] == 0
+        else:
+            assert solver._sign(params).checkpoint == 1000 - lag
+
     def test_other_extrinsics_stay_immortal(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)
         captured = _patch_signing(monkeypatch, solver)
