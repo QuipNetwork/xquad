@@ -113,6 +113,8 @@ SETTLE_GRACE_BLOCKS = 10
 # The block time assumed when the chain does not say, and the longest pause between reconnects.
 DEFAULT_BLOCK_TIME_MS = 6000
 MAX_BACKOFF_SECONDS = 60.0
+# The shortest pause between settle rounds, so a poll_interval of 0 cannot spin on reads and resends.
+MIN_SETTLE_POLL_SECONDS = 1.0
 # How long solve() waits for a faucet drip to show up in the free balance. The
 # faucet answers only once the drip is on chain, so this covers a lagging RPC
 # node, not block time.
@@ -767,13 +769,15 @@ class SolverQuip(Solver):
         A read that fails reconnects with backoff and retries. The rounds
         stop once the finalized head passes the window's end block, or, if
         the chain cannot be read or finality stalls, at a wall-clock estimate
-        of that block plus :data:`SETTLE_GRACE_BLOCKS`.
+        of that block plus :data:`SETTLE_GRACE_BLOCKS`. Rounds are
+        ``poll_interval`` apart, and at least :data:`MIN_SETTLE_POLL_SECONDS`.
 
         Raises:
             QuipSubmitIncompleteError: if it cannot be settled by then, the
                 specific error chained as its cause.
         """
         deadline = self._settle_deadline(signed)
+        poll = max(self._poll_interval, MIN_SETTLE_POLL_SECONDS)
         failures = 0
         while True:
             try:
@@ -783,14 +787,14 @@ class SolverQuip(Solver):
             except Exception as exc:  # noqa: BLE001 -- a fault while reading; reconnect and read again.
                 failures += 1
                 logger.warning("could not settle propose_job %s (%s); reconnecting", signed.ext_hash, exc)
-                if not self._pause(deadline, min(self._poll_interval * 2 ** (failures - 1), MAX_BACKOFF_SECONDS)):
+                if not self._pause(deadline, min(poll * 2 ** (failures - 1), MAX_BACKOFF_SECONDS)):
                     raise self._unsettled(signed, exc) from exc
                 self._reconnect()
                 continue
             failures = 0
             if outcome != "pending":
                 return outcome
-            if not self._pause(deadline, self._poll_interval):
+            if not self._pause(deadline, poll):
                 stall = QuipConnectionError(
                     f"finality did not reach the window's end block {signed.window_end} in time"
                 )
@@ -891,20 +895,6 @@ class SolverQuip(Solver):
             "places a second order.",
         )
 
-    def _included_block(self, block_hash: str | None) -> int | None:
-        """Return the height of the inclusion block, or ``None`` if it cannot be read.
-
-        Display only: the order is already proposed, so a failed read must not
-        lose its id.
-        """
-        if not block_hash:
-            return None
-        try:
-            return chain.block_number(self._iface, block_hash)
-        except Exception as exc:  # noqa: BLE001 -- the order is on chain; never lose its id over a height.
-            logger.warning("could not read the height of inclusion block %s: %s", block_hash, exc)
-            return None
-
     def _account_nonce(self) -> int:
         """See :func:`xqsa.quip.chain.account_nonce`."""
         return chain.account_nonce(self._iface, self._signer.account_id)
@@ -959,10 +949,6 @@ class SolverQuip(Solver):
         return chain.submit_built(
             self._iface, self._quip_signing, call_module, call_function, wire, ext_hash, wait_for=wait_for
         )
-
-    def _read_proposed_order_id(self, block_hash: str | None, ext_hash: str) -> int:
-        """See :func:`xqsa.quip.chain.read_proposed_order_id`."""
-        return chain.read_proposed_order_id(self._iface, block_hash, ext_hash)
 
     # ------------------------------------------------------------------
     # Monitor / retrieve / decode

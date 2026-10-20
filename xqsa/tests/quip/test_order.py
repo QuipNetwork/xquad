@@ -1309,6 +1309,14 @@ class TestJobOrderSendOutcomes:
         assert order.status() == {"state": "sending", "extrinsic_hash": "0xext", "nonce": 0, "window_end": 263}
         assert len(set(captured["sent"])) == 1
 
+    def test_a_zero_poll_interval_does_not_spin(self, monkeypatch, virtual_clock) -> None:
+        solver, captured = _ready(monkeypatch)
+        solver._poll_interval = 0
+        _stall_finality(monkeypatch, solver, captured)
+        with pytest.raises(QuipSubmitIncompleteError, match="finality did not reach"):
+            solver.create_order(_model()).submit()
+        assert virtual_clock and all(seconds >= 1.0 for seconds in virtual_clock[:-1])
+
     def test_unreachable_node_is_sending_after_reconnecting(self, monkeypatch, virtual_clock) -> None:
         solver, captured = _ready(monkeypatch)
         _send_raises(monkeypatch, solver, ConnectionError("websocket closed"), captured, lands_on=None)
@@ -1582,6 +1590,8 @@ class TestUnconfirmedDeprecation:
         with pytest.warns(DeprecationWarning) as record:
             assert xqsa.QuipUnconfirmedError is QuipUnconfirmedError
         assert len(record) == 1
+        assert "import it from xqsa.quip" in str(record[0].message)
+        assert "no longer produced since v0.4.5" in str(record[0].message)
 
     def test_internal_import_does_not_warn(self) -> None:
         with warnings.catch_warnings():

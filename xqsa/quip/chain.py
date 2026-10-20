@@ -660,10 +660,11 @@ def settle_proposal(
 
     Raises:
         QuipConnectionError: if a chain read fails; retrying may settle it.
-        QuipMetadataError: if the block holds ``ext_hash`` but its events
-            cannot be read as a dispatch result, or a successful dispatch
-            emitted no ``JobProposed`` in its phase: this client cannot read
-            the runtime's events.
+        QuipMetadataError: if the block that spent ``nonce`` has extrinsics
+            that do not decode, so ``ext_hash`` may be among them; or if it
+            holds ``ext_hash`` but its events cannot be read as a dispatch
+            result, or a successful dispatch emitted no ``JobProposed`` in
+            its phase: this client cannot read the runtime's blocks or events.
     """
     head_number, head_hash = finalized_head(iface)
     if account_nonce_at(iface, account_id, head_hash) <= nonce:
@@ -671,14 +672,23 @@ def settle_proposal(
     number = first_block_past_nonce(iface, account_id, nonce, checkpoint, head_number)
     spent_in = block_hash(iface, number)
     try:
-        block = iface.get_block(block_hash=spent_in, include_author=False, ignore_decoding_errors=True) or {}
+        block = iface.get_block(block_hash=spent_in, include_author=False, ignore_decoding_errors=True)
         events = list(_events(iface, spent_in))
     except QuipMetadataError:
         raise
     except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
         raise QuipConnectionError(f"could not read block {spent_in}: {exc}") from exc
+    if block is None:
+        raise QuipConnectionError(f"the node did not return block {spent_in}")
     index = _extrinsic_index(block, ext_hash)
     if index is None:
+        # The block spent our nonce, so it holds a signed extrinsic; one that did not decode may be ours.
+        extrinsics = block.get("extrinsics") or []
+        if not extrinsics or any(ext is None for ext in extrinsics):
+            raise QuipMetadataError(
+                f"block {spent_in} spent nonce {nonce}, but not all of its extrinsics could be decoded, so "
+                f"whether it holds propose_job {ext_hash} is unknown"
+            )
         return "never"
     for phase, module_id, event_id, attrs in events:
         if (phase, module_id) != (index, "System"):

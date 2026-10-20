@@ -318,7 +318,9 @@ def _self_solve(solver: SolverQuip, model: XQMX, vectors: list[list[int]], **opt
     first and its account leads unless a strictly lower energy arrives. The
     account registers as a solver first if it is not one. The next order id
     is predicted, so a proposal from elsewhere in the same block reverts the
-    batch; that is retried.
+    batch; that is retried. It returns once the order is in finalized state:
+    a batch reported in a block can be retracted with that block and land
+    again later, and a read at the best head in between would not find it.
     """
     pallet = "QuantumComputeMempool"
     account = "0x" + bytes(solver._signer.account_id).hex()
@@ -338,12 +340,36 @@ def _self_solve(solver: SolverQuip, model: XQMX, vectors: list[list[int]], **opt
             },
         ]
         try:
-            solver._submit_extrinsic("Utility", "batch_all", {"calls": calls})
+            sent = solver._submit_extrinsic("Utility", "batch_all", {"calls": calls})
         except QuipSubmissionError as exc:
             refusals.append(str(exc))
             continue
+        _await_final_order(solver, order_id, sent.block_hash)
         return order_id
     pytest.fail("the self-solve batch was refused three times:\n" + "\n".join(refusals))
+
+
+def _await_final_order(solver: SolverQuip, order_id: int, in_block: str, timeout: float = 180.0) -> None:
+    """Wait until ``order_id`` is in the state of the finalized head; ``in_block`` is where its batch was reported.
+
+    The order must be ``solver``'s: after a retraction another account's
+    proposal can take the predicted id, and the batch's answer then lands on
+    their order while ours gets the next id.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        final = solver._iface.get_chain_finalised_head()
+        order = solver._iface.query("QuantumComputeMempool", "JobOrders", [order_id], block_hash=final).value
+        if order is not None:
+            if quip_chain.account_bytes(order["proposer"]) != bytes(solver._signer.account_id):
+                pytest.fail(
+                    f"order {order_id} was proposed by another account; the batch reported in {in_block} "
+                    f"placed ours at a later id, likely {order_id + 1}"
+                )
+            return
+        if time.monotonic() > deadline:
+            pytest.fail(f"order {order_id} is not finalized {timeout:.0f} s after its batch was reported in {in_block}")
+        time.sleep(3)
 
 
 def _answer(solver: SolverQuip, order_id: int, vectors: list[list[int]]) -> None:
@@ -937,7 +963,8 @@ class TestAccess:
         rule = AccessAllow(accounts=[_register(first)], types=["QpuIonq"])
         job = first.create_order(model)._job
         ground = [_model_vector(job, _by_energy(model)[0])]
-        order_id = _self_solve(first, model, ground, access=rule)
+        # A wait long enough for the second answer to land after the first is finalized.
+        order_id = _self_solve(first, model, ground, access=rule, block_wait=30)
         with pytest.raises(QuipSubmissionError, match="QuantumComputeMempool.NotEligibleSolver"):
             _answer(second, order_id, ground)
         first.get_receipt(order_id).wait()

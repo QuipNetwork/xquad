@@ -2340,15 +2340,15 @@ class TestSolverQuipSubmission:
     def test_order_id_extraction_tolerates_attribute_shapes(self, monkeypatch, attrs_form) -> None:
         solver = _make_solver(monkeypatch)
         solver._iface.events = [_job_proposed_event(7, attrs_form=attrs_form)]
-        assert solver._read_proposed_order_id("0xblock", "0xext") == 7
+        assert quip_chain.read_proposed_order_id(solver._iface, "0xblock", "0xext") == 7
 
     def test_order_id_is_read_from_our_own_event(self, monkeypatch) -> None:
         """Two proposals in one block: ours is second, so the first block's JobProposed is not ours."""
         solver = _make_solver(monkeypatch)
         solver._iface.extrinsics = ["0xtimestamp", "0xtheirs", "0xext"]
         solver._iface.events = [_job_proposed_event(7, phase=1), _job_proposed_event(8, phase=2)]
-        assert solver._read_proposed_order_id("0xblock", "0xext") == 8
-        assert solver._read_proposed_order_id("0xblock", "0xtheirs") == 7
+        assert quip_chain.read_proposed_order_id(solver._iface, "0xblock", "0xext") == 8
+        assert quip_chain.read_proposed_order_id(solver._iface, "0xblock", "0xtheirs") == 7
 
     def test_order_id_of_another_phase_is_not_ours(self, monkeypatch) -> None:
         from xqsa.quip import QuipSubmissionError
@@ -2357,7 +2357,7 @@ class TestSolverQuipSubmission:
         solver._iface.extrinsics = ["0xtheirs", "0xext"]
         solver._iface.events = [_job_proposed_event(7, phase=0)]
         with pytest.raises(QuipSubmissionError, match="no JobProposed event with an order id was found in its phase 1"):
-            solver._read_proposed_order_id("0xblock", "0xext")
+            quip_chain.read_proposed_order_id(solver._iface, "0xblock", "0xext")
 
     def test_order_id_of_an_extrinsic_not_in_the_block_raises(self, monkeypatch) -> None:
         from xqsa.quip import QuipSubmissionError
@@ -2366,7 +2366,7 @@ class TestSolverQuipSubmission:
         solver._iface.extrinsics = ["0xtheirs"]
         solver._iface.events = [_job_proposed_event(7, phase=0)]
         with pytest.raises(QuipSubmissionError, match="does not hold extrinsic 0xext"):
-            solver._read_proposed_order_id("0xblock", "0xext")
+            quip_chain.read_proposed_order_id(solver._iface, "0xblock", "0xext")
 
     def test_order_id_extraction_rejects_positional_shape(self, monkeypatch) -> None:
         # A bare-positional attribute list is deliberately NOT trusted: a
@@ -2378,14 +2378,14 @@ class TestSolverQuipSubmission:
         solver = _make_solver(monkeypatch)
         solver._iface.events = [_job_proposed_event(7, attrs_form="positional")]
         with pytest.raises(QuipSubmissionError, match="no JobProposed"):
-            solver._read_proposed_order_id("0xblock", "0xext")
+            quip_chain.read_proposed_order_id(solver._iface, "0xblock", "0xext")
 
     def test_no_block_hash_raises(self, monkeypatch) -> None:
         from xqsa.quip import QuipSubmissionError
 
         solver = _make_solver(monkeypatch)
         with pytest.raises(QuipSubmissionError, match="cannot read the order id"):
-            solver._read_proposed_order_id(None, "0xext")
+            quip_chain.read_proposed_order_id(solver._iface, None, "0xext")
 
 
 # ---------------------------------------------------------------------------
@@ -4080,7 +4080,8 @@ class _History:
     def __init__(self, nonces: list[int], *, finalized: int | None = None) -> None:
         self.nonces = nonces
         self.finalized = len(nonces) - 1 if finalized is None else finalized
-        self.blocks: dict[int, tuple[list[str], list[dict]]] = {}
+        self.blocks: dict[int, tuple[list[str | None], list[dict]]] = {}  # None: an extrinsic that did not decode.
+        self.missing: set[int] = set()  # blocks the node does not return.
         self.reads: list[int] = []
 
     def hash_of(self, number: int) -> str:
@@ -4101,8 +4102,11 @@ class _History:
         return _StorageEntry({"nonce": self.nonces[number]})
 
     def get_block(self, block_hash=None, include_author=False, ignore_decoding_errors=False):
-        extrinsics, _ = self.blocks.get(int(block_hash, 16), ([], []))
-        return {"extrinsics": [{"extrinsic_hash": ext} for ext in extrinsics]}
+        number = int(block_hash, 16)
+        if number in self.missing:
+            return None
+        extrinsics, _ = self.blocks.get(number, ([], []))
+        return {"extrinsics": [None if ext is None else {"extrinsic_hash": ext} for ext in extrinsics]}
 
     def get_events(self, block_hash=None):
         return self.blocks.get(int(block_hash, 16), ([], []))[1]
@@ -4138,6 +4142,24 @@ class TestSettleProposal:
         history = _History([5, 5, 6])
         history.blocks[2] = (["0xtheirs"], [_system(0, "ExtrinsicSuccess")])
         assert self._settle(history) == "never"
+
+    @pytest.mark.parametrize("extrinsics", [["0xtheirs", None], []], ids=["undecodable", "empty"])
+    def test_an_unreadable_spending_block_is_a_metadata_error(self, extrinsics) -> None:
+        """An extrinsic that did not decode may be ours, so the proposal is not proven absent."""
+        from xqsa.quip import QuipMetadataError
+
+        history = _History([5, 6])
+        history.blocks[1] = (extrinsics, [_system(0, "ExtrinsicSuccess")])
+        with pytest.raises(QuipMetadataError, match="whether it holds propose_job 0xours is unknown"):
+            self._settle(history)
+
+    def test_a_missing_spending_block_is_a_connection_error(self) -> None:
+        from xqsa.quip import QuipConnectionError
+
+        history = _History([5, 6])
+        history.missing.add(1)
+        with pytest.raises(QuipConnectionError, match="did not return block"):
+            self._settle(history)
 
     def test_unspent_nonce_inside_the_window_is_pending(self) -> None:
         assert self._settle(_History([5] * 63)) == "pending"  # finalized at 62, the window ends at 63.

@@ -847,7 +847,7 @@ class JobOrder:
         self._state = "submitted"
 
     def order_id(self) -> int | None:
-        """Return the chain's order id, or ``None`` while the order is a draft."""
+        """Return the chain's order id, or ``None`` until it is ``submitted``: a draft, ``sending`` or ``failed``."""
         return self._order_id
 
     def status(self) -> dict[str, Any]:
