@@ -25,6 +25,7 @@ sent. The ``quip_cpu`` tests run the real quip-cpu-sa binary named by
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import sys
@@ -33,7 +34,7 @@ from typing import Any
 
 import pytest
 
-from xqffi.vm import XqmxModel
+from xqffi.vm import Domain, XqmxModel, XqmxSample
 from xqsa.binary import BinaryImplementation
 from xqsa.errors import (
     ModelRejectedError,
@@ -130,6 +131,12 @@ def _request(tmp_path: Path) -> dict[str, Any]:
     return json.loads((tmp_path / "request.json").read_text())
 
 
+def _ground_energy(model: XqmxModel) -> int:
+    """The model's minimum energy, by brute force."""
+    values = (0, 1) if model.domain == Domain.BINARY else (-1, 1)
+    return min(model.energy(XqmxSample(model.domain, list(v))) for v in itertools.product(values, repeat=model.size))
+
+
 def _model(domain: str = "binary") -> XqmxModel:
     model = XqmxModel.binary(3) if domain == "binary" else XqmxModel.spin(3)
     model.set_linear(0, 2)
@@ -155,6 +162,11 @@ class TestConstruction:
             ({"caps": QUIP_CPU_SA_CAPS | {"protocolVersion": 1}}, "protocol version 1"),
             ({"caps": QUIP_CPU_SA_CAPS | {"algorithm": "gibbs"}}, "runs algorithm 'gibbs'"),
             ({"caps": QUIP_CPU_SA_CAPS | {"supportedKinds": ["ISING_GENERATE"]}}, "ISING_SAMPLE"),
+            ({"caps": QUIP_CPU_SA_CAPS | {"supportedKinds": "ISING_SAMPLE"}}, "supportedKinds is not a list"),
+            ({"caps": QUIP_CPU_SA_CAPS | {"features": None}}, "features is not a list"),
+            ({"caps": QUIP_CPU_SA_CAPS | {"maxNodes": "100000"}}, "maxNodes is not a non-negative integer"),
+            ({"caps": QUIP_CPU_SA_CAPS | {"maxDegree": -1}}, "maxDegree is not a non-negative integer"),
+            ({"caps": QUIP_CPU_SA_CAPS | {"exactResolutionMilli": True}}, "exactResolutionMilli is not"),
         ],
     )
     def test_unusable_binary(self, tmp_path: Path, stub: dict[str, Any], match: str) -> None:
@@ -252,6 +264,7 @@ class TestPreChecks:
             {"beta_schedule_type": "cosine"},
             {"seed": -1},
             {"seed": 2**64},
+            {"seed": True},
         ],
     )
     def test_parameter_refusals(self, tmp_path: Path, params: dict[str, Any]) -> None:
@@ -295,6 +308,7 @@ class TestFailures:
             "garbage",
             json.dumps([{"spins": [1, 1], "energy_milli": 0, "timing": {}, "sampler": {}}]),
             json.dumps([{"spins": [1, 0, 1], "energy_milli": 0, "timing": {}, "sampler": {}}]),
+            json.dumps([{"spins": [1, 1, 1], "energy_milli": 0, "timing": {}, "sampler": {}}]),
         ],
     )
     def test_bad_output(self, tmp_path: Path, stdout: str) -> None:
@@ -357,7 +371,7 @@ class TestQuipCpuSa:
     def test_round_trip(self, domain: str) -> None:
         model = _model(domain)
         result = SolverCPU._binary(str(_REAL), num_reads=20, seed=5).solve(model)
-        assert result.energy == model.energy(result.sample)
+        assert result.energy == _ground_energy(model)
         assert result.metadata["reads"] == 20
         assert result.metadata["params"]["beta_schedule_type"] == "geometric"
 
@@ -383,6 +397,11 @@ class TestQuipCpuSa:
         model.set_linear(0, 2**31 // 1000 + 1)
         with pytest.raises(ModelRejectedError) as excinfo:
             SolverCPU._binary(str(_REAL)).solve(model)
+        assert excinfo.value.exit_code is None
+
+    def test_node_limit_refused_before_spawn(self) -> None:
+        with pytest.raises(ModelRejectedError, match="100001 nodes") as excinfo:
+            SolverCPU._binary(str(_REAL)).solve(XqmxModel.spin(100001))
         assert excinfo.value.exit_code is None
 
     def test_binary_refuses_too_many_nodes(self) -> None:

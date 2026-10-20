@@ -43,6 +43,8 @@ from .solver import Implementation, RunOutput, _check_anneal_params, _check_beta
 _PROTOCOL_VERSION = 2
 _I32_MIN, _I32_MAX = -(2**31), 2**31 - 1
 _SEED_LIMIT = 2**64
+_LIMIT_KEYS = ("maxNodes", "maxEdges", "maxDegree", "maxLocalFieldMilli", "exactResolutionMilli")
+_SAMPLER_KEYS = frozenset({"seed", "num_sweeps", "sweeps_per_beta", "beta_range", "beta_schedule_type"})
 
 _EXIT_ERRORS: dict[int, type[SolverError]] = {
     64: SolverProtocolError,
@@ -104,7 +106,7 @@ class BinaryImplementation(Implementation):
         """
         _check_anneal_params(num_reads, num_sweeps, num_sweeps_per_beta)
         _check_beta_schedule(beta_schedule_type)
-        if seed is not None and not (isinstance(seed, int) and 0 <= seed < _SEED_LIMIT):
+        if seed is not None and not (_is_int(seed) and 0 <= seed < _SEED_LIMIT):
             raise ValueError(f"seed must be an int in [0, 2**64), got {seed!r}")
 
         ising = to_ising_milli(model)
@@ -168,6 +170,12 @@ class BinaryImplementation(Implementation):
             raise unavailable(f"protocol version {caps.get('protocolVersion')!r}, expected {_PROTOCOL_VERSION}")
         if caps.get("algorithm") != algorithm:
             raise unavailable(f"runs algorithm {caps.get('algorithm')!r}, not {algorithm!r}")
+        for key in ("supportedKinds", "features"):
+            if not isinstance(caps.get(key, []), list):
+                raise unavailable(f"{key} is not a list: {caps[key]!r}")
+        for key in _LIMIT_KEYS:
+            if not (_is_int(caps.get(key, 0)) and caps.get(key, 0) >= 0):
+                raise unavailable(f"{key} is not a non-negative integer: {caps[key]!r}")
         if "ISING_SAMPLE" not in caps.get("supportedKinds", []):
             raise unavailable("does not support ISING_SAMPLE")
         return caps
@@ -219,13 +227,19 @@ class BinaryImplementation(Implementation):
                 isinstance(read, dict)
                 and isinstance(read.get("energy_milli"), int)
                 and isinstance(read.get("sampler"), dict)
+                and _SAMPLER_KEYS <= read["sampler"].keys()
                 and isinstance(read.get("timing"), dict)
             ):
-                raise failed("a read lacks energy_milli, sampler or timing")
+                raise failed("a read lacks energy_milli, timing or a sampler field")
             spins = read.get("spins")
             if not isinstance(spins, list) or len(spins) != nodes or any(s not in (-1, 1) for s in spins):
                 raise failed(f"a read's spins are not {nodes} values of -1 or +1")
         return reads
+
+
+def _is_int(value: object) -> bool:
+    """An int that is not a bool."""
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _wire(milli: int) -> int | float:

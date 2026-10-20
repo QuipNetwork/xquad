@@ -63,7 +63,7 @@ The shipped implementations run in-process, in the Python interpreter that calls
 **Construction.** It runs `<path> --capabilities` once and caches the JSON object it prints. Construction raises `SolverUnavailableError` when:
 
 1. the binary cannot be started;
-2. it exits non-zero, or its stdout is not a JSON object;
+2. it exits non-zero, its stdout is not a JSON object, `supportedKinds` or `features` is not a list, or a limit (`maxNodes`, `maxEdges`, `maxDegree`, `maxLocalFieldMilli`, `exactResolutionMilli`) is not a non-negative integer;
 3. `protocolVersion` is not `2`;
 4. `algorithm` differs from the requested algorithm;
 5. `supportedKinds` lacks `ISING_SAMPLE`.
@@ -99,7 +99,7 @@ The shipped implementations run in-process, in the Python interpreter that calls
 | 69 | `SolverUnavailableError` |
 | 70, any other | `SolverFailedError` |
 
-`SolverFailedError` is also raised when the binary exits 0 but its stdout is not a non-empty JSON array of reads, or a read's `spins` are not one `-1` or `+1` per variable. The error types live in `xqsa.errors` and are not exported from `xqsa` yet.
+`SolverFailedError` is also raised when the binary exits 0 but its stdout is not a non-empty JSON array of reads, a read's `spins` are not one `-1` or `+1` per variable, or a read lacks `energy_milli`, `timing` or the `sampler` fields the result reports. The error types live in `xqsa.errors` and are not exported from `xqsa` yet.
 
 **Result.** The sample is the read with the lowest `energy_milli`, the first on ties. `reads` is the number of reads returned, `seed` is the seed the binary reports, and `params` holds `num_sweeps`, `num_sweeps_per_beta`, `beta_range` (`None` when the binary chose), `beta_schedule_type` and `timing` (`sample_us`, `total_us`), as the binary used them.
 
