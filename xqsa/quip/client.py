@@ -692,7 +692,7 @@ class SolverQuip(Solver):
             logger.warning("propose_job %s failed on chain in block %s: %s", ext_hash, block_hash, receipt.error)
             return _Sent(ext_hash=ext_hash, block_hash=block_hash, included_block=included_block, error=receipt.error)
         try:
-            order_id = self._read_proposed_order_id(block_hash)
+            order_id = self._read_proposed_order_id(block_hash, ext_hash)
         except Exception as exc:  # noqa: BLE001 -- the order is on chain; never let it read as unsent.
             raise chain.unconfirmed_error(ext_hash, block_hash, f"the order id could not be read: {exc}") from exc
         logger.info(
@@ -773,9 +773,9 @@ class SolverQuip(Solver):
             self._iface, self._quip_signing, call_module, call_function, wire, ext_hash, wait_for=wait_for
         )
 
-    def _read_proposed_order_id(self, block_hash: str | None) -> int:
+    def _read_proposed_order_id(self, block_hash: str | None, ext_hash: str) -> int:
         """See :func:`xqsa.quip.chain.read_proposed_order_id`."""
-        return chain.read_proposed_order_id(self._iface, block_hash)
+        return chain.read_proposed_order_id(self._iface, block_hash, ext_hash)
 
     # ------------------------------------------------------------------
     # Monitor / retrieve / decode

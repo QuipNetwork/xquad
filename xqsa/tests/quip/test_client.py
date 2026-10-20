@@ -1065,6 +1065,8 @@ class FakeSubstrate:
         self.genesis_hash: object = GENESIS_HASH
         self.ss58_format = 42
         self.nonce = 0
+        # The extrinsic hashes of every block, in block order; events match them by phase index.
+        self.extrinsics: list[str] = ["0xext"]
 
     def rpc_request(self, method: str, params: list | None = None):
         self.rpc_calls.append((method, params))
@@ -1112,16 +1114,20 @@ class FakeSubstrate:
     def get_events(self, block_hash: str | None = None):
         return self.events
 
+    def get_block(self, block_hash: str | None = None, include_author: bool = False, ignore_decoding_errors=False):
+        return {"extrinsics": [{"extrinsic_hash": ext_hash} for ext_hash in self.extrinsics]}
+
     def close(self) -> None:
         pass
 
 
-def _job_proposed_event(order_id: int, *, attrs_form: str = "mapping") -> dict:
+def _job_proposed_event(order_id: int, *, attrs_form: str = "mapping", phase: int = 0) -> dict:
     """Build a synthetic decoded JobProposed event record (substrate-interface shape).
 
     ``attrs_form`` selects the attribute encoding to exercise the defensive
     parser: ``"mapping"`` (field-keyed dict), ``"params"`` (name/value list), or
-    ``"positional"`` (bare value list, order_id first).
+    ``"positional"`` (bare value list, order_id first). ``phase`` is the index
+    of the extrinsic that emitted it.
     """
     if attrs_form == "params":
         attributes: object = [{"name": "order_id", "value": order_id}, {"name": "reward", "value": 1}]
@@ -1129,7 +1135,10 @@ def _job_proposed_event(order_id: int, *, attrs_form: str = "mapping") -> dict:
         attributes = [order_id, "0xspec", "0xproposer"]
     else:
         attributes = {"order_id": order_id, "spec_id": "0xspec", "reward": 1}
-    return {"event": {"module_id": "QuantumComputeMempool", "event_id": "JobProposed", "attributes": attributes}}
+    return {
+        "phase": {"ApplyExtrinsic": phase},
+        "event": {"module_id": "QuantumComputeMempool", "event_id": "JobProposed", "attributes": attributes},
+    }
 
 
 def _fake_substrate_module(iface: object, *, raises: Exception | None = None) -> types.ModuleType:
@@ -2250,7 +2259,33 @@ class TestSolverQuipSubmission:
     def test_order_id_extraction_tolerates_attribute_shapes(self, monkeypatch, attrs_form) -> None:
         solver = _make_solver(monkeypatch)
         solver._iface.events = [_job_proposed_event(7, attrs_form=attrs_form)]
-        assert solver._read_proposed_order_id("0xblock") == 7
+        assert solver._read_proposed_order_id("0xblock", "0xext") == 7
+
+    def test_order_id_is_read_from_our_own_event(self, monkeypatch) -> None:
+        """Two proposals in one block: ours is second, so the first block's JobProposed is not ours."""
+        solver = _make_solver(monkeypatch)
+        solver._iface.extrinsics = ["0xtimestamp", "0xtheirs", "0xext"]
+        solver._iface.events = [_job_proposed_event(7, phase=1), _job_proposed_event(8, phase=2)]
+        assert solver._read_proposed_order_id("0xblock", "0xext") == 8
+        assert solver._read_proposed_order_id("0xblock", "0xtheirs") == 7
+
+    def test_order_id_of_another_phase_is_not_ours(self, monkeypatch) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        solver = _make_solver(monkeypatch)
+        solver._iface.extrinsics = ["0xtheirs", "0xext"]
+        solver._iface.events = [_job_proposed_event(7, phase=0)]
+        with pytest.raises(QuipSubmissionError, match="no JobProposed event with an order id was found in its phase 1"):
+            solver._read_proposed_order_id("0xblock", "0xext")
+
+    def test_order_id_of_an_extrinsic_not_in_the_block_raises(self, monkeypatch) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        solver = _make_solver(monkeypatch)
+        solver._iface.extrinsics = ["0xtheirs"]
+        solver._iface.events = [_job_proposed_event(7, phase=0)]
+        with pytest.raises(QuipSubmissionError, match="does not hold extrinsic 0xext"):
+            solver._read_proposed_order_id("0xblock", "0xext")
 
     def test_order_id_extraction_rejects_positional_shape(self, monkeypatch) -> None:
         # A bare-positional attribute list is deliberately NOT trusted: a
@@ -2262,14 +2297,14 @@ class TestSolverQuipSubmission:
         solver = _make_solver(monkeypatch)
         solver._iface.events = [_job_proposed_event(7, attrs_form="positional")]
         with pytest.raises(QuipSubmissionError, match="no JobProposed"):
-            solver._read_proposed_order_id("0xblock")
+            solver._read_proposed_order_id("0xblock", "0xext")
 
     def test_no_block_hash_raises(self, monkeypatch) -> None:
         from xqsa.quip import QuipSubmissionError
 
         solver = _make_solver(monkeypatch)
         with pytest.raises(QuipSubmissionError, match="cannot read the order id"):
-            solver._read_proposed_order_id(None)
+            solver._read_proposed_order_id(None, "0xext")
 
 
 # ---------------------------------------------------------------------------
