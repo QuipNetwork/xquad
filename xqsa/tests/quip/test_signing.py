@@ -290,6 +290,47 @@ class TestSignedExtensions:
         assert len(additional) == 4 + 4 + 32 + 32 + 1
 
 
+class TestMortalEra:
+    # Vectors from the 2026-10-20 aglais probe: the runtime accepted both at
+    # finalized head #74773 (TaggedTransactionQueue_validate_transaction).
+    @pytest.mark.parametrize(("period", "encoded"), [(64, "5501"), (2048, "5a41")])
+    def test_encoding_matches_the_runtime(self, period, encoded) -> None:
+        assert quip_signing.MortalEra(period, 74773, "0x" + "cd" * 32).encode().hex() == encoded
+
+    # 8192 quantizes the phase by 2: 9000 % 8192 = 808 -> 404 << 4 | 12 = 0x194C.
+    @pytest.mark.parametrize(
+        ("period", "checkpoint", "encoded"), [(4, 0, 0x0001), (16, 5, 0x0053), (8192, 9000, 0x194C)]
+    )
+    def test_encoding_follows_the_substrate_formula(self, period, checkpoint, encoded) -> None:
+        assert quip_signing.MortalEra(period, checkpoint, "0x00").encode() == encoded.to_bytes(2, "little")
+
+    def test_last_block_ends_the_window(self) -> None:
+        assert quip_signing.MortalEra(64, 100, "0x00").last_block == 163
+
+    @pytest.mark.parametrize("period", [0, 2, 3, 63, 100, 1 << 17])
+    def test_period_must_be_a_power_of_two_in_range(self, period) -> None:
+        with pytest.raises(QuipSigningError, match="power of two"):
+            quip_signing.MortalEra(period, 0, "0x00")
+
+    def test_mortal_extension_commits_to_the_checkpoint(self) -> None:
+        checkpoint = bytes([0xCD]) * 32
+        era = quip_signing.MortalEra(64, 74773, "0x" + checkpoint.hex())
+        extra, additional = quip_signing._signed_extensions(
+            nonce=0, spec_version=1, tx_version=1, genesis_bytes=GENESIS, era=era
+        )
+        assert extra == bytes.fromhex("5501") + b"\x00\x00\x00"
+        assert additional == (1).to_bytes(4, "little") * 2 + GENESIS + checkpoint + b"\x00"
+
+    def test_mortal_extrinsic_carries_the_era(self) -> None:
+        signer = signer_from_seed(SEED)
+        iface = FakeIface(nonce=3)
+        era = quip_signing.MortalEra(64, 74773, "0x" + "cd" * 32)
+        wire, _ = build_signed_extrinsic(iface, signer, "QuantumComputeMempool", "propose_job", {}, era=era)
+        immortal, _ = build_signed_extrinsic(iface, signer, "QuantumComputeMempool", "propose_job", {})
+        assert _decode_wire(wire)[2].startswith(bytes.fromhex("5501"))
+        assert _decode_wire(immortal)[2].startswith(b"\x00")  # every other call stays immortal.
+
+
 # ---------------------------------------------------------------------------
 # Keystore
 # ---------------------------------------------------------------------------

@@ -98,6 +98,12 @@ RELIABLE_DEADLINE_BLOCKS = 100
 
 _SUPPORTED_DELIVERY = "OnChainOnly"
 
+# The blocks a signed ``propose_job`` stays valid for. The chain's
+# ``BlockHashCount`` is 2400, and a mortal era is a power of two, so 2048 is
+# the longest; 64 blocks is about 6.4 minutes.
+DEFAULT_INCLUSION_WINDOW_BLOCKS = 64
+MAX_INCLUSION_WINDOW_BLOCKS = 2048
+
 
 @dataclass(frozen=True)
 class _OrderOptions:
@@ -132,6 +138,25 @@ def check_client_defaults(delivery: Any) -> None:
             f"delivery={delivery!r}: result delivery is not supported yet: ResultReady only fires on a claim, "
             "which network solvers do not make"
         )
+
+
+def check_inclusion_window(blocks: Any) -> int:
+    """Return the inclusion window ``blocks`` rounds up to: the next power of two.
+
+    Raises:
+        TypeError: if ``blocks`` is not an int.
+        QuipOrderOptionError: if ``blocks`` is below
+            :data:`DEFAULT_INCLUSION_WINDOW_BLOCKS` or above
+            :data:`MAX_INCLUSION_WINDOW_BLOCKS`.
+    """
+    blocks = _require_int(blocks, "inclusion_window_blocks")
+    if not DEFAULT_INCLUSION_WINDOW_BLOCKS <= blocks <= MAX_INCLUSION_WINDOW_BLOCKS:
+        raise QuipOrderOptionError(
+            "inclusion_window_blocks",
+            f"inclusion_window_blocks={blocks} must be from {DEFAULT_INCLUSION_WINDOW_BLOCKS} to "
+            f"{MAX_INCLUSION_WINDOW_BLOCKS}",
+        )
+    return 1 << (blocks - 1).bit_length()
 
 
 def merge_options(
@@ -458,14 +483,19 @@ def _chain_floors(options: _OrderOptions, job: IsingJob) -> Floors:
 
 @dataclass(frozen=True)
 class _SignedCall:
-    """A signed ``propose_job`` extrinsic and the nonce it was signed with.
+    """A signed ``propose_job`` extrinsic, the nonce it was signed with, and its inclusion window.
 
-    ``wire`` is a sendable transaction, so it is kept out of ``repr``.
+    The extrinsic is mortal: it can be included from block ``checkpoint``,
+    the finalized head it was signed at, through block ``window_end``, and
+    never after. ``wire`` is a sendable transaction, so it is kept out of
+    ``repr``.
     """
 
     wire: bytes = field(repr=False)
     ext_hash: str
     nonce: int
+    checkpoint: int
+    window_end: int
 
 
 @dataclass(frozen=True)
@@ -723,7 +753,8 @@ class JobOrder:
     def status(self) -> dict[str, Any]:
         """Return the order's state and what is known of it.
 
-        - ``draft``: ``state`` and ``options``.
+        - ``draft``: ``state``, ``options`` and ``inclusion_window_blocks``,
+          the blocks a signed proposal stays valid for.
         - ``unconfirmed``: ``state``, ``extrinsic_hash``, ``block_hash`` and
           ``included_block`` (``None`` when unknown).
         - ``failed``: the same, plus the chain's dispatch ``error``.
@@ -735,7 +766,11 @@ class JobOrder:
           ``finalized`` once the chain says it is final.
         """
         if self._state == "draft":
-            return {"state": self._state, "options": self.options()}
+            return {
+                "state": self._state,
+                "options": self.options(),
+                "inclusion_window_blocks": self._client._inclusion_window_blocks,
+            }
         if self._order_id is None:
             sent = {
                 "state": self._state,

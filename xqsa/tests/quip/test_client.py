@@ -1107,6 +1107,9 @@ class FakeSubstrate:
     def get_account_nonce(self, account_address: str) -> int:
         return self.nonce
 
+    def get_chain_finalised_head(self) -> str:
+        return "0xfinal"  # its header reads as ``head``, like every block's.
+
     def get_block_hash(self, block_id: int | None = None) -> str | None:
         assert block_id == 0, "only the genesis hash is read"
         return self.genesis_hash
@@ -1257,6 +1260,28 @@ class TestSolverQuipGuards:
 
 class TestSolverQuipConstruction:
     """Constructor configuration resolution against a mocked chain."""
+
+    @pytest.mark.parametrize(("blocks", "effective"), [(64, 64), (65, 128), (1000, 1024), (2048, 2048)])
+    def test_inclusion_window_rounds_up_to_a_power_of_two(self, monkeypatch, blocks, effective) -> None:
+        assert _make_solver(monkeypatch, inclusion_window_blocks=blocks)._inclusion_window_blocks == effective
+
+    def test_inclusion_window_defaults_to_64(self, monkeypatch) -> None:
+        from xqsa.quip import DEFAULT_INCLUSION_WINDOW_BLOCKS
+
+        assert _make_solver(monkeypatch)._inclusion_window_blocks == DEFAULT_INCLUSION_WINDOW_BLOCKS == 64
+
+    @pytest.mark.parametrize("blocks", [0, 63, 2049, 4096])
+    def test_inclusion_window_out_of_range_refused(self, monkeypatch, blocks) -> None:
+        from xqsa.quip import QuipOrderOptionError
+
+        with pytest.raises(QuipOrderOptionError, match="must be from 64 to 2048") as info:
+            _make_solver(monkeypatch, inclusion_window_blocks=blocks)
+        assert info.value.option == "inclusion_window_blocks"
+
+    @pytest.mark.parametrize("blocks", [64.0, "64", True])
+    def test_inclusion_window_must_be_an_int(self, monkeypatch, blocks) -> None:
+        with pytest.raises(TypeError, match="inclusion_window_blocks must be an int"):
+            _make_solver(monkeypatch, inclusion_window_blocks=blocks)
 
     def test_happy_path(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)
@@ -2042,10 +2067,11 @@ def _patch_signing(monkeypatch, solver, *, receipt=None, build_raises: Exception
     captured: dict = {"builds": 0}
     qs = solver._quip_signing
 
-    def fake_build(iface, signer, call_module, call_function, call_params, nonce=None):
+    def fake_build(iface, signer, call_module, call_function, call_params, nonce=None, era=None):
         captured.update(iface=iface, call_module=call_module, call_function=call_function, call_params=call_params)
         captured["builds"] += 1
         captured.setdefault("nonces", []).append(nonce)
+        captured.setdefault("eras", []).append(era)
         captured.setdefault("params", []).append(call_params)
         if build_raises is not None:
             raise build_raises
@@ -2231,6 +2257,21 @@ class TestSolverQuipSubmission:
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error="System.ExtrinsicFailed: {...}"))
         with pytest.raises(QuipSubmissionError, match="failed on-chain"):
             solver._submit_built("QuantumComputeMempool", "propose_job", b"\x00\x01", "0xext")
+
+    def test_propose_job_is_signed_mortal_from_the_finalized_head(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, inclusion_window_blocks=100)
+        solver._iface.head = 74773
+        captured = _patch_signing(monkeypatch, solver)
+        signed = solver._sign(solver._propose_call_params(self._simple_job(), solver._default_options()))
+        [era] = captured["eras"]
+        assert (era.period, era.checkpoint, era.checkpoint_hash) == (128, 74773, "0xfinal")
+        assert (signed.checkpoint, signed.window_end) == (74773, 74773 + 127)
+
+    def test_other_extrinsics_stay_immortal(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+        captured = _patch_signing(monkeypatch, solver)
+        solver._build_extrinsic("QuantumComputeMempool", "reclaim_order", {"order_id": 1})
+        assert captured["eras"] == [None]
 
     def test_propose_job_returns_order_id(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)

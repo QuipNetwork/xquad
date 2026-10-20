@@ -71,6 +71,7 @@ from xqsa.quip.errors import (  # noqa: F401 -- the Quip* errors stay importable
 from xqsa.quip.faucet import DEFAULT_DRIP_PLANCK, fund_from_faucet
 from xqsa.quip.networks import NETWORKS
 from xqsa.quip.order import (
+    DEFAULT_INCLUSION_WINDOW_BLOCKS,
     JobOrder,
     _chain_floors,
     _check_access,
@@ -79,6 +80,7 @@ from xqsa.quip.order import (
     _Sent,
     _SignedCall,
     check_client_defaults,
+    check_inclusion_window,
     merge_options,
 )
 from xqsa.quip.quote import JobQuote, _format_planck
@@ -139,6 +141,14 @@ class SolverQuip(Solver):
     (for example QPU-backed ones). See the module docstring for configuration
     and installation.
 
+    Every ``propose_job`` is signed mortal: it can be included only within
+    ``inclusion_window_blocks`` of the finalized head it was signed at, 64 to
+    2048 blocks, rounded up to a power of two (64 blocks is about 6.4
+    minutes). Once that window has passed unspent, the proposal can never
+    land. A longer window rides out more congestion and outage, but can make
+    a submit take longer to settle. It is a client setting, not an order
+    option.
+
     Raises:
         ImportError: if the ``[quip]`` extra is not installed
             (``pip install xqsa[quip]`` -- provides ``substrate-interface`` and
@@ -146,10 +156,12 @@ class SolverQuip(Solver):
         ValueError: if no RPC URL is configured, or ``access``, ``resolution``
             or ``delivery`` names a value no order can use yet (checked before
             connecting).
-        TypeError: if both ``access`` and the deprecated ``mode`` are given.
-        QuipOrderOptionError: if an ``access`` allowlist is outside the
-            chain's limits, or a raw ``access`` dict cannot be read as an
-            access rule. Each listed account that is not a registered
+        TypeError: if both ``access`` and the deprecated ``mode`` are given,
+            or ``inclusion_window_blocks`` is not an int.
+        QuipOrderOptionError: if ``inclusion_window_blocks`` is below 64 or
+            above 2048 (checked before connecting), an ``access`` allowlist
+            is outside the chain's limits, or a raw ``access`` dict cannot be
+            read as an access rule. Each listed account that is not a registered
             solver warns once, here rather than on every order.
         QuipConnectionError: if the node is unreachable or the configured Ising
             spec is not registered on-chain.
@@ -177,6 +189,7 @@ class SolverQuip(Solver):
         block_wait: int = DEFAULT_BLOCK_WAIT,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         timeout: float = DEFAULT_TIMEOUT,
+        inclusion_window_blocks: int = DEFAULT_INCLUSION_WINDOW_BLOCKS,
         faucet: str | None = None,
         autoconfirm: bool | Callable[[JobQuote], bool] | None = None,
         autofund: bool | Callable[[JobQuote], bool] | None = None,
@@ -204,6 +217,7 @@ class SolverQuip(Solver):
             access = AccessOpen()
         # All before any network I/O.
         check_client_defaults(delivery)
+        self._inclusion_window_blocks = check_inclusion_window(inclusion_window_blocks)
         self._access = coerce_access(access)
         self._resolution = coerce_resolution(resolution)
 
@@ -627,16 +641,38 @@ class SolverQuip(Solver):
         return call_params
 
     def _sign(self, call_params: dict, nonce: int | None = None) -> _SignedCall:
-        """Sign ``call_params`` as a ``propose_job`` extrinsic with ``nonce``, else the current one.
+        """Sign ``call_params`` as a mortal ``propose_job`` extrinsic with ``nonce``, else the current one.
+
+        The era starts at the finalized head, so its checkpoint can never be
+        retracted, and lasts the client's ``inclusion_window_blocks``.
 
         Raises:
             QuipSubmissionError: if assembly or signing fails.
-            QuipConnectionError: if the nonce cannot be read.
+            QuipConnectionError: if the nonce or the finalized head cannot be read.
         """
         if nonce is None:
             nonce = self._account_nonce()
-        wire, ext_hash = self._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, call_params, nonce=nonce)
-        return _SignedCall(wire=wire, ext_hash=ext_hash, nonce=nonce)
+        number, head = chain.finalized_head(self._iface)
+        era = self._quip_signing.MortalEra(self._inclusion_window_blocks, number, head)
+        wire, ext_hash = self._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, call_params, nonce=nonce, era=era)
+        return _SignedCall(wire=wire, ext_hash=ext_hash, nonce=nonce, checkpoint=number, window_end=era.last_block)
+
+    def _window_lapsing(self, signed: _SignedCall) -> bool:
+        """Whether less than half of ``signed``'s inclusion window is left after the best block.
+
+        A quote can sit for a while before its submit; bytes that might
+        expire before they land are signed afresh instead.
+
+        Raises:
+            QuipConnectionError: if the best block cannot be read.
+        """
+        try:
+            best = self._current_block()
+        except QuipMetadataError:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
+            raise QuipConnectionError(f"could not read the best block: {exc}") from exc
+        return signed.window_end - best < self._inclusion_window_blocks // 2
 
     def _propose(self, signed: _SignedCall, call_params: dict, reward: int) -> _Sent:
         """Send ``signed`` if its nonce is still current, else re-sign once, and report the outcome.
@@ -644,7 +680,8 @@ class SolverQuip(Solver):
         The nonce is read just before sending. If it moved since ``signed``
         was signed, another transaction from this account used it, so the
         call is signed once more with the new nonce and checked again; if it
-        moves a second time nothing is sent. This narrows the race to the gap
+        moves a second time nothing is sent. Bytes whose inclusion window is
+        more than half spent are signed afresh too. This narrows the race to the gap
         between the last read and the send, but cannot close it: a node
         rejects a transaction that reuses a nonce before charging a fee, and
         that surfaces as a :class:`QuipSubmissionError` from the send.
@@ -657,8 +694,12 @@ class SolverQuip(Solver):
             QuipConnectionError: if the nonce cannot be read.
         """
         current = self._account_nonce()
-        if current != signed.nonce:
-            logger.info("account nonce moved from %d to %d since signing; signing again", signed.nonce, current)
+        moved = current != signed.nonce
+        if moved or self._window_lapsing(signed):
+            if moved:
+                logger.info("account nonce moved from %d to %d since signing; signing again", signed.nonce, current)
+            else:
+                logger.info("the quoted proposal's window ends at block %d; signing again", signed.window_end)
             signed = self._sign(call_params, nonce=current)
             if self._account_nonce() != signed.nonce:
                 raise QuipSubmissionError(
@@ -753,11 +794,11 @@ class SolverQuip(Solver):
         return chain.send_extrinsic(self._iface, self._quip_signing, call_module, call_function, wire, ext_hash)
 
     def _build_extrinsic(
-        self, call_module: str, call_function: str, call_params: dict, nonce: int | None = None
+        self, call_module: str, call_function: str, call_params: dict, nonce: int | None = None, era: Any = None
     ) -> tuple[bytes, str]:
         """See :func:`xqsa.quip.chain.build_extrinsic`."""
         return chain.build_extrinsic(
-            self._iface, self._quip_signing, self._signer, call_module, call_function, call_params, nonce=nonce
+            self._iface, self._quip_signing, self._signer, call_module, call_function, call_params, nonce=nonce, era=era
         )
 
     def _submit_built(
@@ -996,6 +1037,7 @@ class SolverQuip(Solver):
             num_spins=job.topology.num_nodes,
             num_couplings=job.topology.num_edges,
             placement=options.topology,
+            inclusion_window_blocks=self._inclusion_window_blocks,
         )
 
     def create_order(self, model: XQMX, **options: Any) -> JobOrder:

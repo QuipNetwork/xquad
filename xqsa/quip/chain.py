@@ -428,6 +428,24 @@ def account_nonce(iface: Any, account_id: Any) -> int:
         raise QuipConnectionError(f"could not read the account nonce of {address}: {exc}") from exc
 
 
+def finalized_head(iface: Any) -> tuple[int, str]:
+    """Return the finalized head block as ``(number, hash)``.
+
+    Raises:
+        QuipConnectionError: if the head cannot be read.
+    """
+    try:
+        raw = iface.get_chain_finalised_head()
+        number = block_number(iface, raw) if raw else None
+    except QuipMetadataError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
+        raise QuipConnectionError(f"could not read the finalized head: {exc}") from exc
+    if number is None:
+        raise QuipConnectionError("the node returned no finalized head")
+    return number, _as_hex(raw)
+
+
 def block_number(iface: Any, block_hash: str) -> int:
     """Return the height of the block ``block_hash``.
 
@@ -445,17 +463,21 @@ def build_extrinsic(
     call_function: str,
     call_params: dict,
     nonce: int | None = None,
+    era: Any = None,
 ) -> tuple[bytes, str]:
     """Sign an extrinsic via :func:`xqsa.quip.signing.build_signed_extrinsic`: ``(wire, hash)``.
 
     ``nonce`` signs with that account nonce; ``None`` lets the signing layer
-    read the current one.
+    read the current one. ``era``, a :class:`~xqsa.quip.signing.MortalEra`,
+    signs it mortal; ``None`` signs it immortal.
 
     Raises:
         QuipSubmissionError: if assembly or signing fails.
     """
     try:
-        return quip_signing.build_signed_extrinsic(iface, signer, call_module, call_function, call_params, nonce=nonce)
+        return quip_signing.build_signed_extrinsic(
+            iface, signer, call_module, call_function, call_params, nonce=nonce, era=era
+        )
     except quip_signing.QuipSigningError as exc:
         raise QuipSubmissionError(f"{call_module}.{call_function} could not be submitted: {exc}") from exc
 

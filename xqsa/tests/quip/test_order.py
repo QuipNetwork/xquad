@@ -863,7 +863,7 @@ class TestJobOrderLifecycle:
         order = solver.create_order(_model())
         assert isinstance(order, JobOrder)
         assert order.order_id() is None
-        assert order.status() == {"state": "draft", "options": order.options()}
+        assert order.status() == {"state": "draft", "options": order.options(), "inclusion_window_blocks": 64}
 
     def test_order_inherits_client_defaults(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch, reward=2 * UNIT, deadline_blocks=200, block_wait=20)
@@ -1072,6 +1072,34 @@ class TestJobOrderQuoteAndSubmit:
         # Both quoted at nonce 0; the second re-signs at 1 once the first is sent.
         assert captured["nonces"] == [0, 0, 1]
         assert captured["sent"] == [captured["wires"][0], captured["wires"][2]]
+
+
+class TestJobOrderInclusionWindow:
+    def test_quote_shows_the_effective_window(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch, inclusion_window_blocks=100)
+        quote = solver.create_order(_model()).quote()
+        assert quote.inclusion_window_blocks == 128
+        assert "│ Window      included within 128 blocks " in str(quote)
+
+    def test_a_fresh_quote_is_sent_as_signed(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        order.quote()
+        solver._iface.head += 31  # 32 of 64 blocks left: not yet lapsing.
+        order.submit()
+        assert captured["builds"] == 1
+
+    def test_a_lapsing_quote_is_signed_again(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        order.quote()
+        quoted_at = solver._iface.head
+        solver._iface.head += 32  # 31 of 64 blocks left after the best block.
+        order.submit()
+        assert captured["builds"] == 2
+        assert [era.checkpoint for era in captured["eras"]] == [quoted_at, quoted_at + 32]
+        assert captured["sent"] == [captured["wires"][1]]
+        assert captured["nonces"] == [0, 0]
 
 
 class TestJobOrderNonceCheck:

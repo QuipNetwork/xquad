@@ -326,6 +326,7 @@ def _self_solve(solver: SolverQuip, model: XQMX, vectors: list[list[int]], **opt
         solver._submit_extrinsic(pallet, "register_solver", {"solver_type": "Cpu"})
     propose = solver.create_order(model, **options)._call_params()
     solutions = quip_chain.wrap_bounded([quip_chain.wrap_bounded(list(vector)) for vector in vectors])
+    refusals: list[str] = []
     for _attempt in range(3):
         order_id = int(solver._iface.query(pallet, "NextOrderId").value)
         calls = [
@@ -338,10 +339,11 @@ def _self_solve(solver: SolverQuip, model: XQMX, vectors: list[list[int]], **opt
         ]
         try:
             solver._submit_extrinsic("Utility", "batch_all", {"calls": calls})
-        except QuipSubmissionError:
+        except QuipSubmissionError as exc:
+            refusals.append(str(exc))
             continue
         return order_id
-    pytest.fail("the self-solve batch was refused three times")
+    pytest.fail("the self-solve batch was refused three times:\n" + "\n".join(refusals))
 
 
 def _answer(solver: SolverQuip, order_id: int, vectors: list[list[int]]) -> None:
@@ -627,18 +629,46 @@ class TestJobOrder:
         assert quote.reward_planck == order.reward
         assert quote.account is not None and not quote.account.startswith("0x")  # SS58, not hex.
         assert {len(line) for line in str(quote).splitlines()} == {72}
+        # The mortal proposal, checked here rather than in a test of its own:
+        # each submit reserves a reward the session's one faucet drip must cover.
+        signed = order._signed
+        assert quote.inclusion_window_blocks == 64
+        assert signed.window_end - signed.checkpoint == 63
 
         order.submit()
         assert order.status()["state"] in ("submitted", "finalized")
         order_id = order.order_id()
         assert isinstance(order_id, int)
-        assert order._included_block is not None
+        assert signed.checkpoint < order._included_block <= signed.window_end  # landed inside its window.
 
         stored = solver._fetch_order(order_id)
         assert int(stored["timing"]["deadline_blocks"]) == 120
         assert int(stored["timing"]["block_wait"]) == 5
         with pytest.raises(QuipSubmissionError, match="works only on a draft"):
             order.set(deadline_blocks=200)
+
+
+class TestMortalEra:
+    """``propose_job`` is signed mortal from the finalized head; the runtime must accept it."""
+
+    def test_mortal_propose_job_validates(self, make_solver) -> None:
+        # Read-only: the pool's own validity check, at the best block as the
+        # pool runs it. Not at the checkpoint: the finalized head can lag the
+        # faucet drip and read as Invalid::Payment (0x010001). Ok is a leading
+        # 0x00 in the SCALE Result.
+        solver = make_solver()
+        order = solver.create_order(_asymmetric_spin_model())
+        order.quote()
+        signed = order._signed
+        assert signed is not None
+        assert signed.window_end == signed.checkpoint + solver._inclusion_window_blocks - 1
+        at = solver._iface.get_chain_head()
+        source_external = b"\x02"
+        payload = source_external + signed.wire + bytes.fromhex(at[2:])
+        result = solver._iface.rpc_request(
+            "state_call", ["TaggedTransactionQueue_validate_transaction", "0x" + payload.hex(), at]
+        )["result"]
+        assert result.startswith("0x00"), f"the runtime refused the mortal era: {result}"
 
 
 class TestReceipt:

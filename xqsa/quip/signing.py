@@ -240,6 +240,42 @@ def load_or_generate_keystore(path: Path | str) -> Keystore:
 
 
 @dataclass(frozen=True)
+class MortalEra:
+    """A mortal transaction era: valid from block ``checkpoint`` for ``period`` blocks.
+
+    ``period`` is a power of two, at least 4; ``checkpoint_hash`` is the hash
+    of block ``checkpoint``, which the signature commits to, so a checkpoint
+    the chain does not hold fails as ``BadProof``. The extrinsic can be
+    included in blocks ``checkpoint`` to :attr:`last_block`; after that it can
+    never land.
+
+    Raises:
+        QuipSigningError: if ``period`` is not a power of two from 4 to 65536.
+    """
+
+    period: int
+    checkpoint: int
+    checkpoint_hash: str
+
+    def __post_init__(self) -> None:
+        if not 4 <= self.period <= 1 << 16 or self.period & (self.period - 1):
+            raise QuipSigningError(f"era period must be a power of two from 4 to 65536, got {self.period}")
+
+    @property
+    def last_block(self) -> int:
+        """The last block that can include the extrinsic."""
+        return self.checkpoint + self.period - 1
+
+    def encode(self) -> bytes:
+        """The SCALE ``Era::Mortal`` bytes: period and phase packed into a little-endian ``u16``."""
+        quantize = max(self.period >> 12, 1)
+        phase = self.checkpoint % self.period
+        trailing_zeros = (self.period & -self.period).bit_length() - 1
+        encoded = min(15, max(1, trailing_zeros - 1)) | ((phase // quantize) << 4)
+        return encoded.to_bytes(2, "little")
+
+
+@dataclass(frozen=True)
 class ExtrinsicReceipt:
     """Outcome of submitting a hybrid-signed extrinsic.
 
@@ -272,10 +308,12 @@ def build_signed_extrinsic(
     call_function: str,
     call_params: dict,
     nonce: int | None = None,
+    era: MortalEra | None = None,
 ) -> tuple[bytes, str]:
     """Assemble a hybrid-signed v4 extrinsic, returning ``(wire_bytes, ext_hash)``.
 
     ``nonce`` signs with that account nonce; ``None`` reads the current one.
+    ``era`` signs it mortal; ``None`` signs it immortal.
 
     ``iface`` is a connected ``substrate-interface`` ``SubstrateInterface`` used
     only for ``compose_call`` and read-only chain state (nonce, genesis hash,
@@ -322,6 +360,7 @@ def build_signed_extrinsic(
         spec_version=spec_version,
         tx_version=tx_version,
         genesis_bytes=genesis_bytes,
+        era=era,
     )
 
     payload = call_bytes + extra + additional
@@ -592,8 +631,12 @@ def _extension_fields(
     tx_version: int,
     genesis_bytes: bytes,
     tip: int = 0,
+    era: MortalEra | None = None,
 ) -> dict[str, tuple[bytes, bytes]]:
     """Return each signed extension's ``(extra, additional)`` contribution.
+
+    ``CheckMortality`` is ``Era::Immortal`` against the genesis hash, or with
+    ``era`` the mortal era against its checkpoint's hash.
 
     One entry per extension, keyed by the identifier the runtime metadata uses,
     in :data:`SIGNED_EXTENSIONS` order. Most extensions contribute nothing to
@@ -612,7 +655,11 @@ def _extension_fields(
         "CheckSpecVersion": (b"", spec_version.to_bytes(4, "little")),
         "CheckTxVersion": (b"", tx_version.to_bytes(4, "little")),
         "CheckGenesis": (b"", genesis_bytes),
-        "CheckMortality": (b"\x00", genesis_bytes),  # Era::Immortal -> genesis hash
+        "CheckMortality": (
+            (b"\x00", genesis_bytes)  # Era::Immortal -> genesis hash
+            if era is None
+            else (era.encode(), bytes.fromhex(_strip_0x(era.checkpoint_hash)))
+        ),
         "CheckNonce": (encode_compact_u32(nonce), b""),
         "CheckWeight": (b"", b""),
         "ChargeTransactionPayment": (encode_compact_u128(tip), b""),
@@ -629,6 +676,7 @@ def _signed_extensions(
     tx_version: int,
     genesis_bytes: bytes,
     tip: int = 0,
+    era: MortalEra | None = None,
 ) -> tuple[bytes, bytes]:
     """Return the ``(extra, additional)`` signed-extension blobs in metadata order.
 
@@ -642,6 +690,7 @@ def _signed_extensions(
         tx_version=tx_version,
         genesis_bytes=genesis_bytes,
         tip=tip,
+        era=era,
     )
     return (
         b"".join(fields[name][0] for name in SIGNED_EXTENSIONS),
@@ -848,6 +897,7 @@ def _warn_if_world_readable(path: Path) -> None:
 __all__ = [
     "ExtrinsicReceipt",
     "Keystore",
+    "MortalEra",
     "QuipSigningError",
     "build_signed_extrinsic",
     "encode_compact_u128",
