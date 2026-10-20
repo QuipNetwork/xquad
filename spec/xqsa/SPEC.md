@@ -59,6 +59,9 @@ The base package ships `SolverCPU`. `SolverGPU` (CUDA or Metal) and `SolverDWave
 | `inprocess/cuda.py` | `InProcessCuda`, custom CUDA kernels through CuPy |
 | `inprocess/metal.py` | `InProcessMetal`, custom Metal kernels through `pyobjc-framework-Metal` |
 | `inprocess/dwave.py` | `InProcessDWave` wrapping D-Wave Leap QPU access through `dwave-system` |
+| `binary.py` | `BinaryImplementation`, which runs a solver-core binary through `--solve` |
+| `ising.py` | Exact conversion of BINARY and SPIN models to Ising in milli units, and of spins back to samples |
+| `errors.py` | The errors `BinaryImplementation` raises: `SolverError` and its subclasses |
 | `quip/` | `SolverQuip`, the Quip Network mempool solver, and its order, receipt and codec types |
 
 ## Thread Safety

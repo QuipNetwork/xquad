@@ -10,7 +10,7 @@ Public solver classes are named for where the model is solved: `SolverCPU`, `Sol
 | `engine` | `SolverGPU` | The GPU runtime: `"cuda"` or `"metal"`. Required; there is no auto-detection. |
 | `mode` | `SolverDWave` | How D-Wave hardware is used: `"qpu"`. |
 
-Selectors are keyword-only constructor arguments. Each class passes every other keyword through to the implementation it composes (see [INTERFACE.md](INTERFACE.md)). Implementations are named for how they run: `InProcessCPU`, `InProcessCuda`, `InProcessMetal` and `InProcessDWave` run in the Python process. They are not exported from `xqsa`.
+Selectors are keyword-only constructor arguments. Each class passes every other keyword through to the implementation it composes (see [INTERFACE.md](INTERFACE.md)). Implementations are named for how they run: `InProcessCPU`, `InProcessCuda`, `InProcessMetal` and `InProcessDWave` run in the Python process. `BinaryImplementation` (`binary.py`) runs a solver-core binary; no public solver uses it until the CPU family moves onto it. None of them is exported from `xqsa`.
 
 ## Algorithm Families
 
