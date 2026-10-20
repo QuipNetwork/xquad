@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import math
+import sys
 import time
 import warnings
 from collections.abc import Mapping
@@ -730,6 +731,12 @@ class JobOrder:
         draft. If it cannot be settled by the window's end, the order is left
         ``sending``.
 
+        Anything else that stops it once the bytes may have reached the node,
+        such as a ``KeyboardInterrupt``, also leaves the order ``sending``:
+        the hash, nonce and window end are printed to stderr and the
+        exception is re-raised unchanged. Before that point the order stays
+        a draft.
+
         On a ``sending`` order, it resumes instead: it settles the bytes
         already sent, up to their window's end, and signs nothing. Landed,
         the order is ``submitted`` (or ``failed``, raised as below). Proven
@@ -764,6 +771,20 @@ class JobOrder:
             sent = self._client._propose_job(signed, self.reward)
         except QuipSubmitIncompleteError as exc:
             raise self._sending(signed, exc) from exc.__cause__
+        except QuipSubmissionError:
+            raise  # refused outright, or proven never on chain: still a draft.
+        except BaseException:
+            # A Ctrl-C or any other escape once the bytes may have reached the
+            # node: as a draft, a second submit() would sign the next nonce
+            # and could place a second order.
+            self._state, self._signed, self._ext_hash = "sending", signed, signed.ext_hash
+            print(
+                f"[quip] submit() stopped after propose_job {signed.ext_hash} (nonce {signed.nonce}) may have reached "
+                f"the node; its window ends at block {signed.window_end}. The order is sending: calling submit() "
+                "again resumes it; it never places a second order.",
+                file=sys.stderr,
+            )
+            raise
         self._record(sent)
         return self
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 import warnings
 from dataclasses import replace
 from types import SimpleNamespace
@@ -1394,6 +1395,50 @@ def chain_module_metadata():
     from xqsa.quip import metadata
 
     return metadata
+
+
+class TestJobOrderInterrupted:
+    """Ctrl-C during submit(): a draft before the bytes can reach the node, ``sending`` after."""
+
+    def test_interrupt_before_the_send_stays_a_draft(self, monkeypatch, capsys) -> None:
+        solver, captured = _ready(monkeypatch, autoconfirm=lambda quote: _raise(KeyboardInterrupt()))
+        order = solver.create_order(_model())
+        with pytest.raises(KeyboardInterrupt):
+            order.submit()
+        assert order._state == "draft"
+        assert order._signed is None
+        assert "sent" not in captured
+        assert capsys.readouterr().err.count("[quip] submit() stopped") == 0
+
+    @pytest.mark.parametrize("where", ["send", "settle"])
+    def test_interrupt_after_the_send_is_sending(self, monkeypatch, capsys, where) -> None:
+        solver, captured = _ready(monkeypatch)
+        interrupt = KeyboardInterrupt()
+        if where == "send":
+            _send_raises(monkeypatch, solver, interrupt, captured, lands_on=None)
+        else:
+            _stall_finality(monkeypatch, solver, captured)
+            monkeypatch.setattr(time, "sleep", lambda seconds: _raise(interrupt))
+        order = solver.create_order(_model())
+        with pytest.raises(KeyboardInterrupt) as info:
+            order.submit()
+        assert info.value is interrupt  # re-raised unchanged.
+        assert order._state == "sending"
+        assert order._signed.wire == captured["wires"][0]
+        err = capsys.readouterr().err
+        assert "propose_job 0xext (nonce 0)" in err
+        assert "window ends at block 263" in err
+        assert "calling submit() again resumes it; it never places a second order" in err
+
+    def test_resume_after_an_interrupt_signs_nothing(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        _send_raises(monkeypatch, solver, KeyboardInterrupt(), captured)  # it landed despite the interrupt.
+        order = solver.create_order(_model())
+        with pytest.raises(KeyboardInterrupt):
+            order.submit()
+        assert order.submit().order_id() == 1
+        assert captured["builds"] == 1
+        assert len(captured["sent"]) == 1
 
 
 def _sending(monkeypatch):
