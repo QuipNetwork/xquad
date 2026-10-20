@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .dwave_cpu import InProcessCPU
+from .inprocess.cpu import InProcessCPU
 from .solver import Implementation, Solver
 
 
@@ -88,9 +88,9 @@ class SolverGPU(Solver):
     def __init__(self, *, engine: str, algorithm: str = "sa", **params: Any) -> None:
         impl: type[Implementation]
         if engine == "cuda":
-            from .cuda_gpu import InProcessCuda as impl
+            from .inprocess.cuda import InProcessCuda as impl
         elif engine == "metal":
-            from .metal_gpu import InProcessMetal as impl
+            from .inprocess.metal import InProcessMetal as impl
         else:
             raise ValueError(f"Unsupported engine {engine!r}. Supported: ['cuda', 'metal']")
         super().__init__(impl(algorithm=algorithm, **params), engine=engine, algorithm=algorithm)
@@ -128,6 +128,6 @@ class SolverDWave(Solver):
     def __init__(self, *, mode: str = "qpu", **params: Any) -> None:
         if mode != "qpu":
             raise ValueError(f"Unsupported mode {mode!r}. Supported: ['qpu']; hybrid modes are not available yet.")
-        from .dwave_qpu import InProcessDWave
+        from .inprocess.dwave import InProcessDWave
 
         super().__init__(InProcessDWave(**params), mode=mode)

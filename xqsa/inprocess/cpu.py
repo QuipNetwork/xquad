@@ -30,7 +30,7 @@ from dwave.samplers import SimulatedAnnealingSampler
 
 from xqffi.vm import XqmxModel
 
-from .solver import Implementation, RunOutput, _check_algorithm, _check_anneal_params, model_to_bqm, sample_to_xqmx
+from ..solver import Implementation, RunOutput, _check_algorithm, _check_anneal_params, model_to_bqm, sample_to_xqmx
 
 _SUPPORTED_ALGORITHMS = frozenset({"sa"})
 
