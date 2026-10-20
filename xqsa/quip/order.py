@@ -106,6 +106,7 @@ _SUPPORTED_DELIVERY = "OnChainOnly"
 # ``BlockHashCount`` is 2400, and a mortal era is a power of two, so 2048 is
 # the longest; 64 blocks is about 6.4 minutes.
 DEFAULT_INCLUSION_WINDOW_BLOCKS = 64
+MIN_INCLUSION_WINDOW_BLOCKS = 64
 MAX_INCLUSION_WINDOW_BLOCKS = 2048
 
 
@@ -150,14 +151,14 @@ def check_inclusion_window(blocks: Any) -> int:
     Raises:
         TypeError: if ``blocks`` is not an int.
         QuipOrderOptionError: if ``blocks`` is below
-            :data:`DEFAULT_INCLUSION_WINDOW_BLOCKS` or above
+            :data:`MIN_INCLUSION_WINDOW_BLOCKS` or above
             :data:`MAX_INCLUSION_WINDOW_BLOCKS`.
     """
     blocks = _require_int(blocks, "inclusion_window_blocks")
-    if not DEFAULT_INCLUSION_WINDOW_BLOCKS <= blocks <= MAX_INCLUSION_WINDOW_BLOCKS:
+    if not MIN_INCLUSION_WINDOW_BLOCKS <= blocks <= MAX_INCLUSION_WINDOW_BLOCKS:
         raise QuipOrderOptionError(
             "inclusion_window_blocks",
-            f"inclusion_window_blocks={blocks} must be from {DEFAULT_INCLUSION_WINDOW_BLOCKS} to "
+            f"inclusion_window_blocks={blocks} must be from {MIN_INCLUSION_WINDOW_BLOCKS} to "
             f"{MAX_INCLUSION_WINDOW_BLOCKS}",
         )
     return 1 << (blocks - 1).bit_length()

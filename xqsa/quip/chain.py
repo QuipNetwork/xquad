@@ -557,39 +557,6 @@ def _unconfirmed(
     )
 
 
-def unconfirmed_error(ext_hash: str, block_hash: str | None, why: str) -> QuipUnconfirmedError:
-    """Build the :class:`QuipUnconfirmedError` for a sent ``propose_job`` whose outcome is unknown."""
-    return _unconfirmed(MEMPOOL_PALLET, PROPOSE_JOB_CALL, ext_hash, block_hash, why)
-
-
-def read_proposed_order_id(iface: Any, block_hash: str | None, ext_hash: str) -> int:
-    """Extract the order id from the ``JobProposed`` event the extrinsic ``ext_hash`` emitted at ``block_hash``.
-
-    The event is matched to the extrinsic's index in the block, the way
-    :func:`xqsa.quip.signing._fetch_dispatch_error` matches its dispatch
-    result: another account's proposal in the same block emits a
-    ``JobProposed`` of its own.
-
-    Raises:
-        QuipSubmissionError: if the block hash is missing, the block does not
-            hold ``ext_hash``, or no ``JobProposed`` event with a readable
-            ``order_id`` is in its phase.
-    """
-    if not block_hash:
-        raise QuipSubmissionError("propose_job was included but returned no block hash; cannot read the order id")
-    block = iface.get_block(block_hash=block_hash, include_author=False, ignore_decoding_errors=True) or {}
-    index = _extrinsic_index(block, ext_hash)
-    if index is None:
-        raise QuipSubmissionError(f"block {block_hash} does not hold extrinsic {ext_hash}; cannot read the order id")
-    order_id = _proposed_order_id(list(_events(iface, block_hash)), index)
-    if order_id is None:
-        raise QuipSubmissionError(
-            f"propose_job was included in block {block_hash} but no {JOB_PROPOSED_EVENT} event with an order id "
-            f"was found in its phase {index}"
-        )
-    return order_id
-
-
 def _proposed_order_id(events: list[tuple[int | None, object, object, object]], phase: int) -> int | None:
     """Return the ``order_id`` of the ``JobProposed`` event in ``phase``, or ``None`` if there is none."""
     for event_phase, module_id, event_id, attrs in events:
@@ -673,7 +640,6 @@ def settle_proposal(
     spent_in = block_hash(iface, number)
     try:
         block = iface.get_block(block_hash=spent_in, include_author=False, ignore_decoding_errors=True)
-        events = list(_events(iface, spent_in))
     except QuipMetadataError:
         raise
     except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
@@ -690,6 +656,12 @@ def settle_proposal(
                 f"whether it holds propose_job {ext_hash} is unknown"
             )
         return "never"
+    try:
+        events = list(_events(iface, spent_in))
+    except QuipMetadataError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
+        raise QuipConnectionError(f"could not read the events of block {spent_in}: {exc}") from exc
     for phase, module_id, event_id, attrs in events:
         if (phase, module_id) != (index, "System"):
             continue
