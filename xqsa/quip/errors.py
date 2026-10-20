@@ -124,13 +124,15 @@ class QuipReclaimRefusedError(QuipSubmissionError):
 
 
 class QuipUnconfirmedError(QuipSubmissionError):
-    """Raised when a ``propose_job`` was sent but its outcome or order id is unknown.
+    """Deprecated: no longer produced since v0.4.5; removed in v0.5.0.
 
-    The order may be on chain: resubmitting it could place a second order,
-    reserving a second reward and paying a second fee. The :class:`~xqsa.quip.JobOrder`
-    moves to ``unconfirmed`` and refuses further submits. Carries
-    ``extrinsic_hash`` and, when the extrinsic was seen in a block,
-    ``block_hash`` (else ``None``).
+    It was raised when a ``propose_job`` was sent but its outcome or order id
+    was unknown, leaving the :class:`~xqsa.quip.JobOrder` ``unconfirmed``.
+    :meth:`~xqsa.quip.JobOrder.submit` now settles every send from
+    finalized state, and raises :class:`QuipSubmitIncompleteError` when it
+    cannot by the end of the proposal's window. Importing it from
+    :mod:`xqsa.quip` warns. Carries ``extrinsic_hash`` and ``block_hash``
+    (``None`` when unknown).
     """
 
     def __init__(self, extrinsic_hash: str, block_hash: str | None, message: str) -> None:

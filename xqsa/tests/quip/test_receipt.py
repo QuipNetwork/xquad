@@ -33,7 +33,6 @@ from xqsa.quip import (
     QuipReclaimRefusedError,
     QuipSubmissionError,
     QuipTimeoutError,
-    QuipUnconfirmedError,
     chain,
 )
 from xqsa.quip.access import AccessAllow, AccessOpen
@@ -50,6 +49,7 @@ from xqsa.quip.chain import (
     top_solvers,
 )
 from xqsa.quip.display import Floors, count, floors_text, terms_rows, variant_text
+from xqsa.quip.errors import QuipUnconfirmedError
 from xqsa.quip.receipt import JobOrderReceipt
 from xqsa.quip.resolution import ResolutionTopNEqual
 

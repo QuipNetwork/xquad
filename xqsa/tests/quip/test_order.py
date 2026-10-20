@@ -37,11 +37,11 @@ from xqsa.quip import (
     QuipOrderOptionError,
     QuipSubmissionError,
     QuipSubmitIncompleteError,
-    QuipUnconfirmedError,
     chain,
 )
 from xqsa.quip.access import AccessAllow, AccessOpen
 from xqsa.quip.chain import ChainLimits, unregistered_solvers
+from xqsa.quip.errors import QuipUnconfirmedError
 from xqsa.quip.order import JobOrder, _OrderOptions, check_client_defaults, merge_options
 from xqsa.quip.resolution import ResolutionSingleBest, ResolutionTopNEqual, ResolutionTopNWeighted
 from xqsa.solver import SolverResult
@@ -1558,6 +1558,64 @@ class TestJobOrderSending:
         assert restored.order is None
         assert (restored.extrinsic_hash, restored.nonce, restored.window_end) == ("0xext", 0, 263)
         assert str(restored) == str(info.value)
+
+
+class TestUnconfirmedDeprecation:
+    """``unconfirmed`` and ``QuipUnconfirmedError``: importable with a warning, never produced."""
+
+    def test_import_warns_at_the_caller(self) -> None:
+        import xqsa.quip
+
+        with pytest.warns(DeprecationWarning, match="no longer produced since v0.4.5") as record:
+            cls = xqsa.quip.QuipUnconfirmedError
+        assert cls is QuipUnconfirmedError
+        assert record[0].filename == __file__
+        assert "QuipUnconfirmedError" not in xqsa.quip.__all__
+
+    def test_umbrella_and_flat_names_warn_once(self) -> None:
+        import xqsa
+        from xquad.sa import quip
+
+        with pytest.warns(DeprecationWarning, match="no longer produced") as record:
+            assert quip.QuipUnconfirmedError is QuipUnconfirmedError
+        assert record[0].filename == __file__
+        with pytest.warns(DeprecationWarning) as record:
+            assert xqsa.QuipUnconfirmedError is QuipUnconfirmedError
+        assert len(record) == 1
+
+    def test_internal_import_does_not_warn(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            from xqsa.quip.errors import QuipUnconfirmedError as internal
+        assert internal is QuipUnconfirmedError
+
+    def test_unknown_name_still_raises(self) -> None:
+        import xqsa.quip
+
+        with pytest.raises(AttributeError, match="has no attribute 'QuipNoSuchError'"):
+            xqsa.quip.QuipNoSuchError  # noqa: B018
+
+    def test_a_legacy_unconfirmed_order_loads_and_keeps_refusing(self, monkeypatch) -> None:
+        import copy
+
+        solver, captured = _ready(monkeypatch)
+        legacy = solver.create_order(_model())
+        # As 0.4.3 and 0.4.4 left it: no _signed bytes, its outcome unknown.
+        legacy._state, legacy._ext_hash = "unconfirmed", "0xext"
+        with pytest.warns(DeprecationWarning, match="look up extrinsic 0xext"):
+            order = copy.copy(legacy)  # through __getstate__ and __setstate__, as unpickling does.
+        assert order.status() == {
+            "state": "unconfirmed",
+            "extrinsic_hash": "0xext",
+            "block_hash": None,
+            "included_block": None,
+        }
+        for call in (order.submit, order.quote, lambda: order.set(reward=2 * UNIT)):
+            with pytest.raises(QuipSubmissionError, match="is unconfirmed"):
+                call()
+        with pytest.raises(QuipSubmissionError, match="is unconfirmed, so its order id is unknown"):
+            order.receipt()
+        assert captured["builds"] == 0 and "sent" not in captured
 
 
 class TestJobOrderSignedBytesStayPrivate:

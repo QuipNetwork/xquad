@@ -68,6 +68,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("xqsa.quip")
 
+# "unconfirmed" is deprecated: no longer produced since v0.4.5, it is kept so
+# that an order pickled by 0.4.3 or 0.4.4 in that state still loads and refuses
+# to be sent again; removed in v0.5.0.
 OrderState = Literal["draft", "sending", "submitted", "unconfirmed", "failed", "finalized"]
 
 # The options an order accepts; ``delivery`` is a client default only.
@@ -543,8 +546,9 @@ class JobOrder:
     proposal is not on the finalized chain and never was. A ``sending``
     order keeps its signed bytes and nonce, also through pickling: every
     other method settles it first, and :meth:`submit` resumes it, so it is
-    never signed again while those bytes can still land. ``unconfirmed``, an
-    order whose outcome was unknown, is no longer produced.
+    never signed again while those bytes can still land. ``unconfirmed`` is
+    deprecated and no longer produced since v0.4.5: an order pickled in it
+    by 0.4.3 or 0.4.4 loads with a warning and is never sent again.
 
     The order caches its signed extrinsic, never a quote. :meth:`quote` signs
     once and re-prices the same bytes on every call, reading the fee, balance
@@ -1013,6 +1017,17 @@ class JobOrder:
         if self._state != "sending":
             state["_signed"] = None
         return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """Restore a pickled order; one pickled ``unconfirmed`` by 0.4.3 or 0.4.4 warns and keeps refusing."""
+        self.__dict__.update(state)
+        if self._state == "unconfirmed":
+            warnings.warn(
+                f"this order is unconfirmed, a state deprecated and no longer produced since v0.4.5 (removed in "
+                f"v0.5.0); it may be on chain, so it is never sent again: look up extrinsic {self._ext_hash}",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
     def _require_draft(self, action: str) -> None:
         if self._state != "draft":

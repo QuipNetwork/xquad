@@ -72,7 +72,10 @@ def flat_quip_getattr(flat: str, home: str) -> Callable[[str], object]:
             DeprecationWarning,
             stacklevel=2,
         )
-        return getattr(importlib.import_module(home), name)
+        # One warning per access: a name ``home`` deprecates too would warn again.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            return getattr(importlib.import_module(home), name)
 
     return __getattr__
 
