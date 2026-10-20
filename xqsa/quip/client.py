@@ -886,13 +886,19 @@ class SolverQuip(Solver):
     @staticmethod
     def _unsettled(signed: _SignedCall, cause: Exception) -> QuipSubmitIncompleteError:
         """The error for a sent ``propose_job`` that is not settled yet; :class:`JobOrder` attaches itself."""
+        if isinstance(cause, QuipMetadataError):
+            then = (
+                "this client cannot decode the runtime's blocks; upgrade xquad, then call submit() again. The order "
+                "keeps its signed bytes and nonce."
+            )
+        else:
+            then = "calling submit() again resumes it; it never places a second order."
         return QuipSubmitIncompleteError(
             signed.ext_hash,
             signed.nonce,
             signed.window_end,
             f"propose_job {signed.ext_hash} (nonce {signed.nonce}) was sent but is not settled ({cause}). Its window "
-            f"ends at block {signed.window_end}. The order is sending: calling submit() again resumes it; it never "
-            "places a second order.",
+            f"ends at block {signed.window_end}. The order is sending: {then}",
         )
 
     def _account_nonce(self) -> int:

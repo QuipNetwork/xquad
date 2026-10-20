@@ -149,7 +149,9 @@ class QuipSubmitIncompleteError(QuipSubmissionError):
     is the ``__cause__``. The proposal may still be on chain, or land before
     its window ends. The :class:`~xqsa.quip.JobOrder` is left ``sending``
     with its signed bytes and nonce: calling ``submit()`` on it again
-    resumes settling and never places a second order.
+    resumes settling and never places a second order. When the cause is a
+    :class:`QuipMetadataError`, this client cannot decode the runtime's
+    blocks: upgrade xquad, then call ``submit()`` again.
 
     Carries the ``order`` (``None`` after pickling, as the order holds a
     live connection), the ``extrinsic_hash``, the ``nonce`` it was signed

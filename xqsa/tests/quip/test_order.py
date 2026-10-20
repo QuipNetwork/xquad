@@ -1283,6 +1283,7 @@ class TestJobOrderSendOutcomes:
         with pytest.raises(QuipSubmitIncompleteError, match="no System.ExtrinsicSuccess or ExtrinsicFailed") as info:
             order.submit()
         assert isinstance(info.value.__cause__, QuipMetadataError)
+        assert "upgrade xquad, then call submit() again" in str(info.value)
         assert info.value.order is order
         assert order.status()["state"] == "sending"
 
@@ -1293,6 +1294,7 @@ class TestJobOrderSendOutcomes:
         with pytest.raises(QuipSubmitIncompleteError, match="no JobProposed") as info:
             order.submit()
         assert isinstance(info.value.__cause__, QuipMetadataError)
+        assert "upgrade xquad, then call submit() again" in str(info.value)
         assert order.order_id() is None
         assert order.status()["state"] == "sending"
 
@@ -1545,15 +1547,23 @@ class TestJobOrderSending:
         assert order.submit().order_id() == 1
         assert order._state == "submitted"
 
-    def test_copy_and_pickle_state_keep_the_sending_bytes(self, monkeypatch) -> None:
-        import copy
-
+    def test_pickle_state_keeps_the_sending_bytes(self, monkeypatch) -> None:
         _, order, captured = _sending(monkeypatch)
         state = order.__getstate__()
         assert state["_state"] == "sending"
         assert state["_signed"].wire == captured["wires"][0]
         assert state["_signed"].nonce == 0
-        assert copy.copy(order)._signed == order._signed
+        restored = type(order).__new__(type(order))
+        restored.__setstate__(state)  # as unpickling does; __copy__ and __deepcopy__ are not on that path.
+        assert restored._signed == order._signed
+
+    @pytest.mark.parametrize("copier", ["copy", "deepcopy"])
+    def test_copying_a_sending_order_is_refused(self, monkeypatch, copier) -> None:
+        import copy
+
+        _, order, _ = _sending(monkeypatch)
+        with pytest.raises(QuipSubmissionError, match="order is sending; settle it"):
+            getattr(copy, copier)(order)
 
     def test_error_pickles_without_its_order(self, monkeypatch) -> None:
         import pickle

@@ -30,6 +30,7 @@ fee to fail on chain.
 
 from __future__ import annotations
 
+import copy
 import logging
 import math
 import sys
@@ -1011,13 +1012,41 @@ class JobOrder:
     def __getstate__(self) -> dict[str, Any]:
         """Pickle and copy without the signed extrinsic, which a draft's copy signs afresh.
 
-        A ``sending`` order keeps it: those bytes, with their nonce, are the
-        only transaction that may use that nonce while they can still land.
+        A pickled ``sending`` order keeps it: those bytes, with their nonce,
+        are the only transaction that may use that nonce while they can still
+        land. Copies of a ``sending`` order are refused; see :meth:`__copy__`.
         """
         state = self.__dict__.copy()
         if self._state != "sending":
             state["_signed"] = None
         return state
+
+    def __copy__(self) -> Self:
+        """Copy as the default would, refusing a ``sending`` order: two live orders must not share one nonce.
+
+        Raises:
+            QuipSubmissionError: if the order is ``sending``.
+        """
+        self._refuse_copy_while_sending()
+        new = type(self).__new__(type(self))
+        new.__setstate__(self.__getstate__())
+        return new
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> Self:
+        """Deep-copy as the default would, refusing a ``sending`` order; see :meth:`__copy__`.
+
+        Raises:
+            QuipSubmissionError: if the order is ``sending``.
+        """
+        self._refuse_copy_while_sending()
+        new = type(self).__new__(type(self))
+        memo[id(self)] = new
+        new.__setstate__(copy.deepcopy(self.__getstate__(), memo))
+        return new
+
+    def _refuse_copy_while_sending(self) -> None:
+        if self._state == "sending":
+            raise QuipSubmissionError("order is sending; settle it with status() or submit() before copying")
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         """Restore a pickled order; one pickled ``unconfirmed`` by 0.4.3 or 0.4.4 warns and keeps refusing."""

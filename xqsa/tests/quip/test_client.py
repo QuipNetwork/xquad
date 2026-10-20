@@ -2335,6 +2335,7 @@ class TestSolverQuipSubmission:
             solver._propose_job(_signed_call(solver), UNIT)
         assert (info.value.extrinsic_hash, info.value.nonce, info.value.window_end) == ("0xext", 0, 63)
         assert isinstance(info.value.__cause__, QuipMetadataError)
+        assert "upgrade xquad, then call submit() again" in str(info.value)
 
 
 # ---------------------------------------------------------------------------
