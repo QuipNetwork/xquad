@@ -54,13 +54,12 @@ The base package ships `SolverCPU`. `SolverGPU` (CUDA or Metal) and `SolverDWave
 | Module | Purpose |
 |--------|---------|
 | `solver.py` | `Solver` base class and its `solve()` template, `Implementation`, `RunOutput`, `SolverResult`, model validation, BQM conversion helpers |
-| `solvers.py` | The public `SolverCPU`, `SolverGPU` and `SolverDWave` classes |
+| `solvers.py` | The public `SolverCPU`, `SolverGPU` and `SolverDWave` classes, and the registry: `SOLVERS`, `DEFAULT_SOLVER`, `build_solver` |
 | `inprocess/cpu.py` | `InProcessCPU` wrapping `dwave-samplers` |
 | `inprocess/cuda.py` | `InProcessCuda`, custom CUDA kernels through CuPy |
 | `inprocess/metal.py` | `InProcessMetal`, custom Metal kernels through `pyobjc-framework-Metal` |
 | `inprocess/dwave.py` | `InProcessDWave` wrapping D-Wave Leap QPU access through `dwave-system` |
 | `quip/` | `SolverQuip`, the Quip Network mempool solver, and its order, receipt and codec types |
-| `registry.py` | `SOLVERS`, `DEFAULT_SOLVER` and `build_solver` |
 
 ## Thread Safety
 

@@ -26,7 +26,7 @@ import pytest
 import xqsa
 import xqsa.quip
 from xqffi.vm import XqmxModel
-from xqsa import registry
+from xqsa import solvers
 
 
 class TestRegistry:
@@ -44,7 +44,7 @@ class TestRegistry:
         requires).
         """
         assert xqsa.SOLVERS["quip"] is xqsa.quip.SolverQuip
-        assert "quip" not in registry._SEEDED  # env-driven, not RNG-seeded
+        assert "quip" not in solvers._SEEDED  # env-driven, not RNG-seeded
 
         built: dict[str, Any] = {}
 
@@ -52,8 +52,8 @@ class TestRegistry:
             def __init__(self) -> None:
                 built["args"] = {}
 
-        monkeypatch.setitem(registry.SOLVERS, "quip", FakeQuip)
-        registry.build_solver("quip", seed=123)  # seed is ignored
+        monkeypatch.setitem(solvers.SOLVERS, "quip", FakeQuip)
+        solvers.build_solver("quip", seed=123)  # seed is ignored
         assert built["args"] == {}
 
     def test_default_solver_is_registered(self) -> None:
@@ -95,12 +95,12 @@ class TestBuildSolver:
             def __init__(self) -> None:
                 captured["unseeded"] = {}
 
-        monkeypatch.setitem(registry.SOLVERS, "fake-seeded", FakeSeeded)
-        monkeypatch.setitem(registry.SOLVERS, "fake-unseeded", FakeUnseeded)
-        monkeypatch.setattr(registry, "_SEEDED", frozenset({"fake-seeded"}))
+        monkeypatch.setitem(solvers.SOLVERS, "fake-seeded", FakeSeeded)
+        monkeypatch.setitem(solvers.SOLVERS, "fake-unseeded", FakeUnseeded)
+        monkeypatch.setattr(solvers, "_SEEDED", frozenset({"fake-seeded"}))
 
-        registry.build_solver("fake-seeded", seed=99)
-        registry.build_solver("fake-unseeded", seed=99)
+        solvers.build_solver("fake-seeded", seed=99)
+        solvers.build_solver("fake-unseeded", seed=99)
 
         assert captured["seeded"] == {"seed": 99}
         assert captured["unseeded"] == {}

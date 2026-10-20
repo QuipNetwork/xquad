@@ -43,7 +43,7 @@ _REASONS: dict[str, str] = {
     "metal": "no Metal device",
 }
 
-# xqsa registry keys (xqsa/registry.py), in the order example-smoke.py has
+# xqsa registry keys (xqsa/solvers.py), in the order example-smoke.py has
 # always printed them in.
 _SOLVER_NAMES: dict[str, str] = {
     "cuda": "cuda",
