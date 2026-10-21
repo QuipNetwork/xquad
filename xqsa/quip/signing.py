@@ -41,10 +41,12 @@ applies it before calling ``sign``.
 The extrinsic layout is adapted from ``quip.network/faucet`` and the
 ``quip-protocol`` miner's ``shared/substrate_client.py``; it carries the H4
 suite (sr25519 + FN-DSA-512) as published by ``quip-signer`` 0.3.x, and is
-validated by ``test_signing.py`` plus live submission. The
-signed-extension order in :data:`SIGNED_EXTENSIONS` is the one
-item only a live metadata check can confirm, so ``test_live.py`` asserts it
-against the chain's own metadata.
+validated by ``test_signing.py`` plus live submission. The signed-extension
+order is read from the node's runtime metadata at every signing, and
+:func:`check_runtime` holds the envelope and each extension's encoding to the
+chain's types, so a runtime this client cannot sign for fails as
+:class:`~xqsa.quip.errors.QuipMetadataError` rather than as a rejected
+signature.
 """
 
 from __future__ import annotations
@@ -68,7 +70,7 @@ from xqsa.quip.codec import (
     _phase_extrinsic_index,
     _strip_0x,
 )
-from xqsa.quip.errors import QuipSigningError
+from xqsa.quip.errors import QuipMetadataError, QuipSigningError
 
 if TYPE_CHECKING:
     from quip_signer import HybridSigner
@@ -81,17 +83,15 @@ MULTI_ADDRESS_ID = 0x00  # ``MultiAddress::Id`` discriminator (32-byte account i
 # encoded ``SignedPayload`` exceeds this many bytes (``using_encoded`` rule).
 SIGNED_PAYLOAD_HASH_THRESHOLD = 256
 
-# The runtime's signed extensions, in metadata order. Confirmed live against
-# aglais (``specVersion`` 117) and the outgoing testnet (116) on 2026-09-09.
-# ``EthSetOrigin`` (``pallet_revive::evm::tx_extension::SetOrigin``) is empty in
-# both the ``extra`` and ``additional`` halves, so it costs no wire bytes today,
-# but its position matters the moment a runtime gives it a payload.
-#
-# ``_extension_fields`` carries both halves per extension and
-# ``_signed_extensions`` concatenates each of them in this order, and
-# ``test_live.py::TestConnectivity::test_signed_extensions_match_chain``
-# asserts it against live metadata -- so the next insertion fails a test rather
-# than a submission.
+# The extrinsic envelope this client writes, as the runtime metadata names its
+# ``Address`` and ``Signature`` types; :func:`check_runtime` compares them.
+ADDRESS_TYPE_PATH = "sp_runtime::multiaddress::MultiAddress"
+SIGNATURE_TYPE_PATH = "quip_transaction_crypto::HybridTxSignature"
+
+# The signed extensions of the runtime this release first shipped against, in
+# its metadata order. Nothing here reads it: the order comes from the node's
+# runtime metadata, and ``_extension_fields`` is the table of how each
+# extension encodes.
 SIGNED_EXTENSIONS: tuple[str, ...] = (
     "AuthorizeCall",
     "CheckNonZeroSender",
@@ -282,6 +282,10 @@ class MortalEra:
         return encoded.to_bytes(2, "little")
 
 
+# The mortal era :func:`check_runtime` encodes as a sample.
+_SAMPLE_ERA = MortalEra(64, 0, "0x" + "00" * 32)
+
+
 @dataclass(frozen=True)
 class ExtrinsicReceipt:
     """Outcome of submitting a hybrid-signed extrinsic.
@@ -306,6 +310,52 @@ class ExtrinsicReceipt:
     def is_unverified(self) -> bool:
         """True when inclusion was reported but its dispatch result could not be read."""
         return self.error is not None and self.error.startswith(UNCLASSIFIED_PREFIX)
+
+
+def check_runtime(iface: Any) -> None:
+    """Check that this client can sign for the node's runtime, raising on the first difference.
+
+    Reads ``iface.metadata`` and ``iface.runtime_config``, so it checks the
+    runtime ``iface`` last loaded. The envelope must be extrinsic version 4
+    with a ``MultiAddress`` address whose ``Id`` variant is index 0 and a
+    ``HybridTxSignature`` signature. Every signed extension the metadata
+    lists must be one this client encodes, and each half it encodes must
+    decode exactly, every byte consumed, with the chain's type: sample values
+    are checked with an immortal and with a mortal era.
+
+    Raises:
+        QuipMetadataError: if the envelope or a signed extension differs from
+            what this client encodes. Upgrading xquad is the remedy; retrying
+            is not.
+    """
+    try:
+        v14 = iface.metadata.value[1]["V14"]
+        extrinsic = v14["extrinsic"]
+        types = {entry["id"]: entry["type"] for entry in v14["types"]["types"]}
+        params = {param["name"]: types.get(param["type"]) or {} for param in types[extrinsic["ty"]]["params"]}
+        address, signature = params.get("Address", {}), params.get("Signature", {})
+        variants = address.get("def", {}).get("variant", {}).get("variants", [])
+        envelope = {
+            "extrinsic version": (extrinsic["version"], EXTRINSIC_VERSION_SIGNED & 0x7F),
+            "Address type": ("::".join(address.get("path", [])), ADDRESS_TYPE_PATH),
+            "MultiAddress::Id index": (
+                next((v["index"] for v in variants if v["name"] == "Id"), None),
+                MULTI_ADDRESS_ID,
+            ),
+            "Signature type": ("::".join(signature.get("path", [])), SIGNATURE_TYPE_PATH),
+        }
+    except (AttributeError, KeyError, IndexError, TypeError) as exc:
+        raise QuipMetadataError(
+            f"cannot read the extrinsic envelope from the node's runtime metadata: {exc!r}"
+        ) from exc
+    for what, (found, expected) in envelope.items():
+        if found != expected:
+            raise QuipMetadataError(
+                f"the node's runtime has {what} {found!r} where this client encodes {expected!r}; "
+                "upgrade xquad to sign for this runtime"
+            )
+    for era in (None, _SAMPLE_ERA):
+        _signed_extensions(iface, nonce=0, spec_version=1, tx_version=1, genesis_bytes=bytes(32), era=era)
 
 
 def build_signed_extrinsic(
@@ -336,7 +386,13 @@ def build_signed_extrinsic(
     ``quip_signer.verify_envelope`` before returning, so a wrong payload or
     identity is caught locally rather than as an opaque on-chain rejection.
 
+    The runtime is checked with :func:`check_runtime` right after
+    ``compose_call``, which loads the metadata at the head, and the real
+    extension bytes are then decoded against the chain's types once more, so
+    the metadata, the call and the runtime version all describe one runtime.
+
     Raises:
+        QuipMetadataError: if this client cannot sign for the node's runtime.
         QuipSigningError: if the envelope fails its local verification.
     """
     # Imported here rather than at module scope to keep this module free of a
@@ -346,6 +402,7 @@ def build_signed_extrinsic(
     from substrateinterface.utils.hasher import blake2_256
 
     call_bytes = _compose_call_bytes(iface, call_module, call_function, call_params)
+    check_runtime(iface)
 
     account = signer.account_id
     # Enforce the documented wire invariants before splicing identity material
@@ -363,6 +420,7 @@ def build_signed_extrinsic(
     tx_version = int(runtime_version["transactionVersion"])
 
     extra, additional = _signed_extensions(
+        iface,
         nonce=nonce,
         spec_version=spec_version,
         tx_version=tx_version,
@@ -645,16 +703,15 @@ def _extension_fields(
     ``CheckMortality`` is ``Era::Immortal`` against the genesis hash, or with
     ``era`` the mortal era against its checkpoint's hash.
 
-    One entry per extension, keyed by the identifier the runtime metadata uses,
-    in :data:`SIGNED_EXTENSIONS` order. Most extensions contribute nothing to
-    either half (``AuthorizeCall``, ``CheckNonZeroSender``, ``CheckWeight``,
+    One entry per extension this client can encode, keyed by the identifier
+    the runtime metadata uses. Most extensions contribute nothing to either
+    half (``AuthorizeCall``, ``CheckNonZeroSender``, ``CheckWeight``,
     ``EthSetOrigin``, ``WeightReclaim``).
 
     One table rather than two parallel ones: the halves are what the runtime
     defines together, and splitting them let a name be added to one and missed
-    in the other. ``test_signing.py`` asserts this table's keys against
-    :data:`SIGNED_EXTENSIONS`, and ``test_live.py`` asserts the empty
-    entries really encode nothing on-chain.
+    in the other. :func:`check_runtime` holds every entry the runtime lists to
+    the chain's type for it.
     """
     return {
         "AuthorizeCall": (b"", b""),
@@ -677,6 +734,7 @@ def _extension_fields(
 
 
 def _signed_extensions(
+    iface: Any,
     *,
     nonce: int,
     spec_version: int,
@@ -685,12 +743,20 @@ def _signed_extensions(
     tip: int = 0,
     era: MortalEra | None = None,
 ) -> tuple[bytes, bytes]:
-    """Return the ``(extra, additional)`` signed-extension blobs in metadata order.
+    """Return the ``(extra, additional)`` signed-extension blobs in the runtime's metadata order.
 
-    Both halves are concatenated from :func:`_extension_fields` in
-    :data:`SIGNED_EXTENSIONS` order, so the declared order, the two encoded
-    orders, and the set of extensions cannot drift apart.
+    Both halves are concatenated from :func:`_extension_fields` in the order
+    ``iface.metadata`` lists the extensions, and each half is decoded with the
+    chain's type for it first, so a blob the runtime would read differently is
+    never signed.
+
+    Raises:
+        QuipMetadataError: if the runtime lists an extension this client
+            cannot encode, or a half does not decode exactly with its type.
     """
+    # Imported here for the reason given in build_signed_extrinsic.
+    from scalecodec.base import ScaleBytes
+
     fields = _extension_fields(
         nonce=nonce,
         spec_version=spec_version,
@@ -699,10 +765,26 @@ def _signed_extensions(
         tip=tip,
         era=era,
     )
-    return (
-        b"".join(fields[name][0] for name in SIGNED_EXTENSIONS),
-        b"".join(fields[name][1] for name in SIGNED_EXTENSIONS),
-    )
+    extra, additional = [], []
+    for name, chain_types in iface.metadata.get_signed_extensions().items():
+        if name not in fields:
+            raise QuipMetadataError(
+                f"this client cannot encode signed extension {name}, which the node's runtime lists; "
+                "upgrade xquad to sign for this runtime"
+            )
+        for half, type_key, blob, out in zip(
+            ("extra", "additional"), ("extrinsic", "additional_signed"), fields[name], (extra, additional), strict=True
+        ):
+            type_string = chain_types[type_key]
+            try:
+                iface.runtime_config.create_scale_object(type_string, data=ScaleBytes(blob)).decode()
+            except Exception as exc:  # noqa: BLE001 -- any decode failure means the chain's type moved.
+                raise QuipMetadataError(
+                    f"signed extension {name}.{half} no longer has the shape this client encodes "
+                    f"(the chain's type is {type_string}): {exc}; upgrade xquad to sign for this runtime"
+                ) from exc
+            out.append(blob)
+    return b"".join(extra), b"".join(additional)
 
 
 def _compose_call_bytes(iface: Any, call_module: str, call_function: str, call_params: dict) -> bytes:
@@ -873,6 +955,7 @@ __all__ = [
     "MortalEra",
     "QuipSigningError",
     "build_signed_extrinsic",
+    "check_runtime",
     "encode_compact_u128",
     "encode_compact_u32",
     "generate_keystore",

@@ -85,7 +85,7 @@ from xqsa.quip.display import Floors, floors_text
 from xqsa.quip.faucet import fund_from_faucet
 from xqsa.quip.metadata import connect as connect_shimmed
 from xqsa.quip.resolution import MIN_RANK_WEIGHTED_SPEC
-from xqsa.quip.signing import SIGNED_EXTENSIONS, _extension_fields, load_or_generate_keystore
+from xqsa.quip.signing import check_runtime, load_or_generate_keystore
 from xqsa.quip.solution import decode_answers, pick_best
 from xqvm_py.xqmx import XQMX, compute_energy
 
@@ -500,34 +500,12 @@ class TestConnectivity:
         assert chain.metadata is not None
         assert chain.runtime_version is not None
 
-    def test_signed_extensions_match_chain(self, chain) -> None:
-        # QUI-1257: the encoded order must equal the runtime's own, so the next
-        # extension the runtime inserts fails this test rather than a submission.
+    def test_client_can_sign_for_the_runtime(self, chain) -> None:
+        # QUI-1257, QUI-1510: the envelope and every signed extension, in the
+        # runtime's order, decode exactly with the chain's types; a runtime
+        # change fails here rather than as a rejected signature.
         chain.init_runtime()
-        assert tuple(chain.metadata.get_signed_extensions()) == SIGNED_EXTENSIONS
-
-    def test_empty_signed_extensions_really_encode_nothing(self, chain) -> None:
-        # The order check above catches an insertion or a reorder. It does not
-        # catch an existing extension gaining a field: we would keep encoding
-        # b"" for it and the submission, not the test, would be what fails.
-        # So check the claim directly -- every half we encode as empty must be a
-        # type that decodes from zero bytes.
-        from scalecodec.base import ScaleBytes
-
-        chain.init_runtime()
-        definitions = chain.metadata.get_signed_extensions()
-        fields = _extension_fields(nonce=0, spec_version=1, tx_version=1, genesis_bytes=b"\x00" * 32)
-
-        for name, halves in fields.items():
-            for half, blob in zip(("extrinsic", "additional_signed"), halves, strict=True):
-                if blob:
-                    continue  # we encode bytes for it; emptiness is not claimed.
-                type_string = definitions[name][half]
-                obj = chain.runtime_config.create_scale_object(type_string, data=ScaleBytes(b""))
-                try:
-                    obj.decode()
-                except Exception as exc:  # noqa: BLE001 -- any failure means it wants bytes.
-                    pytest.fail(f"{name}.{half} ({type_string}) is no longer empty on-chain: {exc}")
+        check_runtime(chain)
 
     def test_chain_default_topology_is_mineable(self, chain, make_solver) -> None:
         # Both localdev and testnet seed MineableTopologies with the chain's

@@ -474,6 +474,8 @@ def build_extrinsic(
 
     Raises:
         QuipSubmissionError: if assembly or signing fails.
+        QuipMetadataError: propagated unchanged; a runtime this client cannot
+            sign for is not a submission failure.
     """
     try:
         return quip_signing.build_signed_extrinsic(
