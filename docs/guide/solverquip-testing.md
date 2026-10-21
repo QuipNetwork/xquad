@@ -80,7 +80,7 @@ The live suite runs in three tiers, by what a test needs from the chain:
 
 | Class | Covers | Needs |
 | --- | --- | --- |
-| `TestConnectivity` | chain constants, the topology decode, the V14 metadata shim, the signed-extension list, the topology override | a reachable chain; a few tests fund an account; the override test needs `QUIP_TOPOLOGY` |
+| `TestConnectivity` | chain constants, the topology decode, the V14 metadata shim, the runtime check (`check_runtime`), the topology override | a reachable chain; a few tests fund an account; the override test needs `QUIP_TOPOLOGY` |
 | `TestSubmitPath` | the balance pre-check, a proposal that times out and is recovered, auto-reclaim of an expired unanswered order | funding; patches `MIN_DEADLINE_BLOCKS` to 1 so an order can expire inside the test |
 | `TestJobOrder` | `create_order`, `set()`, `quote()` and `submit()`, the stored order read back, `set()` refused after submit | funding |
 | `TestReceipt` | an unanswered order reclaimed through its receipt (`Reward  reclaimed`), `list_orders()`, a repeated reclaim refused | funding; patches `MIN_DEADLINE_BLOCKS` to 1 |
@@ -291,11 +291,13 @@ what the signing layer speaks.
 - **Runtime:** advances over time; read it with `state_getRuntimeVersion`
   rather than assuming a pinned value. The signer reads `transactionVersion`
   from the chain, so a bump to that number alone does not break submission.
-  The signed-extension list and its order are fixed client-side
-  (`SIGNED_EXTENSIONS` in `xqsa/quip/signing.py`), so a runtime that adds,
-  removes, reorders or reshapes an extension breaks signing. After an upgrade,
-  run `test_live.py::TestConnectivity`, which checks that list against the
-  chain.
+  The client reads the signed-extension order from the runtime metadata, and
+  on every connect and every signing checks the extrinsic envelope and each
+  extension's shape against the chain's types (`check_runtime` in
+  `xqsa/quip/signing.py`). A runtime it cannot encode for fails as
+  `QuipMetadataError` on connect, not as a rejected signature; the remedy is
+  a newer xquad. After an upgrade, run `test_live.py::TestConnectivity`,
+  which runs the same check against the live chain.
 - **Metadata:** the runtime serves Metadata V16, which `scalecodec` cannot
   decode. Build clients through `xqsa.quip.metadata.connect`, which pulls V14
   from the versioned runtime API; a stock `SubstrateInterface` fails with
@@ -368,9 +370,12 @@ once when the fleet is active.
   unsolved, which looks like "nothing solves" if you only inspect old orders. (Known miner-side follow-up, not a client bug.)
 - **Runtime can advance under you:** re-read `state_getRuntimeVersion` each
   session; do not hard-code pinned facts. The signer adapts `transactionVersion`
-  from the chain, but the signed-extension list is fixed client-side, so an
-  upgrade that changes it breaks submission. Run
-  `test_live.py::TestConnectivity` after every known upgrade.
+  and the signed-extension order from the chain, and checks the envelope and
+  each extension's shape on every connect and every signing. An upgrade that
+  changes an extension this client cannot encode fails as `QuipMetadataError`
+  on connect, not as a rejected signature. Run
+  `test_live.py::TestConnectivity` after every known upgrade; it runs the same
+  check live.
 - **Metadata V16 blocks a stock client:** `substrate-interface` decodes through
   `scalecodec`, whose `MetadataAll` enum ends at V14, so
   `SubstrateInterface.init_runtime()` raises `ValueError: Index '16' not present
