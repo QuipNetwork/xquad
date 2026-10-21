@@ -1985,8 +1985,11 @@ class TestSolverQuipMetadataErrors:
 
         iface = _default_iface()
         iface._init_runtime_raises = QuipMetadataError("serves V16 runtime metadata")
+        closed: list[bool] = []
+        monkeypatch.setattr(iface, "close", lambda: closed.append(True))
         with pytest.raises(QuipMetadataError, match="serves V16"):
             _make_solver(monkeypatch, iface=iface)
+        assert closed == [True]
 
     def test_construction_surfaces_it_from_a_constant_read(self, monkeypatch) -> None:
         # Belt and braces: init_runtime re-runs on a runtime upgrade mid-session,
@@ -2003,8 +2006,11 @@ class TestSolverQuipMetadataErrors:
 
         iface = _default_iface()
         iface._init_runtime_raises = RuntimeError("rpc timeout")
+        closed: list[bool] = []
+        monkeypatch.setattr(iface, "close", lambda: closed.append(True))
         with pytest.raises(QuipConnectionError, match="could not connect"):
             _make_solver(monkeypatch, iface=iface)
+        assert closed == [True]
 
     def test_storage_reads_propagate_it_unchanged(self, monkeypatch) -> None:
         from xqsa.quip import QuipMetadataError

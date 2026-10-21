@@ -1360,8 +1360,12 @@ class TestJobOrderSendOutcomes:
         other = _default_iface()
         if change == "genesis":
             other.genesis_hash = "0x" + "11" * 32
-        else:
+        elif change == "runtime":
             other.metadata = FakeRuntimeMetadata(signature="sp_runtime::MultiSignature")
+        elif change == "init":
+            other._init_runtime_raises = RuntimeError("rpc timeout")
+        else:  # "interrupt": Ctrl-C while the new connection is checked.
+            other.get_block_hash = lambda block_id=None: _raise(KeyboardInterrupt())
         closed: list[bool] = []
         monkeypatch.setattr(other, "close", lambda: closed.append(True))
         monkeypatch.setattr(solver._iface, "get_chain_finalised_head", lambda: _raise(ConnectionError("down")))
@@ -1399,6 +1403,23 @@ class TestJobOrderSendOutcomes:
         with pytest.raises(QuipSubmitIncompleteError) as info:
             solver._settle_once(_signed_call(solver))
         assert isinstance(info.value.__cause__, cause)
+        assert (closed, solver._iface) == ([True], session)
+
+    def test_a_reconnect_that_fails_to_load_the_runtime_closes_it(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        session = solver._iface
+        closed = self._repointed(monkeypatch, solver, "init")
+        with pytest.raises(QuipSubmitIncompleteError) as info:
+            solver._settle_once(_signed_call(solver))
+        assert isinstance(info.value.__cause__, QuipConnectionError)  # the old connection's read, retried.
+        assert (closed, solver._iface) == ([True], session)
+
+    def test_an_interrupt_while_checking_a_reconnect_closes_it(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        session = solver._iface
+        closed = self._repointed(monkeypatch, solver, "interrupt")
+        with pytest.raises(KeyboardInterrupt):
+            solver._settle_once(_signed_call(solver))
         assert (closed, solver._iface) == ([True], session)
 
     def test_a_zero_poll_interval_does_not_spin(self, monkeypatch, virtual_clock) -> None:

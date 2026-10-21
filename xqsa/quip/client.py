@@ -266,19 +266,24 @@ class SolverQuip(Solver):
             # pulls V14 through the versioned runtime API instead, and confines
             # that to instances we build. See xqsa.quip.metadata.
             self._iface = quip_metadata.connect(resolved_url)
-            # Resolve metadata here rather than letting the first storage read
-            # trigger it: a node whose metadata this client cannot decode must
-            # fail as QuipMetadataError, and every read below wraps its faults
-            # as "could not read <pallet constant>", which names the wrong
-            # cause. Doing it once, in the open, also makes the failure
-            # independent of which resolve step happens to run first.
-            self._iface.init_runtime()
         except QuipMetadataError:
             raise  # a client/runtime metadata mismatch is not a connection fault.
         except Exception as exc:  # noqa: BLE001 -- any connect failure is a connection error.
             raise QuipConnectionError(f"could not connect to the Quip node at {resolved_url}: {exc}") from exc
         self._url = resolved_url
         try:
+            try:
+                # Resolve metadata here rather than letting the first storage read
+                # trigger it: a node whose metadata this client cannot decode must
+                # fail as QuipMetadataError, and every read below wraps its faults
+                # as "could not read <pallet constant>", which names the wrong
+                # cause. Doing it once, in the open, also makes the failure
+                # independent of which resolve step happens to run first.
+                self._iface.init_runtime()
+            except QuipMetadataError:
+                raise  # a client/runtime metadata mismatch is not a connection fault.
+            except Exception as exc:  # noqa: BLE001 -- any connect failure is a connection error.
+                raise QuipConnectionError(f"could not connect to the Quip node at {resolved_url}: {exc}") from exc
             pin = NETWORKS[_network].genesis if _network is not None else None
             self._genesis_hash = self._check_connection(self._iface, expected_genesis=pin)
 
@@ -947,17 +952,18 @@ class SolverQuip(Solver):
         """
         try:
             iface = quip_metadata.connect(self._url)
-            iface.init_runtime()
         except Exception as exc:  # noqa: BLE001 -- the caller retries until its deadline.
             logger.warning("could not reconnect to the Quip node at %s: %s", self._url, exc)
             return
         try:
+            iface.init_runtime()
             self._check_connection(iface, expected_genesis=self._genesis_hash, reconnect=True)
-        except Exception as exc:
+        except BaseException as exc:
+            # Kept only on success, so close it on every failure.
             with contextlib.suppress(Exception):
                 iface.close()
-            if isinstance(exc, (chain.GenesisMismatch, QuipMetadataError)):
-                raise  # the same node gives the same answer; retrying cannot help.
+            if not isinstance(exc, Exception) or isinstance(exc, (chain.GenesisMismatch, QuipMetadataError)):
+                raise  # an interrupt, or the same node gives the same answer; retrying cannot help.
             logger.warning("could not reconnect to the Quip node at %s: %s", self._url, exc)
             return
         old, self._iface = self._iface, iface

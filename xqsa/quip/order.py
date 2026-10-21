@@ -711,6 +711,8 @@ class JobOrder:
                 be settled yet.
             QuipSubmissionError: if the order is no longer a draft, or the
                 extrinsic cannot be built.
+            QuipMetadataError: if this client cannot sign for the node's
+                runtime; nothing is sent and the order stays a draft.
             QuipConnectionError: if a chain read faults.
         """
         self._settle_first()
@@ -757,9 +759,12 @@ class JobOrder:
                 ``failed`` and the fee was paid).
             QuipSubmitIncompleteError: if it could not be settled by the end
                 of its window: no node could be reached, finality stalled, or
-                the block's events could not be decoded. The order is
-                ``sending`` and the error carries it; calling ``submit()``
-                again resumes it.
+                the block's events could not be decoded; or at once, if a
+                reconnect reached another chain or a runtime this client
+                cannot sign for. The order is ``sending`` and the error
+                carries it; calling ``submit()`` again resumes it.
+            QuipMetadataError: if this client cannot sign for the node's
+                runtime; nothing is sent and the order stays a draft.
             QuipCancelledError: if a consent gate declines.
             QuipFaucetError: if the faucet refuses or cannot be reached.
         """
