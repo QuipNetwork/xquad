@@ -181,11 +181,14 @@ class SolverQuip(Solver):
             solver warns once, here rather than on every order.
         QuipConnectionError: if the node is unreachable or the configured Ising
             spec is not registered on-chain.
-        QuipMetadataError: if the node's runtime metadata cannot be decoded by
-            the installed substrate-interface/scalecodec, even through the V14
-            shim. Raised in its own right rather than folded into
-            QuipConnectionError, because the remedy is a runtime that still
-            serves V14, not a retry.
+        GenesisMismatch: a :class:`QuipConnectionError`, if the network
+            preset pins a genesis hash and the node serves another chain.
+        QuipMetadataError: if this client cannot read or sign for the node's
+            runtime: its metadata does not decode even through the V14 shim,
+            or its extrinsic envelope or signed extensions differ from what
+            this client encodes. Raised in its own right rather than folded
+            into QuipConnectionError, because the remedy is upgrading xquad,
+            not a retry.
     """
 
     def __init__(
@@ -209,6 +212,7 @@ class SolverQuip(Solver):
         faucet: str | None = None,
         autoconfirm: bool | Callable[[JobQuote], bool] | None = None,
         autofund: bool | Callable[[JobQuote], bool] | None = None,
+        _network: str | None = None,
     ) -> None:
         # Two distinct guards, one per piece of the [quip] extra: client + signer.
         try:
@@ -252,7 +256,7 @@ class SolverQuip(Solver):
         # chain, so it never draws from whatever faucet happens to be exported.
         self._faucet = faucet or (None if url else os.environ.get("QUIP_FAUCET_URL"))
         # Set by for_network; a solver built from a raw url= names no network.
-        self._network: str | None = None
+        self._network = _network
         self._autoconfirm = _resolve_gate(autoconfirm, "autoconfirm", "QUIP_AUTOCONFIRM")
         self._autofund = _resolve_gate(autofund, "autofund", "QUIP_AUTOFUND")
 
@@ -274,14 +278,21 @@ class SolverQuip(Solver):
         except Exception as exc:  # noqa: BLE001 -- any connect failure is a connection error.
             raise QuipConnectionError(f"could not connect to the Quip node at {resolved_url}: {exc}") from exc
         self._url = resolved_url
-        self._genesis_hash = chain.genesis_hash(self._iface)
+        try:
+            pin = NETWORKS[_network].genesis if _network is not None else None
+            self._genesis_hash = self._check_connection(self._iface, expected_genesis=pin)
 
-        self._spec_id = self._resolve_spec_id(spec_id)
-        self._limits = chain.read_limits(self._iface)
-        # Checked once here; an order that keeps the default does not look it up again.
-        _check_access(self._access, self._limits, self._iface, stacklevel=3)
-        self._reward = self._resolve_reward(reward)
-        self._topology_hash = self._resolve_topology_hash(topology)
+            self._spec_id = self._resolve_spec_id(spec_id)
+            self._limits = chain.read_limits(self._iface)
+            # Checked once here; an order that keeps the default does not look it up again.
+            _check_access(self._access, self._limits, self._iface, stacklevel=3)
+            self._reward = self._resolve_reward(reward)
+            self._topology_hash = self._resolve_topology_hash(topology)
+        except BaseException:
+            # No solver comes back to close it, so close it here.
+            with contextlib.suppress(Exception):
+                self._iface.close()
+            raise
 
     @classmethod
     def for_network(cls, name: str, /, **kwargs: Any) -> Self:
@@ -313,9 +324,7 @@ class SolverQuip(Solver):
         if not kwargs.get("faucet"):  # an unset faucet must not let QUIP_FAUCET_URL beat the preset.
             kwargs["faucet"] = preset.faucet
         _pop_mode(kwargs, stacklevel=2)  # here, so the deprecation names the caller's line.
-        solver = cls(url=preset.rpc, **kwargs)
-        solver._network = name
-        return solver
+        return cls(url=preset.rpc, _network=name, **kwargs)
 
     # ------------------------------------------------------------------
     # Identity / configuration resolution
@@ -789,7 +798,8 @@ class SolverQuip(Solver):
         land, the same bytes are sent again, so a node that lost them
         relearns them; the hash is the same, so they can land once at most.
         A read that fails reconnects with backoff and retries; a node that
-        cannot decode the blocks or has discarded the state stops it at once.
+        cannot decode the blocks, has discarded the state, or serves another
+        chain or a runtime this client cannot sign for stops it at once.
         The rounds stop once the finalized head passes the window's end
         block, or when finality made no progress over a wall-clock estimate
         of that block plus :data:`SETTLE_GRACE_BLOCKS`; while finality
@@ -808,14 +818,17 @@ class SolverQuip(Solver):
         while True:
             try:
                 outcome = self._settle_round(signed)
-            except (QuipMetadataError, chain.StatePruned) as exc:
+            except (QuipMetadataError, chain.StatePruned, chain.GenesisMismatch) as exc:
                 raise self._unsettled(signed, exc) from exc
             except Exception as exc:  # noqa: BLE001 -- a fault while reading; reconnect and read again.
                 failures += 1
                 logger.warning("could not settle propose_job %s (%s); reconnecting", signed.ext_hash, exc)
                 if not self._pause(deadline, min(poll * 2 ** (failures - 1), MAX_BACKOFF_SECONDS)):
                     raise self._unsettled(signed, exc) from exc
-                self._reconnect()
+                try:
+                    self._reconnect()
+                except (chain.GenesisMismatch, QuipMetadataError) as fatal:
+                    raise self._unsettled(signed, fatal) from fatal
                 continue
             failures = 0
             if outcome != "pending":
@@ -913,11 +926,28 @@ class SolverQuip(Solver):
         return True
 
     def _reconnect(self) -> None:
-        """Replace the chain connection with a fresh one; a failure keeps the old one for the next attempt."""
+        """Replace the chain connection with a fresh one; a failure keeps the old one for the next attempt.
+
+        The new connection must serve the session's genesis on a runtime this
+        client can sign for, else it is closed and the old one kept.
+
+        Raises:
+            GenesisMismatch: if the node now serves another chain.
+            QuipMetadataError: if this client cannot sign for the node's runtime.
+        """
         try:
             iface = quip_metadata.connect(self._url)
             iface.init_runtime()
         except Exception as exc:  # noqa: BLE001 -- the caller retries until its deadline.
+            logger.warning("could not reconnect to the Quip node at %s: %s", self._url, exc)
+            return
+        try:
+            self._check_connection(iface, expected_genesis=self._genesis_hash, reconnect=True)
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                iface.close()
+            if isinstance(exc, (chain.GenesisMismatch, QuipMetadataError)):
+                raise  # the same node gives the same answer; retrying cannot help.
             logger.warning("could not reconnect to the Quip node at %s: %s", self._url, exc)
             return
         old, self._iface = self._iface, iface
@@ -925,13 +955,47 @@ class SolverQuip(Solver):
             with contextlib.suppress(Exception):
                 old.close()
 
+    def _check_connection(self, iface: Any, *, expected_genesis: str | None, reconnect: bool = False) -> str:
+        """Check that ``iface`` serves the expected chain on a runtime this client can sign for; return its genesis.
+
+        Logs the network, runtime and genesis at ``INFO``.
+
+        Raises:
+            GenesisMismatch: if ``expected_genesis`` is set and the node's differs.
+            QuipMetadataError: if this client cannot sign for the node's runtime.
+            QuipConnectionError: if the genesis hash cannot be read.
+        """
+        genesis = chain.genesis_hash(iface).lower()
+        network = self._network or "custom endpoint"
+        if expected_genesis is not None and genesis != expected_genesis:
+            raise chain.GenesisMismatch(
+                f"the Quip node at {self._url} ({network}) serves genesis {genesis}, "
+                f"not the expected {expected_genesis}"
+            )
+        self._quip_signing.check_runtime(iface)
+        logger.info(
+            "%s Quip %s at %s: specVersion %s, transactionVersion %s, genesis %s",
+            "reconnected to" if reconnect else "connected to",
+            network,
+            self._url,
+            iface.runtime_version,
+            iface.transaction_version,
+            genesis,
+        )
+        return genesis
+
     @staticmethod
     def _unsettled(signed: _SignedCall, cause: Exception) -> QuipSubmitIncompleteError:
         """The error for a sent ``propose_job`` that is not settled yet; :class:`JobOrder` attaches itself."""
         if isinstance(cause, QuipMetadataError):
             then = (
-                "this client cannot decode the runtime's blocks; upgrade xquad, then call submit() again. The order "
-                "keeps its signed bytes and nonce."
+                "this client cannot read or sign for the node's runtime; upgrade xquad, then call submit() again. "
+                "The order keeps its signed bytes and nonce."
+            )
+        elif isinstance(cause, chain.GenesisMismatch):
+            then = (
+                "the endpoint now serves a different chain; point the client at the network this order was sent on, "
+                "then call submit() again."
             )
         elif isinstance(cause, chain.StatePruned):
             then = (

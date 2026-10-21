@@ -46,6 +46,7 @@ not here.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 
@@ -428,7 +429,7 @@ class TestConnectivity:
             pytest.fail(f"this endpoint prunes state; settling needs --state-pruning=archive ({exc})")
 
     @requires_hash_topology
-    def test_topology_decodes_to_a_consistent_graph(self, make_solver) -> None:
+    def test_topology_decodes_to_a_consistent_graph(self, make_solver, caplog) -> None:
         # Deliberately not an exact node/edge count. A count is a fingerprint of
         # one deployment -- aglais and a localdev DevNet register different
         # graphs -- so an exact assertion fails on a healthy chain that simply
@@ -440,7 +441,13 @@ class TestConnectivity:
         # deployment: a non-empty graph whose edges reference real nodes.
         # Topology.__post_init__ already enforces ordering and uniqueness but
         # checks neither endpoint membership nor self-loops.
-        solver = make_solver()
+        with caplog.at_level(logging.INFO, logger="xqsa.quip"):
+            solver = make_solver()
+        # QUI-1510: the connect checked the runtime and says what it reached.
+        assert any(
+            m.startswith(f"connected to Quip custom endpoint at {RPC_URL}: specVersion ") and solver._genesis_hash in m
+            for m in caplog.messages
+        )
         topology = solver._fetch_topology()
         assert topology.nodes
         assert topology.edges

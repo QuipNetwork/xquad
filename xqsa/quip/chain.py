@@ -573,6 +573,10 @@ class StatePruned(QuipConnectionError):
     """The node has discarded the state of a past block; a node that keeps full state history can read it."""
 
 
+class GenesisMismatch(QuipConnectionError):
+    """The node serves a different chain from the one expected; another node at a correct endpoint can serve it."""
+
+
 def account_nonce_at(iface: Any, account_id: Any, block_hash: str) -> int:
     """Return the account's nonce in the state of block ``block_hash``.
 

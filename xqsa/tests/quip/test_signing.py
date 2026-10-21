@@ -65,6 +65,8 @@ from xqsa.quip.signing import (
     submit_and_watch,
 )
 
+from .test_client import FAKE_EXTENSIONS, FakeRuntimeConfig, FakeRuntimeMetadata
+
 pytestmark = pytest.mark.quip
 
 # A fixed seed keeps the derived account id / envelope deterministic per run.
@@ -94,99 +96,6 @@ class _FakeCall:
 class _FakeExtrinsic:
     def __init__(self, extrinsic_hash: str) -> None:
         self.extrinsic_hash = extrinsic_hash
-
-
-# The live runtime's signed extensions in metadata order (aglais, specVersion
-# 119), each as ``(name, extra type, additional type)``. The types name the
-# widths ``_FakeScaleObject`` decodes.
-FAKE_EXTENSIONS: tuple[tuple[str, str, str], ...] = (
-    ("AuthorizeCall", "()", "()"),
-    ("CheckNonZeroSender", "()", "()"),
-    ("CheckSpecVersion", "()", "u32"),
-    ("CheckTxVersion", "()", "u32"),
-    ("CheckGenesis", "()", "H256"),
-    ("CheckMortality", "Era", "H256"),
-    ("CheckNonce", "Compact", "()"),
-    ("CheckWeight", "()", "()"),
-    ("ChargeTransactionPayment", "Compact", "()"),
-    ("CheckMetadataHash", "Mode", "Option<[u8;32]>"),
-    ("EthSetOrigin", "()", "()"),
-    ("WeightReclaim", "()", "()"),
-)
-
-
-def _scale_width(type_name: str, data: bytes) -> int:
-    """How many bytes a value of ``type_name`` takes when it starts ``data``."""
-    fixed = {"()": 0, "u32": 4, "u64": 8, "H256": 32, "Mode": 1}
-    if type_name in fixed:
-        return fixed[type_name]
-    if not data:
-        raise ValueError(f"no bytes for {type_name}")
-    if type_name == "Era":
-        return 1 if data[0] == 0 else 2
-    if type_name == "Option<[u8;32]>":
-        return 1 if data[0] == 0 else 33
-    if type_name == "Compact":
-        return {0: 1, 1: 2, 2: 4}.get(data[0] & 0b11, (data[0] >> 2) + 5)
-    raise NotImplementedError(type_name)
-
-
-class _FakeScaleObject:
-    """Mimics a scalecodec type object: ``decode()`` raises unless every byte is consumed."""
-
-    def __init__(self, type_name: str, data: bytes) -> None:
-        self.type_name = type_name
-        self.data = data
-
-    def decode(self) -> None:
-        if _scale_width(self.type_name, self.data) != len(self.data):
-            raise ValueError(f"{self.type_name} does not take {len(self.data)} bytes")
-
-
-class FakeRuntimeConfig:
-    def create_scale_object(self, type_string: str, data) -> _FakeScaleObject:
-        return _FakeScaleObject(type_string.removeprefix("scale_info::"), bytes(data.data))
-
-
-class FakeRuntimeMetadata:
-    """The V14 metadata ``check_runtime`` reads: the extrinsic envelope and the signed extensions."""
-
-    def __init__(
-        self,
-        extensions: tuple[tuple[str, str, str], ...] = FAKE_EXTENSIONS,
-        *,
-        version: int = 4,
-        address: str = "sp_runtime::multiaddress::MultiAddress",
-        id_index: int = 0,
-        signature: str = "quip_transaction_crypto::HybridTxSignature",
-    ) -> None:
-        self.extensions = extensions
-        self.version = version
-        self.address = address
-        self.id_index = id_index
-        self.signature = signature
-
-    def get_signed_extensions(self) -> dict:
-        return {
-            name: {"extrinsic": f"scale_info::{extra}", "additional_signed": f"scale_info::{additional}"}
-            for name, extra, additional in self.extensions
-        }
-
-    @property
-    def value(self) -> tuple:
-        params = [
-            {"name": "Address", "type": 2},
-            {"name": "Call", "type": None},
-            {"name": "Signature", "type": 3},
-            {"name": "Extra", "type": None},
-        ]
-        id_variant = {"name": "Id", "index": self.id_index}
-        types = [
-            {"id": 1, "type": {"path": ["sp_runtime", "generic", "UncheckedExtrinsic"], "params": params}},
-            {"id": 2, "type": {"path": self.address.split("::"), "def": {"variant": {"variants": [id_variant]}}}},
-            {"id": 3, "type": {"path": self.signature.split("::")}},
-        ]
-        return (None, {"V14": {"extrinsic": {"version": self.version, "ty": 1}, "types": {"types": types}}})
 
 
 class FakeIface:
