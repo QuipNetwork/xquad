@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 import warnings
 from dataclasses import replace
 from types import SimpleNamespace
@@ -32,13 +33,15 @@ from xqsa.quip import (
     QuipCancelledError,
     QuipConnectionError,
     QuipJobFailedError,
+    QuipMetadataError,
     QuipOrderOptionError,
     QuipSubmissionError,
-    QuipUnconfirmedError,
+    QuipSubmitIncompleteError,
     chain,
 )
 from xqsa.quip.access import AccessAllow, AccessOpen
-from xqsa.quip.chain import ChainLimits, unregistered_solvers
+from xqsa.quip.chain import ChainLimits, StatePruned, unregistered_solvers
+from xqsa.quip.errors import QuipUnconfirmedError
 from xqsa.quip.order import JobOrder, _OrderOptions, check_client_defaults, merge_options
 from xqsa.quip.resolution import ResolutionSingleBest, ResolutionTopNEqual, ResolutionTopNWeighted
 from xqsa.solver import SolverResult
@@ -863,7 +866,7 @@ class TestJobOrderLifecycle:
         order = solver.create_order(_model())
         assert isinstance(order, JobOrder)
         assert order.order_id() is None
-        assert order.status() == {"state": "draft", "options": order.options()}
+        assert order.status() == {"state": "draft", "options": order.options(), "inclusion_window_blocks": 64}
 
     def test_order_inherits_client_defaults(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch, reward=2 * UNIT, deadline_blocks=200, block_wait=20)
@@ -1074,6 +1077,34 @@ class TestJobOrderQuoteAndSubmit:
         assert captured["sent"] == [captured["wires"][0], captured["wires"][2]]
 
 
+class TestJobOrderInclusionWindow:
+    def test_quote_shows_the_effective_window(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch, inclusion_window_blocks=100)
+        quote = solver.create_order(_model()).quote()
+        assert quote.inclusion_window_blocks == 128
+        assert "│ Window      included within 128 blocks " in str(quote)
+
+    def test_a_fresh_quote_is_sent_as_signed(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        order.quote()
+        solver._iface.head += 31  # 32 of 64 blocks left: not yet lapsing.
+        order.submit()
+        assert captured["builds"] == 1
+
+    def test_a_lapsing_quote_is_signed_again(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        order = solver.create_order(_model())
+        order.quote()
+        quoted_at = solver._iface.head
+        solver._iface.head += 32  # 31 of 64 blocks left after the best block.
+        order.submit()
+        assert captured["builds"] == 2
+        assert [era.checkpoint for era in captured["eras"]] == [quoted_at, quoted_at + 32]
+        assert captured["sent"] == [captured["wires"][1]]
+        assert captured["nonces"] == [0, 0]
+
+
 class TestJobOrderNonceCheck:
     def test_unchanged_nonce_sends_after_one_signature(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)
@@ -1123,75 +1154,223 @@ class TestJobOrderNonceCheck:
             solver.create_order(_model()).submit()
 
 
-def _send_raises(monkeypatch, solver, error: Exception, captured: dict) -> None:
-    """Make the node's watch raise ``error`` after the extrinsic is handed over."""
+def _send_raises(monkeypatch, solver, error: Exception | None, captured: dict, *, lands_on: int | None = 1) -> None:
+    """Make the first send raise ``error`` after the bytes reach the node; each send is a block.
+
+    The proposal lands, finalized at once, on send number ``lands_on``
+    (``None``: never). Each send also moves the head one block on, the way
+    a resend once per block would see it.
+    """
 
     def send(iface, wire_bytes, ext_hash, wait_for="inblock"):
-        captured.setdefault("sent", []).append(wire_bytes)
-        raise error
+        sends = captured.setdefault("sent", [])
+        sends.append(wire_bytes)
+        if len(sends) == lands_on:
+            iface.land(captured["nonces"][-1])
+        iface.head += 1
+        if len(sends) == 1 and error is not None:
+            raise error
 
     monkeypatch.setattr(solver._quip_signing, "submit_and_watch", send)
 
 
+def _stall_finality(monkeypatch, solver, captured: dict) -> None:
+    """The best block moves on with every send but finality stays where it was, and nothing lands."""
+    solver._iface.finalized = solver._iface.head
+    _send_raises(monkeypatch, solver, None, captured, lands_on=None)
+
+
+def _uncertain(solver, message: str) -> Exception:
+    return solver._quip_signing.SendOutcomeUnknown(message)
+
+
 class TestJobOrderSendOutcomes:
+    """Every send ends submitted, failed or draft, read from finalized state.
+
+    The seven ways a send used to leave the outcome unknown: a transport
+    fault while sending, no inclusion block reported, a ``retracted`` or
+    ``finalityTimeout`` pool status, an RPC 1012 or 1013 refusal, an
+    unreadable dispatch result, and an unreadable order id.
+    """
+
     @pytest.mark.parametrize("status", ["invalid", "dropped", "usurped"])
     def test_certain_rejection_stays_a_draft(self, monkeypatch, status) -> None:
         solver, captured = _ready(monkeypatch)
         rejected = solver._quip_signing.QuipSigningError(f"transaction pool rejected the extrinsic: {status}")
-        _send_raises(monkeypatch, solver, rejected, captured)
+        _send_raises(monkeypatch, solver, rejected, captured, lands_on=None)
         order = solver.create_order(_model())
         with pytest.raises(QuipSubmissionError, match=status) as info:
             order.submit()
         assert not isinstance(info.value, QuipUnconfirmedError)
         assert order.status()["state"] == "draft"
+        assert len(captured["sent"]) == 1  # refused outright: never settled or sent again.
 
     @pytest.mark.parametrize(
         "error",
         [
-            pytest.param("retracted", id="retracted"),
-            pytest.param("finalityTimeout", id="finality-timeout"),
+            pytest.param("transaction pool rejected the extrinsic: retracted (0xblock)", id="retracted"),
+            pytest.param("transaction pool rejected the extrinsic: finalityTimeout (0xblock)", id="finality-timeout"),
+            pytest.param("author_submitExtrinsic rejected the extrinsic: {'code': 1012}", id="rpc-1012"),
+            pytest.param("author_submitExtrinsic rejected the extrinsic: {'code': 1013}", id="rpc-1013"),
             pytest.param(ConnectionError("websocket closed"), id="transport"),
         ],
     )
-    def test_uncertain_send_is_unconfirmed(self, monkeypatch, error) -> None:
+    def test_uncertain_send_that_landed_is_submitted(self, monkeypatch, error) -> None:
         solver, captured = _ready(monkeypatch)
-        if isinstance(error, str):
-            error = solver._quip_signing.SendOutcomeUnknown(f"transaction pool rejected the extrinsic: {error}")
-        _send_raises(monkeypatch, solver, error, captured)
+        _send_raises(monkeypatch, solver, _uncertain(solver, error) if isinstance(error, str) else error, captured)
         order = solver.create_order(_model())
-        with pytest.raises(QuipUnconfirmedError, match="Do not resubmit") as info:
-            order.submit()
-        assert info.value.extrinsic_hash == "0xext"
-        assert order.status() == {
-            "state": "unconfirmed",
-            "extrinsic_hash": "0xext",
-            "block_hash": None,
-            "included_block": None,
-        }
-        for call in (order.submit, order.quote, lambda: order.set(reward=2 * UNIT)):
-            with pytest.raises(QuipSubmissionError, match="is unconfirmed"):
-                call()
-        assert len(captured["sent"]) == 1  # never sent again.
+        assert order.submit().order_id() == 1
+        assert order._state == "submitted"
+        assert len(captured["sent"]) == 1
 
-    def test_unverified_dispatch_is_unconfirmed(self, monkeypatch) -> None:
-        solver, _ = _ready(monkeypatch)
-        unverified = _ok_receipt(solver, error="unclassified: get_block failed for 0xblock: timeout")
-        _patch_signing(monkeypatch, solver, receipt=unverified)
-        order = solver.create_order(_model())
-        with pytest.raises(QuipUnconfirmedError, match="unclassified"):
-            order.submit()
-        assert order.status()["block_hash"] == "0xblock"
-        assert order.status()["included_block"] == solver._iface.head
+    def test_send_seen_nowhere_is_resent_until_it_lands(self, monkeypatch) -> None:
+        """No inclusion block reported: the same bytes go out once a block until finalized state shows them."""
+        solver, captured = _ready(monkeypatch)
+        _send_raises(monkeypatch, solver, None, captured, lands_on=3)
+        order = solver.create_order(_model()).submit()
+        assert order.order_id() == 1
+        assert captured["sent"] == [captured["wires"][0]] * 3
+        assert captured["builds"] == 1  # never signed again while it could land.
 
-    def test_unreadable_order_id_is_unconfirmed(self, monkeypatch) -> None:
-        solver, _ = _ready(monkeypatch)
-        solver._iface.events = []  # included, but no JobProposed event.
+    @pytest.mark.parametrize(
+        "error",
+        [
+            pytest.param(None, id="window-expired"),
+            pytest.param("transaction pool rejected the extrinsic: retracted (0xblock)", id="retracted"),
+        ],
+    )
+    def test_window_ending_unspent_is_a_draft(self, monkeypatch, error) -> None:
+        """Seen nowhere, or retracted and never included again: once the window is final, it never was."""
+        solver, captured = _ready(monkeypatch)
+        _send_raises(monkeypatch, solver, error and _uncertain(solver, error), captured, lands_on=None)
         order = solver.create_order(_model())
-        with pytest.raises(QuipUnconfirmedError, match="order id could not be read"):
+        with pytest.raises(QuipSubmissionError, match="never reached the chain.*window ended at block 263") as info:
             order.submit()
+        assert not isinstance(info.value, QuipUnconfirmedError)
+        assert order.status()["state"] == "draft"
+        assert len(set(captured["sent"])) == 1
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        assert order.submit().order_id() == 1  # a draft submits again, signed anew.
+
+    def test_nonce_used_by_another_transaction_is_a_draft(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        solver._iface.extrinsics = ["0xother"]  # the block that spent the nonce holds someone else's.
+        _send_raises(monkeypatch, solver, None, captured)
+        order = solver.create_order(_model())
+        with pytest.raises(QuipSubmissionError, match="nonce 0 was used by another transaction"):
+            order.submit()
+        assert order.status()["state"] == "draft"
+        assert len(captured["sent"]) == 1
+
+    def test_unreadable_block_is_read_again(self, monkeypatch) -> None:
+        """A dispatch result that cannot be read for a moment reconnects and reads it again."""
+        solver, _ = _ready(monkeypatch)
+        iface, faults = solver._iface, iter([TimeoutError("get_block timed out")])
+        read = iface.get_block
+
+        def flaky(**kwargs):
+            if (fault := next(faults, None)) is not None:
+                raise fault
+            return read(**kwargs)
+
+        monkeypatch.setattr(iface, "get_block", flaky)
+        assert solver.create_order(_model()).submit().order_id() == 1
+
+    def test_undecodable_dispatch_result_is_sending(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error="unclassified: no phase matched"))
+        order = solver.create_order(_model())
+        with pytest.raises(QuipSubmitIncompleteError, match="no System.ExtrinsicSuccess or ExtrinsicFailed") as info:
+            order.submit()
+        assert isinstance(info.value.__cause__, QuipMetadataError)
+        assert "upgrade xquad, then call submit() again" in str(info.value)
+        assert info.value.order is order
+        assert order.status()["state"] == "sending"
+
+    def test_unreadable_order_id_is_sending(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        solver._iface.events = []  # included and dispatched, but no JobProposed event.
+        order = solver.create_order(_model())
+        with pytest.raises(QuipSubmitIncompleteError, match="no JobProposed") as info:
+            order.submit()
+        assert isinstance(info.value.__cause__, QuipMetadataError)
+        assert "upgrade xquad, then call submit() again" in str(info.value)
         assert order.order_id() is None
-        assert order.status()["state"] == "unconfirmed"
-        assert order.status()["block_hash"] == "0xblock"
+        assert order.status()["state"] == "sending"
+
+    def test_finality_stall_is_sending(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        _stall_finality(monkeypatch, solver, captured)
+        order = solver.create_order(_model())
+        with pytest.raises(
+            QuipSubmitIncompleteError, match="finality did not reach the window's end block 263"
+        ) as info:
+            order.submit()
+        assert isinstance(info.value, QuipSubmissionError)
+        assert (info.value.extrinsic_hash, info.value.nonce, info.value.window_end) == ("0xext", 0, 263)
+        assert order.status() == {"state": "sending", "extrinsic_hash": "0xext", "nonce": 0, "window_end": 263}
+        assert len(set(captured["sent"])) == 1
+
+    def test_slow_finality_keeps_settling_while_it_advances(self, monkeypatch, virtual_clock) -> None:
+        """Finality moves one block every other round, half the estimate's pace, and still reaches the window's end."""
+        solver, captured = _ready(monkeypatch)
+        _stall_finality(monkeypatch, solver, captured)
+        send = solver._quip_signing.submit_and_watch
+
+        def slow(iface, *args, **kwargs):
+            send(iface, *args, **kwargs)
+            if len(captured["sent"]) % 2 == 0:
+                iface.finalized += 1
+
+        monkeypatch.setattr(solver._quip_signing, "submit_and_watch", slow)
+        with pytest.raises(QuipSubmissionError, match="never reached the chain") as info:
+            solver.create_order(_model()).submit()
+        assert not isinstance(info.value, QuipSubmitIncompleteError)
+        assert solver._iface.finalized == 263
+
+    def test_pruned_state_is_sending_at_once(self, monkeypatch, virtual_clock) -> None:
+        solver, captured = _ready(monkeypatch)
+        _send_raises(monkeypatch, solver, None, captured, lands_on=None)
+        query = solver._iface.query
+
+        def pruned(module, name, params=None, block_hash=None):
+            if block_hash is not None:
+                raise RuntimeError(f"State already discarded for {block_hash}")
+            return query(module, name, params, block_hash)
+
+        monkeypatch.setattr(solver._iface, "query", pruned)
+        connects: list[str] = []
+        monkeypatch.setattr(chain_module_metadata(), "connect", lambda url: connects.append(url) or solver._iface)
+        order = solver.create_order(_model())
+        with pytest.raises(QuipSubmitIncompleteError, match=r"\(--state-pruning=archive\), then call submit") as info:
+            order.submit()
+        assert isinstance(info.value.__cause__, StatePruned)
+        assert (connects, virtual_clock) == ([], [])  # no reconnect, no wait.
+        assert order.status()["state"] == "sending"
+
+    def test_a_zero_poll_interval_does_not_spin(self, monkeypatch, virtual_clock) -> None:
+        solver, captured = _ready(monkeypatch)
+        solver._poll_interval = 0
+        _stall_finality(monkeypatch, solver, captured)
+        with pytest.raises(QuipSubmitIncompleteError, match="finality did not reach"):
+            solver.create_order(_model()).submit()
+        assert virtual_clock and all(seconds >= 1.0 for seconds in virtual_clock[:-1])
+
+    def test_unreachable_node_is_sending_after_reconnecting(self, monkeypatch, virtual_clock) -> None:
+        solver, captured = _ready(monkeypatch)
+        _send_raises(monkeypatch, solver, ConnectionError("websocket closed"), captured, lands_on=None)
+        connects: list[str] = []
+        order = solver.create_order(_model())
+        order.quote()  # signed while the node still answers.
+        monkeypatch.setattr(solver._iface, "get_chain_finalised_head", lambda: _raise(ConnectionError("down")))
+        monkeypatch.setattr(chain_module_metadata(), "connect", lambda url: connects.append(url) or solver._iface)
+        with pytest.raises(QuipSubmitIncompleteError, match="could not read the finalized head: down") as info:
+            order.submit()
+        assert isinstance(info.value.__cause__, QuipConnectionError)
+        assert connects and set(connects) == {"ws://fake:9944"}
+        # Backoff doubles from the poll interval, capped at a minute.
+        assert virtual_clock[:5] == [6.0, 12.0, 24.0, 48.0, 60.0]
+        assert order.status()["state"] == "sending"
 
     def test_dispatch_failure_is_failed(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
@@ -1205,27 +1384,34 @@ class TestJobOrderSendOutcomes:
             "extrinsic_hash": "0xext",
             "block_hash": "0xblock",
             "included_block": solver._iface.head,
-            "error": "QuantumComputeMempool.RewardTooLow",
+            "error": "System.ExtrinsicFailed: QuantumComputeMempool.RewardTooLow",
         }
         with pytest.raises(QuipSubmissionError, match="is failed"):
             order.submit()
 
-    def test_solve_raises_unconfirmed(self, monkeypatch) -> None:
+    def test_solve_raises_incomplete_with_the_order(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)
-        _send_raises(monkeypatch, solver, ConnectionError("websocket closed"), captured)
-        with pytest.raises(QuipUnconfirmedError):
+        _stall_finality(monkeypatch, solver, captured)
+        with pytest.raises(QuipSubmitIncompleteError) as info:
             solver.solve(_model())
+        order = info.value.order
+        assert isinstance(order, JobOrder) and order._state == "sending"
+        solver._iface.finalized = None
+        solver._iface.land(0)
+        assert order.submit().order_id() == 1  # a solve() caller settles it through the order.
 
     def test_receipt_rows(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)
-        _send_raises(monkeypatch, solver, ConnectionError("websocket closed"), captured)
-        unconfirmed = solver.create_order(_model())
-        with pytest.raises(QuipUnconfirmedError):
-            unconfirmed.submit()
-        text = str(unconfirmed)
-        assert text.startswith("╭─ Job order (unconfirmed) ")
+        _stall_finality(monkeypatch, solver, captured)
+        sending = solver.create_order(_model())
+        with pytest.raises(QuipSubmitIncompleteError):
+            sending.submit()
+        text = str(sending)
+        rows = _box_rows(text)
+        assert text.startswith("╭─ Job order (sending) ")
         assert "│ Quoted      1.002182560255 AGLS total, block 200 " in text
-        assert "│ Receipt     unconfirmed, extrinsic " in text
+        start = rows.index("Receipt     sending, extrinsic")
+        assert rows[start + 1 : start + 3] == ["            0xext", "            nonce 0, window ends at block 263"]
         assert {len(line) for line in text.splitlines()} == {72}
 
         solver, _ = _ready(monkeypatch)
@@ -1243,9 +1429,250 @@ class TestJobOrderSendOutcomes:
         assert rows[start + 1] == "            quoted 1.002182560255 AGLS total, block 200"
         assert not any("reward" in row for row in rows[start:])
         assert "affordable" not in text
-        assert f"│ Receipt     failed in block {solver._iface.head}: QuantumComputeMempool." in text
+        assert f"│ Receipt     failed in block {solver._iface.head}: System.ExtrinsicFailed: " in text
         assert reads == [("0xblock", "0xext")]
         assert {len(line) for line in text.splitlines()} == {72}
+
+
+def _raise(error: Exception):
+    raise error
+
+
+def chain_module_metadata():
+    from xqsa.quip import metadata
+
+    return metadata
+
+
+class TestJobOrderInterrupted:
+    """Ctrl-C during submit(): a draft before the bytes can reach the node, ``sending`` after."""
+
+    def test_interrupt_before_the_send_stays_a_draft(self, monkeypatch, capsys) -> None:
+        solver, captured = _ready(monkeypatch, autoconfirm=lambda quote: _raise(KeyboardInterrupt()))
+        order = solver.create_order(_model())
+        with pytest.raises(KeyboardInterrupt):
+            order.submit()
+        assert order._state == "draft"
+        assert order._signed is None
+        assert "sent" not in captured
+        assert capsys.readouterr().err.count("[quip] submit() stopped") == 0
+
+    @pytest.mark.parametrize("where", ["send", "settle"])
+    def test_interrupt_after_the_send_is_sending(self, monkeypatch, capsys, where) -> None:
+        solver, captured = _ready(monkeypatch)
+        interrupt = KeyboardInterrupt()
+        if where == "send":
+            _send_raises(monkeypatch, solver, interrupt, captured, lands_on=None)
+        else:
+            _stall_finality(monkeypatch, solver, captured)
+            monkeypatch.setattr(time, "sleep", lambda seconds: _raise(interrupt))
+        order = solver.create_order(_model())
+        with pytest.raises(KeyboardInterrupt) as info:
+            order.submit()
+        assert info.value is interrupt  # re-raised unchanged.
+        assert order._state == "sending"
+        assert order._signed.wire == captured["wires"][0]
+        err = capsys.readouterr().err
+        assert "propose_job 0xext (nonce 0)" in err
+        assert "window ends at block 263" in err
+        assert "calling submit() again resumes it; it never places a second order" in err
+
+    def test_resume_after_an_interrupt_signs_nothing(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        _send_raises(monkeypatch, solver, KeyboardInterrupt(), captured)  # it landed despite the interrupt.
+        order = solver.create_order(_model())
+        with pytest.raises(KeyboardInterrupt):
+            order.submit()
+        assert order.submit().order_id() == 1
+        assert captured["builds"] == 1
+        assert len(captured["sent"]) == 1
+
+
+def _sending(monkeypatch):
+    """A funded solver and an order left ``sending`` by a finality stall: ``(solver, order, captured)``."""
+    solver, captured = _ready(monkeypatch)
+    _stall_finality(monkeypatch, solver, captured)
+    order = solver.create_order(_model())
+    with pytest.raises(QuipSubmitIncompleteError):
+        order.submit()
+    return solver, order, captured
+
+
+def _finality_resumes(solver, *, lands: bool = True, error: str | None = None) -> None:
+    """Finality catches up: with ``lands`` the proposal is in its block, else the window is final and unspent."""
+    iface = solver._iface
+    if lands:
+        iface.finalized = None
+        iface.land(0, error=error)
+    else:
+        iface.finalized = 263
+
+
+class TestJobOrderSending:
+    """A ``sending`` order: sent, not settled yet, and never signed again while it may land."""
+
+    @pytest.mark.parametrize("action", ["set", "quote", "receipt", "wait"])
+    def test_actions_settle_first_and_raise_while_pending(self, monkeypatch, action) -> None:
+        solver, order, captured = _sending(monkeypatch)
+        call = {
+            "set": lambda: order.set(reward=2 * UNIT),
+            "quote": order.quote,
+            "receipt": order.receipt,
+            "wait": order.wait,
+        }[action]
+        with pytest.raises(QuipSubmitIncompleteError, match="may still land up to block 263") as info:
+            call()
+        assert info.value.order is order
+        assert order._state == "sending"
+        assert captured["builds"] == 1
+
+    def test_actions_go_ahead_once_it_landed(self, monkeypatch) -> None:
+        solver, order, _ = _sending(monkeypatch)
+        _finality_resumes(solver)
+        assert order.receipt().order_id == 1
+        assert order._state == "submitted"
+        with pytest.raises(QuipSubmissionError, match="order 1 is submitted; set"):
+            order.set(reward=2 * UNIT)
+
+    def test_status_settles_without_raising(self, monkeypatch) -> None:
+        solver, order, _ = _sending(monkeypatch)
+        assert order.status()["state"] == "sending"
+        _finality_resumes(solver, lands=False)
+        assert order.status()["state"] == "draft"
+        assert order._signed is None  # dead bytes: the next quote signs anew.
+
+    def test_status_reports_a_failed_landing(self, monkeypatch) -> None:
+        solver, order, _ = _sending(monkeypatch)
+        _finality_resumes(solver, error="QuantumComputeMempool.RewardTooLow")
+        assert order.status()["state"] == "failed"
+
+    def test_quote_on_a_proven_draft_signs_afresh(self, monkeypatch) -> None:
+        solver, order, captured = _sending(monkeypatch)
+        _finality_resumes(solver, lands=False)
+        assert order.quote().affordable
+        assert captured["builds"] == 2
+
+    def test_resume_returns_a_landed_order_without_signing(self, monkeypatch) -> None:
+        solver, order, captured = _sending(monkeypatch)
+        sends = len(captured["sent"])
+        _finality_resumes(solver)
+        assert order.submit() is order
+        assert (order._state, order.order_id()) == ("submitted", 1)
+        assert captured["builds"] == 1
+        assert len(captured["sent"]) == sends  # settled on the first read: nothing sent again.
+
+    def test_resume_of_a_failed_landing_raises_failed(self, monkeypatch) -> None:
+        solver, order, captured = _sending(monkeypatch)
+        _finality_resumes(solver, error="QuantumComputeMempool.RewardTooLow")
+        with pytest.raises(QuipSubmissionError, match="fee was paid"):
+            order.submit()
+        assert order._state == "failed"
+        assert captured["builds"] == 1
+
+    def test_resume_while_still_pending_only_resends_the_same_bytes(self, monkeypatch) -> None:
+        solver, order, captured = _sending(monkeypatch)
+        with pytest.raises(QuipSubmitIncompleteError):
+            order.submit()
+        assert captured["builds"] == 1
+        assert set(captured["sent"]) == {captured["wires"][0]}
+        assert order._state == "sending"
+
+    def test_resume_sends_afresh_only_once_proven_never_on_chain(self, monkeypatch) -> None:
+        solver, order, captured = _sending(monkeypatch)
+        _finality_resumes(solver, lands=False)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        assert order.submit().order_id() == 1
+        assert order._state == "submitted"
+
+    def test_pickle_state_keeps_the_sending_bytes(self, monkeypatch) -> None:
+        _, order, captured = _sending(monkeypatch)
+        state = order.__getstate__()
+        assert state["_state"] == "sending"
+        assert state["_signed"].wire == captured["wires"][0]
+        assert state["_signed"].nonce == 0
+        restored = type(order).__new__(type(order))
+        restored.__setstate__(state)  # as unpickling does; __copy__ and __deepcopy__ are not on that path.
+        assert restored._signed == order._signed
+
+    @pytest.mark.parametrize("copier", ["copy", "deepcopy"])
+    def test_copying_a_sending_order_is_refused(self, monkeypatch, copier) -> None:
+        import copy
+
+        _, order, _ = _sending(monkeypatch)
+        with pytest.raises(QuipSubmissionError, match="order is sending; settle it"):
+            getattr(copy, copier)(order)
+
+    def test_error_pickles_without_its_order(self, monkeypatch) -> None:
+        import pickle
+
+        solver, captured = _ready(monkeypatch)
+        _stall_finality(monkeypatch, solver, captured)
+        with pytest.raises(QuipSubmitIncompleteError) as info:
+            solver.create_order(_model()).submit()
+        restored = pickle.loads(pickle.dumps(info.value))
+        assert restored.order is None
+        assert (restored.extrinsic_hash, restored.nonce, restored.window_end) == ("0xext", 0, 263)
+        assert str(restored) == str(info.value)
+
+
+class TestUnconfirmedDeprecation:
+    """``unconfirmed`` and ``QuipUnconfirmedError``: importable with a warning, never produced."""
+
+    def test_import_warns_at_the_caller(self) -> None:
+        import xqsa.quip
+
+        with pytest.warns(DeprecationWarning, match="no longer produced since v0.4.5") as record:
+            cls = xqsa.quip.QuipUnconfirmedError
+        assert cls is QuipUnconfirmedError
+        assert record[0].filename == __file__
+        assert "QuipUnconfirmedError" not in xqsa.quip.__all__
+
+    def test_umbrella_and_flat_names_warn_once(self) -> None:
+        import xqsa
+        from xquad.sa import quip
+
+        with pytest.warns(DeprecationWarning, match="no longer produced") as record:
+            assert quip.QuipUnconfirmedError is QuipUnconfirmedError
+        assert record[0].filename == __file__
+        with pytest.warns(DeprecationWarning) as record:
+            assert xqsa.QuipUnconfirmedError is QuipUnconfirmedError
+        assert len(record) == 1
+        assert "import it from xqsa.quip" in str(record[0].message)
+        assert "no longer produced since v0.4.5" in str(record[0].message)
+
+    def test_internal_import_does_not_warn(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            from xqsa.quip.errors import QuipUnconfirmedError as internal
+        assert internal is QuipUnconfirmedError
+
+    def test_unknown_name_still_raises(self) -> None:
+        import xqsa.quip
+
+        with pytest.raises(AttributeError, match="has no attribute 'QuipNoSuchError'"):
+            xqsa.quip.QuipNoSuchError  # noqa: B018
+
+    def test_a_legacy_unconfirmed_order_loads_and_keeps_refusing(self, monkeypatch) -> None:
+        import copy
+
+        solver, captured = _ready(monkeypatch)
+        legacy = solver.create_order(_model())
+        # As 0.4.3 and 0.4.4 left it: no _signed bytes, its outcome unknown.
+        legacy._state, legacy._ext_hash = "unconfirmed", "0xext"
+        with pytest.warns(DeprecationWarning, match="look up extrinsic 0xext"):
+            order = copy.copy(legacy)  # through __getstate__ and __setstate__, as unpickling does.
+        assert order.status() == {
+            "state": "unconfirmed",
+            "extrinsic_hash": "0xext",
+            "block_hash": None,
+            "included_block": None,
+        }
+        for call in (order.submit, order.quote, lambda: order.set(reward=2 * UNIT)):
+            with pytest.raises(QuipSubmissionError, match="is unconfirmed"):
+                call()
+        with pytest.raises(QuipSubmissionError, match="is unconfirmed, so its order id is unknown"):
+            order.receipt()
+        assert captured["builds"] == 0 and "sent" not in captured
 
 
 class TestJobOrderSignedBytesStayPrivate:

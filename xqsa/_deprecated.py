@@ -67,12 +67,14 @@ def flat_quip_getattr(flat: str, home: str) -> Callable[[str], object]:
     def __getattr__(name: str) -> object:
         if name not in FLAT_QUIP_NAMES:
             raise AttributeError(f"module {flat!r} has no attribute {name!r}")
-        warnings.warn(
-            f"{flat}.{name} is deprecated; import it from {home} (removed in v0.5.0)",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return getattr(importlib.import_module(home), name)
+        message = f"{flat}.{name} is deprecated; import it from {home} (removed in v0.5.0)"
+        # A name xqsa.quip retires too also says why, which the flat path would otherwise hide.
+        retired = importlib.import_module("xqsa.quip")._DEPRECATED.get(name)
+        warnings.warn(f"{message}. {retired}" if retired else message, DeprecationWarning, stacklevel=2)
+        # One warning per access: a name ``home`` deprecates too would warn again.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            return getattr(importlib.import_module(home), name)
 
     return __getattr__
 

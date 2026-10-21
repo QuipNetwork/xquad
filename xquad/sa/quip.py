@@ -19,5 +19,11 @@
 
 from xqsa.quip import *  # noqa: F403
 from xqsa.quip import __all__ as _xqsa_quip_all
+from xqsa.quip import _deprecated
 
 __all__ = list(_xqsa_quip_all)
+
+
+def __getattr__(name: str) -> object:
+    """Serve `xqsa.quip`'s deprecated names (PEP 562), warning at the caller's line."""
+    return _deprecated(name, __name__, stacklevel=2)

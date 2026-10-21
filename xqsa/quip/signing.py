@@ -60,7 +60,14 @@ from typing import TYPE_CHECKING, Any
 
 import quip_signer
 
-from xqsa.quip.codec import _as_int_or_none, _event_ids, _extrinsic_index, _phase_extrinsic_index, _strip_0x
+from xqsa.quip.codec import (
+    _as_int_or_none,
+    _dispatch_error_text,
+    _event_ids,
+    _extrinsic_index,
+    _phase_extrinsic_index,
+    _strip_0x,
+)
 from xqsa.quip.errors import QuipSigningError
 
 if TYPE_CHECKING:
@@ -240,6 +247,42 @@ def load_or_generate_keystore(path: Path | str) -> Keystore:
 
 
 @dataclass(frozen=True)
+class MortalEra:
+    """A mortal transaction era: valid from block ``checkpoint`` for ``period`` blocks.
+
+    ``period`` is a power of two, at least 4; ``checkpoint_hash`` is the hash
+    of block ``checkpoint``, which the signature commits to, so a checkpoint
+    the chain does not hold fails as ``BadProof``. The extrinsic can be
+    included in blocks ``checkpoint`` to :attr:`last_block`; after that it can
+    never land.
+
+    Raises:
+        QuipSigningError: if ``period`` is not a power of two from 4 to 65536.
+    """
+
+    period: int
+    checkpoint: int
+    checkpoint_hash: str
+
+    def __post_init__(self) -> None:
+        if not 4 <= self.period <= 1 << 16 or self.period & (self.period - 1):
+            raise QuipSigningError(f"era period must be a power of two from 4 to 65536, got {self.period}")
+
+    @property
+    def last_block(self) -> int:
+        """The last block that can include the extrinsic."""
+        return self.checkpoint + self.period - 1
+
+    def encode(self) -> bytes:
+        """The SCALE ``Era::Mortal`` bytes: period and phase packed into a little-endian ``u16``."""
+        quantize = max(self.period >> 12, 1)
+        phase = self.checkpoint % self.period
+        trailing_zeros = (self.period & -self.period).bit_length() - 1
+        encoded = min(15, max(1, trailing_zeros - 1)) | ((phase // quantize) << 4)
+        return encoded.to_bytes(2, "little")
+
+
+@dataclass(frozen=True)
 class ExtrinsicReceipt:
     """Outcome of submitting a hybrid-signed extrinsic.
 
@@ -272,10 +315,12 @@ def build_signed_extrinsic(
     call_function: str,
     call_params: dict,
     nonce: int | None = None,
+    era: MortalEra | None = None,
 ) -> tuple[bytes, str]:
     """Assemble a hybrid-signed v4 extrinsic, returning ``(wire_bytes, ext_hash)``.
 
     ``nonce`` signs with that account nonce; ``None`` reads the current one.
+    ``era`` signs it mortal; ``None`` signs it immortal.
 
     ``iface`` is a connected ``substrate-interface`` ``SubstrateInterface`` used
     only for ``compose_call`` and read-only chain state (nonce, genesis hash,
@@ -322,6 +367,7 @@ def build_signed_extrinsic(
         spec_version=spec_version,
         tx_version=tx_version,
         genesis_bytes=genesis_bytes,
+        era=era,
     )
 
     payload = call_bytes + extra + additional
@@ -592,8 +638,12 @@ def _extension_fields(
     tx_version: int,
     genesis_bytes: bytes,
     tip: int = 0,
+    era: MortalEra | None = None,
 ) -> dict[str, tuple[bytes, bytes]]:
     """Return each signed extension's ``(extra, additional)`` contribution.
+
+    ``CheckMortality`` is ``Era::Immortal`` against the genesis hash, or with
+    ``era`` the mortal era against its checkpoint's hash.
 
     One entry per extension, keyed by the identifier the runtime metadata uses,
     in :data:`SIGNED_EXTENSIONS` order. Most extensions contribute nothing to
@@ -612,7 +662,11 @@ def _extension_fields(
         "CheckSpecVersion": (b"", spec_version.to_bytes(4, "little")),
         "CheckTxVersion": (b"", tx_version.to_bytes(4, "little")),
         "CheckGenesis": (b"", genesis_bytes),
-        "CheckMortality": (b"\x00", genesis_bytes),  # Era::Immortal -> genesis hash
+        "CheckMortality": (
+            (b"\x00", genesis_bytes)  # Era::Immortal -> genesis hash
+            if era is None
+            else (era.encode(), bytes.fromhex(_strip_0x(era.checkpoint_hash)))
+        ),
         "CheckNonce": (encode_compact_u32(nonce), b""),
         "CheckWeight": (b"", b""),
         "ChargeTransactionPayment": (encode_compact_u128(tip), b""),
@@ -629,6 +683,7 @@ def _signed_extensions(
     tx_version: int,
     genesis_bytes: bytes,
     tip: int = 0,
+    era: MortalEra | None = None,
 ) -> tuple[bytes, bytes]:
     """Return the ``(extra, additional)`` signed-extension blobs in metadata order.
 
@@ -642,6 +697,7 @@ def _signed_extensions(
         tx_version=tx_version,
         genesis_bytes=genesis_bytes,
         tip=tip,
+        era=era,
     )
     return (
         b"".join(fields[name][0] for name in SIGNED_EXTENSIONS),
@@ -661,40 +717,6 @@ def _compose_call_bytes(iface: Any, call_module: str, call_function: str, call_p
     if isinstance(raw, str):
         return bytes.fromhex(_strip_0x(raw))
     return bytes(raw)
-
-
-def _dispatch_error_text(iface: Any, attrs: Any) -> str:
-    """Name the ``DispatchError`` in ``ExtrinsicFailed`` attributes, or return them as ``repr`` if it cannot be named.
-
-    A module error arrives as pallet and error indices (``{'index': 9,
-    'error': '0x06000000'}``, the error index in the first byte), so it is
-    looked up in the runtime metadata: ``QuantumComputeMempool.NotEligibleSolver``
-    with its doc line. Any other variant (``BadOrigin``, ``Token``, ...) is
-    rendered as its name and value. The attributes arrive as a dict, or, on
-    builds that decode them positionally, as ``[dispatch_error, dispatch_info]``.
-    """
-    if isinstance(attrs, dict):
-        error = attrs.get("dispatch_error")
-    else:
-        error = attrs[0] if isinstance(attrs, (list, tuple)) and attrs else None
-    if isinstance(error, str):
-        return error
-    if not isinstance(error, dict) or len(error) != 1:
-        return repr(attrs)
-    [(variant, value)] = error.items()
-    if variant != "Module":
-        return f"{variant}: {value}" if value is not None else variant
-    try:
-        # Older builds decode the indices as a tuple.
-        module_index, error_index = value[:2] if isinstance(value, tuple) else (value["index"], value["error"])
-        if isinstance(error_index, str):
-            error_index = bytes.fromhex(_strip_0x(error_index))[0]
-        pallet = iface.metadata.get_pallet_by_index(int(module_index)).name
-        entry = iface.metadata.get_module_error(module_index=int(module_index), error_index=int(error_index))
-        name, docs = entry.name, " ".join(entry.docs).strip()
-    except Exception:  # noqa: BLE001 -- an unnamed error still reads as the raw value, never hides it.
-        return repr(attrs)
-    return f"{pallet}.{name}" + (f" ({docs})" if docs else "")
 
 
 def _fetch_dispatch_error(iface: Any, *, block_hash: str, ext_hash: str) -> str | None:
@@ -848,6 +870,7 @@ def _warn_if_world_readable(path: Path) -> None:
 __all__ = [
     "ExtrinsicReceipt",
     "Keystore",
+    "MortalEra",
     "QuipSigningError",
     "build_signed_extrinsic",
     "encode_compact_u128",
