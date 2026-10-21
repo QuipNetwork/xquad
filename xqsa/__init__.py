@@ -25,9 +25,8 @@ xqsa.quip.SolverQuip submits to the Quip network.
 
 from . import quip as quip
 from ._deprecated import flat_quip_dir, flat_quip_getattr
-from .registry import DEFAULT_SOLVER, SOLVERS, build_solver
 from .solver import Solver, SolverResult
-from .solvers import SolverCPU, SolverDWave, SolverGPU
+from .solvers import DEFAULT_SOLVER, SOLVERS, SolverCPU, SolverDWave, SolverGPU, build_solver
 
 __all__ = [
     "Solver",

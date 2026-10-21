@@ -37,7 +37,7 @@ from typing import Any
 
 from xqffi.vm import XqmxModel
 
-from .solver import Implementation, RunOutput, model_to_bqm, sample_to_xqmx
+from ..solver import Implementation, RunOutput, model_to_bqm, sample_to_xqmx
 
 
 class InProcessDWave(Implementation):

@@ -49,12 +49,59 @@ class Implementation(ABC):
 
 An implementation turns a validated model into a sample. It does not time the run, compute the authoritative energy or assemble metadata; the template does all three. Its constructor declares every parameter it takes as an explicit keyword, so a misspelled parameter raises `TypeError` when the solver is built. It passes the per-call parameters, with their values, to `Implementation.__init__`, and `run()` declares the same names as keyword-only parameters. `run()` always receives every one of them, so a name present on one side only raises on every call.
 
-The shipped implementations run in-process, in the Python interpreter that calls `solve()`: `InProcessCPU`, `InProcessCuda`, `InProcessMetal` and `InProcessDWave` (see [SOLVERS.md](SOLVERS.md)). A solver-binary implementation, which runs a solver as a separate executable, plugs in at the same seam.
+The shipped implementations run in-process, in the Python interpreter that calls `solve()`: `InProcessCPU`, `InProcessCuda`, `InProcessMetal` and `InProcessDWave` (see [SOLVERS.md](SOLVERS.md)). `BinaryImplementation` (`binary.py`) plugs in at the same seam and runs a solver as a separate executable; see [Binary Implementation](#binary-implementation). No public solver uses it yet.
 
 `xqsa.solver` also provides two module functions for implementations built on `dimod`:
 
 - `model_to_bqm(model)` converts an `XqmxModel` to a `dimod.BinaryQuadraticModel`.
 - `sample_to_xqmx(model, raw_sample)` converts a `{variable: value}` dict to an `XqmxSample` with the model's grid dimensions. Variables absent from the dict keep the domain default.
+
+## Binary Implementation
+
+`BinaryImplementation(path, algorithm="sa", **params)` runs a solver-core binary at `path`. It takes the same per-call parameters as `InProcessCPU`, plus `beta_schedule_type` (`"geometric"` or `"linear"`, default `"geometric"`).
+
+**Construction.** It runs `<path> --capabilities` once and caches the JSON object it prints. Construction raises `SolverUnavailableError` when:
+
+1. the binary cannot be started, or `--capabilities` does not finish within 10 seconds;
+2. it exits non-zero, its stdout is not a JSON object, `supportedKinds` or `features` is not a list, or a limit (`maxNodes`, `maxEdges`, `maxDegree`, `maxLocalFieldMilli`, `exactResolutionMilli`) is not a non-negative integer;
+3. `protocolVersion` is not `2`;
+4. `algorithm` differs from the requested algorithm;
+5. `supportedKinds` lacks `ISING_SAMPLE`.
+
+**Model conversion.** A SPIN model is sent as it is, scaled to milli units. A BINARY model is converted to Ising with `x = (1 + s) / 2`: `h'_i = h_i / 2 + sum_j J_ij / 4`, `J'_ij = J_ij / 4`, and the constant is dropped. A diagonal term `(i, i)` is linear in BINARY and constant in SPIN, so it never becomes an edge. Every converted coefficient is a whole number of milli units, so the conversion is exact. Spins map back as `x = (s + 1) / 2`. The template recomputes the energy on the original model, so the dropped constant never reaches the caller.
+
+**Checks before spawning.** `run()` validates the parameters as `InProcessCPU` does, requires `beta_range` to be `None` or two finite positive numbers, and requires `seed` to be `None` or an integer in `[0, 2**64)` (`ValueError` otherwise). It then raises `ModelRejectedError`, without starting the binary, when:
+
+- `beta_schedule_type` is `"linear"` and `features` lacks `linear-schedule`;
+- the node or edge count exceeds a non-zero `maxNodes` or `maxEdges`;
+- a node's degree exceeds a non-zero `maxDegree`;
+- a node's `|h_i| + sum_j |J_ij|`, in milli, exceeds a non-zero `maxLocalFieldMilli`;
+- `features` has `exact-coefficients` and a coefficient is not a multiple of a non-zero `exactResolutionMilli`;
+- a coefficient, in milli, is outside the signed 32-bit range.
+
+**Request.** It runs `<path> --solve` with one JSON object on stdin:
+
+| Key | Value |
+|-----|-------|
+| `h`, `j`, `edges` | Ising coefficients in units, one `h` per variable and one `j` per edge `[u, v]`. A whole value is sent as an integer, any other as an exact quarter. |
+| `num_reads`, `num_sweeps` | As given. |
+| `sweeps_per_beta` | `num_sweeps_per_beta`. |
+| `beta_range` | `[hot, cold]`, or `null` to let the binary choose. |
+| `seed` | As given; when `None`, a 64-bit seed drawn with `secrets`. |
+| `beta_schedule_type` | Sent only when `"linear"`. |
+
+**Exit codes.** On a non-zero exit, `run()` raises with the binary's `exit_code` and a `detail`: the text after the `[quip-solver-<backend>]` prefix on its last stderr line, or all of stderr when that line has none (both streams are decoded as UTF-8, with replacement characters for invalid bytes):
+
+| Exit | Error |
+|------|-------|
+| 64 | `SolverProtocolError` |
+| 65 | `ModelRejectedError` |
+| 69 | `SolverUnavailableError` |
+| 70, any other | `SolverFailedError` |
+
+`SolverFailedError` is also raised when the binary exits 0 but its stdout is not a non-empty JSON array of reads, a read's `spins` are not one `-1` or `+1` per variable, or a read lacks `energy_milli`, `timing` or the `sampler` fields the result reports. The error types live in `xqsa.errors` and are not exported from `xqsa` yet.
+
+**Result.** The sample is the read with the lowest `energy_milli`, the first on ties. `reads` is the number of reads returned, `seed` is the seed the binary reports, and `params` holds `num_sweeps`, `num_sweeps_per_beta`, `beta_range` (`None` when the binary chose), `beta_schedule_type` and `timing` (`sample_us`, `total_us`), as the binary used them.
 
 ## `solve()` Contract
 
@@ -124,7 +171,7 @@ Every solver whose `solve()` is the template returns `SolverResult.metadata` wit
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `seed` | `int \| None` | The random seed the run used. `None` when unseeded, and always `None` on physical hardware, which has no seed. |
+| `seed` | `int \| None` | The random seed the run used. `None` when unseeded, and always `None` on physical hardware, which has no seed. A binary-backed implementation always reports the seed it used, drawn when none was given. |
 | `reads` | `int` | Number of samples/reads taken. |
 | `params` | `dict[str, Any]` | The selectors that chose the implementation, the parameters the run used, and backend diagnostics. |
 

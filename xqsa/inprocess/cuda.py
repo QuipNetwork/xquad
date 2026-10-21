@@ -37,7 +37,7 @@ import numpy.typing as npt
 
 from xqffi.vm import Domain, XqmxModel
 
-from .solver import (
+from ..solver import (
     Implementation,
     RunOutput,
     _check_algorithm,
@@ -62,7 +62,7 @@ _THREADS_PER_REPLICA = 256
 # ---------------------------------------------------------------------------
 
 # Device RNG (QUI-705): mirrors InProcessMetal's on-device scheme
-# (xqsa/metal_gpu.py _RNG_PRELUDE) with 64-bit state so acceptance draws
+# (xqsa/inprocess/metal.py _RNG_PRELUDE) with 64-bit state so acceptance draws
 # stay float64 (53-bit uniform). Metal's float32 is an MSL platform limit,
 # not a precision decision. Python mirrors live in tests/test_xqsa.py;
 # keep constants in sync bit-for-bit.

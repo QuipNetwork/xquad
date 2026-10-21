@@ -622,8 +622,10 @@ test-miri: deps-miri
 # tests (quip), which need the `[quip]` extra and run in the dedicated
 # `test:quip` job (.gitlab/ci/test.yml). This job runs everywhere, so it must
 # deselect them or they would run unconfigured in CI.
+# The real quip-cpu-sa binary tests (quip_cpu) are deselected too; run them on
+# their own with `-m quip_cpu` and XQSA_QUIP_CPU_SA set.
 test-py: deps-py
-	uv run --no-sync pytest xqcp/tests xqsa/tests xquad/tests scripts/tests -m "not cuda and not qpu and not metal and not quip"
+	uv run --no-sync pytest xqcp/tests xqsa/tests xquad/tests scripts/tests -m "not cuda and not qpu and not metal and not quip and not quip_cpu"
 
 # Run the WASM no_std correctness tests (fixtures/xqvm-wasm).
 # Two gates in sequence:

@@ -3,7 +3,7 @@
 `SolverDWave` submits the model to a physical D-Wave Advantage
 quantum annealer over the D-Wave Leap cloud API. This page is derived
 from
-[`xqsa/dwave_qpu.py`](https://gitlab.com/quip.network/xquad/-/blob/main/xqsa/dwave_qpu.py)
+[`xqsa/inprocess/dwave.py`](https://gitlab.com/quip.network/xquad/-/blob/main/xqsa/inprocess/dwave.py)
 and `spec/xqsa/*`; no D-Wave Leap account was available while writing
 it, so nothing on this page was run.
 

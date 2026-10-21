@@ -10,7 +10,7 @@ Public solver classes are named for where the model is solved: `SolverCPU`, `Sol
 | `engine` | `SolverGPU` | The GPU runtime: `"cuda"` or `"metal"`. Required; there is no auto-detection. |
 | `mode` | `SolverDWave` | How D-Wave hardware is used: `"qpu"`. |
 
-Selectors are keyword-only constructor arguments. Each class passes every other keyword through to the implementation it composes (see [INTERFACE.md](INTERFACE.md)). Implementations are named for how they run: `InProcessCPU`, `InProcessCuda`, `InProcessMetal` and `InProcessDWave` run in the Python process. They are not exported from `xqsa`.
+Selectors are keyword-only constructor arguments. Each class passes every other keyword through to the implementation it composes (see [INTERFACE.md](INTERFACE.md)). Implementations are named for how they run: `InProcessCPU`, `InProcessCuda`, `InProcessMetal` and `InProcessDWave` run in the Python process. `BinaryImplementation` (`binary.py`) runs a solver-core binary; no public solver uses it until the CPU family moves onto it. None of them is exported from `xqsa`.
 
 ## Algorithm Families
 
@@ -118,10 +118,10 @@ Configuration (constructor arg, then environment): `url`/`QUIP_RPC_URL`, `seed`/
 
 | Solver | Implementation (file) | Extra | Hardware | Status |
 |--------|-----------------------|-------|----------|--------|
-| `SolverCPU` | `InProcessCPU` (`dwave_cpu.py`) | (base) | CPU | implemented |
-| `SolverGPU(engine="cuda")` | `InProcessCuda` (`cuda_gpu.py`) | `[cuda]` | NVIDIA CUDA GPU | implemented |
-| `SolverGPU(engine="metal")` | `InProcessMetal` (`metal_gpu.py`) | `[metal]` | Apple Metal GPU | implemented |
-| `SolverDWave(mode="qpu")` | `InProcessDWave` (`dwave_qpu.py`) | `[dwave]` | D-Wave QPU (cloud) | implemented |
+| `SolverCPU` | `InProcessCPU` (`inprocess/cpu.py`) | (base) | CPU | implemented |
+| `SolverGPU(engine="cuda")` | `InProcessCuda` (`inprocess/cuda.py`) | `[cuda]` | NVIDIA CUDA GPU | implemented |
+| `SolverGPU(engine="metal")` | `InProcessMetal` (`inprocess/metal.py`) | `[metal]` | Apple Metal GPU | implemented |
+| `SolverDWave(mode="qpu")` | `InProcessDWave` (`inprocess/dwave.py`) | `[dwave]` | D-Wave QPU (cloud) | implemented |
 | `SolverQuip` | -- (`quip/`) | `[quip]` | Quip Network mempool (miner-solved) | implemented |
 | `SolverIBMQAOA` | -- | `[ibm]` | IBM QPU / AerSimulator | planned |
 | `SolverIonQQAOA` | -- | `[ionq]` | IonQ trapped-ion QPU | planned |

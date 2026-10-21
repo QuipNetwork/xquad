@@ -497,7 +497,7 @@ class TestSolverDWave:
 # SolverGPU (CUDA engine) -- mocked tests (no GPU required, runs everywhere)
 # ---------------------------------------------------------------------------
 
-# Python mirrors of the CUDA device RNG in xqsa.cuda_gpu._RNG_PRELUDE
+# Python mirrors of the CUDA device RNG in xqsa.inprocess.cuda._RNG_PRELUDE
 # (QUI-705). Constants and update order must match the kernel bit-for-bit;
 # the fake kernel below consumes these so the mocked solve reproduces the
 # device sampling stream exactly.
@@ -831,7 +831,7 @@ class TestSolverGPUCudaMocked:
 
     def test_launch_shape_parallel_reduction_mocked(self, mock_cupy_env) -> None:
         """Each replica's block launches _THREADS_PER_REPLICA threads (QUI-852)."""
-        from xqsa.cuda_gpu import _THREADS_PER_REPLICA
+        from xqsa.inprocess.cuda import _THREADS_PER_REPLICA
 
         _Solver = _cuda
 
@@ -1015,7 +1015,7 @@ class TestSolverGPUCudaPlumbing:
 
     def test_settings_reach_the_sampler(self, monkeypatch) -> None:
         """Constructor values, per-call overrides and selectors flow through run()."""
-        from xqsa.cuda_gpu import InProcessCuda
+        from xqsa.inprocess.cuda import InProcessCuda
 
         fake_cupy = types.ModuleType("cupy")
         fake_cupy.cuda = types.SimpleNamespace(runtime=types.SimpleNamespace(getDeviceCount=lambda: 1))
@@ -1932,7 +1932,7 @@ class TestSolverGPUMetalMocked:
 
     def test_sa_dispatch_width_mocked(self, mock_metal_env) -> None:
         """The sa pipeline dispatches _SA_THREADGROUP_WIDTH threads per replica (QUI-852)."""
-        from xqsa.metal_gpu import _SA_THREADGROUP_WIDTH
+        from xqsa.inprocess.metal import _SA_THREADGROUP_WIDTH
 
         _Solver = _metal
 

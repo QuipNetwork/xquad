@@ -6,7 +6,7 @@ using only local hardware and no account. `cpu` runs on the CPU;
 NVIDIA or Apple Silicon GPU. The `metal` examples below ran for
 real, on an Apple Silicon Mac; no NVIDIA GPU was available while
 writing this chapter, so the `cuda` material comes from reading
-[`xqsa/cuda_gpu.py`](https://gitlab.com/quip.network/xquad/-/blob/main/xqsa/cuda_gpu.py)
+[`xqsa/inprocess/cuda.py`](https://gitlab.com/quip.network/xquad/-/blob/main/xqsa/inprocess/cuda.py)
 rather than from execution.
 
 ## `SolverCPU`: The Baseline
@@ -93,7 +93,7 @@ The CUDA engine supports only `algorithm="sa"` -- CUDA has no Gibbs
 kernel. Any other `algorithm` raises `ValueError` saying it is not
 available in-process; further algorithms arrive with the solver binaries.
 See
-[`xqsa/cuda_gpu.py`](https://gitlab.com/quip.network/xquad/-/blob/main/xqsa/cuda_gpu.py)
+[`xqsa/inprocess/cuda.py`](https://gitlab.com/quip.network/xquad/-/blob/main/xqsa/inprocess/cuda.py)
 for the implementation the rest of this section describes.
 
 | Parameter | `engine="cuda"` default | `engine="metal"` default | Meaning |

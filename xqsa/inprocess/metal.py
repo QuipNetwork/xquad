@@ -27,7 +27,7 @@ The kernels are adapted from the quip-protocol ``MetalMiner``
 (``GPU/metal_kernels.metal``, ``GPU/metal_gibbs.metal``), simplified for
 XQMX models: float32 coefficients, dense topology, single-model dispatch.
 
-This implementation intentionally mirrors :class:`xqsa.cuda_gpu.InProcessCuda`. Two
+This implementation intentionally mirrors :class:`xqsa.inprocess.cuda.InProcessCuda`. Two
 deliberate divergences from the protocol simplify the port and match the
 CUDA solver's representation:
 
@@ -52,7 +52,7 @@ import numpy as np
 
 from xqffi.vm import Domain, XqmxModel
 
-from .solver import (
+from ..solver import (
     Implementation,
     RunOutput,
     _check_algorithm,

@@ -64,7 +64,7 @@ skip_no_token = pytest.mark.skipif(
 
 # `dwave.system` is a real module dependency of this file, not merely a
 # runtime one: SolverDWave lazy-imports it inside __init__
-# (xqsa/dwave_qpu.py), but every test below constructs one. It ships only in
+# (xqsa/inprocess/dwave.py), but every test below constructs one. It ships only in
 # xqsa's `dwave` extra, so under `uv sync --extra cuda` / `--extra metal` --
 # what hardware:cuda and hardware:metal install -- this module now skips at
 # import rather than dragging the xquad umbrella package, and with it xqffi's
