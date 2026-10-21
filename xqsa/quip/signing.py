@@ -56,6 +56,7 @@ import json
 import os
 import stat
 import tempfile
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -88,11 +89,11 @@ SIGNED_PAYLOAD_HASH_THRESHOLD = 256
 ADDRESS_TYPE_PATH = "sp_runtime::multiaddress::MultiAddress"
 SIGNATURE_TYPE_PATH = "quip_transaction_crypto::HybridTxSignature"
 
-# The signed extensions of the runtime this release first shipped against, in
-# its metadata order. Nothing here reads it: the order comes from the node's
-# runtime metadata, and ``_extension_fields`` is the table of how each
-# extension encodes.
-SIGNED_EXTENSIONS: tuple[str, ...] = (
+# The signed extensions of the 0.4 runtimes, in their metadata order, served
+# only as the deprecated ``SIGNED_EXTENSIONS``. Nothing here reads it: the
+# order comes from the node's runtime metadata, and ``_extension_fields`` is
+# the table of how each extension encodes.
+_SIGNED_EXTENSIONS_0_4: tuple[str, ...] = (
     "AuthorizeCall",
     "CheckNonZeroSender",
     "CheckSpecVersion",
@@ -940,13 +941,27 @@ def _warn_if_world_readable(path: Path) -> None:
     """Emit a warning if ``path`` is group/world accessible (seed exposure)."""
     mode = path.stat().st_mode
     if mode & (stat.S_IRWXG | stat.S_IRWXO):
-        import warnings
-
         warnings.warn(
             f"keystore {path} has group/world-accessible permissions "
             f"({stat.S_IMODE(mode):o}); tighten to {KEYSTORE_FILE_MODE:o}",
             stacklevel=2,
         )
+
+
+def __getattr__(name: str) -> object:
+    """Serve the deprecated ``SIGNED_EXTENSIONS`` (PEP 562), warning at the caller's line.
+
+    QUI-1608 removes it in v0.5.0.
+    """
+    if name != "SIGNED_EXTENSIONS":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    warnings.warn(
+        "xqsa.quip.signing.SIGNED_EXTENSIONS is deprecated since v0.4.5 and removed in v0.5.0; "
+        "the order comes from the runtime metadata",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _SIGNED_EXTENSIONS_0_4
 
 
 __all__ = [

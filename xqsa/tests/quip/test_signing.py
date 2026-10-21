@@ -390,6 +390,32 @@ class TestSignedExtensions:
         assert len(additional) == 4 + 4 + 32 + 32 + 1
 
 
+class TestDeprecatedSignedExtensions:
+    def test_the_old_name_warns_and_keeps_its_value(self) -> None:
+        with pytest.warns(DeprecationWarning, match="SIGNED_EXTENSIONS is deprecated since v0.4.5"):
+            order = quip_signing.SIGNED_EXTENSIONS
+        assert order == tuple(name for name, _, _ in FAKE_EXTENSIONS)
+
+    def test_the_shim_path_warns_too(self, monkeypatch) -> None:
+        import importlib
+        import sys
+
+        monkeypatch.delitem(sys.modules, "xqsa.quip_signing", raising=False)
+        with pytest.warns(DeprecationWarning) as caught:
+            shim = importlib.import_module("xqsa.quip_signing")
+            order = shim.SIGNED_EXTENSIONS
+        assert [str(w.message) for w in caught] == [
+            "xqsa.quip_signing is deprecated; import xqsa.quip.signing instead",
+            "xqsa.quip.signing.SIGNED_EXTENSIONS is deprecated since v0.4.5 and removed in v0.5.0; "
+            "the order comes from the runtime metadata",
+        ]
+        assert order == quip_signing._SIGNED_EXTENSIONS_0_4
+
+    def test_another_missing_name_raises(self) -> None:
+        with pytest.raises(AttributeError, match="has no attribute 'NOT_A_NAME'"):
+            _ = quip_signing.NOT_A_NAME
+
+
 class TestCheckRuntime:
     def test_the_live_runtime_passes(self) -> None:
         check_runtime(FakeIface())
