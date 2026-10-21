@@ -329,6 +329,13 @@ def check_runtime(iface: Any) -> None:
             what this client encodes. Upgrading xquad is the remedy; retrying
             is not.
     """
+    _check_envelope(iface)
+    for era in (None, _SAMPLE_ERA):
+        _signed_extensions(iface, nonce=0, spec_version=1, tx_version=1, genesis_bytes=bytes(32), era=era)
+
+
+def _check_envelope(iface: Any) -> None:
+    """Check the extrinsic envelope half of :func:`check_runtime`; raises :class:`QuipMetadataError`."""
     try:
         v14 = iface.metadata.value[1]["V14"]
         extrinsic = v14["extrinsic"]
@@ -355,8 +362,6 @@ def check_runtime(iface: Any) -> None:
                 f"the node's runtime has {what} {found!r} where this client encodes {expected!r}; "
                 "upgrade xquad to sign for this runtime"
             )
-    for era in (None, _SAMPLE_ERA):
-        _signed_extensions(iface, nonce=0, spec_version=1, tx_version=1, genesis_bytes=bytes(32), era=era)
 
 
 def build_signed_extrinsic(
@@ -387,10 +392,10 @@ def build_signed_extrinsic(
     ``quip_signer.verify_envelope`` before returning, so a wrong payload or
     identity is caught locally rather than as an opaque on-chain rejection.
 
-    The runtime is checked with :func:`check_runtime` right after
-    ``compose_call``, which loads the metadata at the head, and the real
-    extension bytes are then decoded against the chain's types once more, so
-    the metadata, the call and the runtime version all describe one runtime.
+    Right after ``compose_call``, which loads the metadata at the head, the
+    envelope is checked as :func:`check_runtime` checks it, and the real
+    extension bytes are decoded against the chain's types, so the metadata,
+    the call and the runtime version all describe one runtime.
 
     Raises:
         QuipMetadataError: if this client cannot sign for the node's runtime.
@@ -403,7 +408,8 @@ def build_signed_extrinsic(
     from substrateinterface.utils.hasher import blake2_256
 
     call_bytes = _compose_call_bytes(iface, call_module, call_function, call_params)
-    check_runtime(iface)
+    # The extensions are checked below on the real values, so only the envelope here.
+    _check_envelope(iface)
 
     account = signer.account_id
     # Enforce the documented wire invariants before splicing identity material

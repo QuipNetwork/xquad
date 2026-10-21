@@ -1672,6 +1672,14 @@ class TestSolverQuipConstruction:
         with pytest.raises(ValueError, match="aglais, devnet"):
             SolverQuip.for_network("mainnet", seed=VALID_SEED)
 
+    def test_an_unknown_private_network_name_raises_before_connecting(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface(), substrate_raises=AssertionError("must not connect"))
+        _clear_quip_env(monkeypatch)
+        with pytest.raises(ValueError, match="unknown Quip network 'nope'"):
+            SolverQuip(url="ws://x", seed=VALID_SEED, _network="nope")
+
     @staticmethod
     def _pin_aglais(monkeypatch, genesis: str) -> None:
         from dataclasses import replace as dc_replace

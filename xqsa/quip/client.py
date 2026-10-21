@@ -138,6 +138,31 @@ def _is_native(topology: str | None) -> bool:
     return (topology or "").strip().lower() == NATIVE_TOPOLOGY
 
 
+def _open(url: str) -> Any:
+    """Connect to ``url`` and load its runtime; the connection is closed on any failure."""
+    # Not substrateinterface.SubstrateInterface directly: Quip runtimes serve
+    # metadata V16, which scalecodec cannot decode. The subclass pulls V14
+    # through the versioned runtime API instead, and confines that to instances
+    # we build. See xqsa.quip.metadata.
+    iface = quip_metadata.connect(url)
+    try:
+        # Resolve metadata here rather than letting the first storage read
+        # trigger it: a node whose metadata this client cannot decode must fail
+        # as QuipMetadataError, and every later read wraps its faults as "could
+        # not read <pallet constant>", which names the wrong cause.
+        iface.init_runtime()
+    except BaseException:
+        _close(iface)
+        raise
+    return iface
+
+
+def _close(iface: Any) -> None:
+    """Close ``iface``, ignoring a failure: the connection is being given up."""
+    with contextlib.suppress(Exception):
+        iface.close()
+
+
 class SolverQuip(Solver):
     """Network-mempool backend: solve XQMX Ising models on the Quip Network.
 
@@ -237,6 +262,9 @@ class SolverQuip(Solver):
             access = AccessOpen()
         # All before any network I/O.
         check_client_defaults(delivery)
+        if _network is not None and _network not in NETWORKS:
+            raise ValueError(f"unknown Quip network {_network!r}; known networks: {', '.join(sorted(NETWORKS))}")
+        pin = NETWORKS[_network].genesis if _network is not None else None
         self._inclusion_window_blocks = check_inclusion_window(inclusion_window_blocks)
         self._access = coerce_access(access)
         self._resolution = coerce_resolution(resolution)
@@ -261,30 +289,13 @@ class SolverQuip(Solver):
         self._autofund = _resolve_gate(autofund, "autofund", "QUIP_AUTOFUND")
 
         try:
-            # Not substrateinterface.SubstrateInterface directly: Quip runtimes
-            # serve metadata V16, which scalecodec cannot decode. The subclass
-            # pulls V14 through the versioned runtime API instead, and confines
-            # that to instances we build. See xqsa.quip.metadata.
-            self._iface = quip_metadata.connect(resolved_url)
+            self._iface = _open(resolved_url)
         except QuipMetadataError:
             raise  # a client/runtime metadata mismatch is not a connection fault.
         except Exception as exc:  # noqa: BLE001 -- any connect failure is a connection error.
             raise QuipConnectionError(f"could not connect to the Quip node at {resolved_url}: {exc}") from exc
         self._url = resolved_url
         try:
-            try:
-                # Resolve metadata here rather than letting the first storage read
-                # trigger it: a node whose metadata this client cannot decode must
-                # fail as QuipMetadataError, and every read below wraps its faults
-                # as "could not read <pallet constant>", which names the wrong
-                # cause. Doing it once, in the open, also makes the failure
-                # independent of which resolve step happens to run first.
-                self._iface.init_runtime()
-            except QuipMetadataError:
-                raise  # a client/runtime metadata mismatch is not a connection fault.
-            except Exception as exc:  # noqa: BLE001 -- any connect failure is a connection error.
-                raise QuipConnectionError(f"could not connect to the Quip node at {resolved_url}: {exc}") from exc
-            pin = NETWORKS[_network].genesis if _network is not None else None
             self._genesis_hash = self._check_connection(self._iface, expected_genesis=pin)
 
             self._spec_id = self._resolve_spec_id(spec_id)
@@ -294,9 +305,7 @@ class SolverQuip(Solver):
             self._reward = self._resolve_reward(reward)
             self._topology_hash = self._resolve_topology_hash(topology)
         except BaseException:
-            # No solver comes back to close it, so close it here.
-            with contextlib.suppress(Exception):
-                self._iface.close()
+            _close(self._iface)  # no solver comes back to close it.
             raise
 
     @classmethod
@@ -943,42 +952,48 @@ class SolverQuip(Solver):
     def _reconnect(self) -> None:
         """Replace the chain connection with a fresh one; a failure keeps the old one for the next attempt.
 
-        The new connection must serve the session's genesis on a runtime this
-        client can sign for, else it is closed and the old one kept.
+        The new connection must serve the session's genesis, else it is closed
+        and the old one kept. Its signed extensions are not checked: settling
+        only reads and resends bytes already signed, and the next signing
+        checks the runtime it signs for.
 
         Raises:
             GenesisMismatch: if the node now serves another chain.
-            QuipMetadataError: if this client cannot sign for the node's runtime.
+            QuipMetadataError: if this client cannot read the node's metadata.
         """
         try:
-            iface = quip_metadata.connect(self._url)
+            iface = _open(self._url)
+        except QuipMetadataError:
+            raise  # the same node gives the same answer; retrying cannot help.
         except Exception as exc:  # noqa: BLE001 -- the caller retries until its deadline.
             logger.warning("could not reconnect to the Quip node at %s: %s", self._url, exc)
             return
         try:
-            iface.init_runtime()
             self._check_connection(iface, expected_genesis=self._genesis_hash, reconnect=True)
-        except BaseException as exc:
-            # Kept only on success, so close it on every failure.
-            with contextlib.suppress(Exception):
-                iface.close()
-            if not isinstance(exc, Exception) or isinstance(exc, (chain.GenesisMismatch, QuipMetadataError)):
-                raise  # an interrupt, or the same node gives the same answer; retrying cannot help.
+        except chain.GenesisMismatch:
+            _close(iface)
+            raise  # the same node gives the same answer; retrying cannot help.
+        except Exception as exc:  # noqa: BLE001 -- the caller retries until its deadline.
+            _close(iface)
             logger.warning("could not reconnect to the Quip node at %s: %s", self._url, exc)
             return
+        except BaseException:
+            _close(iface)
+            raise
         old, self._iface = self._iface, iface
         if old is not iface:
-            with contextlib.suppress(Exception):
-                old.close()
+            _close(old)
 
     def _check_connection(self, iface: Any, *, expected_genesis: str | None, reconnect: bool = False) -> str:
         """Check that ``iface`` serves the expected chain on a runtime this client can sign for; return its genesis.
 
-        Logs the network, runtime and genesis at ``INFO``.
+        Logs the network, runtime and genesis at ``INFO``. A ``reconnect``
+        checks the genesis only; see :meth:`_reconnect`.
 
         Raises:
             GenesisMismatch: if ``expected_genesis`` is set and the node's differs.
-            QuipMetadataError: if this client cannot sign for the node's runtime.
+            QuipMetadataError: if this client cannot sign for the node's runtime
+                (first connect only).
             QuipConnectionError: if the genesis hash cannot be read.
         """
         genesis = chain.genesis_hash(iface).lower()
@@ -988,7 +1003,8 @@ class SolverQuip(Solver):
                 f"the Quip node at {self._url} ({network}) serves genesis {genesis}, "
                 f"not the expected {expected_genesis}"
             )
-        self._quip_signing.check_runtime(iface)
+        if not reconnect:
+            self._quip_signing.check_runtime(iface)
         logger.info(
             "%s Quip %s at %s: specVersion %s, transactionVersion %s, genesis %s",
             "reconnected to" if reconnect else "connected to",

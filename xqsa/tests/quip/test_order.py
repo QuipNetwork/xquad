@@ -1372,38 +1372,39 @@ class TestJobOrderSendOutcomes:
         monkeypatch.setattr(chain_module_metadata(), "connect", lambda url: other)
         return closed
 
-    @pytest.mark.parametrize(
-        ("change", "cause", "then"),
-        [
-            ("genesis", GenesisMismatch, "the endpoint now serves a different chain"),
-            ("runtime", QuipMetadataError, "upgrade xquad"),
-        ],
-    )
-    def test_a_reconnect_to_another_chain_or_runtime_is_sending_at_once(
-        self, monkeypatch, virtual_clock, change, cause, then
-    ) -> None:
+    def test_a_reconnect_to_another_chain_is_sending_at_once(self, monkeypatch, virtual_clock) -> None:
         solver, captured = _ready(monkeypatch)
         _send_raises(monkeypatch, solver, ConnectionError("websocket closed"), captured, lands_on=None)
         order = solver.create_order(_model())
         order.quote()
         session = solver._iface
-        closed = self._repointed(monkeypatch, solver, change)
-        with pytest.raises(QuipSubmitIncompleteError, match=then) as info:
+        closed = self._repointed(monkeypatch, solver, "genesis")
+        with pytest.raises(QuipSubmitIncompleteError, match="the endpoint now serves a different chain") as info:
             order.submit()
-        assert isinstance(info.value.__cause__, cause)
+        assert isinstance(info.value.__cause__, GenesisMismatch)
         assert len(virtual_clock) == 1  # one backoff before the reconnect, then no retries.
         assert (closed, solver._iface) == ([True], session)
         assert order.status()["state"] == "sending"
 
-    @pytest.mark.parametrize(("change", "cause"), [("genesis", GenesisMismatch), ("runtime", QuipMetadataError)])
-    def test_one_settle_attempt_stops_on_another_chain_or_runtime(self, monkeypatch, change, cause) -> None:
+    def test_one_settle_attempt_stops_on_another_chain(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
         session = solver._iface
-        closed = self._repointed(monkeypatch, solver, change)
+        closed = self._repointed(monkeypatch, solver, "genesis")
         with pytest.raises(QuipSubmitIncompleteError) as info:
             solver._settle_once(_signed_call(solver))
-        assert isinstance(info.value.__cause__, cause)
+        assert isinstance(info.value.__cause__, GenesisMismatch)
         assert (closed, solver._iface) == ([True], session)
+
+    def test_a_reconnect_does_not_check_the_signed_extensions(self, monkeypatch) -> None:
+        # Settling only reads and resends signed bytes; the next signing checks the runtime.
+        solver, _ = _ready(monkeypatch)
+        session = solver._iface
+        closed = self._repointed(monkeypatch, solver, "runtime")
+        with pytest.raises(QuipSubmitIncompleteError) as info:
+            solver._settle_once(_signed_call(solver))
+        assert not isinstance(info.value.__cause__, QuipMetadataError)  # it read on the new node instead.
+        assert closed == []
+        assert solver._iface is not session
 
     def test_a_reconnect_that_fails_to_load_the_runtime_closes_it(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
