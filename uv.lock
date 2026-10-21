@@ -17,6 +17,7 @@ dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "ruff", specifier = ">=0.7" },
+    { name = "scalecodec", specifier = ">=1.2,<2" },
 ]
 
 [[package]]
