@@ -547,16 +547,28 @@ class SolverQuip(Solver):
     ) -> QuipSubmissionError:
         """Build the error for an account that cannot cover ``quote``, naming where to fund it.
 
-        ``beyond_drip`` marks a shortfall larger than one faucet drip, which
-        ``autofund`` never requests: that is more often a mistyped reward than
-        a real need. ``above_ceiling`` marks an account already holding more
-        than one drip, which the faucet refuses to top up.
+        With no faucet, a named network says it has none and a raw ``url=``
+        says how to name one; either adds a ``reward=`` nudge when the
+        shortfall exceeds one faucet drip. With a faucet, ``beyond_drip``
+        marks a shortfall larger than one drip, which ``autofund`` never
+        requests: that is more often a mistyped reward than a real need.
+        ``above_ceiling`` marks an account already holding more than one drip,
+        which the faucet refuses to top up.
         """
 
         def amount(planck: int) -> str:
             return f"{_format_planck(planck, quote.token_decimals)} {quote.token_symbol}"
 
-        if beyond_drip:
+        if not self._faucet:
+            if self._network:
+                remedy = f"{self._network} has no faucet; fund the account another way."
+            else:
+                remedy = (
+                    "Pass faucet=, set QUIP_FAUCET_URL, or build with SolverQuip.for_network(...) to name a faucet."
+                )
+            if quote.shortfall_planck > DEFAULT_DRIP_PLANCK:
+                remedy += " Check reward= if that is more than you meant."
+        elif beyond_drip:
             remedy = (
                 f"That is more than one faucet drip ({amount(DEFAULT_DRIP_PLANCK)}), which is all autofund "
                 "requests; check reward=, or fund the account another way."
@@ -566,10 +578,8 @@ class SolverQuip(Solver):
                 f"The faucet only tops up an account holding at most one drip ({amount(DEFAULT_DRIP_PLANCK)}); "
                 "fund the account another way."
             )
-        elif self._faucet:
-            remedy = f"Fund it from the faucet at {self._faucet}."
         else:
-            remedy = "Pass faucet=, set QUIP_FAUCET_URL, or build with SolverQuip.for_network(...) to name a faucet."
+            remedy = f"Fund it from the faucet at {self._faucet}."
         return QuipSubmissionError(
             f"insufficient balance: account {self._account_ss58} holds "
             f"{amount(quote.balance_planck)} but the job needs {amount(quote.total_planck)} "
@@ -1418,7 +1428,7 @@ class SolverQuip(Solver):
             time.sleep(self._poll_interval)
 
     def _clear_gates(self, quote: JobQuote) -> None:
-        """Show ``quote``, refuse what no drip can cover, then ask the gates and fund if short.
+        """Show ``quote``, refuse what cannot be funded, then ask the gates and fund if short.
 
         The ``autoconfirm`` gate comes first, so the price is accepted before
         funding is considered. Only if the account is short does the
@@ -1426,22 +1436,23 @@ class SolverQuip(Solver):
 
         Raises:
             QuipSubmissionError: if the account cannot cover the quote and no
-                faucet is configured, the shortfall exceeds one faucet drip, the
-                balance already exceeds the faucet's one-drip ceiling, or the
-                drip does not land. The first three are raised before either
-                gate is asked.
+                faucet is configured, or, with a faucet, the shortfall exceeds
+                one drip, the balance already exceeds the faucet's one-drip
+                ceiling, or the drip does not land. All but the last are raised
+                before either gate is asked; the drip limits apply only with a
+                faucet.
             QuipCancelledError: if a gate declines.
             QuipFaucetError: if the faucet refuses or cannot be reached.
         """
         self._display(quote)
         # A shortfall no drip can cover fails whatever the gates say, so raise
         # it before asking anyone to confirm a job that cannot go out.
+        if quote.shortfall_planck and not self._faucet:
+            raise self._insufficient_error(quote)
         if quote.shortfall_planck > DEFAULT_DRIP_PLANCK:
             raise self._insufficient_error(quote, beyond_drip=True)
         if quote.shortfall_planck and quote.balance_planck > DEFAULT_DRIP_PLANCK:
             raise self._insufficient_error(quote, above_ceiling=True)
-        if quote.shortfall_planck and not self._faucet:
-            raise self._insufficient_error(quote)
         total = f"{_format_planck(quote.total_planck, quote.token_decimals)} {quote.token_symbol}"
         self._pass_gate(self._autoconfirm, quote, name="autoconfirm", question=f"Submit this job for {total}?")
         if quote.shortfall_planck:

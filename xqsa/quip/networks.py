@@ -51,7 +51,8 @@ class QuipNetwork:
 
     Attributes:
         rpc: Websocket RPC endpoint, passed to ``SolverQuip`` as ``url``.
-        faucet: Base URL of the network's faucet, passed to ``SolverQuip`` as ``faucet``.
+        faucet: Base URL of the network's faucet, passed to ``SolverQuip`` as
+            ``faucet``, or ``None`` if the network has no faucet.
         genesis: The network's genesis hash, or ``None`` to accept any. With
             a hash, a node serving another chain fails the connect with
             :class:`~xqsa.quip.chain.GenesisMismatch`. Leave it unset for a
@@ -62,7 +63,7 @@ class QuipNetwork:
     """
 
     rpc: str
-    faucet: str
+    faucet: str | None
     genesis: str | None = None
 
     def __post_init__(self) -> None:

@@ -3656,6 +3656,35 @@ class TestSolverQuipInsufficientBalance:
         assert "faucet=" in message
         assert "QUIP_FAUCET_URL" in message
         assert "SolverQuip.for_network" in message
+        assert "reward=" not in message  # one UNIT short: within a drip.
+
+    @pytest.mark.parametrize("reward", [UNIT, 20 * UNIT])
+    def test_a_network_with_no_faucet_says_so(self, monkeypatch, reward) -> None:
+        from dataclasses import replace as dc_replace
+
+        from xqsa.quip import QuipSubmissionError, SolverQuip, client
+        from xqsa.quip.networks import NETWORKS
+
+        iface = _chain_iface(order=_order(), head=200, balance=0)
+        _install(monkeypatch, iface)
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_FAUCET_URL", "http://env-faucet")  # must not stand in for the preset's.
+        monkeypatch.setattr(client, "NETWORKS", {"aglais": dc_replace(NETWORKS["aglais"], faucet=None)})
+        solver = SolverQuip.for_network("aglais", seed=VALID_SEED, topology=TOPO_HASH, reward=reward, autoconfirm=True)
+        _patch_signing(monkeypatch, solver)
+        with pytest.raises(QuipSubmissionError, match="aglais has no faucet; fund the account another way") as info:
+            solver.solve(_model())
+        assert "drip" not in str(info.value)
+        assert ("Check reward=" in str(info.value)) is (reward > UNIT)
+
+    def test_a_raw_url_with_no_faucet_and_a_large_shortfall_names_both_remedies(self, monkeypatch) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        solver, _iface = _solve_ready_short(monkeypatch, reward=20 * UNIT, faucet=None, autoconfirm=True)
+        _patch_signing(monkeypatch, solver)
+        with pytest.raises(QuipSubmissionError, match="to name a faucet. Check reward=") as info:
+            solver.solve(_model())
+        assert "drip" not in str(info.value)
 
 
 class _FakeTTY:
