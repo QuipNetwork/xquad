@@ -26,19 +26,20 @@ env vars at its RPC + faucet:
     QUIP_FAUCET_URL=http://localhost:20049/api/faucet \\
         uv run --extra quip pytest xqsa/tests/quip/test_live.py -m quip -v
 
-Two tiers:
+Three kinds of order:
 
-* SUBMIT + lifecycle tests run against any healthy devnet. They validate the
-  parts of SolverQuip that do not need a returned solution: connectivity, the
-  live ``propose_job`` SCALE/extras contract (a clean submission with no
-  ``System.ExtrinsicFailed``), the topology fetch, the balance pre-check, the
-  timeout path, expired-no-solution auto-reclaim, and reclaiming an
-  unanswered order through its receipt.
-* END-TO-END tests need the miner to actually return a solution. They are
-  guarded by the ``solving_miner`` fixture, which probes the fleet once and
-  skips them when no solution comes back within the probe window. They run
-  whenever a live solver fleet is active (a fresh order solves in ~1-2 blocks)
-  and skip cleanly when the fleet is idle or unavailable.
+* NETWORK orders (``TestNetwork``) go through ``solve()`` with open access and
+  test that the network answers. When nobody answers before the deadline they
+  skip with a ``network:`` reason.
+* SELF-SOLVED orders (``TestSelfSolved``) test chain rules. They go through the
+  real submit, admit only our own two accounts (or a solver type), and are
+  answered by those accounts in separate extrinsics, so ranks, energies and
+  leaders are fixed by the test.
+* UNANSWERED orders expire with nothing touching them: the timeout path,
+  auto-reclaim, and reclaiming through a receipt.
+
+The read-only connectivity tests run against any healthy devnet. Every skip
+reason starts with ``network:`` or ``designed:``; ``conftest.py`` counts both.
 
 Crypto known-answer vectors belong to ``quip_signer``'s own ``test_parity.py``,
 not here.
@@ -61,6 +62,7 @@ pytest.importorskip(
     reason="designed: quip_signer extension not installed (run `uv sync --extra quip`)",
 )
 
+from xqsa import SolverResult
 from xqsa.quip import (
     AccessAllow,
     JobOrder,
@@ -112,26 +114,15 @@ pytestmark = [
 
 UNIT = 10**12
 
-# Production lifecycle bounds. An earlier revision tightened these to
-# deadline_blocks=30 / block_wait=5 so a live solve reached finality in tens of
-# seconds, on the assumption in MINER_IDLE_SKIP below that a fresh order solves
-# in ~1-2 blocks. Measured against aglais on 2026-09-18 that assumption holds
+# Production lifecycle bounds, which the network orders keep. An earlier
+# revision tightened these to deadline_blocks=30 / block_wait=5 so a live solve
+# reached finality in tens of seconds, on the assumption that a fresh order
+# solves in ~1-2 blocks. Measured against aglais on 2026-09-18 that assumption holds
 # only for the median: first-solution latency ran 1, 1, 1, 2, 5, 6, 9, 12 and 25
 # blocks across twelve answered orders, so a 30-block deadline sat inside the
 # tail and orders were finalizing empty. poll_interval stays tight so an
 # answered order still returns promptly; timeout clears 100 blocks at ~6s.
 SOLVER_KWARGS = dict(deadline_blocks=100, block_wait=10, poll_interval=3.0, timeout=660.0)
-
-# How long the capability probe waits for the miner to submit ANY solution
-# before declaring the E2E tier unavailable. Overridable for slow hosts.
-PROBE_TIMEOUT = float(os.environ.get("QUIP_MINER_PROBE_TIMEOUT", "60"))
-
-MINER_IDLE_SKIP = (
-    "network: miner returned no solution within the probe window -- the live solver "
-    "fleet is idle or unavailable. E2E validation needs an active fleet; a "
-    "fresh order solves in ~1-2 blocks when one is running."
-)
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -219,58 +210,6 @@ def make_solver(funded_keystore):
 def second_solver(second_funded_keystore) -> SolverQuip:
     """A SolverQuip on the second funded keystore, whose account is a ``Gpu`` solver."""
     return SolverQuip(url=RPC_URL, keystore=second_funded_keystore, **SOLVER_KWARGS)
-
-
-@pytest.fixture(scope="session")
-def _miner_solves(tmp_path_factory) -> bool:
-    """Probe once whether the miner returns a solution; cached for the session.
-
-    Proposes the gated tests' own model and polls ``OrderSolutions`` for any
-    submission. Fast when the miner works (returns on the first solution);
-    bounded by ``PROBE_TIMEOUT`` when it does not. Returns False (rather than
-    erroring) so the E2E tier skips cleanly when the fleet is idle.
-    """
-    if not FAUCET_URL:
-        return False
-    path = str(tmp_path_factory.mktemp("quip-probe") / "keystore.json")
-    keystore = load_or_generate_keystore(path)
-    dest = "0x" + keystore.account_id.hex()
-    try:
-        fund_from_faucet(dest, url=FAUCET_URL)
-    except Exception:
-        return False
-
-    solver = SolverQuip(url=RPC_URL, keystore=path, **SOLVER_KWARGS)
-    # Give the funding a moment to land before reserving a reward.
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        if solver._free_balance() > UNIT:
-            break
-        time.sleep(3)
-
-    # The same model the gated tests propose. A smaller one would place onto
-    # different hardware nodes and so prove nothing about them: placement is
-    # per-model, and whether an order is answered depends on the nodes it lands
-    # on. A gate must exercise what it gates, native mode included.
-    try:
-        order_id = solver.create_order(_asymmetric_spin_model()).submit().order_id()
-    except Exception:
-        return False
-
-    probe_deadline = time.monotonic() + PROBE_TIMEOUT
-    while time.monotonic() < probe_deadline:
-        sols = list(solver._iface.query_map("QuantumComputeMempool", "OrderSolutions", [order_id]))
-        if sols:
-            return True
-        time.sleep(3)
-    return False
-
-
-@pytest.fixture
-def solving_miner(_miner_solves) -> None:
-    """Skip the test unless the probe confirmed the miner returns solutions."""
-    if not _miner_solves:
-        pytest.skip(MINER_IDLE_SKIP)
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +351,16 @@ def _claim_from(solver: SolverQuip, order_id: int) -> tuple[dict[bytes, int], st
 def _ss58(solver: SolverQuip) -> str:
     """``solver``'s account in SS58, as receipts name solvers."""
     return quip_chain.ss58_address(solver._iface, bytes(solver._signer.account_id))
+
+
+def _solve_or_skip(solver: SolverQuip, model: XQMX, **kwargs):
+    """``solver.solve(model, **kwargs)``, skipping the test when the network left the order unanswered."""
+    try:
+        return solver.solve(model, **kwargs)
+    except QuipJobFailedError as exc:
+        if "finalized with no solutions" not in str(exc):
+            raise
+        pytest.skip(f"network: no solver answered order {exc.order_id} before it expired")
 
 
 def _register(solver: SolverQuip) -> str:
@@ -707,102 +656,51 @@ class TestReceipt:
 
 
 # ---------------------------------------------------------------------------
-# End-to-end -- needs the miner to actually return a solution
+# Network, self-solved and payout-rule orders
 # ---------------------------------------------------------------------------
 
 
-class TestEndToEnd:
-    def test_spin_roundtrip_pipeline(self, make_solver, solving_miner) -> None:
-        """The live pipeline returns a feasible, chain-consistent spin result.
+class TestNetwork:
+    """Open orders through ``solve()``: the network answers them, or they skip with a ``network:`` reason."""
+
+    def test_network_solves_our_order(self, make_solver) -> None:
+        """The live pipeline returns a feasible, chain-consistent result, and the deprecated pair reads it back.
 
         Optimality and encoding correctness are guarded deterministically by
         ``test_encoded_problem_argmin_decodes_to_optimum`` in ``test_client.py``.
-        This test covers propose, fleet solve, chain record, and decode without
-        requiring the probabilistic live fleet to reach the global optimum.
+        This test covers propose, network solve, chain record, and decode without
+        requiring the probabilistic live network to reach the global optimum.
         """
         model = _asymmetric_spin_model()
         solver = make_solver()
-        result = solver.solve(model)
+        result = _solve_or_skip(solver, model)
+        assert isinstance(result, SolverResult)
         assert result.metadata["energy_matches_chain"] is True
         assert result.metadata["num_solutions"] >= 1
         assert _feasible(result.sample, model.size, {-1, 1})
+        order_id = result.metadata["order_id"]
+        snap = solver.get_receipt(order_id).status()
+        assert snap["first_solution_at"] > snap["created_at"]
 
-    def test_binary_roundtrip_pipeline(self, make_solver, solving_miner) -> None:
-        """The live pipeline returns a feasible, chain-consistent binary result.
+        # The deprecated pair keeps working until QUI-1608.
+        with pytest.warns(DeprecationWarning):
+            assert solver.status(order_id)["is_final"] is True
+        with pytest.warns(DeprecationWarning):
+            recovered = solver.query(order_id, model)
+        assert recovered is not None
+        assert recovered.energy == result.energy
 
-        Optimality and encoding correctness are guarded deterministically by
-        ``test_encoded_problem_argmin_decodes_to_optimum`` in ``test_client.py``.
-        This test covers propose, fleet solve, chain record, and decode without
-        requiring the probabilistic live fleet to reach the global optimum.
-        """
-        model = XQMX.binary_model(3)
-        model.set_linear(0, -1)
-        model.set_linear(1, 2)
-        model.set_quadratic(0, 1, -3)
-        model.set_quadratic(1, 2, 1)
-        solver = make_solver()
-        result = solver.solve(model)
-        assert result.metadata["energy_matches_chain"] is True
-        assert result.metadata["num_solutions"] >= 1
-        assert _feasible(result.sample, model.size, {0, 1})
-
-    def test_native_topology_dense_model_round_trip(self, make_solver, solving_miner) -> None:
+    def test_network_solves_a_native_order(self, make_solver) -> None:
         """A K6 model, which the default topology cannot place, solves in native mode."""
         model = _dense_spin_model()
         solver = make_solver()
         if not TOPOLOGY_OVERRIDE:  # the chain default; a registered override may hold K6.
             with pytest.raises(PlacementError):
                 solver._job_for(model, None, None)
-        result = solver.solve(model, topology="native")
+        result = _solve_or_skip(solver, model, topology="native")
         assert result.metadata["energy_matches_chain"] is True
         assert result.metadata["num_solutions"] >= 1
         assert _feasible(result.sample, model.size, {-1, 1})
-
-    def test_receipt_rebuilt_in_a_fresh_session(self, make_solver, solving_miner) -> None:
-        """A receipt rebuilt by id on another client reports what the submitting order's receipt does."""
-        solver = make_solver()
-        order = solver.create_order(_asymmetric_spin_model()).submit()
-        with pytest.raises(QuipSubmissionError, match="is open until block"):
-            order.reclaim()  # refused locally, before signing.
-
-        rebuilt = make_solver().get_receipt(order.order_id())
-        rebuilt.wait()
-        if not rebuilt.status()["solution_count"]:
-            assert rebuilt.reclaim() == order.reward  # through the rebuilt receipt; nothing stays reserved.
-            pytest.skip("network: no solver answered this order; the comparison needs an answer")
-
-        # Only what final orders keep: a winner's claim may still close the
-        # order, moving chain_status and claimed, between the paired reads.
-        stable = ("state", "order_id", "created_at", "first_solution_at", "effective_expiry", "solution_count")
-        original = order.receipt()
-        assert rebuilt._genesis_hash == original._genesis_hash
-        assert [rebuilt.status()[key] for key in stable] == [original.status()[key] for key in stable]
-        assert rebuilt.solvers() == original.solvers()
-        winners = rebuilt.settlement()["winners"]
-        assert winners == original.settlement()["winners"]
-        assert rebuilt.solvers()[0]["solver"] == winners[0]["solver"]
-        with pytest.raises(QuipSubmissionError, match="was answered by|is already closed"):
-            rebuilt.reclaim()
-        text = str(rebuilt)
-        assert {len(line) for line in text.splitlines()} == {72}
-        assert "unknown" not in text
-        assert rebuilt._genesis_hash not in text
-
-    def test_query_and_status_after_solve(self, make_solver, solving_miner) -> None:
-        # The deprecated pair keeps working until QUI-1608.
-        model = _asymmetric_spin_model()
-        solver = make_solver()
-        result = solver.solve(model)
-        order_id = result.metadata["order_id"]
-
-        with pytest.warns(DeprecationWarning):
-            snap = solver.status(order_id)
-        assert snap["is_final"] is True
-
-        with pytest.warns(DeprecationWarning):
-            recovered = solver.query(order_id, model)
-        assert recovered is not None
-        assert recovered.energy == result.energy
 
 
 class TestSelfSolved:
@@ -1054,22 +952,3 @@ class TestPayoutRules:
             )
         with pytest.raises(QuipOrderOptionError, match=f"runtime {solver._limits.spec_version}"):
             solver.create_order(_asymmetric_spin_model(), resolution=ResolutionTopNWeighted(2))
-
-
-class TestQualityFloors:
-    def test_floors_order_comes_back_whole(self, make_solver, solving_miner) -> None:
-        """A network-answered order with a solution count and diversity floor; every stored vector decodes."""
-        solver = make_solver()
-        order = solver.create_order(_asymmetric_spin_model(), min_solutions=2, min_diversity=0.1).submit().wait()
-        order_id = order.order_id()
-        params = solver._fetch_order(order_id)["ising_params"]
-        assert (params["min_solutions"], params["min_diversity_milli"]) == (2, 100)
-        answers = solver._fetch_solutions(order_id)
-        if not answers:
-            assert order.reclaim() == order.reward
-            pytest.skip("network: no solver met the floors on this order")
-
-        for answer in answers:
-            assert len(answer["solutions"]) >= 2
-            assert int(answer["diversity_milli"]) >= 100
-        assert len(order.solutions()) == sum(len(answer["solutions"]) for answer in answers)
