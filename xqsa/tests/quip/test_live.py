@@ -66,6 +66,7 @@ from xqsa import SolverResult
 from xqsa.quip import (
     AccessAllow,
     JobOrder,
+    QuipFaucetError,
     QuipJobFailedError,
     QuipOrderOptionError,
     QuipSubmissionError,
@@ -129,13 +130,14 @@ SOLVER_KWARGS = dict(deadline_blocks=100, block_wait=10, poll_interval=3.0, time
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def chain():
     """A read-only substrate-interface connection for direct chain assertions.
 
     Built through ``xqsa.quip.metadata.connect`` for the same reason SolverQuip
     is: Quip runtimes serve metadata V16, which scalecodec cannot decode, so a
-    stock ``SubstrateInterface`` fails on the first query.
+    stock ``SubstrateInterface`` fails on the first query. Opened per test: the
+    node drops a websocket left idle while funded fixtures run.
     """
     iface = connect_shimmed(RPC_URL)
     yield iface
@@ -150,7 +152,10 @@ def _new_funded_keystore(tmp_path_factory, name: str) -> str:
     keystore = load_or_generate_keystore(path)
     dest = "0x" + keystore.account_id.hex()
 
-    fund_from_faucet(dest, url=FAUCET_URL)
+    try:
+        fund_from_faucet(dest, url=FAUCET_URL)
+    except QuipFaucetError as exc:
+        pytest.skip(f"network: the faucet refused funding: {exc}")
 
     # Wait for the transfer to land.
     iface = connect_shimmed(RPC_URL)
@@ -168,28 +173,39 @@ def _new_funded_keystore(tmp_path_factory, name: str) -> str:
     return path
 
 
+# The first account's solver type. The network's solvers register as Cpu or
+# Gpu, so an allowlist of this type admits our account and nobody else's.
+OWN_SOLVER_TYPE = "QpuPasqal"
+
+
+def _new_solver_keystore(tmp_path_factory, name: str, solver_type: str) -> str:
+    """A funded keystore whose account is registered as a ``solver_type`` solver; returns its path.
+
+    Registration is permanent, so it happens once, here, before any test answers an order.
+    """
+    path = _new_funded_keystore(tmp_path_factory, name)
+    solver = SolverQuip(url=RPC_URL, keystore=path, **SOLVER_KWARGS)
+    solver._submit_extrinsic("QuantumComputeMempool", "register_solver", {"solver_type": solver_type})
+    return path
+
+
 @pytest.fixture(scope="session")
 def funded_keystore(tmp_path_factory):
-    """A fresh keystore funded via the chain's faucet.
+    """A fresh keystore funded via the chain's faucet, its account a solver of ``OWN_SOLVER_TYPE``.
 
     Skips the whole funded tier when ``QUIP_FAUCET_URL`` is unset -- without a
     funder we cannot reserve a reward.
     """
-    return _new_funded_keystore(tmp_path_factory, "quip")
+    return _new_solver_keystore(tmp_path_factory, "quip", OWN_SOLVER_TYPE)
 
 
 @pytest.fixture(scope="session")
 def second_funded_keystore(tmp_path_factory):
     """Another funded keystore, for a second solver account on one order, registered as a ``Gpu`` solver.
 
-    The type is what lets an allowlist of ``Cpu`` refuse it. Registration is
-    permanent, so it happens here, before any helper registers the account as
-    ``Cpu``.
+    Its type is what lets an allowlist of ``OWN_SOLVER_TYPE`` refuse it.
     """
-    path = _new_funded_keystore(tmp_path_factory, "quip-second")
-    solver = SolverQuip(url=RPC_URL, keystore=path, **SOLVER_KWARGS)
-    solver._submit_extrinsic("QuantumComputeMempool", "register_solver", {"solver_type": "Gpu"})
-    return path
+    return _new_solver_keystore(tmp_path_factory, "quip-second", "Gpu")
 
 
 @pytest.fixture
@@ -264,22 +280,6 @@ def _ranked_vectors(job) -> list[list[int]]:
         for bits in range(2 ** len(variables))
     ]
     return sorted(vectors, key=lambda vector: ising_energy_milli(job, vector))
-
-
-def _flip_unplaced(job, vector: list[int]) -> list[int]:
-    """``vector`` with every second node the model does not use flipped.
-
-    Its energy is unchanged, and its diversity against ``vector`` is near the
-    chain's maximum of 0.5. Flipping every unplaced node would not do: the
-    chain counts a vector and its full flip as identical, so that vector
-    would sit as close as the placed nodes allow.
-    """
-    placed = {job.topology.index_of(node) for node in job.mapping.values()}
-    unplaced = [index for index in range(len(vector)) if index not in placed]
-    flipped = list(vector)
-    for index in unplaced[::2]:
-        flipped[index] = -flipped[index]
-    return flipped
 
 
 def _place(solver: SolverQuip, model: XQMX, **options) -> JobOrder:
@@ -363,13 +363,9 @@ def _solve_or_skip(solver: SolverQuip, model: XQMX, **kwargs):
         pytest.skip(f"network: no solver answered order {exc.order_id} before it expired")
 
 
-def _register(solver: SolverQuip) -> str:
-    """Register ``solver``'s account as a ``Cpu`` solver if it is not one; returns the account as ``0x`` hex."""
-    pallet = "QuantumComputeMempool"
-    account = "0x" + bytes(solver._signer.account_id).hex()
-    if solver._iface.query(pallet, "Solvers", [account]).value is None:
-        solver._submit_extrinsic(pallet, "register_solver", {"solver_type": "Cpu"})
-    return account
+def _account(solver: SolverQuip) -> str:
+    """``solver``'s account as ``0x`` hex, as an allowlist takes it."""
+    return "0x" + bytes(solver._signer.account_id).hex()
 
 
 # ---------------------------------------------------------------------------
@@ -726,7 +722,7 @@ class TestSelfSolved:
         model.set_quadratic(0, 1, -3)
         model.set_quadratic(1, 2, 1)
         solver = make_solver()
-        rule = AccessAllow(accounts=[_register(solver), _register(second_solver)])
+        rule = AccessAllow(accounts=[_account(solver), _account(second_solver)])
         order = solver.create_order(model, access=rule)
         assert isinstance(order, JobOrder)
         order.set(deadline_blocks=30, block_wait=4)
@@ -796,7 +792,7 @@ class TestSelfSolved:
         if (solver._limits.spec_version or 0) < MIN_RANK_WEIGHTED_SPEC:
             pytest.skip(f"designed: runtime {solver._limits.spec_version} weights by energy, not by rank")
         model = _asymmetric_spin_model()
-        rule = AccessAllow(accounts=[_register(solver), _register(second_solver)])
+        rule = AccessAllow(accounts=[_account(solver), _account(second_solver)])
         # An odd reward, so rank 0 takes a remainder.
         order = _place(
             solver,
@@ -840,7 +836,7 @@ class TestSelfSolved:
         """Both accounts answer the ground state; the first answer keeps rank 0 and the reward splits equally."""
         model = _asymmetric_spin_model()
         solver = make_solver()
-        rule = AccessAllow(accounts=[_register(solver), _register(second_solver)])
+        rule = AccessAllow(accounts=[_account(solver), _account(second_solver)])
         order = _place(
             solver,
             model,
@@ -883,11 +879,10 @@ class TestSelfSolved:
         }
 
     def test_type_allowlist_admits_and_refuses_by_type(self, make_solver, second_solver) -> None:
-        """An allowlist of Cpu solvers refuses the Gpu second account and admits ours."""
+        """An allowlist of our account's solver type refuses the Gpu second account and admits ours alone."""
         model = _asymmetric_spin_model()
         solver = make_solver()
-        _register(solver)  # as Cpu
-        rule = AccessAllow(types=["Cpu"])
+        rule = AccessAllow(types=[OWN_SOLVER_TYPE])
         order = _place(solver, model, access=rule, deadline_blocks=30, block_wait=4)
         order_id = order.order_id()
         ground = _ranked_vectors(order._job)[0]
@@ -905,10 +900,7 @@ class TestSelfSolved:
         """The second account's answers each miss one floor; ours meets them all once the ceiling drops a vector."""
         model = _asymmetric_spin_model()
         solver = make_solver()
-        rule = AccessAllow(accounts=[_register(solver), _register(second_solver)])
-        job = solver.create_order(model)._job
-        if job.topology.num_nodes - len(job.mapping) < 30:
-            pytest.skip("designed: the topology has too few unused nodes to vary diversity without energy")
+        rule = AccessAllow(accounts=[_account(solver), _account(second_solver)])
         order = _place(
             solver,
             model,
@@ -923,16 +915,18 @@ class TestSelfSolved:
         vectors = _ranked_vectors(job)
         ground, low, high = vectors[0], vectors[1], vectors[-1]  # -6, -2 and +6 on this model.
         positive = vectors[5]  # +2
+        # The chain measures diversity over the order's placed nodes, here 3: two
+        # copies of one vector score 0, and ground against low scores at least 1/3.
 
         refusals = (
             ([ground], "InsufficientSolutions"),
-            ([ground, low], "InsufficientDiversity"),  # they differ on placed nodes only.
+            ([ground, ground], "InsufficientDiversity"),
             ([positive, high], "InsufficientEnergy"),  # the ceiling drops both.
         )
         for answer, error in refusals:
             with pytest.raises(QuipSubmissionError, match=f"QuantumComputeMempool.{error}"):
                 _submit_answer(second_solver, order_id, answer)
-        _submit_answer(solver, order_id, [ground, _flip_unplaced(job, low), high])
+        _submit_answer(solver, order_id, [ground, low, high])
         receipt = order.wait().receipt()
 
         params = solver._fetch_order(order_id)["ising_params"]

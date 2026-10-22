@@ -101,9 +101,10 @@ orders are then claimed with `claim_reward`, so nothing stays reserved.
 
 Registration is permanent: every account a run registers stays on chain as a
 solver. The fixtures use throwaway keystores for that reason, so a run adds two
-solver accounts to the network: the first account as `Cpu`, and the second as
-`Gpu`, which is what lets a `Cpu` allowlist refuse it. The second account is
-registered in its fixture, before any test could register it as `Cpu`.
+solver accounts to the network: the first account as `QpuPasqal`, and the
+second as `Gpu`. The network's solvers register as `Cpu` or `Gpu`, so an
+allowlist of `QpuPasqal` admits our first account alone and refuses the second.
+Both accounts are registered in their fixtures, before any test answers.
 
 Timing is set per order. Self-solved orders use a 30-block deadline with a
 `block_wait` of 4 to 8 blocks, long enough for the answers they wait on. The
