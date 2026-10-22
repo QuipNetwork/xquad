@@ -77,10 +77,10 @@ So `isinstance` works whether the caller imported directly from the peer or via 
 | `xquad.program` | first-party | Interactive API -- `Program`, `Session`, `RunResult` |
 | `xquad.vm` | first-party | Unified `VM` wrapper with backend dispatch (`VMBackend.RUST` / `VMBackend.PYTHON`) |
 | `xquad.types` | first-party | Canonical Python type aliases used across the API |
-| `xquad.asm` | re-exports `xqffi.asm` | `parse_xqasm`, `assemble_source`, `disassemble` |
-| `xquad.verifier` | re-exports `xqffi.verifier` | `verify`, `verify_source` |
-| `xquad.cp` | re-exports `xqcp` | DSL -- `Problem`, `Types`, expression builders |
-| `xquad.sa` | re-exports `xqsa` | Solvers -- `SolverDWaveCPU`, `Solver` |
+| `xquad.asm` | is `xqffi.asm` | `parse_xqasm`, `assemble_source`, `disassemble` |
+| `xquad.verifier` | is `xqffi.verifier` | `verify`, `verify_source` |
+| `xquad.cp` | is `xqcp` | DSL -- `Problem`, `Types`, expression builders |
+| `xquad.sa` | is `xqsa` | Solvers -- `SolverDWaveCPU`, `Solver` |
 
 Lower-level escape hatches remain available directly via the peer packages (`xqffi.vm.Vm` for the raw FFI one-shot surface; `xqvm_py.Executor` for the pure-Python reference VM).
 
