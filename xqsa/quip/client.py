@@ -22,6 +22,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import ssl
 import sys
 import time
 import warnings
@@ -140,13 +141,16 @@ def _is_native(topology: str | None) -> bool:
     return (topology or "").strip().lower() == NATIVE_TOPOLOGY
 
 
-def _open(url: str) -> Any:
+def _open(url: str, ssl_context: ssl.SSLContext | None = None) -> Any:
     """Connect to ``url`` and load its runtime; the connection is closed on any failure."""
     # Not substrateinterface.SubstrateInterface directly: Quip runtimes serve
     # metadata V16, which scalecodec cannot decode. The subclass pulls V14
     # through the versioned runtime API instead, and confines that to instances
     # we build. See xqsa.quip.metadata.
-    iface = quip_metadata.connect(url)
+    if ssl_context is None:
+        iface = quip_metadata.connect(url)
+    else:
+        iface = quip_metadata.connect(url, ws_options={"sslopt": {"context": ssl_context}})
     try:
         # Resolve metadata here rather than letting the first storage read
         # trigger it: a node whose metadata this client cannot decode must fail
@@ -198,6 +202,14 @@ class SolverQuip(Solver):
     :meth:`balance` given ``account=``; everything that signs, and those two
     without ``account=``, raise :class:`QuipSigningError`.
 
+    ``ssl_context=`` takes an ``ssl.SSLContext`` used as-is for both the
+    ``wss://`` RPC connection (reconnects included) and the ``autofund``
+    faucet request, in place of the default CA-bundle context; it is ignored
+    for ``ws://`` and ``http://`` URLs. It adds no revocation checking of its
+    own: a stdlib context checks only CRLs the caller loads, with
+    ``VERIFY_CRL_CHECK_LEAF`` or ``VERIFY_CRL_CHECK_CHAIN`` set, and cannot
+    check OCSP.
+
     Raises:
         ImportError: if the ``[quip]`` extra is not installed
             (``pip install xqsa[quip]`` -- provides ``substrate-interface`` and
@@ -207,7 +219,9 @@ class SolverQuip(Solver):
             or ``delivery`` names a value no order can use yet (checked before
             connecting).
         TypeError: if both ``access`` and the deprecated ``mode`` are given,
-            or ``inclusion_window_blocks`` is not an int.
+            ``inclusion_window_blocks`` is not an int, or ``ssl_context`` is
+            neither ``None`` nor an ``ssl.SSLContext`` (checked before
+            connecting).
         QuipOrderOptionError: if ``inclusion_window_blocks`` is below 64 or
             above 2048 (checked before connecting), an ``access`` allowlist
             is outside the chain's limits, or a raw ``access`` dict cannot be
@@ -250,6 +264,7 @@ class SolverQuip(Solver):
         autoconfirm: bool | Callable[[JobQuote], bool] | None = None,
         autofund: bool | Callable[[JobQuote], bool] | None = None,
         read_only: bool = False,
+        ssl_context: ssl.SSLContext | None = None,
         _network: str | None = None,
     ) -> None:
         # Two distinct guards, one per piece of the [quip] extra: client + signer.
@@ -269,6 +284,8 @@ class SolverQuip(Solver):
 
         if read_only and (seed is not None or keystore is not None):
             raise ValueError("read_only=True takes no seed= or keystore=")
+        if ssl_context is not None and not isinstance(ssl_context, ssl.SSLContext):
+            raise TypeError(f"ssl_context must be an ssl.SSLContext, got {type(ssl_context).__name__}")
         resolved_url = url or os.environ.get("QUIP_RPC_URL")
         if not resolved_url:
             raise ValueError("A Quip RPC URL is required. Pass url= or set QUIP_RPC_URL.")
@@ -301,11 +318,12 @@ class SolverQuip(Solver):
         self._faucet = faucet or (None if url else os.environ.get("QUIP_FAUCET_URL"))
         # Set by for_network; a solver built from a raw url= names no network.
         self._network = _network
+        self._ssl_context = ssl_context
         self._autoconfirm = _resolve_gate(autoconfirm, "autoconfirm", "QUIP_AUTOCONFIRM")
         self._autofund = _resolve_gate(autofund, "autofund", "QUIP_AUTOFUND")
 
         try:
-            self._iface = _open(resolved_url)
+            self._iface = _open(resolved_url, self._ssl_context)
         except QuipMetadataError:
             raise  # a client/runtime metadata mismatch is not a connection fault.
         except Exception as exc:  # noqa: BLE001 -- any connect failure is a connection error.
@@ -1031,7 +1049,7 @@ class SolverQuip(Solver):
             QuipMetadataError: if this client cannot read the node's metadata.
         """
         try:
-            iface = _open(self._url)
+            iface = _open(self._url, self._ssl_context)
         except QuipMetadataError:
             raise  # the same node gives the same answer; retrying cannot help.
         except Exception as exc:  # noqa: BLE001 -- the caller retries until its deadline.
@@ -1511,6 +1529,7 @@ class SolverQuip(Solver):
             "0x" + bytes(self._signer.account_id).hex(),
             url=self._faucet,
             dest_label=self._account_ss58,
+            ssl_context=self._ssl_context,
         )
         deadline = time.monotonic() + FUND_WAIT_SECONDS
         while (balance := self._free_balance()) < quote.total_planck:

@@ -22,6 +22,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import ssl
 import urllib.error
 from unittest.mock import patch
 
@@ -240,6 +241,33 @@ def test_bad_ca_bundle_raises_faucet_error(monkeypatch):
     with pytest.raises(QuipFaucetError) as excinfo:
         fund_from_faucet(DEST, url=URL)
     assert excinfo.value.status is None
+
+
+def _caller_context() -> ssl.SSLContext:
+    # Not ssl.create_default_context: the autouse fixture stubs it out.
+    return ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+
+@patch("xqsa.quip.faucet.time.sleep")
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
+def test_caller_context_is_used_on_both_tries(mock_urlopen, mock_sleep, monkeypatch, tmp_path):
+    bundle = tmp_path / "ca.pem"
+    bundle.write_text("")
+    monkeypatch.setenv("WEBSOCKET_CLIENT_CA_BUNDLE", str(bundle))
+    built: list[dict] = []
+    monkeypatch.setattr("xqsa.quip.faucet.ssl.create_default_context", lambda **kwargs: built.append(kwargs))
+    ctx = _caller_context()
+    mock_urlopen.side_effect = [_http_error(429, {"retry_after_seconds": 1}), _Ctx(_response({"amount": 1}))]
+    fund_from_faucet(DEST, url=URL, ssl_context=ctx)
+    assert [call.kwargs["context"] for call in mock_urlopen.call_args_list] == [ctx, ctx]
+    assert built == []  # neither the CA bundle nor the certifi default was consulted.
+
+
+@patch("xqsa.quip.faucet.urllib.request.urlopen")
+def test_a_non_context_is_refused_before_any_request(mock_urlopen):
+    with pytest.raises(TypeError, match="ssl_context must be an ssl.SSLContext, got object"):
+        fund_from_faucet(DEST, url=URL, ssl_context=object())
+    mock_urlopen.assert_not_called()
 
 
 def test_scheme_less_url_raises_faucet_error():

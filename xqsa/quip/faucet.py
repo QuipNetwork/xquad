@@ -29,12 +29,12 @@ The request verifies TLS against the same CA default as
 names an existing file or directory, otherwise the system trust store, or
 certifi's bundle on a macOS Python whose store is empty. It checks the
 certificate chain, host name and validity dates, and does not check
-revocation (no CRL, no OCSP), and offers no hook to change that: it builds
-its own ``ssl.SSLContext`` and takes none from the caller, and
-``SolverQuip``'s ``autofund`` always goes through it. A caller that needs
-revocation checking leaves ``autofund`` off and sends the
-``POST <url>/request`` itself over a TLS stack that checks OCSP or a CRL
-and fails closed when the check does not finish.
+revocation (no CRL, no OCSP). A caller that needs more passes its own
+``ssl.SSLContext`` as ``ssl_context=``, which replaces that default
+entirely; ``SolverQuip`` passes the one it was given, so ``autofund`` uses
+it too. A stdlib context checks only CRLs the caller loads, with
+``VERIFY_CRL_CHECK_LEAF`` or ``VERIFY_CRL_CHECK_CHAIN`` set, and cannot
+check OCSP at all.
 """
 
 from __future__ import annotations
@@ -63,8 +63,12 @@ DEFAULT_DRIP_PLANCK = 10_000_000_000_000
 MAX_RETRY_AFTER_SECONDS = 30.0
 
 
-def _post_request(url: str, dest: str, amount: int | None, timeout: float) -> tuple[int, dict]:
+def _post_request(
+    url: str, dest: str, amount: int | None, timeout: float, ssl_context: ssl.SSLContext | None = None
+) -> tuple[int, dict]:
     """Send one funding request to ``url``; return ``(status, body)``.
+
+    A given ``ssl_context`` is used as-is, in place of the CA-bundle default.
 
     A body that is not a JSON object reads as ``{}``: a proxy answering in
     HTML at a mis-set URL must fail as a faucet error, not a decode error.
@@ -88,7 +92,9 @@ def _post_request(url: str, dest: str, amount: int | None, timeout: float) -> tu
             method="POST",
         )
         bundle = os.environ.get("WEBSOCKET_CLIENT_CA_BUNDLE", "")
-        if os.path.isfile(bundle):
+        if ssl_context is not None:
+            context = ssl_context
+        elif os.path.isfile(bundle):
             context = ssl.create_default_context(cafile=bundle)
         elif os.path.isdir(bundle):
             context = ssl.create_default_context(capath=bundle)
@@ -114,7 +120,13 @@ def _json_object(raw: bytes) -> dict:
 
 
 def fund_from_faucet(
-    dest: str, *, url: str, amount: int | None = None, timeout: float = 40.0, dest_label: str | None = None
+    dest: str,
+    *,
+    url: str,
+    amount: int | None = None,
+    timeout: float = 40.0,
+    dest_label: str | None = None,
+    ssl_context: ssl.SSLContext | None = None,
 ) -> dict:
     """Request faucet funding for ``dest`` and return the drip's JSON body.
 
@@ -132,6 +144,9 @@ def fund_from_faucet(
         timeout: Per-attempt socket timeout in seconds.
         dest_label: The account as messages and logs name it (e.g. its SS58
             address). Defaults to ``dest``; never sent to the faucet.
+        ssl_context: The TLS context for the request, used in place of the
+            ``WEBSOCKET_CLIENT_CA_BUNDLE`` or default CA-bundle context;
+            ignored for an ``http://`` URL.
 
     Returns:
         The faucet's parsed JSON response body on success.
@@ -139,10 +154,14 @@ def fund_from_faucet(
     Raises:
         QuipFaucetError: on a 403, a 400, a second consecutive 429, any other
             non-2xx status, or a transport-level failure.
+        TypeError: if ``ssl_context`` is neither ``None`` nor an
+            ``ssl.SSLContext``, before any request.
     """
+    if ssl_context is not None and not isinstance(ssl_context, ssl.SSLContext):
+        raise TypeError(f"ssl_context must be an ssl.SSLContext, got {type(ssl_context).__name__}")
     request_url = url.rstrip("/") + "/request"
     shown = dest_label or dest
-    status, body = _post_request(request_url, dest, amount, timeout)
+    status, body = _post_request(request_url, dest, amount, timeout, ssl_context)
 
     if status == 429:
         try:
@@ -155,7 +174,7 @@ def fund_from_faucet(
             )
         logger.debug("faucet %s rate limited %s, retrying after %ss", request_url, shown, retry_after)
         time.sleep(retry_after)
-        status, body = _post_request(request_url, dest, amount, timeout)
+        status, body = _post_request(request_url, dest, amount, timeout, ssl_context)
 
     if 200 <= status < 300:
         logger.info("faucet %s funded %s: %s planck", request_url, shown, body.get("amount"))
