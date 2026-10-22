@@ -281,6 +281,8 @@ class JobOrderReceipt:
         Nothing reclaims on its own.
 
         Raises:
+            QuipSigningError: if the receipt's client is read-only, after the
+                order is read and before anything is signed.
             QuipReclaimRefusedError: if this account did not propose the order,
                 the order is already closed, it is still open, or it was
                 answered; or if the chain refuses the reclaim at dispatch, which

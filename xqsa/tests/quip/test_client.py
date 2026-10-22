@@ -4522,3 +4522,25 @@ class TestSignerPrecedence:
         with pytest.raises(QuipSigningError, match="no keystore named 'typo'"):
             SolverQuip(url="ws://fake")
         assert not list(home.rglob("typo*"))
+
+    def test_unusable_default_raises_as_the_resolver_reports(self, monkeypatch, tmp_path, quip_home) -> None:
+        from xqsa.quip import QuipSigningError, SolverQuip, resolve_accounts
+
+        home, _ = quip_home
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        (home / ".quip").mkdir()
+        (home / ".quip" / "keystore.json").write_text("{not json")
+        (home / ".quip" / "keystore.json").chmod(0o600)
+        assert "not readable JSON" in resolve_accounts().in_effect.problem
+        with pytest.raises(QuipSigningError, match="not readable JSON"):
+            SolverQuip(url="ws://fake")
+
+    def test_unexpandable_keystore_in_effect_fails_as_before(self, monkeypatch, tmp_path) -> None:
+        from xqsa.quip import SolverQuip
+
+        self._configure(monkeypatch, tmp_path, ())
+        monkeypatch.setenv("QUIP_KEYSTORE", "~nosuchuser_qui1610/k.json")
+        with pytest.raises(RuntimeError, match="home directory"):
+            SolverQuip(url="ws://fake")
+        assert not (tmp_path / "~nosuchuser_qui1610").exists()

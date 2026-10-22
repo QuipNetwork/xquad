@@ -126,7 +126,7 @@ FUND_WAIT_SECONDS = 30.0
 # see the warning it raises past it.
 LIST_ORDERS_LIMIT = 32
 
-# Keystore used when no seed or keystore is configured; created on first use.
+# Keystore used when no seed, keystore or account preference is configured; created on first use.
 DEFAULT_KEYSTORE = "~/.quip/keystore.json"
 
 
@@ -194,9 +194,9 @@ class SolverQuip(Solver):
 
     ``read_only=True`` connects and reads without resolving a signer, so it
     ignores ``QUIP_SIGNER_SEED`` and ``QUIP_KEYSTORE`` and never creates a
-    keystore. :meth:`get_receipt`, :meth:`list_orders` and :meth:`balance`
-    work given ``account=``; everything that signs, and those two without
-    ``account=``, raise :class:`QuipSigningError`.
+    keystore. :meth:`get_receipt` works, as do :meth:`list_orders` and
+    :meth:`balance` given ``account=``; everything that signs, and those two
+    without ``account=``, raise :class:`QuipSigningError`.
 
     Raises:
         ImportError: if the ``[quip]`` extra is not installed
@@ -223,6 +223,9 @@ class SolverQuip(Solver):
             this client encodes. Raised in its own right rather than folded
             into QuipConnectionError, because the remedy is upgrading xquad,
             not a retry.
+        QuipSigningError: if the signer cannot be built: the seed is not 32
+            bytes, a keystore is unusable, or an account preference is broken
+            or names a missing or unusable keystore.
     """
 
     def __init__(
@@ -379,7 +382,8 @@ class SolverQuip(Solver):
         if source.step in ("seed=", "QUIP_SIGNER_SEED"):
             return quip_signing.signer_from_seed(seed or os.environ["QUIP_SIGNER_SEED"])
         if source.step in ("keystore=", "QUIP_KEYSTORE"):
-            return quip_signing.load_or_generate_keystore(source.path).signer
+            # The raw value, so a path the resolver could not expand fails here as it always has.
+            return quip_signing.load_or_generate_keystore(source.value).signer
         if source.problem is not None:
             raise QuipSigningError(
                 f"the {source.step} account preference cannot sign: {source.problem}. "
@@ -1692,6 +1696,7 @@ class SolverQuip(Solver):
         Raises:
             ValueError: if ``state`` is not ``"submitted"`` or ``"finalized"``,
                 or ``account`` cannot be read as an account.
+            QuipSigningError: if ``account`` is omitted on a read-only client.
             QuipConnectionError: if an order or the head block cannot be read.
         """
         if state not in (None, "submitted", "finalized"):

@@ -133,12 +133,16 @@ def resolve_accounts(*, seed: bytes | str | None = None, keystore: str | Path | 
             print(resolution.in_effect.step, resolution.in_effect.path)
     """
     project = _find_project()
-    user = _user_dir()
+    user = _find_user_dir()
     accounts = (*_list_accounts(project, "project"), *_list_accounts(user, "user"))
-    by_level = {level: {a.name: a for a in accounts if a.level == level} for level in _LEVELS}
+    default_path = user / _USER_DEFAULT if user is not None else None
+    by_level: dict[str, dict[str, Account]] = {level: {} for level in _LEVELS}
+    for account in accounts:
+        # A stray ``~/.quip/keystores/default.json`` is listed but never resolves as ``default``.
+        if not (account.level == "user" and account.name == "default" and account.path != default_path):
+            by_level[account.level].setdefault(account.name, account)
     env_seed = os.environ.get("QUIP_SIGNER_SEED")
     env_keystore = os.environ.get("QUIP_KEYSTORE")
-    default_path = user / _USER_DEFAULT
     default = by_level["user"].get("default")
     sources = (
         SignerSource("seed=", _SET if seed else None, None, None),
@@ -163,8 +167,9 @@ def create_account(
     with no ``.quip/`` found, one is made in the working directory.
 
     Raises:
-        ValueError: if ``name`` or ``level`` is invalid, or the project level
-            is asked for in the home directory.
+        ValueError: if ``name`` or ``level`` is invalid, the project level is
+            asked for in the home directory, or the working directory's
+            ``.quip`` is not a usable project directory.
         QuipSigningError: if the keystore exists and ``overwrite`` is False,
             or ``seed`` is not 32 bytes.
         ImportError: if the ``[quip]`` extra is not installed.
@@ -196,7 +201,8 @@ def use_account(name: str, *, level: Level) -> None:
     Raises:
         ValueError: if ``name`` or ``level`` is invalid, no keystore by that
             name resolves from ``level``, the existing ``config.toml`` holds
-            other keys, or the project level is asked for in the home directory.
+            other keys, the project level is asked for in the home directory,
+            or the working directory's ``.quip`` is not a usable project directory.
     """
     _check_name(name)
     _check_level(level)
@@ -219,7 +225,7 @@ def clear_account(*, level: Level) -> None:
 
     Raises:
         ValueError: if ``level`` is invalid, or ``config.toml`` holds keys
-            besides ``account`` or is not valid TOML.
+            besides ``account``, is not valid TOML, or cannot be read.
     """
     _check_level(level)
     base = _find_project() if level == "project" else _user_dir()
@@ -234,15 +240,33 @@ def _user_dir() -> Path:
     return Path.home() / _QUIP_DIR
 
 
+def _find_user_dir() -> Path | None:
+    """Return the user ``.quip/``, or ``None`` when no home directory can be determined."""
+    try:
+        return _user_dir()
+    except RuntimeError:
+        return None
+
+
 def _find_project() -> Path | None:
-    """Return the nearest project ``.quip/``, walking up and stopping below home."""
-    home = Path.home().resolve()
-    cwd = Path.cwd().resolve()
+    """Return the nearest project ``.quip/``, walking up and stopping below home.
+
+    A working directory that no longer exists has no project, and a ``.quip``
+    that resolves to the user level (a symlink) is never one.
+    """
+    try:
+        cwd = Path.cwd().resolve()
+    except OSError:
+        return None
+    user = _find_user_dir()
+    home = user.parent.resolve() if user is not None else None
+    user_quip = user.resolve() if user is not None else None
     for directory in (cwd, *cwd.parents):
         if directory == home:
             return None
-        if (directory / _QUIP_DIR).is_dir():
-            return directory / _QUIP_DIR
+        candidate = directory / _QUIP_DIR
+        if candidate.is_dir() and candidate.resolve() != user_quip:
+            return candidate
     return None
 
 
@@ -257,7 +281,12 @@ def _level_dir_for_write(level: Level) -> Path:
     cwd = Path.cwd().resolve()
     if cwd == Path.home().resolve():
         raise ValueError("the home directory is the user level; use `--global`")
-    return cwd / _QUIP_DIR
+    candidate = cwd / _QUIP_DIR
+    if candidate.exists() or candidate.is_symlink():
+        raise ValueError(
+            f"{candidate} exists but is not a project .quip/ directory (a file, or a link to the user level)"
+        )
+    return candidate
 
 
 def _check_name(name: str) -> None:
@@ -290,19 +319,23 @@ def _write_gitignore(base: Path) -> None:
 
 
 def _list_accounts(base: Path | None, level: Level) -> list[Account]:
+    """List the keystores under ``base``; a directory the process cannot enter lists none."""
     if base is None:
         return []
     found = []
-    if level == "user" and (base / _USER_DEFAULT).is_file():
-        found.append(_read_account("default", level, base / _USER_DEFAULT))
-    keystores = base / _KEYSTORES
-    if keystores.is_dir():
-        for path in sorted(keystores.glob("*.json")):
-            account = _read_account(path.stem, level, path)
-            if level == "user" and path.stem == "default":
-                problem = f"never used: the user `default` account is {base / _USER_DEFAULT}"
-                account = Account(account.name, level, path, account.account_id, problem)
-            found.append(account)
+    try:
+        if level == "user" and (base / _USER_DEFAULT).is_file():
+            found.append(_read_account("default", level, base / _USER_DEFAULT))
+        keystores = base / _KEYSTORES
+        if keystores.is_dir():
+            for path in sorted(keystores.glob("*.json")):
+                account = _read_account(path.stem, level, path)
+                if level == "user" and path.stem == "default":
+                    problem = f"never used: the user `default` account is {base / _USER_DEFAULT}"
+                    account = Account(account.name, level, path, account.account_id, problem)
+                found.append(account)
+    except OSError:
+        return []
     return found
 
 
@@ -348,7 +381,16 @@ def _cached_account_id(path: Path) -> tuple[bytes | None, str | None]:
 def _keystore_source(step: Literal["keystore=", "QUIP_KEYSTORE"], keystore: str | Path | None) -> SignerSource:
     if not keystore:
         return SignerSource(step, None, None, None)
-    return SignerSource(step, str(keystore), Path(keystore).expanduser(), None)
+    try:
+        path = Path(keystore).expanduser()
+    except RuntimeError as exc:  # ``~user`` naming no user here.
+        return SignerSource(step, str(keystore), None, f"cannot expand {keystore}: {exc}")
+    # A missing path is created on first use; anything already there must be a usable keystore.
+    try:
+        problem = _cached_account_id(path)[1] if path.exists() else None
+    except OSError as exc:  # e.g. under a directory this process cannot enter.
+        problem = f"cannot read {path}: {exc}"
+    return SignerSource(step, str(keystore), path, problem)
 
 
 def _preference_source(
@@ -377,7 +419,7 @@ def _read_preference(config: Path) -> tuple[str | None, str | None]:
             raw = tomllib.load(handle)
     except FileNotFoundError:
         return None, None
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         return None, f"{config} is not readable TOML: {exc}"
     name = raw.get("account")
     if name is None:
@@ -396,7 +438,9 @@ def _check_rewritable(config: Path) -> None:
             raw = tomllib.load(handle)
     except FileNotFoundError:
         return
-    except tomllib.TOMLDecodeError as exc:
+    except OSError as exc:  # a directory, or a file this process cannot read.
+        raise ValueError(f"{config} cannot be read ({exc}); fix it by hand") from exc
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise ValueError(f"{config} is not valid TOML ({exc}); edit it by hand") from exc
     if set(raw) - {"account"}:
         raise ValueError(f"{config} has keys besides `account`; edit it by hand")

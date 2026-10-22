@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -350,3 +351,144 @@ class TestResolve:
         _keystore(home / ".quip" / "keystores" / "default.json")
         (account,) = resolve_accounts().accounts
         assert "never used" in account.problem
+
+
+class TestEdgeCases:
+    def test_stray_user_default_json_never_shadows_keystore_json(self, quip_home) -> None:
+        home, _ = quip_home
+        real = create_account(level="user", seed=SEED_A)
+        _keystore(home / ".quip" / "keystores" / "default.json")
+        use_account("default", level="user")
+        resolution = resolve_accounts()
+        assert (resolution.in_effect.step, resolution.in_effect.path) == ("user", real.path)
+        assert resolution.in_effect.problem is None
+        default = next(source for source in resolution.sources if source.step == "default")
+        assert default.problem is None
+
+    def test_unusable_default_reported_on_the_default_step(self, quip_home) -> None:
+        home, _ = quip_home
+        _keystore(home / ".quip" / "keystore.json", version=2)
+        source = resolve_accounts().in_effect
+        assert source.step == "default"
+        assert "version 2 not supported" in source.problem
+
+    def test_deleted_working_directory_has_no_project(self, quip_home, monkeypatch, tmp_path) -> None:
+        gone = tmp_path / "gone"
+        gone.mkdir()
+        monkeypatch.chdir(gone)
+        gone.rmdir()
+        resolution = resolve_accounts(seed=SEED_A)
+        assert resolution.in_effect.step == "seed="
+        assert next(s for s in resolution.sources if s.step == "project").value is None
+
+    def test_no_home_directory_has_no_user_level(self, quip_home, monkeypatch) -> None:
+        def no_home(cls):
+            raise RuntimeError("Could not determine home directory.")
+
+        monkeypatch.setattr(Path, "home", classmethod(no_home))
+        resolution = resolve_accounts(seed=SEED_A)
+        assert resolution.in_effect.step == "seed="
+        assert resolution.accounts == ()
+        assert next(s for s in resolution.sources if s.step == "default").path is None
+
+    def test_quip_file_in_working_directory_refused(self, quip_home) -> None:
+        _, project = quip_home
+        (project / ".quip").write_text("")
+        with pytest.raises(ValueError, match="not a project .quip/ directory"):
+            create_account("a", level="project")
+        create_account("a", level="user")
+        with pytest.raises(ValueError, match="not a project .quip/ directory"):
+            use_account("a", level="project")
+
+    def test_link_to_user_level_is_never_a_project(self, quip_home) -> None:
+        home, project = quip_home
+        create_account("a", level="user")
+        (home / ".quip" / "config.toml").write_text('account = "a"\n')
+        (project / ".quip").symlink_to(home / ".quip")
+        resolution = resolve_accounts()
+        assert [(a.name, a.level) for a in resolution.accounts] == [("a", "user")]
+        assert resolution.in_effect.step == "user"
+        with pytest.raises(ValueError, match="not a project .quip/ directory"):
+            create_account("b", level="project")
+
+    def test_stray_user_default_json_alone_is_not_the_default(self, quip_home) -> None:
+        home, _ = quip_home
+        _keystore(home / ".quip" / "keystores" / "default.json")
+        resolution = resolve_accounts()
+        assert (resolution.in_effect.step, resolution.in_effect.problem) == ("default", None)
+        (home / ".quip" / "config.toml").write_text('account = "default"\n')
+        assert "no keystore named 'default'" in resolve_accounts().in_effect.problem
+
+    @pytest.mark.parametrize("step", ["keystore=", "QUIP_KEYSTORE"])
+    @pytest.mark.parametrize(("kind", "problem"), [("file", "H3 account"), ("directory", "not readable JSON")])
+    def test_unusable_keystore_path_reported(self, quip_home, monkeypatch, tmp_path, step, kind, problem) -> None:
+        path = tmp_path / "bad.json"
+        if kind == "file":
+            _keystore(path, scheme="hybrid")
+        else:
+            path.mkdir()
+        kwargs = {"keystore": str(path)} if step == "keystore=" else {}
+        if step == "QUIP_KEYSTORE":
+            monkeypatch.setenv("QUIP_KEYSTORE", str(path))
+        source = resolve_accounts(**kwargs).in_effect
+        assert source.step == step
+        assert problem in source.problem
+
+    @pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="needs a non-root POSIX user")
+    def test_unenterable_user_dir_lists_nothing(self, quip_home) -> None:
+        home, _ = quip_home
+        create_account("a", level="user")
+        (home / ".quip").chmod(0)
+        try:
+            resolution = resolve_accounts(seed=SEED_A)
+        finally:
+            (home / ".quip").chmod(0o700)
+        assert resolution.in_effect.step == "seed="
+        assert resolution.accounts == ()
+
+    @pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="needs a non-root POSIX user")
+    def test_unreadable_keystore_env_does_not_break_a_seed(self, quip_home, monkeypatch, tmp_path) -> None:
+        locked = tmp_path / "locked"
+        locked.mkdir()
+        monkeypatch.setenv("QUIP_KEYSTORE", str(locked / "keystore.json"))
+        locked.chmod(0)
+        try:
+            resolution = resolve_accounts(seed=SEED_A)
+        finally:
+            locked.chmod(0o700)
+        assert resolution.in_effect.step == "seed="
+        env = next(source for source in resolution.sources if source.step == "QUIP_KEYSTORE")
+        assert "cannot read" in env.problem
+
+    @pytest.mark.parametrize("level", ["project", "user"])
+    def test_non_utf8_config_is_a_problem_not_an_error(self, quip_home, level) -> None:
+        home, project = quip_home
+        base = (project if level == "project" else home) / ".quip"
+        base.mkdir()
+        (base / "config.toml").write_bytes(b"\xff\xfea\x00")
+        assert resolve_accounts(seed=SEED_A).in_effect.step == "seed="
+        source = next(s for s in resolve_accounts().sources if s.step == level)
+        assert "not readable TOML" in source.problem
+        with pytest.raises(ValueError, match="not valid TOML"):
+            clear_account(level=level)
+
+    def test_unknown_user_keystore_path_does_not_break_a_seed(self, quip_home, monkeypatch) -> None:
+        monkeypatch.setenv("QUIP_KEYSTORE", "~nosuchuser_qui1610/k.json")
+        resolution = resolve_accounts(seed=SEED_A)
+        assert resolution.in_effect.step == "seed="
+        env = next(source for source in resolution.sources if source.step == "QUIP_KEYSTORE")
+        assert env.path is None
+        assert "cannot expand" in env.problem
+
+    @pytest.mark.parametrize("level", ["project", "user"])
+    def test_config_directory_refused_with_value_error(self, quip_home, level) -> None:
+        home, project = quip_home
+        create_account("a", level="user")
+        (project / ".quip").mkdir()
+        base = (project if level == "project" else home) / ".quip"
+        (base / "config.toml").mkdir()
+        assert resolve_accounts(seed=SEED_A).in_effect.step == "seed="
+        with pytest.raises(ValueError, match="cannot be read"):
+            use_account("a", level=level)
+        with pytest.raises(ValueError, match="cannot be read"):
+            clear_account(level=level)
