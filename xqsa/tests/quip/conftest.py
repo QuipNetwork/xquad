@@ -52,6 +52,21 @@ def virtual_clock(request, monkeypatch):
     yield sleeps
 
 
+@pytest.fixture(autouse=True)
+def isolated_home(request, monkeypatch, tmp_path_factory):
+    """Keep every unit test away from the real ``~/.quip`` and any ``.quip/`` above the repo.
+
+    Signer resolution lists the keystores under the home directory and walks
+    up from the working directory, so both move to an empty temporary tree.
+    The live tier keeps the real ones.
+    """
+    if request.module.__name__.endswith("test_live"):
+        return
+    root = tmp_path_factory.mktemp("isolated")
+    monkeypatch.setenv("HOME", str(root / "home"))
+    monkeypatch.chdir(root)
+
+
 def _seed_bytes(seed) -> bytes:
     return bytes.fromhex(seed.removeprefix("0x")) if isinstance(seed, str) else bytes(seed)
 

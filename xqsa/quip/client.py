@@ -34,6 +34,7 @@ from xqsa.quip import chain
 from xqsa.quip import metadata as quip_metadata
 from xqsa.quip.access import Access, AccessOpen, coerce_access
 from xqsa.quip.access import from_chain as access_from_chain
+from xqsa.quip.accounts import resolve_accounts
 from xqsa.quip.chain import (  # noqa: F401 -- FEE_HEADROOM_PLANCK and the pallet names stay importable from here.
     FEE_HEADROOM_PLANCK,
     JOB_ORDERS_STORAGE,
@@ -64,6 +65,7 @@ from xqsa.quip.errors import (  # noqa: F401 -- the Quip* errors stay importable
     QuipMetadataError,
     QuipOrderOptionError,
     QuipReclaimRefusedError,
+    QuipSigningError,
     QuipSubmissionError,
     QuipSubmitIncompleteError,
     QuipTimeoutError,
@@ -346,19 +348,37 @@ class SolverQuip(Solver):
 
     @staticmethod
     def _build_signer(quip_signing: Any, *, seed: str | None, keystore: str | None) -> Any:
-        """Build the hybrid signer from a seed or keystore (env fallbacks applied).
+        """Build the hybrid signer from the step :func:`~xqsa.quip.accounts.resolve_accounts` puts in effect.
 
-        Resolution: ``seed``, ``QUIP_SIGNER_SEED``, ``keystore``, ``QUIP_KEYSTORE``,
-        then :data:`DEFAULT_KEYSTORE`. Falling back to the default warns when the
-        file is new, since that is a fresh, empty account a caller may not have
-        meant to use, and logs its path at INFO when an existing file is loaded.
+        Resolution: ``seed``, ``keystore``, ``QUIP_SIGNER_SEED``, ``QUIP_KEYSTORE``,
+        the project account preference, the user one, then :data:`DEFAULT_KEYSTORE`.
+        An explicit or environment keystore path is created when missing, as is
+        the default; falling back to the default warns when the file is new,
+        since that is a fresh, empty account a caller may not have meant to use,
+        and logs its path at INFO when an existing file is loaded. This is the
+        one place a seed is loaded.
+
+        Raises:
+            QuipSigningError: if a preferred account is missing or unusable,
+                or the keystore or seed in effect cannot be loaded.
         """
-        resolved_seed = seed or os.environ.get("QUIP_SIGNER_SEED")
-        if resolved_seed:
-            return quip_signing.signer_from_seed(resolved_seed)
-        resolved_keystore = keystore or os.environ.get("QUIP_KEYSTORE")
-        if resolved_keystore:
-            return quip_signing.load_or_generate_keystore(resolved_keystore).signer
+        source = resolve_accounts(seed=seed, keystore=keystore).in_effect
+        if source is None or source.step == "default":
+            return SolverQuip._load_default_keystore(quip_signing)
+        if source.step in ("seed=", "QUIP_SIGNER_SEED"):
+            return quip_signing.signer_from_seed(seed or os.environ["QUIP_SIGNER_SEED"])
+        if source.step in ("keystore=", "QUIP_KEYSTORE"):
+            return quip_signing.load_or_generate_keystore(source.path).signer
+        if source.problem is not None:
+            raise QuipSigningError(
+                f"the {source.step} account preference cannot sign: {source.problem}. "
+                f"Fix it, or clear it with `xquad quip account use --unset`"
+            )
+        return quip_signing.load_keystore(source.path).signer
+
+    @staticmethod
+    def _load_default_keystore(quip_signing: Any) -> Any:
+        """Load or generate :data:`DEFAULT_KEYSTORE`, warning when it is new."""
         default_path = Path(DEFAULT_KEYSTORE).expanduser()
         existed = default_path.exists()
         ks = quip_signing.load_or_generate_keystore(default_path)
