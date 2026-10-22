@@ -20,4 +20,5 @@
 if __name__ == "__main__":
     from xquad.cli import main
 
-    main()
+    # Otherwise click names the program `python -m xquad` in usage and error lines.
+    main(prog_name="xquad")

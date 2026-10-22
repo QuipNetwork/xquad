@@ -10,7 +10,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 XQuad is a hardware-agnostic toolchain for expressing and running quadratic
 optimization problems (QUBO / Ising / integer) across quantum annealers and
-classical solvers. It ships as three Rust crates plus five Python distributions
+classical solvers. It ships as two Rust crates plus five Python distributions
 built around a single virtual-machine specification.
 
 Think of it as **LLVM for quadratic models** -- a common intermediate
@@ -206,7 +206,7 @@ This syncs the Python workspace (`xqvm_py`, `xqcp`, `xqsa`, `xqffi`,
 `xquad`) into `.venv/`, builds the `xqffi` pyo3 extension via maturin,
 puts the repo root on `sys.path` so scripts anywhere in the repo can
 `import xqcp` / `xqsa` / `xqvm_py` / `xqffi` / `xquad` naturally, and
-installs the `xquad` CLI binary under `~/.cargo/bin/`.
+installs the `xquad` command into `.venv/bin/`, run with `uv run xquad`.
 
 Open a REPL with everything ready:
 

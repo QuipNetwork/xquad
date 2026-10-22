@@ -71,10 +71,14 @@ class _AliasLoader:
         self._target = target
 
     def create_module(self, spec: ModuleSpec) -> ModuleType:
-        return importlib.import_module(self._target)
+        module = importlib.import_module(self._target)
+        self._target_spec = module.__spec__
+        return module
 
     def exec_module(self, module: ModuleType) -> None:
-        pass
+        # The import system has just set the alias's spec on the target; give it its own back, or
+        # `importlib.reload` and `importlib.resources` see a spec with no origin and no real loader.
+        module.__spec__ = self._target_spec
 
 
 class _AliasFinder:

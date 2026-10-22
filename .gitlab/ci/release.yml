@@ -198,10 +198,10 @@ release:validate:
     # as cold-cache room for exactly ONE of the two legs (crate publish
     # dry-run, Python dist build). This job runs both legs serially, and
     # the crate leg grew from a single-crate `cargo publish --dry-run -p
-    # xqvm` to `--workspace` (three crates, all at full verify strength,
-    # in target/package/, sharing no compilation with the maturin build
-    # in the same job). 20m + 20m of pre-existing per-leg cold-cache
-    # budget does not cover a tripled crate leg, and this runner fleet
+    # xqvm` to `--workspace` (three crates when this was sized, two now,
+    # all at full verify strength, in target/package/, sharing no
+    # compilation with the maturin build in the same job). 20m + 20m of pre-existing per-leg cold-cache
+    # budget did not cover a tripled crate leg, and this runner fleet
     # has no shared cache server, so cold is a normal outcome. Per
     # setup.yml's "Job timeouts" section, a timeout exists to kill a job
     # that will never finish, not to police one that is merely slow, so

@@ -73,6 +73,19 @@ def test_dotted_imports_resolve():
     assert sys.modules["xquad.sa.quip"] is _xqsa_quip
 
 
+def test_alias_import_keeps_the_target_spec():
+    """Importing through an alias leaves the target's own spec, so reload and resources work."""
+    import importlib
+
+    import xquad.cp
+    import xquad.sa.quip
+
+    assert _xqcp.__spec__.name == "xqcp"
+    assert _xqsa_quip.__spec__.name == "xqsa.quip"
+    assert _xqsa_quip.__spec__.origin is not None
+    assert importlib.reload(xquad.cp) is _xqcp
+
+
 def test_import_xquad_loads_no_peer():
     """`import xquad` alone leaves the peer packages unimported."""
     code = "import sys, xquad; print(' '.join(m for m in ('xqcp', 'xqsa', 'xqvm_py') if m in sys.modules))"

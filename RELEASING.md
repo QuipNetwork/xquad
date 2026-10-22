@@ -314,7 +314,7 @@ The tag push triggers a fully-automatic pipeline in stage `release`:
 1. **`release:validate`** -- the same job that ran on the release MR's
    own pipeline, using the same setup `release:pypi` uses. `make -k
    check-release` checks every version site against `$CI_COMMIT_TAG`,
-   dry-runs all three crates, and builds, `twine check`s and
+   dry-runs both crates, and builds, `twine check`s and
    smoke-installs all five Python distributions against the tagged
    commit. The version check is the one part that does nothing on the
    MR pipeline, where there is no tag to compare against, so the tag

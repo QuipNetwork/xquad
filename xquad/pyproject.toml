@@ -20,7 +20,7 @@ dependencies = [
     "xqcp==0.4.5.dev0",
     "xqsa==0.4.5.dev0",
     "xqvm_py==0.4.5.dev0",
-    "click>=8.1",
+    "click>=8.2",
 ]
 
 [project.scripts]

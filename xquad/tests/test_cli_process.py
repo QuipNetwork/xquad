@@ -20,8 +20,10 @@
 from __future__ import annotations
 
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -42,6 +44,10 @@ def test_installed_script_matches_python_m(tmp_path: Path) -> None:
     assert script.returncode == module.returncode == 0, script.stderr
     assert script.stdout == module.stdout == "stack (bottom to top):\n  42\n"
     assert _run([str(XQUAD), "--version"]).stdout == _run([sys.executable, "-m", "xquad", "--version"]).stdout
+    usage = _run([str(XQUAD), "vm", "run"])
+    assert usage.returncode == 2
+    assert usage.stderr == _run([sys.executable, "-m", "xquad", "vm", "run"]).stderr
+    assert usage.stderr.startswith("Usage: xquad vm run")
 
 
 @pytest.mark.parametrize("args", [["--help"], ["vm", "asm", "--stdout"]], ids=["help", "vm-asm"])
@@ -61,6 +67,28 @@ def test_startup_leaves_solvers_and_dsl_unimported(tmp_path: Path, args: list[st
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, check=True)
     assert result.stderr.decode().strip() == ""
+
+
+def test_sigint_stops_an_unbounded_run(tmp_path: Path) -> None:
+    src = tmp_path / "forever.xqasm"
+    src.write_text(".0: NOP\nJUMP .0\n")
+    trace = tmp_path / "trace.txt"
+    args = ["vm", "run", "--text", "--unlimited-steps", "--trace", "--trace-file", str(trace), str(src)]
+    # SIG_DFL in the child, so Python installs its own handler there even if pytest inherited an ignore.
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "xquad", *args],
+        preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
+    )
+    try:
+        # A trace on disk means the VM is running, so the CLI has already swapped the handler.
+        deadline = time.monotonic() + 30
+        while not (trace.exists() and trace.stat().st_size) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        proc.send_signal(signal.SIGINT)
+        assert proc.wait(timeout=5) == -signal.SIGINT
+    finally:
+        proc.kill()
+        proc.wait()
 
 
 def test_run_trace_without_file_writes_to_stderr(tmp_path: Path) -> None:

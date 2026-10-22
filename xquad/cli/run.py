@@ -19,21 +19,48 @@
 
 from __future__ import annotations
 
+import re
+import signal
+import threading
 from pathlib import Path
 
 import click
 
 from xquad.cli._common import load_program
 
+# Rust's integer `FromStr` takes an optional sign and ASCII digits only; Python's `int()` also takes
+# underscores, surrounding whitespace and non-ASCII digits, which xqcli rejected as usage errors.
+_SIGNED = re.compile(r"[+-]?[0-9]+")
+_UNSIGNED = re.compile(r"\+?[0-9]+")
+_I64 = range(-(2**63), 2**63)
+_U64_MAX = 2**64 - 1
 
-def _calldata(ctx: click.Context, param: click.Parameter, value: str | None) -> list[int]:
-    """Parse `--calldata a,b,c` into integers."""
-    if value is None:
-        return []
-    try:
-        return [int(item) for item in value.split(",")]
-    except ValueError as e:
-        raise click.BadParameter(f"expected comma-separated integers, got {value!r}") from e
+
+class _U64(click.ParamType):
+    """A `u64` option value, parsed as strictly as clap parsed it."""
+
+    name = "integer"
+
+    def convert(self, value: object, param: click.Parameter | None, ctx: click.Context | None) -> int:
+        if isinstance(value, int):
+            return value
+        if not _UNSIGNED.fullmatch(str(value)):
+            self.fail(f"{value!r} is not a non-negative integer", param, ctx)
+        n = int(str(value))
+        if n > _U64_MAX:
+            self.fail(f"{value} does not fit in a 64-bit unsigned integer", param, ctx)
+        return n
+
+
+def _calldata(ctx: click.Context, param: click.Parameter, value: tuple[str, ...]) -> list[int]:
+    """Parse `--calldata a,b,c` into integers; repeating the flag appends, as `xqcli` did."""
+    items = [item for chunk in value for item in chunk.split(",")]
+    if bad := [item for item in items if not _SIGNED.fullmatch(item)]:
+        raise click.BadParameter(f"{bad[0]!r} is not an integer")
+    ints = [int(item) for item in items]
+    if out_of_range := [n for n in ints if n not in _I64]:
+        raise click.BadParameter(f"{out_of_range[0]} does not fit in a 64-bit signed integer")
+    return ints
 
 
 def _debug(value: object) -> str:
@@ -71,19 +98,20 @@ def _debug(value: object) -> str:
 @click.option(
     "--calldata",
     callback=_calldata,
+    multiple=True,
     metavar="A,B,...",
     help="Comma-separated calldata integers passed to INPUT instructions.",
 )
 @click.option(
     "--outputs",
-    type=click.IntRange(min=0),
+    type=_U64(),
     default=16,
     show_default=True,
     help="Number of output slots available for OUTPUT instructions.",
 )
 @click.option(
     "--step-limit",
-    type=click.IntRange(min=0),
+    type=_U64(),
     help="Maximum number of steps to execute. Exact: 0 executes nothing. Defaults to the VM's DEFAULT_STEP_LIMIT.",
 )
 @click.option(
@@ -93,7 +121,7 @@ def _debug(value: object) -> str:
 )
 @click.option(
     "--memory-limit",
-    type=click.IntRange(min=0),
+    type=_U64(),
     help="Allocation budget in bytes for models, samples and vectors. Defaults to the VM's DEFAULT_MEMORY_LIMIT.",
 )
 @click.option("--trace", is_flag=True, help="Enable step-by-step execution tracing.")
@@ -142,12 +170,23 @@ def run(
         vm.set_step_limit(step_limit)
     if memory_limit is not None:
         vm.set_memory_limit(memory_limit)
+    # The VM runs with the GIL released and never returns to Python's SIGINT handler, so Ctrl-C
+    # would be ignored until the run ended; the default action kills the process, as xqcli did.
+    # Only Python's own handler is swapped: an inherited ignore stays, and off the main thread
+    # signal.signal would raise.
+    sigint = signal.getsignal(signal.SIGINT)
+    swap = sigint is signal.default_int_handler and threading.current_thread() is threading.main_thread()
+    if swap:
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
     try:
         vm.run(bytecode, trace=(trace_format or "text") if trace else None, trace_file=trace_file)
     except OSError as e:
         raise click.ClickException(str(e)) from e
     except RuntimeError as e:
         raise click.ClickException(f"run failed: {e}") from e
+    finally:
+        if swap:
+            signal.signal(signal.SIGINT, sigint)
 
     slots = [(i, v) for i, v in enumerate(vm.outputs()) if v is not None]
     if slots:

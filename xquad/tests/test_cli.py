@@ -150,6 +150,46 @@ def test_run_calldata_reaches_input_instruction(tmp_path: Path, cmd: dict[str, l
     assert "99" in result.stdout
 
 
+def test_run_repeated_calldata_appends(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
+    # clap's `Vec<i64>` appended across repeats, so `--calldata 7 --calldata 9` is `[7, 9]`.
+    src = write(tmp_path, "prog.xqasm", "PUSH 0\nINPUT r0\nPUSH 1\nINPUT r1\nLOAD r0\nLOAD r1\nHALT\n")
+    result = invoke([*cmd["run"], "--text", "--calldata", "7", "--calldata", "8,9", str(src)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "stack (bottom to top):\n  7\n  8\n"
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["--calldata", str(2**63)],
+        ["--calldata", "1,x"],
+        ["--step-limit", str(2**64)],
+        ["--memory-limit", "-1"],
+        ["--outputs", str(2**64)],
+        # Spellings Python's int() takes and Rust's FromStr does not.
+        ["--calldata", "1_000"],
+        ["--calldata", " 7"],
+        ["--calldata", "\u0663"],
+        ["--outputs", "1_6"],
+        ["--step-limit", "-0"],
+        # An empty token, as clap's value_delimiter split it.
+        ["--calldata", "1,"],
+        ["--calldata="],
+    ],
+)
+def test_run_out_of_range_values_are_usage_errors(tmp_path: Path, cmd: dict[str, list[str]], flags: list[str]) -> None:
+    result = invoke([*cmd["run"], "--text", *flags, str(write(tmp_path, "prog.xqasm", PUSH_42))])
+    assert result.exit_code == 2, result.output
+
+
+def test_run_accepts_signed_and_plus_prefixed_integers(tmp_path: Path) -> None:
+    src = write(tmp_path, "prog.xqasm", CALLDATA_R0)
+    # `=` form: clap read a separate `-5` token as a flag, so only this spelling worked in both.
+    result = invoke(["vm", "run", "--text", "--calldata=-5", "--outputs", "+16", str(src)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "stack (bottom to top):\n  -5\n"
+
+
 def test_run_trace_produces_stderr_output(
     tmp_path: Path, cmd: dict[str, list[str]], capfd: pytest.CaptureFixture[str]
 ) -> None:

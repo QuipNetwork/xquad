@@ -1653,7 +1653,7 @@ quip = [
 
 [package.metadata]
 requires-dist = [
-    { name = "click", specifier = ">=8.1" },
+    { name = "click", specifier = ">=8.2" },
     { name = "xqcp", editable = "xqcp" },
     { name = "xqffi", editable = "xqffi" },
     { name = "xqsa", editable = "xqsa" },
