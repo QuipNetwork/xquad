@@ -42,6 +42,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from xqsa.quip.codec import _require_h256
+
 
 @dataclass(frozen=True)
 class QuipNetwork:
@@ -49,11 +51,24 @@ class QuipNetwork:
 
     Attributes:
         rpc: Websocket RPC endpoint, passed to ``SolverQuip`` as ``url``.
-        faucet: Base URL of the network's faucet, passed to ``SolverQuip`` as ``faucet``.
+        faucet: Base URL of the network's faucet, passed to ``SolverQuip`` as
+            ``faucet``, or ``None`` if the network has no faucet.
+        genesis: The network's genesis hash, or ``None`` to accept any. With
+            a hash, a node serving another chain fails the connect with
+            :class:`~xqsa.quip.chain.GenesisMismatch`. Leave it unset for a
+            network that is relaunched with a new genesis.
+
+    Raises:
+        ValueError: if ``genesis`` is not a 32-byte hex hash.
     """
 
     rpc: str
-    faucet: str
+    faucet: str | None
+    genesis: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.genesis is not None:
+            object.__setattr__(self, "genesis", _require_h256(self.genesis, "QuipNetwork.genesis"))
 
 
 NETWORKS: Mapping[str, QuipNetwork] = MappingProxyType(

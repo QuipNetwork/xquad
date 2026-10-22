@@ -138,6 +138,31 @@ def _is_native(topology: str | None) -> bool:
     return (topology or "").strip().lower() == NATIVE_TOPOLOGY
 
 
+def _open(url: str) -> Any:
+    """Connect to ``url`` and load its runtime; the connection is closed on any failure."""
+    # Not substrateinterface.SubstrateInterface directly: Quip runtimes serve
+    # metadata V16, which scalecodec cannot decode. The subclass pulls V14
+    # through the versioned runtime API instead, and confines that to instances
+    # we build. See xqsa.quip.metadata.
+    iface = quip_metadata.connect(url)
+    try:
+        # Resolve metadata here rather than letting the first storage read
+        # trigger it: a node whose metadata this client cannot decode must fail
+        # as QuipMetadataError, and every later read wraps its faults as "could
+        # not read <pallet constant>", which names the wrong cause.
+        iface.init_runtime()
+    except BaseException:
+        _close(iface)
+        raise
+    return iface
+
+
+def _close(iface: Any) -> None:
+    """Close ``iface``, ignoring a failure: the connection is being given up."""
+    with contextlib.suppress(Exception):
+        iface.close()
+
+
 class SolverQuip(Solver):
     """Network-mempool backend: solve XQMX Ising models on the Quip Network.
 
@@ -181,11 +206,14 @@ class SolverQuip(Solver):
             solver warns once, here rather than on every order.
         QuipConnectionError: if the node is unreachable or the configured Ising
             spec is not registered on-chain.
-        QuipMetadataError: if the node's runtime metadata cannot be decoded by
-            the installed substrate-interface/scalecodec, even through the V14
-            shim. Raised in its own right rather than folded into
-            QuipConnectionError, because the remedy is a runtime that still
-            serves V14, not a retry.
+        GenesisMismatch: a :class:`QuipConnectionError`, if the network
+            preset pins a genesis hash and the node serves another chain.
+        QuipMetadataError: if this client cannot read or sign for the node's
+            runtime: its metadata does not decode even through the V14 shim,
+            or its extrinsic envelope or signed extensions differ from what
+            this client encodes. Raised in its own right rather than folded
+            into QuipConnectionError, because the remedy is upgrading xquad,
+            not a retry.
     """
 
     def __init__(
@@ -209,6 +237,7 @@ class SolverQuip(Solver):
         faucet: str | None = None,
         autoconfirm: bool | Callable[[JobQuote], bool] | None = None,
         autofund: bool | Callable[[JobQuote], bool] | None = None,
+        _network: str | None = None,
     ) -> None:
         # Two distinct guards, one per piece of the [quip] extra: client + signer.
         try:
@@ -233,6 +262,9 @@ class SolverQuip(Solver):
             access = AccessOpen()
         # All before any network I/O.
         check_client_defaults(delivery)
+        if _network is not None and _network not in NETWORKS:
+            raise ValueError(f"unknown Quip network {_network!r}; known networks: {', '.join(sorted(NETWORKS))}")
+        pin = NETWORKS[_network].genesis if _network is not None else None
         self._inclusion_window_blocks = check_inclusion_window(inclusion_window_blocks)
         self._access = coerce_access(access)
         self._resolution = coerce_resolution(resolution)
@@ -252,36 +284,29 @@ class SolverQuip(Solver):
         # chain, so it never draws from whatever faucet happens to be exported.
         self._faucet = faucet or (None if url else os.environ.get("QUIP_FAUCET_URL"))
         # Set by for_network; a solver built from a raw url= names no network.
-        self._network: str | None = None
+        self._network = _network
         self._autoconfirm = _resolve_gate(autoconfirm, "autoconfirm", "QUIP_AUTOCONFIRM")
         self._autofund = _resolve_gate(autofund, "autofund", "QUIP_AUTOFUND")
 
         try:
-            # Not substrateinterface.SubstrateInterface directly: Quip runtimes
-            # serve metadata V16, which scalecodec cannot decode. The subclass
-            # pulls V14 through the versioned runtime API instead, and confines
-            # that to instances we build. See xqsa.quip.metadata.
-            self._iface = quip_metadata.connect(resolved_url)
-            # Resolve metadata here rather than letting the first storage read
-            # trigger it: a node whose metadata this client cannot decode must
-            # fail as QuipMetadataError, and every read below wraps its faults
-            # as "could not read <pallet constant>", which names the wrong
-            # cause. Doing it once, in the open, also makes the failure
-            # independent of which resolve step happens to run first.
-            self._iface.init_runtime()
+            self._iface = _open(resolved_url)
         except QuipMetadataError:
             raise  # a client/runtime metadata mismatch is not a connection fault.
         except Exception as exc:  # noqa: BLE001 -- any connect failure is a connection error.
             raise QuipConnectionError(f"could not connect to the Quip node at {resolved_url}: {exc}") from exc
         self._url = resolved_url
-        self._genesis_hash = chain.genesis_hash(self._iface)
+        try:
+            self._genesis_hash = self._check_connection(self._iface, expected_genesis=pin)
 
-        self._spec_id = self._resolve_spec_id(spec_id)
-        self._limits = chain.read_limits(self._iface)
-        # Checked once here; an order that keeps the default does not look it up again.
-        _check_access(self._access, self._limits, self._iface, stacklevel=3)
-        self._reward = self._resolve_reward(reward)
-        self._topology_hash = self._resolve_topology_hash(topology)
+            self._spec_id = self._resolve_spec_id(spec_id)
+            self._limits = chain.read_limits(self._iface)
+            # Checked once here; an order that keeps the default does not look it up again.
+            _check_access(self._access, self._limits, self._iface, stacklevel=3)
+            self._reward = self._resolve_reward(reward)
+            self._topology_hash = self._resolve_topology_hash(topology)
+        except BaseException:
+            _close(self._iface)  # no solver comes back to close it.
+            raise
 
     @classmethod
     def for_network(cls, name: str, /, **kwargs: Any) -> Self:
@@ -313,9 +338,7 @@ class SolverQuip(Solver):
         if not kwargs.get("faucet"):  # an unset faucet must not let QUIP_FAUCET_URL beat the preset.
             kwargs["faucet"] = preset.faucet
         _pop_mode(kwargs, stacklevel=2)  # here, so the deprecation names the caller's line.
-        solver = cls(url=preset.rpc, **kwargs)
-        solver._network = name
-        return solver
+        return cls(url=preset.rpc, _network=name, **kwargs)
 
     # ------------------------------------------------------------------
     # Identity / configuration resolution
@@ -538,16 +561,28 @@ class SolverQuip(Solver):
     ) -> QuipSubmissionError:
         """Build the error for an account that cannot cover ``quote``, naming where to fund it.
 
-        ``beyond_drip`` marks a shortfall larger than one faucet drip, which
-        ``autofund`` never requests: that is more often a mistyped reward than
-        a real need. ``above_ceiling`` marks an account already holding more
-        than one drip, which the faucet refuses to top up.
+        With no faucet, a named network says it has none and a raw ``url=``
+        says how to name one; either adds a ``reward=`` nudge when the
+        shortfall exceeds one faucet drip. With a faucet, ``beyond_drip``
+        marks a shortfall larger than one drip, which ``autofund`` never
+        requests: that is more often a mistyped reward than a real need.
+        ``above_ceiling`` marks an account already holding more than one drip,
+        which the faucet refuses to top up.
         """
 
         def amount(planck: int) -> str:
             return f"{_format_planck(planck, quote.token_decimals)} {quote.token_symbol}"
 
-        if beyond_drip:
+        if not self._faucet:
+            if self._network:
+                remedy = f"{self._network} has no faucet; fund the account another way."
+            else:
+                remedy = (
+                    "Pass faucet=, set QUIP_FAUCET_URL, or build with SolverQuip.for_network(...) to name a faucet."
+                )
+            if quote.shortfall_planck > DEFAULT_DRIP_PLANCK:
+                remedy += " Check reward= if that is more than you meant."
+        elif beyond_drip:
             remedy = (
                 f"That is more than one faucet drip ({amount(DEFAULT_DRIP_PLANCK)}), which is all autofund "
                 "requests; check reward=, or fund the account another way."
@@ -557,10 +592,8 @@ class SolverQuip(Solver):
                 f"The faucet only tops up an account holding at most one drip ({amount(DEFAULT_DRIP_PLANCK)}); "
                 "fund the account another way."
             )
-        elif self._faucet:
-            remedy = f"Fund it from the faucet at {self._faucet}."
         else:
-            remedy = "Pass faucet=, set QUIP_FAUCET_URL, or build with SolverQuip.for_network(...) to name a faucet."
+            remedy = f"Fund it from the faucet at {self._faucet}."
         return QuipSubmissionError(
             f"insufficient balance: account {self._account_ss58} holds "
             f"{amount(quote.balance_planck)} but the job needs {amount(quote.total_planck)} "
@@ -789,7 +822,8 @@ class SolverQuip(Solver):
         land, the same bytes are sent again, so a node that lost them
         relearns them; the hash is the same, so they can land once at most.
         A read that fails reconnects with backoff and retries; a node that
-        cannot decode the blocks or has discarded the state stops it at once.
+        cannot decode the blocks, has discarded the state, or serves another
+        chain or a runtime this client cannot sign for stops it at once.
         The rounds stop once the finalized head passes the window's end
         block, or when finality made no progress over a wall-clock estimate
         of that block plus :data:`SETTLE_GRACE_BLOCKS`; while finality
@@ -808,14 +842,17 @@ class SolverQuip(Solver):
         while True:
             try:
                 outcome = self._settle_round(signed)
-            except (QuipMetadataError, chain.StatePruned) as exc:
+            except (QuipMetadataError, chain.StatePruned, chain.GenesisMismatch) as exc:
                 raise self._unsettled(signed, exc) from exc
             except Exception as exc:  # noqa: BLE001 -- a fault while reading; reconnect and read again.
                 failures += 1
                 logger.warning("could not settle propose_job %s (%s); reconnecting", signed.ext_hash, exc)
                 if not self._pause(deadline, min(poll * 2 ** (failures - 1), MAX_BACKOFF_SECONDS)):
                     raise self._unsettled(signed, exc) from exc
-                self._reconnect()
+                try:
+                    self._reconnect()
+                except (chain.GenesisMismatch, QuipMetadataError) as fatal:
+                    raise self._unsettled(signed, fatal) from fatal
                 continue
             failures = 0
             if outcome != "pending":
@@ -913,25 +950,84 @@ class SolverQuip(Solver):
         return True
 
     def _reconnect(self) -> None:
-        """Replace the chain connection with a fresh one; a failure keeps the old one for the next attempt."""
+        """Replace the chain connection with a fresh one; a failure keeps the old one for the next attempt.
+
+        The new connection must serve the session's genesis, else it is closed
+        and the old one kept. Its signed extensions are not checked: settling
+        only reads and resends bytes already signed, and the next signing
+        checks the runtime it signs for.
+
+        Raises:
+            GenesisMismatch: if the node now serves another chain.
+            QuipMetadataError: if this client cannot read the node's metadata.
+        """
         try:
-            iface = quip_metadata.connect(self._url)
-            iface.init_runtime()
+            iface = _open(self._url)
+        except QuipMetadataError:
+            raise  # the same node gives the same answer; retrying cannot help.
         except Exception as exc:  # noqa: BLE001 -- the caller retries until its deadline.
             logger.warning("could not reconnect to the Quip node at %s: %s", self._url, exc)
             return
+        try:
+            self._check_connection(iface, expected_genesis=self._genesis_hash, reconnect=True)
+        except chain.GenesisMismatch:
+            _close(iface)
+            raise  # the same node gives the same answer; retrying cannot help.
+        except Exception as exc:  # noqa: BLE001 -- the caller retries until its deadline.
+            _close(iface)
+            logger.warning("could not reconnect to the Quip node at %s: %s", self._url, exc)
+            return
+        except BaseException:
+            _close(iface)
+            raise
         old, self._iface = self._iface, iface
         if old is not iface:
-            with contextlib.suppress(Exception):
-                old.close()
+            _close(old)
+
+    def _check_connection(self, iface: Any, *, expected_genesis: str | None, reconnect: bool = False) -> str:
+        """Check that ``iface`` serves the expected chain on a runtime this client can sign for; return its genesis.
+
+        Logs the network, runtime and genesis at ``INFO``. A ``reconnect``
+        checks the genesis only; see :meth:`_reconnect`.
+
+        Raises:
+            GenesisMismatch: if ``expected_genesis`` is set and the node's differs.
+            QuipMetadataError: if this client cannot sign for the node's runtime
+                (first connect only).
+            QuipConnectionError: if the genesis hash cannot be read.
+        """
+        genesis = chain.genesis_hash(iface).lower()
+        network = self._network or "custom endpoint"
+        if expected_genesis is not None and genesis != expected_genesis:
+            raise chain.GenesisMismatch(
+                f"the Quip node at {self._url} ({network}) serves genesis {genesis}, "
+                f"not the expected {expected_genesis}"
+            )
+        if not reconnect:
+            self._quip_signing.check_runtime(iface)
+        logger.info(
+            "%s Quip %s at %s: specVersion %s, transactionVersion %s, genesis %s",
+            "reconnected to" if reconnect else "connected to",
+            network,
+            self._url,
+            iface.runtime_version,
+            iface.transaction_version,
+            genesis,
+        )
+        return genesis
 
     @staticmethod
     def _unsettled(signed: _SignedCall, cause: Exception) -> QuipSubmitIncompleteError:
         """The error for a sent ``propose_job`` that is not settled yet; :class:`JobOrder` attaches itself."""
         if isinstance(cause, QuipMetadataError):
             then = (
-                "this client cannot decode the runtime's blocks; upgrade xquad, then call submit() again. The order "
-                "keeps its signed bytes and nonce."
+                "this client cannot read or sign for the node's runtime; upgrade xquad, then call submit() again. "
+                "The order keeps its signed bytes and nonce."
+            )
+        elif isinstance(cause, chain.GenesisMismatch):
+            then = (
+                "the endpoint now serves a different chain; point the client at the network this order was sent on, "
+                "then call submit() again."
             )
         elif isinstance(cause, chain.StatePruned):
             then = (
@@ -1354,7 +1450,7 @@ class SolverQuip(Solver):
             time.sleep(self._poll_interval)
 
     def _clear_gates(self, quote: JobQuote) -> None:
-        """Show ``quote``, refuse what no drip can cover, then ask the gates and fund if short.
+        """Show ``quote``, refuse what cannot be funded, then ask the gates and fund if short.
 
         The ``autoconfirm`` gate comes first, so the price is accepted before
         funding is considered. Only if the account is short does the
@@ -1362,22 +1458,23 @@ class SolverQuip(Solver):
 
         Raises:
             QuipSubmissionError: if the account cannot cover the quote and no
-                faucet is configured, the shortfall exceeds one faucet drip, the
-                balance already exceeds the faucet's one-drip ceiling, or the
-                drip does not land. The first three are raised before either
-                gate is asked.
+                faucet is configured, or, with a faucet, the shortfall exceeds
+                one drip, the balance already exceeds the faucet's one-drip
+                ceiling, or the drip does not land. All but the last are raised
+                before either gate is asked; the drip limits apply only with a
+                faucet.
             QuipCancelledError: if a gate declines.
             QuipFaucetError: if the faucet refuses or cannot be reached.
         """
         self._display(quote)
         # A shortfall no drip can cover fails whatever the gates say, so raise
         # it before asking anyone to confirm a job that cannot go out.
+        if quote.shortfall_planck and not self._faucet:
+            raise self._insufficient_error(quote)
         if quote.shortfall_planck > DEFAULT_DRIP_PLANCK:
             raise self._insufficient_error(quote, beyond_drip=True)
         if quote.shortfall_planck and quote.balance_planck > DEFAULT_DRIP_PLANCK:
             raise self._insufficient_error(quote, above_ceiling=True)
-        if quote.shortfall_planck and not self._faucet:
-            raise self._insufficient_error(quote)
         total = f"{_format_planck(quote.total_planck, quote.token_decimals)} {quote.token_symbol}"
         self._pass_gate(self._autoconfirm, quote, name="autoconfirm", question=f"Submit this job for {total}?")
         if quote.shortfall_planck:

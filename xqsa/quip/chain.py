@@ -474,6 +474,8 @@ def build_extrinsic(
 
     Raises:
         QuipSubmissionError: if assembly or signing fails.
+        QuipMetadataError: propagated unchanged; a runtime this client cannot
+            sign for is not a submission failure.
     """
     try:
         return quip_signing.build_signed_extrinsic(
@@ -569,6 +571,10 @@ def _proposed_order_id(events: list[tuple[int | None, object, object, object]], 
 
 class StatePruned(QuipConnectionError):
     """The node has discarded the state of a past block; a node that keeps full state history can read it."""
+
+
+class GenesisMismatch(QuipConnectionError):
+    """The node serves a different chain from the one expected; another node at a correct endpoint can serve it."""
 
 
 def account_nonce_at(iface: Any, account_id: Any, block_hash: str) -> int:

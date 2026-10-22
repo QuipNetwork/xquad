@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import stat
 from types import SimpleNamespace
 
@@ -49,10 +50,12 @@ from xqsa.quip.signing import (
     HYBRID_PUBLIC_LEN,
     MULTI_ADDRESS_ID,
     ExtrinsicReceipt,
+    QuipMetadataError,
     QuipSigningError,
     SendOutcomeUnknown,
     _dispatch_error_text,
     build_signed_extrinsic,
+    check_runtime,
     encode_compact_u32,
     encode_compact_u128,
     generate_keystore,
@@ -61,6 +64,8 @@ from xqsa.quip.signing import (
     signer_from_seed,
     submit_and_watch,
 )
+
+from .test_client import FAKE_EXTENSIONS, FakeRuntimeConfig, FakeRuntimeMetadata
 
 pytestmark = pytest.mark.quip
 
@@ -104,8 +109,11 @@ class FakeIface:
         genesis: bytes = GENESIS,
         spec_version: int = 1,
         tx_version: int = 1,
+        metadata: FakeRuntimeMetadata | None = None,
     ) -> None:
         self.call_bytes = call_bytes
+        self.metadata = metadata or FakeRuntimeMetadata()
+        self.runtime_config = FakeRuntimeConfig()
         self.nonce = nonce
         self.genesis = genesis
         self.spec_version = spec_version
@@ -239,18 +247,24 @@ class TestCompactEncoders:
 
 class TestSignedExtensions:
     def test_extra_layout_for_zero_nonce(self) -> None:
-        extra, _ = quip_signing._signed_extensions(nonce=0, spec_version=1, tx_version=1, genesis_bytes=GENESIS)
+        extra, _ = quip_signing._signed_extensions(
+            FakeIface(), nonce=0, spec_version=1, tx_version=1, genesis_bytes=GENESIS
+        )
         # Era::Immortal(0x00) || CheckNonce compact(0)=0x00 || tip compact(0)=0x00
         # || CheckMetadataHash Mode::Disabled(0x00). Every other extension is empty.
         assert extra == b"\x00\x00\x00\x00"
 
     def test_extra_carries_nonce(self) -> None:
-        extra, _ = quip_signing._signed_extensions(nonce=5, spec_version=1, tx_version=1, genesis_bytes=GENESIS)
+        extra, _ = quip_signing._signed_extensions(
+            FakeIface(), nonce=5, spec_version=1, tx_version=1, genesis_bytes=GENESIS
+        )
         # Era || compact(5)=0x14 || tip 0x00 || metadata 0x00.
         assert extra == b"\x00" + encode_compact_u32(5) + b"\x00" + b"\x00"
 
     def test_additional_layout(self) -> None:
-        _, additional = quip_signing._signed_extensions(nonce=0, spec_version=42, tx_version=7, genesis_bytes=GENESIS)
+        _, additional = quip_signing._signed_extensions(
+            FakeIface(), nonce=0, spec_version=42, tx_version=7, genesis_bytes=GENESIS
+        )
         # spec_version(4 LE) || tx_version(4 LE) || genesis(32) || genesis(32)
         # || CheckMetadataHash Option::None(0x00).
         expected = (42).to_bytes(4, "little") + (7).to_bytes(4, "little") + GENESIS + GENESIS + b"\x00"
@@ -259,35 +273,106 @@ class TestSignedExtensions:
 
     def test_tip_encoded_in_extra(self) -> None:
         extra, _ = quip_signing._signed_extensions(
-            nonce=0, spec_version=1, tx_version=1, genesis_bytes=GENESIS, tip=1000
+            FakeIface(), nonce=0, spec_version=1, tx_version=1, genesis_bytes=GENESIS, tip=1000
         )
         assert extra == b"\x00" + b"\x00" + encode_compact_u128(1000) + b"\x00"
 
-    def test_eth_set_origin_sits_between_metadata_hash_and_weight_reclaim(self) -> None:
-        # QUI-1257: the live runtime lists 12 extensions, with EthSetOrigin
-        # (pallet_revive's SetOrigin) in this slot. test_live.py asserts the
-        # whole tuple against chain metadata; this pins the position offline.
-        order = quip_signing.SIGNED_EXTENSIONS
-        assert order.index("EthSetOrigin") == order.index("CheckMetadataHash") + 1
-        assert order.index("WeightReclaim") == order.index("EthSetOrigin") + 1
-        assert len(order) == 12
+    def test_order_follows_the_runtime_metadata(self) -> None:
+        reordered = FakeIface(metadata=FakeRuntimeMetadata(FAKE_EXTENSIONS[::-1]))
+        extra, additional = quip_signing._signed_extensions(
+            reordered, nonce=5, spec_version=42, tx_version=7, genesis_bytes=GENESIS
+        )
+        assert extra == b"\x00" + b"\x00" + encode_compact_u32(5) + b"\x00"
+        assert additional == b"\x00" + GENESIS + GENESIS + (7).to_bytes(4, "little") + (42).to_bytes(4, "little")
 
-    def test_the_field_table_matches_the_declared_order(self) -> None:
-        # SIGNED_EXTENSIONS is the declared order; _extension_fields is what is
-        # actually encoded. A name in one and not the other fails at signing time
-        # with a bare KeyError, which is exactly the drift the live test above
-        # prompts someone to fix.
-        fields = quip_signing._extension_fields(nonce=0, spec_version=117, tx_version=7, genesis_bytes=GENESIS)
-        assert tuple(fields) == quip_signing.SIGNED_EXTENSIONS
+    def test_encoding_table_covers_the_live_extensions(self) -> None:
+        fields = quip_signing._extension_fields(nonce=0, spec_version=119, tx_version=7, genesis_bytes=GENESIS)
+        assert set(fields) == {name for name, _, _ in FAKE_EXTENSIONS}
 
     def test_eth_set_origin_contributes_no_wire_bytes(self) -> None:
         # It is a zero-field composite with an empty additional_signed, so adding
         # it changes no payload -- it is a latent hazard, not a live bug.
         extra, additional = quip_signing._signed_extensions(
-            nonce=3, spec_version=117, tx_version=7, genesis_bytes=GENESIS
+            FakeIface(), nonce=3, spec_version=117, tx_version=7, genesis_bytes=GENESIS
         )
         assert len(extra) == 4
         assert len(additional) == 4 + 4 + 32 + 32 + 1
+
+
+class TestDeprecatedSignedExtensions:
+    def test_the_old_name_warns_and_keeps_its_value(self) -> None:
+        with pytest.warns(DeprecationWarning, match="SIGNED_EXTENSIONS is deprecated since v0.4.5"):
+            order = quip_signing.SIGNED_EXTENSIONS
+        assert order == tuple(name for name, _, _ in FAKE_EXTENSIONS)
+
+    def test_the_shim_path_warns_too(self, monkeypatch) -> None:
+        import importlib
+        import sys
+
+        monkeypatch.delitem(sys.modules, "xqsa.quip_signing", raising=False)
+        with pytest.warns(DeprecationWarning) as caught:
+            shim = importlib.import_module("xqsa.quip_signing")
+            order = shim.SIGNED_EXTENSIONS
+        assert [str(w.message) for w in caught] == [
+            "xqsa.quip_signing is deprecated; import xqsa.quip.signing instead",
+            "xqsa.quip.signing.SIGNED_EXTENSIONS is deprecated since v0.4.5 and removed in v0.5.0; "
+            "the order comes from the runtime metadata",
+        ]
+        assert order == quip_signing._SIGNED_EXTENSIONS_0_4
+
+    def test_another_missing_name_raises(self) -> None:
+        with pytest.raises(AttributeError, match="has no attribute 'NOT_A_NAME'"):
+            _ = quip_signing.NOT_A_NAME
+
+
+class TestCheckRuntime:
+    def test_the_live_runtime_passes(self) -> None:
+        check_runtime(FakeIface())
+
+    def test_an_unknown_extension_raises(self) -> None:
+        metadata = FakeRuntimeMetadata((*FAKE_EXTENSIONS, ("CheckFuture", "()", "()")))
+        with pytest.raises(QuipMetadataError, match="cannot encode signed extension CheckFuture"):
+            check_runtime(FakeIface(metadata=metadata))
+
+    def test_a_reshaped_half_raises(self) -> None:
+        # The chain widens CheckSpecVersion's u32 to a u64; the client still writes four bytes.
+        widened = tuple((n, e, "u64" if n == "CheckSpecVersion" else a) for n, e, a in FAKE_EXTENSIONS)
+        with pytest.raises(QuipMetadataError, match=r"CheckSpecVersion\.additional no longer has the shape"):
+            check_runtime(FakeIface(metadata=FakeRuntimeMetadata(widened)))
+
+    def test_a_reshaped_mortal_era_raises(self) -> None:
+        # An Era type that only takes the immortal byte fails on the mortal sample.
+        one_byte = tuple((n, "Mode" if e == "Era" else e, a) for n, e, a in FAKE_EXTENSIONS)
+        with pytest.raises(QuipMetadataError, match=r"CheckMortality\.extra"):
+            check_runtime(FakeIface(metadata=FakeRuntimeMetadata(one_byte)))
+
+    @pytest.mark.parametrize(
+        ("change", "named"),
+        [
+            ({"version": 5}, "extrinsic version 5"),
+            ({"address": "sp_runtime::AccountId32"}, "Address type 'sp_runtime::AccountId32'"),
+            ({"id_index": 1}, "MultiAddress::Id index 1"),
+            ({"signature": "sp_runtime::MultiSignature"}, "Signature type 'sp_runtime::MultiSignature'"),
+        ],
+    )
+    def test_an_envelope_mismatch_raises(self, change, named) -> None:
+        with pytest.raises(QuipMetadataError, match=re.escape(named)):
+            check_runtime(FakeIface(metadata=FakeRuntimeMetadata(**change)))
+
+    def test_unreadable_metadata_raises(self) -> None:
+        iface = FakeIface()
+        iface.metadata = SimpleNamespace(value=(None, {}))
+        with pytest.raises(QuipMetadataError, match="cannot read the extrinsic envelope"):
+            check_runtime(iface)
+
+    def test_signing_checks_the_runtime(self) -> None:
+        from xqsa.quip import chain
+
+        signer = signer_from_seed(SEED)
+        iface = FakeIface(metadata=FakeRuntimeMetadata(signature="sp_runtime::MultiSignature"))
+        # chain.build_extrinsic wraps signing errors only; this one reaches the caller as it is.
+        with pytest.raises(QuipMetadataError, match="Signature type"):
+            chain.build_extrinsic(iface, quip_signing, signer, "QuantumComputeMempool", "propose_job", {})
 
 
 class TestMortalEra:
@@ -316,7 +401,7 @@ class TestMortalEra:
         checkpoint = bytes([0xCD]) * 32
         era = quip_signing.MortalEra(64, 74773, "0x" + checkpoint.hex())
         extra, additional = quip_signing._signed_extensions(
-            nonce=0, spec_version=1, tx_version=1, genesis_bytes=GENESIS, era=era
+            FakeIface(), nonce=0, spec_version=1, tx_version=1, genesis_bytes=GENESIS, era=era
         )
         assert extra == bytes.fromhex("5501") + b"\x00\x00\x00"
         assert additional == (1).to_bytes(4, "little") * 2 + GENESIS + checkpoint + b"\x00"
@@ -500,7 +585,7 @@ class TestBuildSignedExtrinsic:
 
         # The trailing region is extra || call; reconstruct the expected payload.
         extra, additional = quip_signing._signed_extensions(
-            nonce=3, spec_version=42, tx_version=7, genesis_bytes=GENESIS
+            FakeIface(), nonce=3, spec_version=42, tx_version=7, genesis_bytes=GENESIS
         )
         assert rest == extra + iface.call_bytes
 
@@ -518,7 +603,7 @@ class TestBuildSignedExtrinsic:
 
         _, envelope, _ = _decode_wire(wire)
         extra, additional = quip_signing._signed_extensions(
-            nonce=0, spec_version=1, tx_version=1, genesis_bytes=GENESIS
+            FakeIface(), nonce=0, spec_version=1, tx_version=1, genesis_bytes=GENESIS
         )
         payload = big_call + extra + additional
         assert len(payload) > quip_signing.SIGNED_PAYLOAD_HASH_THRESHOLD
@@ -543,7 +628,7 @@ class TestBuildSignedExtrinsic:
         account, envelope, rest = _decode_wire(disarmed)
         assert (account, rest) == _decode_wire(wire)[::2]
         extra, additional = quip_signing._signed_extensions(
-            nonce=0, spec_version=1, tx_version=1, genesis_bytes=GENESIS
+            FakeIface(), nonce=0, spec_version=1, tx_version=1, genesis_bytes=GENESIS
         )
         digest = hashlib.blake2b(iface.call_bytes + extra + additional, digest_size=32).digest()
         assert quip_signer.verify_envelope(digest, _decode_wire(wire)[1], signer.account_id)

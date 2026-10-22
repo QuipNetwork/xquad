@@ -31,6 +31,8 @@ dev = [
     "pytest>=8",
     "pyyaml>=6",
     "ruff>=0.7",
+    # The SolverQuip unit tests decode SCALE without the [quip] extra.
+    "scalecodec>=1.2,<2",
 ]
 
 # ---------------------------------------------------------------------------

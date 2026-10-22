@@ -40,7 +40,7 @@ from xqsa.quip import (
     chain,
 )
 from xqsa.quip.access import AccessAllow, AccessOpen
-from xqsa.quip.chain import ChainLimits, StatePruned, unregistered_solvers
+from xqsa.quip.chain import ChainLimits, GenesisMismatch, StatePruned, unregistered_solvers
 from xqsa.quip.errors import QuipUnconfirmedError
 from xqsa.quip.order import JobOrder, _OrderOptions, check_client_defaults, merge_options
 from xqsa.quip.resolution import ResolutionSingleBest, ResolutionTopNEqual, ResolutionTopNWeighted
@@ -52,10 +52,13 @@ from .test_client import (
     SOLVER_TYPES,
     TOPO_HASH,
     UNIT,
+    FakeRuntimeMetadata,
+    _default_iface,
     _make_solver,
     _model,
     _ok_receipt,
     _patch_signing,
+    _signed_call,
     _solve_ready,
     _spin_vector,
     _submission,
@@ -1347,6 +1350,78 @@ class TestJobOrderSendOutcomes:
         assert isinstance(info.value.__cause__, StatePruned)
         assert (connects, virtual_clock) == ([], [])  # no reconnect, no wait.
         assert order.status()["state"] == "sending"
+
+    @staticmethod
+    def _repointed(monkeypatch, solver, change: str):
+        """Make reads on the session's connection fail and every reconnect reach a node that ``change`` describes.
+
+        Returns the list of closes on the new node.
+        """
+        other = _default_iface()
+        if change == "genesis":
+            other.genesis_hash = "0x" + "11" * 32
+        elif change == "runtime":
+            other.metadata = FakeRuntimeMetadata(signature="sp_runtime::MultiSignature")
+        elif change == "init":
+            other._init_runtime_raises = RuntimeError("rpc timeout")
+        else:  # "interrupt": Ctrl-C while the new connection is checked.
+            other.get_block_hash = lambda block_id=None: _raise(KeyboardInterrupt())
+        closed: list[bool] = []
+        monkeypatch.setattr(other, "close", lambda: closed.append(True))
+        monkeypatch.setattr(solver._iface, "get_chain_finalised_head", lambda: _raise(ConnectionError("down")))
+        monkeypatch.setattr(chain_module_metadata(), "connect", lambda url: other)
+        return closed
+
+    def test_a_reconnect_to_another_chain_is_sending_at_once(self, monkeypatch, virtual_clock) -> None:
+        solver, captured = _ready(monkeypatch)
+        _send_raises(monkeypatch, solver, ConnectionError("websocket closed"), captured, lands_on=None)
+        order = solver.create_order(_model())
+        order.quote()
+        session = solver._iface
+        closed = self._repointed(monkeypatch, solver, "genesis")
+        with pytest.raises(QuipSubmitIncompleteError, match="the endpoint now serves a different chain") as info:
+            order.submit()
+        assert isinstance(info.value.__cause__, GenesisMismatch)
+        assert len(virtual_clock) == 1  # one backoff before the reconnect, then no retries.
+        assert (closed, solver._iface) == ([True], session)
+        assert order.status()["state"] == "sending"
+
+    def test_one_settle_attempt_stops_on_another_chain(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        session = solver._iface
+        closed = self._repointed(monkeypatch, solver, "genesis")
+        with pytest.raises(QuipSubmitIncompleteError) as info:
+            solver._settle_once(_signed_call(solver))
+        assert isinstance(info.value.__cause__, GenesisMismatch)
+        assert (closed, solver._iface) == ([True], session)
+
+    def test_a_reconnect_does_not_check_the_signed_extensions(self, monkeypatch) -> None:
+        # Settling only reads and resends signed bytes; the next signing checks the runtime.
+        solver, _ = _ready(monkeypatch)
+        session = solver._iface
+        closed = self._repointed(monkeypatch, solver, "runtime")
+        with pytest.raises(QuipSubmitIncompleteError) as info:
+            solver._settle_once(_signed_call(solver))
+        assert not isinstance(info.value.__cause__, QuipMetadataError)  # it read on the new node instead.
+        assert closed == []
+        assert solver._iface is not session
+
+    def test_a_reconnect_that_fails_to_load_the_runtime_closes_it(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        session = solver._iface
+        closed = self._repointed(monkeypatch, solver, "init")
+        with pytest.raises(QuipSubmitIncompleteError) as info:
+            solver._settle_once(_signed_call(solver))
+        assert isinstance(info.value.__cause__, QuipConnectionError)  # the old connection's read, retried.
+        assert (closed, solver._iface) == ([True], session)
+
+    def test_an_interrupt_while_checking_a_reconnect_closes_it(self, monkeypatch) -> None:
+        solver, _ = _ready(monkeypatch)
+        session = solver._iface
+        closed = self._repointed(monkeypatch, solver, "interrupt")
+        with pytest.raises(KeyboardInterrupt):
+            solver._settle_once(_signed_call(solver))
+        assert (closed, solver._iface) == ([True], session)
 
     def test_a_zero_poll_interval_does_not_spin(self, monkeypatch, virtual_clock) -> None:
         solver, captured = _ready(monkeypatch)

@@ -64,14 +64,20 @@ class QuipSigningError(QuipError):
 
 
 class QuipMetadataError(QuipError):
-    """Raised when a node's runtime metadata cannot be decoded by this client.
+    """Raised when this client cannot read or sign for the node's runtime.
+
+    It covers runtime metadata this client cannot decode, blocks or events it
+    cannot decode while settling an order, and an extrinsic envelope or
+    signed extension it cannot encode (see
+    :func:`xqsa.quip.signing.check_runtime`). The remedy is upgrading xquad,
+    not retrying: the same node gives the same answer.
 
     ``substrate-interface``/``scalecodec`` decode metadata up to V14 and Quip
     runtimes serve V16, so :mod:`xqsa.quip.metadata` fetches V14 through the
-    versioned runtime API instead. This is raised only when that path and the
-    stock ``state_getMetadata`` both fail, and it names the version the node
-    serves in place of the bare ``Index '16' not present in Enum type mapping``
-    that ``scalecodec`` would otherwise surface.
+    versioned runtime API instead. When that path and the stock
+    ``state_getMetadata`` both fail, this names the version the node serves
+    in place of the bare ``Index '16' not present in Enum type mapping`` that
+    ``scalecodec`` would otherwise surface.
 
     Defined here in the dependency-free errors module for the same reason as
     :class:`QuipSigningError`: it can be re-exported from ``xqsa`` without

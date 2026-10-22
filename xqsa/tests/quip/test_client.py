@@ -1016,6 +1016,99 @@ class _StorageEntry:
         self.value = value
 
 
+# The live runtime's signed extensions in metadata order (aglais, specVersion
+# 119), each as ``(name, extra type, additional type)``. The types name the
+# widths ``_FakeScaleObject`` decodes.
+FAKE_EXTENSIONS: tuple[tuple[str, str, str], ...] = (
+    ("AuthorizeCall", "()", "()"),
+    ("CheckNonZeroSender", "()", "()"),
+    ("CheckSpecVersion", "()", "u32"),
+    ("CheckTxVersion", "()", "u32"),
+    ("CheckGenesis", "()", "H256"),
+    ("CheckMortality", "Era", "H256"),
+    ("CheckNonce", "Compact", "()"),
+    ("CheckWeight", "()", "()"),
+    ("ChargeTransactionPayment", "Compact", "()"),
+    ("CheckMetadataHash", "Mode", "Option<[u8;32]>"),
+    ("EthSetOrigin", "()", "()"),
+    ("WeightReclaim", "()", "()"),
+)
+
+
+def _scale_width(type_name: str, data: bytes) -> int:
+    """How many bytes a value of ``type_name`` takes when it starts ``data``."""
+    fixed = {"()": 0, "u32": 4, "u64": 8, "H256": 32, "Mode": 1}
+    if type_name in fixed:
+        return fixed[type_name]
+    if not data:
+        raise ValueError(f"no bytes for {type_name}")
+    if type_name == "Era":
+        return 1 if data[0] == 0 else 2
+    if type_name == "Option<[u8;32]>":
+        return 1 if data[0] == 0 else 33
+    if type_name == "Compact":
+        return {0: 1, 1: 2, 2: 4}.get(data[0] & 0b11, (data[0] >> 2) + 5)
+    raise NotImplementedError(type_name)
+
+
+class _FakeScaleObject:
+    """Mimics a scalecodec type object: ``decode()`` raises unless every byte is consumed."""
+
+    def __init__(self, type_name: str, data: bytes) -> None:
+        self.type_name = type_name
+        self.data = data
+
+    def decode(self) -> None:
+        if _scale_width(self.type_name, self.data) != len(self.data):
+            raise ValueError(f"{self.type_name} does not take {len(self.data)} bytes")
+
+
+class FakeRuntimeConfig:
+    def create_scale_object(self, type_string: str, data) -> _FakeScaleObject:
+        return _FakeScaleObject(type_string.removeprefix("scale_info::"), bytes(data.data))
+
+
+class FakeRuntimeMetadata:
+    """The V14 metadata ``check_runtime`` reads: the extrinsic envelope and the signed extensions."""
+
+    def __init__(
+        self,
+        extensions: tuple[tuple[str, str, str], ...] = FAKE_EXTENSIONS,
+        *,
+        version: int = 4,
+        address: str = "sp_runtime::multiaddress::MultiAddress",
+        id_index: int = 0,
+        signature: str = "quip_transaction_crypto::HybridTxSignature",
+    ) -> None:
+        self.extensions = extensions
+        self.version = version
+        self.address = address
+        self.id_index = id_index
+        self.signature = signature
+
+    def get_signed_extensions(self) -> dict:
+        return {
+            name: {"extrinsic": f"scale_info::{extra}", "additional_signed": f"scale_info::{additional}"}
+            for name, extra, additional in self.extensions
+        }
+
+    @property
+    def value(self) -> tuple:
+        params = [
+            {"name": "Address", "type": 2},
+            {"name": "Call", "type": None},
+            {"name": "Signature", "type": 3},
+            {"name": "Extra", "type": None},
+        ]
+        id_variant = {"name": "Id", "index": self.id_index}
+        types = [
+            {"id": 1, "type": {"path": ["sp_runtime", "generic", "UncheckedExtrinsic"], "params": params}},
+            {"id": 2, "type": {"path": self.address.split("::"), "def": {"variant": {"variants": [id_variant]}}}},
+            {"id": 3, "type": {"path": self.signature.split("::")}},
+        ]
+        return (None, {"V14": {"extrinsic": {"version": self.version, "ty": 1}, "types": {"types": types}}})
+
+
 class FakeSubstrate:
     """A minimal stand-in for SubstrateInterface: constants + single-entry storage.
 
@@ -1062,6 +1155,9 @@ class FakeSubstrate:
         self.rpc_calls: list[tuple[str, list | None]] = []
         # What init_runtime() records: aglais's runtime as of QUI-1606.
         self.runtime_version: int | None = 118
+        self.transaction_version: int | None = 1
+        self.metadata = FakeRuntimeMetadata()
+        self.runtime_config = FakeRuntimeConfig()
         self.genesis_hash: object = GENESIS_HASH
         self.ss58_format = 42
         self.nonce = 0
@@ -1576,6 +1672,91 @@ class TestSolverQuipConstruction:
         with pytest.raises(ValueError, match="aglais, devnet"):
             SolverQuip.for_network("mainnet", seed=VALID_SEED)
 
+    def test_an_unknown_private_network_name_raises_before_connecting(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface(), substrate_raises=AssertionError("must not connect"))
+        _clear_quip_env(monkeypatch)
+        with pytest.raises(ValueError, match="unknown Quip network 'nope'"):
+            SolverQuip(url="ws://x", seed=VALID_SEED, _network="nope")
+
+    @staticmethod
+    def _pin_aglais(monkeypatch, genesis: str) -> None:
+        from dataclasses import replace as dc_replace
+
+        from xqsa.quip import client
+        from xqsa.quip.networks import NETWORKS
+
+        pinned = {**NETWORKS, "aglais": dc_replace(NETWORKS["aglais"], genesis=genesis)}
+        monkeypatch.setattr(client, "NETWORKS", pinned)
+
+    def test_for_network_rejects_a_node_on_another_chain(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+        from xqsa.quip.chain import GenesisMismatch
+
+        iface = _default_iface()
+        closed: list[bool] = []
+        monkeypatch.setattr(iface, "close", lambda: closed.append(True))
+        _install(monkeypatch, iface)
+        _clear_quip_env(monkeypatch)
+        self._pin_aglais(monkeypatch, "0x" + "11" * 32)
+        with pytest.raises(
+            GenesisMismatch, match=rf"\(aglais\) serves genesis {GENESIS_HASH}, not the expected 0x1111"
+        ):
+            SolverQuip.for_network("aglais", seed=VALID_SEED)
+        assert closed == [True]
+
+    def test_a_pin_in_mixed_case_matches(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        self._pin_aglais(monkeypatch, GENESIS_HASH.upper().replace("0X", "0x"))
+        assert SolverQuip.for_network("aglais", seed=VALID_SEED)._genesis_hash == GENESIS_HASH
+
+    def test_a_raw_url_is_not_held_to_a_pin(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+        from xqsa.quip.networks import NETWORKS
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        self._pin_aglais(monkeypatch, "0x" + "11" * 32)
+        assert SolverQuip(url=NETWORKS["aglais"].rpc, seed=VALID_SEED)._genesis_hash == GENESIS_HASH
+
+    def test_a_runtime_it_cannot_sign_for_fails_the_connect(self, monkeypatch) -> None:
+        from xqsa.quip import QuipMetadataError
+
+        iface = _default_iface()
+        iface.metadata = FakeRuntimeMetadata((*FAKE_EXTENSIONS, ("CheckFuture", "()", "()")))
+        with pytest.raises(QuipMetadataError, match="cannot encode signed extension CheckFuture"):
+            _make_solver(monkeypatch, iface=iface)
+
+    def test_a_failed_read_after_connecting_closes_the_connection(self, monkeypatch) -> None:
+        from xqsa.quip import QuipConnectionError, SolverQuip
+
+        iface = FakeSubstrate(constants={("QuantumComputeMempool", "MinReward"): UNIT}, storage={})
+        closed: list[bool] = []
+        monkeypatch.setattr(iface, "close", lambda: closed.append(True))
+        _install(monkeypatch, iface)
+        _clear_quip_env(monkeypatch)
+        with pytest.raises(QuipConnectionError, match="not registered"):
+            SolverQuip(url="ws://fake", seed=VALID_SEED)
+        assert closed == [True]
+
+    @pytest.mark.parametrize(("network", "named"), [("aglais", "aglais"), (None, "custom endpoint")])
+    def test_the_connect_is_logged_with_the_runtime(self, monkeypatch, caplog, network, named) -> None:
+        from xqsa.quip import SolverQuip
+
+        iface = _default_iface()
+        _install(monkeypatch, iface)
+        _clear_quip_env(monkeypatch)
+        with caplog.at_level(logging.INFO, logger="xqsa.quip"):
+            solver = SolverQuip.for_network(network, seed=VALID_SEED) if network else _make_solver(monkeypatch)
+        assert (
+            f"connected to Quip {named} at {solver._url}: specVersion 118, transactionVersion 1, "
+            f"genesis {GENESIS_HASH}" in caplog.messages
+        )
+
     def test_for_network_rejects_url(self, monkeypatch) -> None:
         from xqsa.quip import SolverQuip
 
@@ -1812,8 +1993,11 @@ class TestSolverQuipMetadataErrors:
 
         iface = _default_iface()
         iface._init_runtime_raises = QuipMetadataError("serves V16 runtime metadata")
+        closed: list[bool] = []
+        monkeypatch.setattr(iface, "close", lambda: closed.append(True))
         with pytest.raises(QuipMetadataError, match="serves V16"):
             _make_solver(monkeypatch, iface=iface)
+        assert closed == [True]
 
     def test_construction_surfaces_it_from_a_constant_read(self, monkeypatch) -> None:
         # Belt and braces: init_runtime re-runs on a runtime upgrade mid-session,
@@ -1830,8 +2014,11 @@ class TestSolverQuipMetadataErrors:
 
         iface = _default_iface()
         iface._init_runtime_raises = RuntimeError("rpc timeout")
+        closed: list[bool] = []
+        monkeypatch.setattr(iface, "close", lambda: closed.append(True))
         with pytest.raises(QuipConnectionError, match="could not connect"):
             _make_solver(monkeypatch, iface=iface)
+        assert closed == [True]
 
     def test_storage_reads_propagate_it_unchanged(self, monkeypatch) -> None:
         from xqsa.quip import QuipMetadataError
@@ -3483,6 +3670,35 @@ class TestSolverQuipInsufficientBalance:
         assert "faucet=" in message
         assert "QUIP_FAUCET_URL" in message
         assert "SolverQuip.for_network" in message
+        assert "reward=" not in message  # one UNIT short: within a drip.
+
+    @pytest.mark.parametrize("reward", [UNIT, 20 * UNIT])
+    def test_a_network_with_no_faucet_says_so(self, monkeypatch, reward) -> None:
+        from dataclasses import replace as dc_replace
+
+        from xqsa.quip import QuipSubmissionError, SolverQuip, client
+        from xqsa.quip.networks import NETWORKS
+
+        iface = _chain_iface(order=_order(), head=200, balance=0)
+        _install(monkeypatch, iface)
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_FAUCET_URL", "http://env-faucet")  # must not stand in for the preset's.
+        monkeypatch.setattr(client, "NETWORKS", {"aglais": dc_replace(NETWORKS["aglais"], faucet=None)})
+        solver = SolverQuip.for_network("aglais", seed=VALID_SEED, topology=TOPO_HASH, reward=reward, autoconfirm=True)
+        _patch_signing(monkeypatch, solver)
+        with pytest.raises(QuipSubmissionError, match="aglais has no faucet; fund the account another way") as info:
+            solver.solve(_model())
+        assert "drip" not in str(info.value)
+        assert ("Check reward=" in str(info.value)) is (reward > UNIT)
+
+    def test_a_raw_url_with_no_faucet_and_a_large_shortfall_names_both_remedies(self, monkeypatch) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        solver, _iface = _solve_ready_short(monkeypatch, reward=20 * UNIT, faucet=None, autoconfirm=True)
+        _patch_signing(monkeypatch, solver)
+        with pytest.raises(QuipSubmissionError, match="to name a faucet. Check reward=") as info:
+            solver.solve(_model())
+        assert "drip" not in str(info.value)
 
 
 class _FakeTTY:
