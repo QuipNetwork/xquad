@@ -539,20 +539,85 @@ class TestSubmitPath:
         with pytest.raises(QuipSubmissionError):
             solver.solve(_asymmetric_spin_model())
 
-    def test_propose_succeeds_then_times_out_recoverably(self, make_solver) -> None:
-        # A clean propose_job (no System.ExtrinsicFailed -> SCALE shapes + extras
-        # order correct) followed by a tiny timeout: the order id is recoverable.
+
+class TestMortalEra:
+    """``propose_job`` is signed mortal from the finalized head; the runtime must accept it."""
+
+    def test_mortal_propose_job_validates(self, make_solver) -> None:
+        # Read-only: the pool's own validity check, at the best block as the
+        # pool runs it. Not at the checkpoint: the finalized head can lag the
+        # faucet drip and read as Invalid::Payment (0x010001). Ok is a leading
+        # 0x00 in the SCALE Result.
+        solver = make_solver()
+        order = solver.create_order(_asymmetric_spin_model())
+        order.quote()
+        signed = order._signed
+        assert signed is not None
+        assert signed.window_end == signed.checkpoint + solver._inclusion_window_blocks - 1
+        at = solver._iface.get_chain_head()
+        source_external = b"\x02"
+        payload = source_external + signed.wire + bytes.fromhex(at[2:])
+        result = solver._iface.rpc_request(
+            "state_call", ["TaggedTransactionQueue_validate_transaction", "0x" + payload.hex(), at]
+        )["result"]
+        assert result.startswith("0x00"), f"the runtime refused the mortal era: {result}"
+
+
+class TestUnanswered:
+    """Orders that expire with nothing touching them."""
+
+    def test_timeout_expiry_and_reclaim(self, make_solver) -> None:
+        """An order only our account may answer times out in solve(), expires on its own, and reclaims by receipt.
+
+        Nobody else may answer and we never do, so the order expires unanswered
+        whatever the network does. Its deadline is long enough that solve()
+        is still waiting when its timeout fires; a shorter one is already
+        expired once submit() returns, and solve() then reclaims it itself.
+        """
         solver = make_solver(timeout=0.5)
+        account = "0x" + solver._signer.account_id.hex()
+        rule = AccessAllow(accounts=[account])
         with pytest.raises(QuipTimeoutError) as excinfo:
-            solver.solve(_asymmetric_spin_model())
+            solver.solve(_asymmetric_spin_model(), access=rule, deadline_blocks=10, block_wait=1)
         order_id = excinfo.value.order_id
         assert isinstance(order_id, int)
         assert excinfo.value.receipt.order_id == order_id
-        snap = solver.get_receipt(order_id).status()
-        assert snap["order_id"] == order_id
-        assert snap["chain_status"] in ("Opened", "Expired", "Closed")
 
-    def test_expired_no_solution_auto_reclaims(self, make_solver, monkeypatch) -> None:
+        receipt = make_solver().get_receipt(order_id).wait()
+        snap = receipt.status()
+        assert (snap["state"], snap["solution_count"]) == ("finalized", 0)
+        # on_initialize finalised it: Expired at the expiry block, by an event outside any extrinsic.
+        expiry_block = quip_chain.block_hash(solver._iface, snap["effective_expiry"])
+        stored = solver._iface.query("QuantumComputeMempool", "JobOrders", [order_id], block_hash=expiry_block).value
+        assert quip_chain._status_str(stored["status"]) == "Expired"
+        phases = [
+            phase
+            for phase, attrs in _events_named(solver._iface, expiry_block, "OrderExpired")
+            if int(attrs["order_id"]) == order_id
+        ]
+        assert phases == ["Initialization"]
+        assert solver.list_orders()[0] == order_id
+        assert order_id in solver.list_orders(state="finalized")
+
+        def reserved() -> int:
+            return solver._iface.query("System", "Account", [account]).value["data"]["reserved"]
+
+        reward = receipt._facts().reward
+        before = reserved()
+        assert receipt.reclaim() == reward
+        assert before - reserved() >= reward
+        assert receipt.status()["chain_status"] == "Closed"
+        assert receipt.settlement() == {"claimed": False, "winners": []}
+        with pytest.raises(QuipSubmissionError, match="is already closed"):
+            receipt.reclaim()
+
+        text = str(receipt)
+        assert {len(line) for line in text.splitlines()} == {72}
+        assert "│ Reward      reclaimed " in text
+        assert "unknown" not in text  # the fee and submission time were read from the chain.
+        assert receipt._genesis_hash not in text
+
+    def test_expired_order_auto_reclaims(self, make_solver, monkeypatch) -> None:
         # A 1-block deadline finalizes empty regardless of fleet activity: the
         # order hard-expires at created_at+1, before any solver can land a
         # solution (the miner observes the JobProposed event ~1 block after
@@ -580,79 +645,21 @@ class TestSubmitPath:
         # independent, so unaffected by state left by other session tests).
         snap = solver.get_receipt(excinfo.value.order_id).status()
         assert snap["solution_count"] == 0
-        assert snap["chain_status"] in ("Expired", "Closed")
+        assert snap["chain_status"] == "Closed"
         assert snap["state"] == "finalized"
 
         # This order's reward was reserved at propose and released on reclaim, so
         # the reserved balance does not GROW across the solve. The reclaim itself
         # is confirmed by the failure message: a non-release of this order would
         # push reserved above `before`. `<= before` (not `==`) tolerates rewards
-        # reserved by other session-scoped orders (e.g. the earlier
-        # deadline_blocks=30 timeout test) also being reclaimed within this
+        # reserved by other session-scoped orders (e.g. another test's order
+        # being claimed or reclaimed) also being released within this
         # window on a live testnet (~6s blocks), which drops reserved below
         # `before`. The message assert prevents the bare `<=` from passing
         # falsely: both orders reserve the same default 1 UNIT, so a genuine
         # non-release could otherwise cancel against the earlier order's release.
         assert "was reclaimed" in str(excinfo.value)
         assert reserved() <= before
-
-
-class TestMortalEra:
-    """``propose_job`` is signed mortal from the finalized head; the runtime must accept it."""
-
-    def test_mortal_propose_job_validates(self, make_solver) -> None:
-        # Read-only: the pool's own validity check, at the best block as the
-        # pool runs it. Not at the checkpoint: the finalized head can lag the
-        # faucet drip and read as Invalid::Payment (0x010001). Ok is a leading
-        # 0x00 in the SCALE Result.
-        solver = make_solver()
-        order = solver.create_order(_asymmetric_spin_model())
-        order.quote()
-        signed = order._signed
-        assert signed is not None
-        assert signed.window_end == signed.checkpoint + solver._inclusion_window_blocks - 1
-        at = solver._iface.get_chain_head()
-        source_external = b"\x02"
-        payload = source_external + signed.wire + bytes.fromhex(at[2:])
-        result = solver._iface.rpc_request(
-            "state_call", ["TaggedTransactionQueue_validate_transaction", "0x" + payload.hex(), at]
-        )["result"]
-        assert result.startswith("0x00"), f"the runtime refused the mortal era: {result}"
-
-
-class TestReceipt:
-    def test_unanswered_order_reclaims_through_its_receipt(self, make_solver, monkeypatch) -> None:
-        # The 1-block deadline of test_expired_no_solution_auto_reclaims, so the
-        # order finalizes unanswered whatever the fleet does. Here nothing
-        # reclaims on its own: the receipt does it, and its display, the
-        # account's order list and a repeated reclaim all read the result back.
-        monkeypatch.setattr("xqsa.quip.order.MIN_DEADLINE_BLOCKS", 1)
-        solver = make_solver(deadline_blocks=1, block_wait=1, timeout=150.0)
-        account = "0x" + solver._signer.account_id.hex()
-
-        def reserved() -> int:
-            return solver._iface.query("System", "Account", [account]).value["data"]["reserved"]
-
-        order = solver.create_order(_asymmetric_spin_model()).submit().wait()
-        receipt = order.receipt()
-        snap = receipt.status()
-        assert (snap["state"], snap["solution_count"]) == ("finalized", 0)
-        assert solver.list_orders()[0] == order.order_id()
-        assert order.order_id() in solver.list_orders(state="finalized")
-
-        before = reserved()
-        assert receipt.reclaim() == order.reward
-        assert before - reserved() >= order.reward
-        assert receipt.status()["chain_status"] == "Closed"
-        assert receipt.settlement() == {"claimed": False, "winners": []}
-        with pytest.raises(QuipSubmissionError, match="is already closed"):
-            receipt.reclaim()
-
-        text = str(receipt)
-        assert {len(line) for line in text.splitlines()} == {72}
-        assert "│ Reward      reclaimed " in text
-        assert "unknown" not in text  # the fee and submission time were read from the chain.
-        assert receipt._genesis_hash not in text
 
 
 # ---------------------------------------------------------------------------
