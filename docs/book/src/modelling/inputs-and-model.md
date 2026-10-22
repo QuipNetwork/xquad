@@ -10,22 +10,22 @@ Every code sample in this chapter, and the rest of Modelling and
 Solving, assumes the same import:
 
 ```python
-from xquad.cp import Domain, Problem, Types
+from xquad import cp
 ```
 
 It is shown once, here, and omitted everywhere after.
 
 ## Inputs
 
-`problem.input(name, type=Types.Int)` or `type=Types.Vec` declares one
+`problem.input(name, type=cp.Types.Int)` or `type=cp.Types.Vec` declares one
 runtime value and returns an `InputRef` you use for the rest of the
 problem body. `examples/knapsack/runner.py` declares four:
 
 ```python
-num_items = problem.input("num_items", type=Types.Int)
-weights_in = problem.input("weights", type=Types.Vec)
-values_in = problem.input("values", type=Types.Vec)
-capacity_in = problem.input("capacity", type=Types.Int)
+num_items = problem.input("num_items", type=cp.Types.Int)
+weights_in = problem.input("weights", type=cp.Types.Vec)
+values_in = problem.input("values", type=cp.Types.Vec)
+capacity_in = problem.input("capacity", type=cp.Types.Int)
 ```
 
 `Types.Int` is a scalar integer, and `Types.Vec` is a vector of integers.
@@ -93,7 +93,7 @@ total variable count, as an `int` or an expression built from your
 inputs -- knapsack sizes its model directly off an input:
 
 ```python
-problem.define_model(size=num_items, domain=Domain.BINARY)
+problem.define_model(size=num_items, domain=cp.Domain.BINARY)
 ```
 
 `domain` is a `Domain` member; see
@@ -109,7 +109,7 @@ An integer variable takes one of `k` values rather than two. Give the
 width directly:
 
 ```python
-problem.define_model(size=num_assets, domain=Domain.INTEGER, k=4)
+problem.define_model(size=num_assets, domain=cp.Domain.INTEGER, k=4)
 ```
 
 That allocates `num_assets` variables over `{0, 1, 2, 3}`. `k` is an
@@ -119,7 +119,7 @@ Where the values you are modelling are not zero-based, give bounds
 instead:
 
 ```python
-problem.define_model(size=num_assets, domain=Domain.INTEGER, lo=-5, hi=5)
+problem.define_model(size=num_assets, domain=cp.Domain.INTEGER, lo=-5, hi=5)
 ```
 
 You then write coefficients over `x` in `[-5, 5]` while the model holds
@@ -155,7 +155,7 @@ A categorical variable takes one of `k` unordered cases. There is no VM
 domain for that, so XQCP records the standard encoding:
 
 ```python
-problem.define_model(size=num_nodes, domain=Domain.CATEGORICAL, k=num_colors, penalty=200)
+problem.define_model(size=num_nodes, domain=cp.Domain.CATEGORICAL, k=num_colors, penalty=200)
 ```
 
 That is a `num_nodes` x `num_colors` binary grid with one `ONEHOTR` per
@@ -173,7 +173,7 @@ binary decision per item, with no row/column structure to it. Pass `rows`
 and `cols` to get a grid instead:
 
 ```python
-problem.define_model(size=rows * cols, domain=Domain.BINARY, rows=rows, cols=cols)
+problem.define_model(size=rows * cols, domain=cp.Domain.BINARY, rows=rows, cols=cols)
 ```
 
 `rows` and `cols` are both-or-neither: `define_model()` raises
@@ -184,8 +184,8 @@ Once a model has a shape, coefficient access accepts a `(row, col)` tuple
 in place of a flat index, and XQCP flattens it for you. Compiling
 
 ```python
-n = problem.input("n", type=Types.Int)
-problem.define_model(size=n * n, domain=Domain.BINARY, rows=n, cols=n)
+n = problem.input("n", type=cp.Types.Int)
+problem.define_model(size=n * n, domain=cp.Domain.BINARY, rows=n, cols=n)
 problem.model.linear[(1, 2)] = 99
 ```
 

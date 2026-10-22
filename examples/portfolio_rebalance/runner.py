@@ -46,8 +46,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Domain, Problem, Types, xq_grid
-from xquad.sa import DEFAULT_SOLVER, SOLVERS
+from xquad import cp, sa
 from xquad.types import XQMX, Vec
 from xquad.vm import VM, VMBackend
 
@@ -62,7 +61,7 @@ _BUDGET = 1
 _PENALTY = 50
 
 
-def build_problem() -> Problem:
+def build_problem() -> cp.Problem:
     """Construct a Portfolio Rebalance model over integer weights in [-5, 5].
 
     Decision variables x_i in [-5, 5]: the signed weight of asset i.
@@ -75,13 +74,13 @@ def build_problem() -> Problem:
     diagonal, 2P on each off-diagonal pair, and -2PB on each linear
     coefficient; the P*B^2 constant is dropped, as EQUALITY drops its own.
     """
-    problem = Problem("PortfolioRebalance")
+    problem = cp.Problem("PortfolioRebalance")
 
-    num_assets = problem.input("num_assets", type=Types.Int)
-    returns_in = problem.input("returns", type=Types.Vec)
-    cov_in = problem.input("cov", type=Types.Vec)
+    num_assets = problem.input("num_assets", type=cp.Types.Int)
+    returns_in = problem.input("returns", type=cp.Types.Vec)
+    cov_in = problem.input("cov", type=cp.Types.Vec)
 
-    problem.define_model(size=num_assets, domain=Domain.INTEGER, lo=_LO, hi=_HI)
+    problem.define_model(size=num_assets, domain=cp.Domain.INTEGER, lo=_LO, hi=_HI)
 
     # Return objective, and the budget's linear term: -r_i * x_i - 2*P*B * x_i
     with problem.range(0, num_assets) as i:
@@ -90,14 +89,14 @@ def build_problem() -> Problem:
 
     # Risk objective on the upper triangle, and the budget's square
     with problem.range(0, num_assets) as i:
-        problem.model.quadratic[i, i].add(cov_in.get(xq_grid(i, i, num_assets)) + _PENALTY)
+        problem.model.quadratic[i, i].add(cov_in.get(cp.xq_grid(i, i, num_assets)) + _PENALTY)
 
         with problem.range(i + 1, num_assets) as j:
-            cij = problem.stow("cij", cov_in.get(xq_grid(i, j, num_assets)))
+            cij = problem.stow("cij", cov_in.get(cp.xq_grid(i, j, num_assets)))
             problem.model.quadratic[i, j].add(cij + 2 * _PENALTY)
 
     # Output: the signed weight per asset, shifted back out of the model
-    weights = problem.output("weights", type=Types.Vec)
+    weights = problem.output("weights", type=cp.Types.Vec)
     with problem.range(0, num_assets) as i:
         weights.append(problem.sample.value(i))
 
@@ -172,8 +171,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--solver",
-        choices=sorted(SOLVERS),
-        default=DEFAULT_SOLVER,
+        choices=sorted(sa.SOLVERS),
+        default=sa.DEFAULT_SOLVER,
         help="Accepted for interface parity and ignored; no solver samples an integer model yet",
     )
     parser.add_argument(

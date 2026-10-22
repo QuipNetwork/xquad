@@ -40,13 +40,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Domain, Problem, Types
-from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
+from xquad import cp, sa
 from xquad.types import XQMX, Vec
 from xquad.vm import VM, VMBackend
 
 
-def build_problem(num_elements: int, num_sets: int, covers: list[list[int]]) -> Problem:
+def build_problem(num_elements: int, num_sets: int, covers: list[list[int]]) -> cp.Problem:
     """Construct a Set Cover QUBO via ATLEAST per element.
 
     Decision variables x_s in {0,1}: x_s=1 if set s is selected.
@@ -56,13 +55,13 @@ def build_problem(num_elements: int, num_sets: int, covers: list[list[int]]) -> 
     The coverage membership matrix is passed as a flat vec of size E*S.
     A branch conditionally pushes set index s only when covers[e][s] != 0.
     """
-    problem = Problem("SetCover")
+    problem = cp.Problem("SetCover")
 
-    num_elements_in = problem.input("num_elements", type=Types.Int)
-    num_sets_in = problem.input("num_sets", type=Types.Int)
-    covers_in = problem.input("covers", type=Types.Vec)
+    num_elements_in = problem.input("num_elements", type=cp.Types.Int)
+    num_sets_in = problem.input("num_sets", type=cp.Types.Int)
+    covers_in = problem.input("covers", type=cp.Types.Vec)
 
-    problem.define_model(size=num_sets_in, domain=Domain.BINARY)
+    problem.define_model(size=num_sets_in, domain=cp.Domain.BINARY)
 
     # Objective: minimise number of selected sets
     with problem.range(0, num_sets_in) as s:
@@ -81,7 +80,7 @@ def build_problem(num_elements: int, num_sets: int, covers: list[list[int]]) -> 
         problem.model.apply_atleast(elem_indices, 1, 200)
 
     # Output: set selection
-    selected = problem.output("selected", type=Types.Vec)
+    selected = problem.output("selected", type=cp.Types.Vec)
     with problem.range(0, num_sets_in) as s:
         selected.append(problem.sample.getline(s))
 
@@ -113,7 +112,7 @@ def run(
     assert isinstance(model, XQMX)
 
     try:
-        solver = build_solver(solver_name, seed=seed)
+        solver = sa.build_solver(solver_name, seed=seed)
         sample = solver.solve(model).sample
     except (ImportError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -152,8 +151,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--solver",
-        choices=sorted(SOLVERS),
-        default=DEFAULT_SOLVER,
+        choices=sorted(sa.SOLVERS),
+        default=sa.DEFAULT_SOLVER,
         help="XQSA solver backend to sample the model with",
     )
     parser.add_argument(
