@@ -56,7 +56,7 @@ environment variables:
 |---|---|---|
 | `url` | `QUIP_RPC_URL` | Websocket RPC endpoint |
 | `seed` | `QUIP_SIGNER_SEED` | 32-byte hex master seed |
-| `keystore` | `QUIP_KEYSTORE` | Keystore file path (loaded, or created on first use); defaults to `~/.quip/keystore.json` |
+| `keystore` | `QUIP_KEYSTORE` | Keystore file path (loaded, or created on first use). Unset, the account preference or `~/.quip/keystore.json` applies; see [Accounts](#accounts) |
 | `reward` | `QUIP_REWARD` | Reward in planck; falls back to the chain's `MinReward` |
 | `faucet` | `QUIP_FAUCET_URL` | Faucet base URL used to top up a short account when `autofund` allows it. The variable is read only when the RPC URL also comes from `QUIP_RPC_URL`, so an explicit `url` never picks up a faucet for another chain |
 | `autoconfirm` | `QUIP_AUTOCONFIRM` | Whether to submit without asking. `True` (the default) submits; `False` asks on the terminal (stdin, and stderr or stdout) and raises `QuipCancelledError` without one, a notebook included; a callable judges the job's `JobQuote`. The variable takes `1/true/yes/on` or `0/false/no/off` |
@@ -67,8 +67,12 @@ environment variables:
 | `block_wait` | none | Blocks an order keeps accepting answers after the first one arrives; defaults to `10` |
 | `autofund` | `QUIP_AUTOFUND` | Whether to draw one drip from `faucet` when the account cannot cover the quoted job; a shortfall larger than one drip, or an account already holding more than one drip, raises instead. Same forms and default as `autoconfirm` |
 
-A `seed` wins over a `keystore`; with neither set, `SolverQuip` uses
-`~/.quip/keystore.json`, creating it on first use. `spec_id` and
+The signer comes from the first of these that is set: `seed`,
+`keystore`, `QUIP_SIGNER_SEED`, `QUIP_KEYSTORE`, the project account
+preference, the user account preference, then `~/.quip/keystore.json`,
+created on first use. An explicit argument wins over the environment, so
+a `keystore` argument wins over an exported `QUIP_SIGNER_SEED`.
+`spec_id` and
 `topology` both default to chain state (`DefaultIsingSpecId` and
 `DefaultTopology`). `spec_id` is a constructor-only override with no
 environment variable. `topology` also reads `QUIP_TOPOLOGY`, accepts
@@ -91,6 +95,63 @@ other than `"OnChainOnly"`, and for an `access` or `resolution` that is
 not one of the rules above. After connecting, it checks the default
 `access` against the chain's allowlist limits. The remaining options are
 checked against the chain's limits when an order is created.
+
+### Accounts
+
+A keystore is an account: the file holds its 32-byte master seed in
+plain text, so treat it as the account itself and keep it out of
+version control. Each account level holds keystore files and an account
+preference:
+
+| Level | Keystore files | Preference |
+|---|---|---|
+| Project | `.quip/keystores/<name>.json` | `.quip/config.toml` |
+| User | `~/.quip/keystores/<name>.json`, plus `~/.quip/keystore.json` as the account `default` | `~/.quip/config.toml` |
+
+The project level is the nearest `.quip/` directory found walking up
+from the working directory, stopping below the home directory, so
+`~/.quip/` is never a project. A preference is the single line
+`account = "<name>"`. A project preference may name a project or a user
+keystore, and a name present at both levels resolves to the project one;
+a user preference applies in every directory, so it names a user
+keystore. Account names are lowercase letters, digits, `_` and `-`, at
+most 64 characters, starting with a letter or digit.
+
+`xqsa.quip.accounts` manages them. Each call takes the level explicitly:
+
+```python
+from xqsa.quip import create_account, resolve_accounts, use_account
+
+create_account("work", level="user")
+use_account("work", level="project")
+print(resolve_accounts().in_effect)
+```
+
+`create_account` writes a keystore from a fresh seed, or from `seed=`,
+and refuses to replace one unless `overwrite=True`; with no name it
+writes `default`. At project level with no `.quip/` found, it makes one
+in the working directory, and anything created under a project `.quip/`
+also writes a `.quip/.gitignore` of `*` when there is none.
+`use_account` and `clear_account` set and remove a preference.
+`resolve_accounts` lists every keystore with its account and walks the
+signer order above, reporting the step in effect. It never writes a file
+or reads a seed, so an unusable keystore or a broken preference is
+listed with the problem rather than raised. `SolverQuip` raises
+`QuipSigningError` only when such a step is the one it would sign with.
+
+For reads that need no signer, pass `read_only=True`:
+
+```python
+solver = SolverQuip.for_network("aglais", read_only=True)
+print(solver.balance(account=address))  # SS58 text, 0x hex or bytes
+```
+
+A read-only client resolves no signer, so it never creates a keystore,
+and refuses `seed` and `keystore`. `get_receipt`,
+`list_orders(account=...)` and `balance(account=...)`, the account's
+free balance in planck, work on it. Everything that signs, and
+`list_orders` or `balance` without an account, raises
+`QuipSigningError`.
 
 ### Named networks
 

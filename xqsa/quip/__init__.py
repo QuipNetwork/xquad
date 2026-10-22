@@ -39,8 +39,10 @@ Configuration is resolved from constructor arguments first, then environment:
     ``autofund``           ``QUIP_AUTOFUND``     fund from the faucet without asking
     =====================  =======================================================================
 
-A seed wins over a keystore. With neither configured, the keystore at
-``~/.quip/keystore.json`` is loaded, or generated on first use.
+The signer comes from the first of ``seed``, ``keystore``,
+``QUIP_SIGNER_SEED``, ``QUIP_KEYSTORE``, the project account preference, the
+user one, then ``~/.quip/keystore.json``, loaded or generated on first use
+(see :mod:`xqsa.quip.accounts`). ``read_only=True`` resolves no signer.
 
 The order options among them (``reward``, ``deadline_blocks``,
 ``block_wait``) are client defaults. :meth:`SolverQuip.create_order` returns a
