@@ -192,11 +192,18 @@ class SolverQuip(Solver):
     :mod:`~xqsa.quip.networks` presets do. A pruning node stops a submit with
     :class:`QuipSubmitIncompleteError`, the order left ``sending``.
 
+    ``read_only=True`` connects and reads without resolving a signer, so it
+    ignores ``QUIP_SIGNER_SEED`` and ``QUIP_KEYSTORE`` and never creates a
+    keystore. :meth:`get_receipt`, :meth:`list_orders` and :meth:`balance`
+    work given ``account=``; everything that signs, and those two without
+    ``account=``, raise :class:`QuipSigningError`.
+
     Raises:
         ImportError: if the ``[quip]`` extra is not installed
             (``pip install xqsa[quip]`` -- provides ``substrate-interface`` and
             the ``quip_signer`` signing extension).
-        ValueError: if no RPC URL is configured, or ``access``, ``resolution``
+        ValueError: if no RPC URL is configured, ``read_only=True`` comes with
+            ``seed=`` or ``keystore=``, or ``access``, ``resolution``
             or ``delivery`` names a value no order can use yet (checked before
             connecting).
         TypeError: if both ``access`` and the deprecated ``mode`` are given,
@@ -239,6 +246,7 @@ class SolverQuip(Solver):
         faucet: str | None = None,
         autoconfirm: bool | Callable[[JobQuote], bool] | None = None,
         autofund: bool | Callable[[JobQuote], bool] | None = None,
+        read_only: bool = False,
         _network: str | None = None,
     ) -> None:
         # Two distinct guards, one per piece of the [quip] extra: client + signer.
@@ -256,6 +264,8 @@ class SolverQuip(Solver):
             ) from exc
         from xqsa.quip import signing as quip_signing
 
+        if read_only and (seed is not None or keystore is not None):
+            raise ValueError("read_only=True takes no seed= or keystore=")
         resolved_url = url or os.environ.get("QUIP_RPC_URL")
         if not resolved_url:
             raise ValueError("A Quip RPC URL is required. Pass url= or set QUIP_RPC_URL.")
@@ -271,7 +281,8 @@ class SolverQuip(Solver):
         self._access = coerce_access(access)
         self._resolution = coerce_resolution(resolution)
 
-        self._signer = self._build_signer(quip_signing, seed=seed, keystore=keystore)
+        # A read-only client resolves no signer, so it never generates a keystore.
+        self._signer_or_none = None if read_only else self._build_signer(quip_signing, seed=seed, keystore=keystore)
 
         self._delivery = delivery
         self._deadline_blocks = deadline_blocks
@@ -558,6 +569,33 @@ class SolverQuip(Solver):
     def _mineable_topologies(self) -> frozenset[str] | None:
         """See :func:`xqsa.quip.chain.mineable_topologies`."""
         return chain.mineable_topologies(self._iface)
+
+    @property
+    def _signer(self) -> Any:
+        """The hybrid signer; every signing path reaches it, so a read-only client refuses here.
+
+        Raises:
+            QuipSigningError: if this client was built with ``read_only=True``.
+        """
+        if self._signer_or_none is None:
+            raise QuipSigningError("this client has no signer; see `xquad quip account show`")
+        return self._signer_or_none
+
+    def balance(self, account: Any = None) -> int:
+        """Return an account's free balance in planck.
+
+        ``account`` reads another account instead of this client's signer, as
+        SS58 text, ``0x`` hex or bytes, so a read-only client can read any
+        account. The free balance is what an order's reward and fee are paid
+        from; reserved funds are not included.
+
+        Raises:
+            QuipSigningError: if ``account`` is omitted on a read-only client.
+            ValueError: if ``account`` cannot be read as an account.
+            QuipConnectionError: if the balance cannot be read.
+        """
+        owner = self._signer.account_id if account is None else chain.account_bytes(account)
+        return chain.free_balance(self._iface, owner)
 
     @property
     def _account_ss58(self) -> str:
