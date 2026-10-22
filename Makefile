@@ -693,7 +693,7 @@ test-quip-e2e:
 	fi
 	uv sync --extra quip
 	QUIP_RPC_URL="$(QUIP_RPC_URL)" QUIP_FAUCET_URL="$(QUIP_FAUCET_URL)" \
-		uv run --no-sync pytest xqsa/tests/quip/test_live.py -m quip -v
+		uv run --no-sync pytest xqsa/tests/quip/test_live.py -m quip -v -rs
 
 # Real-hardware xqsa solver tests -- CUDA, D-Wave QPU, Apple Metal -- each
 # exercising the encode -> solve -> verify -> decode pipeline against an

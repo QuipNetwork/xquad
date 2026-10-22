@@ -54,11 +54,11 @@ import pytest
 
 pytest.importorskip(
     "substrateinterface",
-    reason="substrate-interface not installed (run `uv sync --extra quip`)",
+    reason="designed: substrate-interface not installed (run `uv sync --extra quip`)",
 )
 pytest.importorskip(
     "quip_signer",
-    reason="quip_signer extension not installed (run `uv sync --extra quip`)",
+    reason="designed: quip_signer extension not installed (run `uv sync --extra quip`)",
 )
 
 from xqsa.quip import (
@@ -101,12 +101,12 @@ TOPOLOGY_OVERRIDE = os.environ.get("QUIP_TOPOLOGY")
 NATIVE_MODE = _is_native(TOPOLOGY_OVERRIDE)
 requires_hash_topology = pytest.mark.skipif(
     NATIVE_MODE,
-    reason="assumes a chain-registered topology hash; QUIP_TOPOLOGY=native resolves none",
+    reason="designed: assumes a chain-registered topology hash; QUIP_TOPOLOGY=native resolves none",
 )
 
 pytestmark = [
     pytest.mark.quip,
-    pytest.mark.skipif(not RPC_URL, reason="QUIP_RPC_URL unset; live chain tests skipped"),
+    pytest.mark.skipif(not RPC_URL, reason="designed: QUIP_RPC_URL unset; live chain tests skipped"),
 ]
 
 UNIT = 10**12
@@ -126,7 +126,7 @@ SOLVER_KWARGS = dict(deadline_blocks=100, block_wait=10, poll_interval=3.0, time
 PROBE_TIMEOUT = float(os.environ.get("QUIP_MINER_PROBE_TIMEOUT", "60"))
 
 MINER_IDLE_SKIP = (
-    "miner returned no solution within the probe window -- the live solver "
+    "network: miner returned no solution within the probe window -- the live solver "
     "fleet is idle or unavailable. E2E validation needs an active fleet; a "
     "fresh order solves in ~1-2 blocks when one is running."
 )
@@ -153,7 +153,7 @@ def chain():
 def _new_funded_keystore(tmp_path_factory, name: str) -> str:
     """Generate a keystore under ``name``, fund it from the faucet and wait for the transfer; returns its path."""
     if not FAUCET_URL:
-        pytest.skip("QUIP_FAUCET_URL unset; funded live tests skipped")
+        pytest.skip("designed: QUIP_FAUCET_URL unset; funded live tests skipped")
     path = str(tmp_path_factory.mktemp(name) / "keystore.json")
     keystore = load_or_generate_keystore(path)
     dest = "0x" + keystore.account_id.hex()
@@ -170,7 +170,7 @@ def _new_funded_keystore(tmp_path_factory, name: str) -> str:
                 break
             time.sleep(3)
         else:
-            pytest.skip("faucet funding did not land within 60s")
+            pytest.skip("network: faucet funding did not land within 60s")
     finally:
         iface.close()
     return path
@@ -493,7 +493,7 @@ class TestConnectivity:
         # nothing in the codebase carries a hash, because a hash is only ever
         # valid on the deployment that registered it.
         if TOPOLOGY_OVERRIDE:
-            pytest.skip("QUIP_TOPOLOGY displaces the chain default this test asserts")
+            pytest.skip("designed: QUIP_TOPOLOGY displaces the chain default this test asserts")
         default = chain.query("QuantumPow", "DefaultTopology").value
         assert default is not None
         solver = make_solver()
@@ -527,7 +527,9 @@ class TestConnectivity:
         solver = make_solver()
         mineable = solver._mineable_topologies()
         if not mineable:
-            pytest.skip("MineableTopologies is empty/unset on this node; expected the default topology seeded")
+            pytest.skip(
+                "designed: MineableTopologies is empty/unset on this node; expected the default topology seeded"
+            )
         assert _canonical_hex(default) in mineable
 
     def test_override_topology_is_registered_but_not_mineable(self, chain, make_solver) -> None:
@@ -537,9 +539,9 @@ class TestConnectivity:
         # _fetch_topology requires; absent from the mining set is the condition
         # solve() used to reject.
         if not TOPOLOGY_OVERRIDE:
-            pytest.skip("QUIP_TOPOLOGY unset; the non-mineable path is opt-in")
+            pytest.skip("designed: QUIP_TOPOLOGY unset; the non-mineable path is opt-in")
         if NATIVE_MODE:
-            pytest.skip("QUIP_TOPOLOGY=native names no registered topology")
+            pytest.skip("designed: QUIP_TOPOLOGY=native names no registered topology")
         # Normalize once, the way the constructor does, and compare against that.
         # _as_hex only prefixes 0x, while the constructor resolves through
         # _require_h256, which also strips and lower-cases. An override spelled in
@@ -788,7 +790,7 @@ class TestEndToEnd:
         rebuilt.wait()
         if not rebuilt.status()["solution_count"]:
             assert rebuilt.reclaim() == order.reward  # through the rebuilt receipt; nothing stays reserved.
-            pytest.skip("no solver answered this order; the comparison needs an answer")
+            pytest.skip("network: no solver answered this order; the comparison needs an answer")
 
         # Only what final orders keep: a winner's claim may still close the
         # order, moving chain_status and claimed, between the paired reads.
@@ -838,7 +840,7 @@ class TestLeader:
         assert entries[0]["solver"] == ours
         if not any(entry["energy_milli"] == entries[0]["ranked_energy_milli"] for entry in entries[1:]):
             _claim(solver, order_id)
-            pytest.skip("no other solver tied our answer; the tie-break went unexercised")
+            pytest.skip("network: no other solver tied our answer; the tie-break went unexercised")
 
         pick = pick_best(receipt, job, model)
         assert (pick.solution.solver, pick.solution.leader, pick.leader_read) == (ours, True, True)
@@ -854,7 +856,7 @@ class TestLeader:
         model = _asymmetric_spin_model()
         solver = make_solver()
         if (solver._limits.max_solutions or 4) < 4:
-            pytest.skip("the chain's MaxSolutions is under 4")
+            pytest.skip("designed: the chain's MaxSolutions is under 4")
         job = solver.create_order(model)._job
         assignments = _by_energy(model)[:4]
         vectors = [_model_vector(job, spins) for spins in reversed(assignments)]
@@ -909,7 +911,9 @@ class TestPayoutRules:
         """create_order refuses rank weighting on a runtime that weights by energy, before anything is signed."""
         solver = make_solver()
         if (solver._limits.spec_version or 0) >= MIN_RANK_WEIGHTED_SPEC:
-            pytest.skip(f"the chain runs runtime {solver._limits.spec_version}; QUI-1674 tests TopNWeighted live")
+            pytest.skip(
+                f"designed: the chain runs runtime {solver._limits.spec_version}; QUI-1674 tests TopNWeighted live"
+            )
         with pytest.raises(QuipOrderOptionError, match=f"runtime {solver._limits.spec_version}"):
             solver.create_order(_asymmetric_spin_model(), resolution=ResolutionTopNWeighted(2))
 
@@ -996,7 +1000,7 @@ class TestQualityFloors:
         answers = solver._fetch_solutions(order_id)
         if not answers:
             assert order.reclaim() == order.reward
-            pytest.skip("no solver met the floors on this order")
+            pytest.skip("network: no solver met the floors on this order")
 
         for answer in answers:
             assert len(answer["solutions"]) >= 2
