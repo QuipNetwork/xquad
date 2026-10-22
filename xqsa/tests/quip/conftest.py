@@ -19,7 +19,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import sys
 import time
+import types
+from pathlib import Path
 
 import pytest
 
@@ -46,3 +50,52 @@ def virtual_clock(request, monkeypatch):
     monkeypatch.setattr(time, "sleep", sleep)
     monkeypatch.setattr(time, "monotonic", lambda: real_monotonic() + offset[0])
     yield sleeps
+
+
+def _seed_bytes(seed) -> bytes:
+    return bytes.fromhex(seed.removeprefix("0x")) if isinstance(seed, str) else bytes(seed)
+
+
+class _SeedSigner:
+    """A stand-in ``HybridSigner`` whose identity is derived from its seed."""
+
+    def __init__(self, seed) -> None:
+        self.seed = _seed_bytes(seed)
+        self.account_id = hashlib.sha256(b"account" + self.seed).digest()
+        self.public_key = hashlib.sha256(b"public" + self.seed).digest()
+
+
+@pytest.fixture
+def seed_signer(monkeypatch):
+    """Install a fake ``quip_signer`` whose signers derive a distinct account per seed.
+
+    Returns the fake module; ``signer.seed`` on any signer it built names the
+    seed it came from.
+    """
+    module = types.ModuleType("quip_signer")
+    module.HybridSigner = types.SimpleNamespace(from_seed=_SeedSigner)  # type: ignore[attr-defined]
+    module.verify_envelope = lambda *args, **kwargs: True  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "quip_signer", module)
+    from xqsa.quip import signing
+
+    # signing binds quip_signer at import, possibly to the real module.
+    monkeypatch.setattr(signing, "quip_signer", module)
+    return module
+
+
+@pytest.fixture
+def quip_home(monkeypatch, tmp_path):
+    """Point ``HOME`` at a temporary directory and work in a project below it.
+
+    Returns ``(home, project)``; the working directory is ``project``, which
+    has no ``.quip/`` yet.
+    """
+    home = tmp_path / "home"
+    project = home / "work" / "proj"
+    project.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    assert Path.home() == home
+    monkeypatch.chdir(project)
+    for name in ("QUIP_SIGNER_SEED", "QUIP_KEYSTORE"):
+        monkeypatch.delenv(name, raising=False)
+    return home, project

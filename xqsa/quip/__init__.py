@@ -119,6 +119,16 @@ import warnings
 
 from . import errors as _errors
 from .access import Access, AccessAllow, AccessOpen
+from .accounts import (
+    Account,
+    AccountResolution,
+    Level,
+    SignerSource,
+    clear_account,
+    create_account,
+    resolve_accounts,
+    use_account,
+)
 from .chain import (
     FEE_HEADROOM_PLANCK,
     JOB_ORDERS_STORAGE,
@@ -183,6 +193,14 @@ __all__ = [
     "ResolutionTopNEqual",
     "ResolutionTopNWeighted",
     "Solution",
+    "Account",
+    "AccountResolution",
+    "Level",
+    "SignerSource",
+    "resolve_accounts",
+    "create_account",
+    "use_account",
+    "clear_account",
     "QuipError",
     "QuipCancelledError",
     "QuipConnectionError",
