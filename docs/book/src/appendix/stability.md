@@ -9,11 +9,11 @@ current process discipline, not a promise that anything is frozen.
 
 ## What Is Versioned Together
 
-Eight packages ship from this repository, three to crates.io (`xqvm`,
-`xqasm`, `xqcli`) and five to PyPI (`xqffi`, `xqvm_py`, `xqcp`, `xqsa`,
-`xquad`). All eight always carry the same version. They release together:
-one release MR bumps every version, one tag triggers the one pipeline that
-publishes all eight, and the changelog is generated from that same tag.
+Seven packages ship from this repository, two to crates.io (`xqvm`,
+`xqasm`) and five to PyPI (`xqffi`, `xqvm_py`, `xqcp`, `xqsa`, `xquad`).
+All seven always carry the same version. They release together: one
+release MR bumps every version, one tag triggers the one pipeline that
+publishes all seven, and the changelog is generated from that same tag.
 There is no independent release cadence per package today.
 
 ## What CI Actually Guards

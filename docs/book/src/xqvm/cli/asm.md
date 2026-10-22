@@ -1,11 +1,11 @@
-# xquad asm
+# xquad vm asm
 
 Assemble an `.xqasm` source file into binary XQVM bytecode.
 
 ## Usage
 
 ```sh
-xquad asm <INPUT> [-o <OUTPUT>] [--stdout]
+xquad vm asm <INPUT> [-o <OUTPUT>] [--stdout]
 ```
 
 ## Arguments
@@ -21,19 +21,18 @@ xquad asm <INPUT> [-o <OUTPUT>] [--stdout]
 | `-o, --output <OUTPUT>` | `<INPUT>` with its extension replaced by `.xqb` | Output file path. |
 | `--stdout` | off | Write bytecode to stdout instead of a file. Conflicts with `-o`/`--output`. |
 
-`-o` and `--stdout` are mutually exclusive; passing both is a clap argument
-error, not a runtime one:
+`-o` and `--stdout` are mutually exclusive; passing both is a usage error
+(exit `2`), not a runtime one:
 
 ```sh
-xquad asm add.xqasm -o build/program.xqb --stdout
+xquad vm asm add.xqasm -o build/program.xqb --stdout
 ```
 
 ```
-error: the argument '--output <OUTPUT>' cannot be used with '--stdout'
+Usage: xquad vm asm [OPTIONS] INPUT
+Try 'xquad vm asm --help' for help.
 
-Usage: xquad asm --output <OUTPUT> <INPUT>
-
-For more information, try '--help'.
+Error: --output cannot be used with --stdout
 ```
 
 ## Examples
@@ -41,7 +40,7 @@ For more information, try '--help'.
 ### Assemble to the default output
 
 ```sh
-xquad asm add.xqasm
+xquad vm asm add.xqasm
 ```
 
 Writes `add.xqb` next to the source and prints a summary to stderr:
@@ -54,19 +53,19 @@ assembled 4 instructions (21 bytes) -> add.xqb
 
 ```sh
 mkdir -p build
-xquad asm add.xqasm -o build/program.xqb
+xquad vm asm add.xqasm -o build/program.xqb
 ```
 
 ### Assemble does not run the verifier
 
-`xquad asm` only assembles; it does not check the result with
-[`xquad verify`](verify.md). A source file with no mnemonic errors can
+`xquad vm asm` only assembles; it does not check the result with
+[`xquad vm check`](check.md). A source file with no mnemonic errors can
 still fail verification once assembled.
 
 ### Pipe bytecode to another tool
 
 ```sh
-xquad asm add.xqasm --stdout | xquad dism
+xquad vm asm add.xqasm --stdout | xquad vm dis
 ```
 
 ```
@@ -96,7 +95,7 @@ JUMP .1
 ```
 
 ```sh
-xquad asm branch.xqasm -o branch.xqb
+xquad vm asm branch.xqasm -o branch.xqb
 ```
 
 ```
@@ -105,18 +104,8 @@ assembled 10 instructions (31 bytes) -> branch.xqb
 
 ## Error reporting
 
-Assembly errors include the source file location and a highlighted
-snippet:
+An assembly error is one line on stderr, and the command exits `1`:
 
 ```
-Error: xqasm::unknown_mnemonic
-
-  × unknown mnemonic `BADOP`
-   ╭─[bad.xqasm:2:1]
- 1 │ PUSH 1
- 2 │ BADOP r0
-   · ──┬──
-   ·   ╰── unknown mnemonic
- 3 │ HALT
-   ╰────
+Error: assembly failed: unknown mnemonic `BADOP`
 ```

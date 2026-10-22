@@ -32,7 +32,7 @@ vm.set_calldata(vec![
 ### Setting Calldata (CLI)
 
 ```sh
-xquad run program.xqb --calldata 10,20,30
+xquad vm run program.xqb --calldata 10,20,30
 ```
 
 The CLI `--calldata` flag only supports integer values. For richer types, use
@@ -63,11 +63,11 @@ for (i, val) in vm.outputs().iter().enumerate() {
 
 ### Reading Outputs (CLI)
 
-`xquad run` prints all non-default (not `Unset`) output slots after
+`xquad vm run` prints all non-default (not `Unset`) output slots after
 execution. `--outputs` defaults to 16 when omitted:
 
 ```sh
-xquad run program.xqb --outputs 4
+xquad vm run program.xqb --outputs 4
 ```
 
 ```

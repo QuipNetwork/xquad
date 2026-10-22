@@ -54,13 +54,13 @@ is a permutation of range(N): True
 energy: -60
 ```
 
-`xquad verify --text` accepts the compiled encoder:
+`xquad vm check --text` accepts the compiled encoder:
 
 ```text
 ok: permutation_encoder.xqasm (29 instructions)
 ```
 
-and `xquad run --text ... --calldata 3` reproduces the same model
+and `xquad vm run --text ... --calldata 3` reproduces the same model
 deterministically from the assembled bytecode, independent of the Python
 solve above:
 
@@ -98,7 +98,7 @@ is structural rather than semantic: `ONEHOTR`/`ONEHOTC` read grid
 dimensions from `RESIZE`, so a model with no grid set has no row or
 column for them to constrain. Both raise `InvalidGridDimensions` at the
 instruction that needed the grid, on either interpreter -- see
-[High-Level Constraints](../xqvm/instructions/constraints.md). `xquad
-verify` does not catch it, since grid dimensions are runtime values, so
+[High-Level Constraints](../xqvm/instructions/constraints.md). `xquad vm
+check` does not catch it, since grid dimensions are runtime values, so
 the failure surfaces when the encoder runs rather than when it compiles.
 

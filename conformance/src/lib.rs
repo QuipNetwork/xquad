@@ -92,7 +92,7 @@ pub struct Inputs {
     /// divergence these vectors exist to catch.
     #[serde(default)]
     pub calldata: Vec<Option<i64>>,
-    /// Number of output slots; defaults to 16 to match `xquad run`.
+    /// Number of output slots; defaults to 16 to match `xquad vm run`.
     #[serde(default = "default_output_slots")]
     pub output_slots: usize,
     /// Step budget for the run, applied to both runners.
@@ -128,7 +128,7 @@ const fn default_output_slots() -> usize {
 /// The harness-wide step budget for a vector that does not name one.
 ///
 /// Is `xqvm::DEFAULT_STEP_LIMIT`, rather than a literal restating it, so a
-/// vector that is not about the budget behaves exactly as `xquad run`
+/// vector that is not about the budget behaves exactly as `xquad vm run`
 /// would and cannot drift from the VM it is testing.
 const fn default_step_limit() -> u64 {
     xqvm::DEFAULT_STEP_LIMIT
@@ -138,7 +138,7 @@ const fn default_step_limit() -> u64 {
 ///
 /// Is `xqvm::DEFAULT_MEMORY_LIMIT`, rather than a literal restating it, for
 /// the reason [`default_step_limit`] names the step constant: a vector that
-/// is not about the budget behaves exactly as `xquad run` would, and cannot
+/// is not about the budget behaves exactly as `xquad vm run` would, and cannot
 /// drift from the VM it is testing.
 const fn default_memory_limit() -> u64 {
     xqvm::DEFAULT_MEMORY_LIMIT

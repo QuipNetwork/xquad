@@ -22,7 +22,7 @@ To populate a sample with concrete variable assignments, construct an
 calldata slot, then `INPUT` it into a register before calling `ENERGY`.
 `SETLINE` and `ADDLINE` can also write a sample's per-variable assignment
 values in place, the same way they write a model's linear bias map, and
-`xquad verify` accepts them -- see
+`xquad vm check` accepts them -- see
 [Coefficient Access](coefficient-access.md). Each write is checked against
 the sample's domain, so a program can only build assignments the variables
 can actually take. Constructing an `XqmxSample` in the host and passing it
@@ -58,9 +58,7 @@ Wrapping arithmetic would have computed it correctly, overflowing to
 raises at the second term instead:
 
 ```
-Error: xqvm::runtime_error
-
-  × arithmetic overflow
+Error: run failed: ArithmeticOverflow { pos: None }
 ```
 
 Reordering the model's coefficients so no partial sum leaves the range

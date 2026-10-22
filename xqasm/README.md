@@ -7,9 +7,9 @@ Text assembler for the [XQuad Toolchain](https://gitlab.com/quip.network/xquad).
 AST, the assembler lowers the AST to instructions via
 `xqvm::InstructionBuilder`, and errors are reported as rich
 [`miette`](https://crates.io/crates/miette) diagnostics with source spans.
-This crate declares no binary; the `xquad asm` subcommand in
-[`xqcli`](https://gitlab.com/quip.network/xquad/-/tree/main/xqcli) is the
-command-line entry point.
+This crate declares no binary; `xquad vm asm`, from the
+[`xquad`](https://pypi.org/project/xquad/) Python package (`pip install
+xquad`), is the command-line entry point.
 
 ## Install
 
@@ -60,7 +60,7 @@ assert!(!program.code().is_empty());
 - [Bytecode encoding spec](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/ENCODING.md) -- assembly syntax and binary format
 - [Normative VM spec](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/SPEC.md)
 - [`xqvm`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm) -- bytecode types and interpreter this crate targets
-- [`xqcli`](https://gitlab.com/quip.network/xquad/-/tree/main/xqcli) -- the `xquad` CLI, wraps this crate as `xquad asm`
+- [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) -- the Python umbrella and the `xquad` CLI, which wraps this crate as `xquad vm asm`
 - [Repository](https://gitlab.com/quip.network/xquad)
 
 ## License

@@ -82,9 +82,9 @@
   - [Verifier](xqvm/verifier.md)
   - [CLI](xqvm/cli/README.md)
     - [Assemble](xqvm/cli/asm.md)
-    - [Disassemble](xqvm/cli/dism.md)
+    - [Disassemble](xqvm/cli/dis.md)
     - [Run](xqvm/cli/run.md)
-    - [Verify](xqvm/cli/verify.md)
+    - [Check](xqvm/cli/check.md)
   - [Limits and Errors](xqvm/limits-and-errors.md)
 
 - [Embedding and Internals](embedding/README.md)

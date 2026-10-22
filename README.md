@@ -30,21 +30,15 @@ supported backend.
 
 ## Install
 
-### Rust (from crates.io)
-
-```sh
-cargo install xqcli           # gives you the `xquad` binary
-```
-
 ### Python (from PyPI)
 
 ```sh
-pip install xquad             # umbrella -- full pipeline
+pip install xquad             # umbrella -- full pipeline and the `xquad` CLI
 # or pick individual pieces:
 pip install xqffi xqcp xqsa   # FFI bindings + DSL + solvers
 ```
 
-Prebuilt wheels are available for Linux x86_64 and aarch64 (CPython >= 3.13). On macOS and Windows, pip builds the `xqffi` Rust extension from source -- this requires a [Rust toolchain](https://rustup.rs/) (>= 1.85).
+`pip install xquad` puts the `xquad` command on `PATH` (`xquad vm asm|dis|run|check`); `python -m xquad` runs the same command when the script directory is not on `PATH`. Prebuilt wheels are available for Linux x86_64 and aarch64 (CPython >= 3.13). On macOS and Windows, pip builds the `xqffi` Rust extension from source -- this requires a [Rust toolchain](https://rustup.rs/) (>= 1.85).
 
 ### GPU/QPU support
 
@@ -65,13 +59,12 @@ complete problem end to end, see
 
 ## Package map
 
-Three Rust crates on **crates.io**:
+Two Rust crates on **crates.io**:
 
-| Crate | Binary | Description |
-|---|---|---|
-| [`xqvm`](xqvm/) | none | X-Quadratic Virtual Machine interpreter, bytecode codec, opcode table (`no_std + alloc`) |
-| [`xqasm`](xqasm/) | none | `.xqasm` text-format assembler |
-| [`xqcli`](xqcli/) | `xquad` | Unified CLI -- `xquad asm` / `dism` / `run` / `verify` |
+| Crate | Description |
+|---|---|
+| [`xqvm`](xqvm/) | X-Quadratic Virtual Machine interpreter, bytecode codec, opcode table (`no_std + alloc`) |
+| [`xqasm`](xqasm/) | `.xqasm` text-format assembler |
 
 Five Python distributions on **PyPI**:
 
@@ -81,7 +74,7 @@ Five Python distributions on **PyPI**:
 | [`xqvm_py`](xqvm_py/) | Pure-Python reference VM (conformance oracle) |
 | [`xqcp`](xqcp/) | Constraint-programming DSL that compiles to `.xqasm` |
 | [`xqsa`](xqsa/) | Solver adapters -- CPU/GPU annealers, D-Wave QPU, Quip network |
-| [`xquad`](xquad/) | Umbrella meta-package with interactive `Program` / `Session` / `RunResult` API |
+| [`xquad`](xquad/) | Umbrella meta-package with interactive `Program` / `Session` / `RunResult` API, and the `xquad` CLI (`xquad vm asm` / `dis` / `run` / `check`) |
 
 The one Rust package without a crates.io artefact is the `xqffi` pyo3
 crate itself -- it ships as the `xqffi` PyPI wheel rather than a reusable
@@ -100,7 +93,7 @@ HALT
 ```
 
 ```sh
-xquad asm add.xqasm -o add.xqb && xquad run add.xqb
+xquad vm asm add.xqasm -o add.xqb && xquad vm run add.xqb
 ```
 
 ### End-to-end (Python, via the umbrella)

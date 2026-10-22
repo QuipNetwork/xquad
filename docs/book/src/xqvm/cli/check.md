@@ -1,4 +1,4 @@
-# xquad verify
+# xquad vm check
 
 Run the bytecode verifier over a program without executing it, and report
 the first violation found.
@@ -6,26 +6,26 @@ the first violation found.
 ## Usage
 
 ```sh
-xquad verify [OPTIONS] <FILE>
+xquad vm check [OPTIONS] <FILE>
 ```
 
 ## Arguments
 
 | Argument | Description |
 |----------|-------------|
-| `FILE` | Program to verify: bytecode (`.xqb`) by default, assembly (`.xqasm`) when `--text` is set. |
+| `FILE` | Program to check: bytecode (`.xqb`) by default, assembly (`.xqasm`) when `--text` is set. |
 
 ## Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--text` | off | Treat `FILE` as assembly source and assemble it before verifying. |
+| `--text` | off | Treat `FILE` as assembly source and assemble it before checking. |
 
-`xquad verify` runs the same default pipeline documented in
+`xquad vm check` runs the same default pipeline documented in
 [Verifier](../verifier.md): structural checks, jump-target checks,
 loop-nesting balance, register type-state, must-init analysis, and stack
 depth, in that order, stopping at the first phase that fails. This page
-covers only the subcommand's own behaviour; for what each phase checks and
+covers only the command's own behaviour; for what each phase checks and
 what each error means, see that page. For a task-oriented walkthrough of
 fixing a rejected program, see
 [Verification](../../running/verification.md).
@@ -33,7 +33,7 @@ fixing a rejected program, see
 ## A passing program
 
 ```sh
-xquad verify add.xqb
+xquad vm check add.xqb
 ```
 
 ```
@@ -41,7 +41,7 @@ ok: add.xqb (4 instructions)
 ```
 
 The instruction count includes the whole decoded stream: labelled
-positions as well as visible mnemonics. `verify` writes this line to
+positions as well as visible mnemonics. `check` writes this line to
 stdout and exits `0`. With `--text`, the same message names the `.xqasm`
 source path rather than a `.xqb` file, since the source is assembled
 in memory first and never written to disk.
@@ -56,14 +56,14 @@ HALT
 ```
 
 ```sh
-xquad verify --text uninit.xqasm
+xquad vm check --text uninit.xqasm
 ```
 
 ```
-Error:   × register r0 read at byte 0x0000 before being written
+Error: check failed: ReadUnsetRegister: register r0 read at byte 0x0000 before being written
 ```
 
-`verify` exits `1` on the first violation any phase finds. A program with
+`check` exits `1` on the first violation any phase finds. A program with
 two independent defects reports only this one; fixing it and re-running
 may surface the next.
 
@@ -83,27 +83,18 @@ HALT
 ```
 
 ```sh
-xquad verify --text idx_underflow.xqasm
+xquad vm check --text idx_underflow.xqasm
 ```
 
 ```
 ok: idx_underflow.xqasm (4 instructions)
 ```
 
-`xquad run --text idx_underflow.xqasm` then underflows the value stack at
-the `IDXGRID`:
+`xquad vm run --text idx_underflow.xqasm` then underflows the value stack
+at the `IDXGRID`, byte `0x0004`:
 
 ```
-Error: xqvm::runtime_error
-
-  × stack underflow at byte 0x0004
-   ╭─[idx_underflow.xqasm:3:1]
- 2 │   0x0002:  PUSH1   2
- 3 │   0x0004:  IDXGRID 
-   · ─────────┬─────────
-   ·          ╰── execution failed here
- 4 │   0x0005:  HALT    
-   ╰────
+Error: run failed: StackUnderflow { pos: 4 }
 ```
 
 Nor does verification look at values. An allocator size, a grid extent, a

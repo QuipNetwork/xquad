@@ -1,11 +1,11 @@
-# xquad dism
+# xquad vm dis
 
 Disassemble XQVM bytecode into a human-readable listing.
 
 ## Usage
 
 ```sh
-xquad dism [FILE]
+xquad vm dis [FILE]
 ```
 
 ## Arguments
@@ -14,13 +14,17 @@ xquad dism [FILE]
 |----------|-------------|
 | `FILE` | Bytecode file to disassemble. Reads from stdin when omitted. |
 
-`dism` decodes `FILE` (or stdin) as a full XQBC container, the same
-format `xquad asm` writes: a 15-byte header (magic, version, code length,
+`dis` decodes `FILE` (or stdin) as a full XQBC container, the same
+format `xquad vm asm` writes: a 15-byte header (magic, version, code length,
 CRC32) followed by the raw instruction stream. It has no path for a bare
 instruction stream missing that header -- a buffer that starts straight
 with opcode bytes fails to decode on the magic check before disassembly
-gets a chance to run. This is why the stdin example below pipes from
-`xquad asm --stdout`, which emits a full container, rather than from a
+gets a chance to run, and the command exits `1`:
+
+```
+Error: failed to decode program: decode error: XQBC header is truncated
+``` This is why the stdin example below pipes from
+`xquad vm asm --stdout`, which emits a full container, rather than from a
 raw instruction buffer.
 
 ## Examples
@@ -28,7 +32,7 @@ raw instruction buffer.
 ### Disassemble a file
 
 ```sh
-xquad dism add.xqb
+xquad vm dis add.xqb
 ```
 
 ```
@@ -41,10 +45,10 @@ xquad dism add.xqb
 ### Disassemble from stdin
 
 ```sh
-xquad asm add.xqasm --stdout | xquad dism
+xquad vm asm add.xqasm --stdout | xquad vm dis
 ```
 
-Produces the same listing as above; `dism` reads the bytes either way.
+Produces the same listing as above; `dis` reads the bytes either way.
 
 ### A program with jumps
 
