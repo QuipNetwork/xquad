@@ -56,10 +56,10 @@ pre-assembled bytecode artifact is committed.
 }
 ```
 
-`output_slots` is optional (defaults to 16, matching `xquad run`). The
+`output_slots` is optional (defaults to 16, matching `xquad vm run`). The
 `calldata` array is exposed to the program in slot order: slot 0 holds
 the first value, slot 1 the second, and so on. `step_limit` is optional
-and defaults to 10000000, matching `xquad run`; the harness resolves the
+and defaults to 10000000, matching `xquad vm run`; the harness resolves the
 default itself and passes it to both runners, because the two
 implementations disagree on what an omitted budget means and a vector
 that left it out used to run bounded on Rust and unbounded on Python.

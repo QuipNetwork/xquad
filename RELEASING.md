@@ -1,19 +1,18 @@
 # Releasing the xquad toolchain
 
-Cutting a release publishes eleven artefacts in one shot from a single
+Cutting a release publishes ten artefacts in one shot from a single
 `v<X.Y.Z>` git tag:
 
 | # | Artefact | Registry | Ordering |
 |---|----------|----------|----------|
-| 1 | [`xqvm`](xqvm/) | crates.io | before xqasm, xqcli |
-| 2 | [`xqasm`](xqasm/) | crates.io | before xqcli |
-| 3 | [`xqcli`](xqcli/) | crates.io | last Rust crate |
-| 4 | [`xqffi`](xqffi/) abi3 wheels + sdist | PyPI | before peers (2 abi3 wheels + sdist) |
-| 5 | [`xqvm_py`](xqvm_py/) sdist | PyPI | before xquad |
-| 6 | [`xqcp`](xqcp/) sdist | PyPI | before xquad |
-| 7 | [`xqsa`](xqsa/) sdist | PyPI | before xquad |
-| 8 | [`xquad`](xquad/) sdist | PyPI | last -- depends on 4-7 |
-| 9 | GitLab Release notes | GitLab | last -- `release:notes` |
+| 1 | [`xqvm`](xqvm/) | crates.io | before xqasm |
+| 2 | [`xqasm`](xqasm/) | crates.io | last Rust crate |
+| 3 | [`xqffi`](xqffi/) abi3 wheels + sdist | PyPI | before peers (2 abi3 wheels + sdist) |
+| 4 | [`xqvm_py`](xqvm_py/) sdist | PyPI | before xquad |
+| 5 | [`xqcp`](xqcp/) sdist | PyPI | before xquad |
+| 6 | [`xqsa`](xqsa/) sdist | PyPI | before xquad |
+| 7 | [`xquad`](xquad/) sdist (and the `xquad` command) | PyPI | last -- depends on 3-6 |
+| 8 | GitLab Release notes | GitLab | last -- `release:notes` |
 
 Triggered by `.gitlab/ci/release.yml`; see that file for the exact
 ordering and rules. `xqffi` the Rust *crate* stays `publish = false`
@@ -31,7 +30,7 @@ view.
 Variables**; masked + protected):
 
 - `CARGO_REGISTRY_TOKEN` -- crates.io API token from
-  `ops@postquant.xyz`. Scope to `xqvm`, `xqasm`, `xqcli` publish-new
+  `ops@postquant.xyz`. Scope to `xqvm`, `xqasm` publish-new
   + publish-update.
 
 **PyPI Trusted Publishing (OIDC)** -- no long-lived token in CI. Each
@@ -326,8 +325,8 @@ The tag push triggers a fully-automatic pipeline in stage `release`:
    fails there instead of mid-release. Its last step is a HEAD request
    against `RELEASE_CLI_URL`, the same pinned URL `release:notes`
    fetches `release-cli` from below -- see that job's entry for why.
-2. **`release:crates`** -- `cargo publish` for `xqvm` → `xqasm` →
-   `xqcli`, in topological order. Fires automatically once
+2. **`release:crates`** -- `cargo publish` for `xqvm` → `xqasm`,
+   in topological order. Fires automatically once
    `release:validate` passes.
 3. **`release:pypi`** -- `maturin build` + `twine upload` (OIDC) for
    `xqffi`, then `uv build` + `twine upload` for `xqvm_py` / `xqcp` /
@@ -362,7 +361,7 @@ and rerun the pipeline.
 
 ## Post-flight
 
-1. **Verify on the registries.** All four crates (xqvm, xqasm, xqcli,
+1. **Verify on the registries.** All three crates (xqvm, xqasm,
    and -- eventually, once we publish it -- xqffi's cdylib) should show
    `vX.Y.Z` within a minute of pipeline completion; all five Python
    distributions (`xqffi`, `xqvm_py`, `xqcp`, `xqsa`, `xquad`) on

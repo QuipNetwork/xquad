@@ -321,7 +321,7 @@ class Site:
         return f"{self.dist}{extras}"
 
 
-_CRATES = ("xqvm", "xqasm", "xqcli", "xqffi", "conformance")
+_CRATES = ("xqvm", "xqasm", "xqffi", "conformance")
 
 SITES: tuple[Site, ...] = (
     # The `version` alongside `path` on the two workspace dependency aliases.

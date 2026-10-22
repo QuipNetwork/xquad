@@ -18,7 +18,7 @@
 """Command-line interface for the XQVM reference implementation.
 
 Thin shim around the in-process Executor API so that xqvm-py can be
-driven with the same I/O contract as the Rust `xquad run` binary. Used
+driven with the same I/O contract as `xquad vm run`. Used
 by the xquad-conformance harness to validate identical outputs across
 implementations.
 
