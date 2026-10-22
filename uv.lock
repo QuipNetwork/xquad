@@ -1630,6 +1630,7 @@ name = "xquad"
 version = "0.4.5.dev0"
 source = { editable = "xquad" }
 dependencies = [
+    { name = "click" },
     { name = "xqcp" },
     { name = "xqffi" },
     { name = "xqsa" },
@@ -1652,6 +1653,7 @@ quip = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.1" },
     { name = "xqcp", editable = "xqcp" },
     { name = "xqffi", editable = "xqffi" },
     { name = "xqsa", editable = "xqsa" },
