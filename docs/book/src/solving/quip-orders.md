@@ -406,7 +406,8 @@ order
 `list_orders(state=None, account=None)` returns the ids of an account's
 orders that are not yet closed, newest first: the chain drops an order
 from the account's list once a claim or a reclaim closes it. `state` is
-`"submitted"`, `"finalized"` or `None`, and any other value raises
+`"submitted"`, `"finalized"`, `"unanswered"` (final with no answers, so
+`reclaim()` refunds it) or `None`, and any other value raises
 `ValueError`; `account` is SS58, `0x` hex or bytes, and defaults to the
 signer. It returns at most the newest 32 ids, after the `state` filter,
 and warns when there are more:

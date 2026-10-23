@@ -49,6 +49,7 @@ from xqsa.quip.chain import (  # noqa: F401 -- FEE_HEADROOM_PLANCK and the palle
 )
 from xqsa.quip.codec import (
     DEFAULT_ISING_SPEC_ID,
+    ORDER_STATUS_CLOSED,
     QUIP_COEFFICIENTS_DOC_URL,
     Topology,
     _as_hex,
@@ -89,7 +90,7 @@ from xqsa.quip.order import (
     merge_options,
 )
 from xqsa.quip.quote import JobQuote, _format_planck
-from xqsa.quip.receipt import JobOrderReceipt
+from xqsa.quip.receipt import JobOrderReceipt, _solution_count
 from xqsa.quip.resolution import Resolution, coerce_resolution
 from xqsa.quip.solution import no_answer_note, pick_best
 from xqsa.solver import Solver, SolverResult
@@ -631,14 +632,57 @@ class SolverQuip(Solver):
         """
         return chain.free_balance(self._iface, self._owner(account))
 
+    def reserved(self, account: Any = None) -> int:
+        """Return an account's reserved balance in planck.
+
+        The chain reserves an order's reward when it is proposed and releases
+        it when a claim or a reclaim closes the order, so this is the reward
+        still held by orders not yet closed, along with anything else the
+        runtime reserves. ``account`` reads another account, as for
+        :meth:`balance`.
+
+        Raises:
+            QuipSigningError: if ``account`` is omitted on a read-only client.
+            ValueError: if ``account`` cannot be read as an account.
+            QuipConnectionError: if the balance cannot be read.
+        """
+        return chain.reserved_balance(self._iface, self._owner(account))
+
+    def order_slots(self, account: Any = None) -> tuple[int, int | None]:
+        """Return how many order slots an account uses, and the chain's cap.
+
+        ``(used, limit)``: ``used`` counts the account's orders not yet
+        closed, each of which holds a slot until a claim or a reclaim closes
+        it; ``limit`` is the runtime's ``MaxOrdersPerProposer``, ``None`` when
+        the runtime sets none. ``account`` reads another account, as for
+        :meth:`balance`.
+
+        Raises:
+            QuipSigningError: if ``account`` is omitted on a read-only client.
+            ValueError: if ``account`` cannot be read as an account.
+            QuipConnectionError: if the order list or the cap cannot be read.
+        """
+        used = len(chain.proposer_orders(self._iface, self._owner(account)))
+        limit = chain.read_constant(self._iface, "MaxOrdersPerProposer")
+        return used, None if limit is None else int(limit)
+
     def _owner(self, account: Any) -> bytes:
         """The account ``account`` names, or this client's signer when it is ``None``."""
         return self._signer.account_id if account is None else chain.account_bytes(account)
 
     @property
+    def account(self) -> str:
+        """The signer's account in SS58.
+
+        Raises:
+            QuipSigningError: if this client was built with ``read_only=True``.
+        """
+        return chain.ss58_address(self._iface, self._signer.account_id)
+
+    @property
     def _account_ss58(self) -> str:
         """The signer's account in SS58, as every message names it."""
-        return chain.ss58_address(self._iface, self._signer.account_id)
+        return self.account
 
     def _free_balance(self) -> int:
         """The signer's free balance; see :meth:`balance`."""
@@ -1717,14 +1761,18 @@ class SolverQuip(Solver):
         self._fetch_order(order_id)
         return JobOrderReceipt(self, order_id, self._genesis_hash)
 
-    def list_orders(self, state: Literal["submitted", "finalized"] | None = None, account: Any = None) -> list[int]:
+    def list_orders(
+        self, state: Literal["submitted", "finalized", "unanswered"] | None = None, account: Any = None
+    ) -> list[int]:
         """Return the ids of an account's orders, newest first.
 
         Reads the chain's per-account order list, so it includes orders
         placed from any session. The chain drops an order from that list once
         a claim or a reclaim closes it, so closed orders are not listed.
-        ``state`` keeps only the orders still open (``"submitted"``) or final
-        (``"finalized"``), at one more read per order. ``account`` lists
+        ``state`` keeps only the orders still open (``"submitted"``), final
+        (``"finalized"``), or final with no answers (``"unanswered"``, the
+        ones :meth:`JobOrderReceipt.reclaim <xqsa.quip.JobOrderReceipt.reclaim>`
+        refunds), at one more read per order. ``account`` lists
         another account's orders instead of this client's signer, as SS58
         text, ``0x`` hex or bytes.
 
@@ -1732,22 +1780,17 @@ class SolverQuip(Solver):
         warns and returns the newest 32.
 
         Raises:
-            ValueError: if ``state`` is not ``"submitted"`` or ``"finalized"``,
-                or ``account`` cannot be read as an account.
+            ValueError: if ``state`` is not ``"submitted"``, ``"finalized"``
+                or ``"unanswered"``, or ``account`` cannot be read as an account.
             QuipSigningError: if ``account`` is omitted on a read-only client.
             QuipConnectionError: if an order or the head block cannot be read.
         """
-        if state not in (None, "submitted", "finalized"):
-            raise ValueError(f"state={state!r}; expected 'submitted', 'finalized' or None")
+        if state not in (None, "submitted", "finalized", "unanswered"):
+            raise ValueError(f"state={state!r}; expected 'submitted', 'finalized', 'unanswered' or None")
         order_ids = chain.proposer_orders(self._iface, self._owner(account))[::-1]
         if state is not None:
             current_block = self._current_block()
-            order_ids = [
-                order_id
-                for order_id in order_ids
-                if self._order_lifecycle(self._fetch_order(order_id), current_block)["is_final"]
-                == (state == "finalized")
-            ]
+            order_ids = [order_id for order_id in order_ids if self._order_in_state(order_id, current_block, state)]
         if len(order_ids) > LIST_ORDERS_LIMIT:
             warnings.warn(
                 f"showing {LIST_ORDERS_LIMIT} of {len(order_ids)} orders on this account. This "
@@ -1757,6 +1800,16 @@ class SolverQuip(Solver):
                 stacklevel=2,
             )
         return order_ids[:LIST_ORDERS_LIMIT]
+
+    def _order_in_state(self, order_id: int, current_block: int, state: str) -> bool:
+        """Whether the order is in the :meth:`list_orders` ``state`` at ``current_block``."""
+        order = self._fetch_order(order_id)
+        lifecycle = self._order_lifecycle(order, current_block)
+        if state == "submitted":
+            return not lifecycle["is_final"]
+        if state == "finalized":
+            return lifecycle["is_final"]
+        return lifecycle["is_final"] and lifecycle["status"] != ORDER_STATUS_CLOSED and _solution_count(order) == 0
 
     def status(self, order_id: int) -> dict[str, Any]:
         """Return a lightweight lifecycle snapshot of an order (no solution decode). Deprecated.

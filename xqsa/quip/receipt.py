@@ -84,12 +84,16 @@ class _Facts:
 
 @dataclass(frozen=True)
 class _Outcome:
-    """The order's outcome now: ``status`` is ``open``, ``final`` or ``closed``."""
+    """The order's outcome now: ``status`` is ``open``, ``final`` or ``closed``.
+
+    ``open_until`` is the order's ``effective_expiry`` while it is open, else ``None``.
+    """
 
     status: str
     answers: int
     leader: str | None
     energy_milli: int | None
+    open_until: int | None
 
 
 class JobOrderReceipt:
@@ -153,6 +157,30 @@ class JobOrderReceipt:
             "effective_expiry": lifecycle["effective_expiry"],
             "current_block": current_block,
             "solution_count": _solution_count(order),
+        }
+
+    def summary(self) -> dict[str, Any]:
+        """Return the order's outcome in one flat dict, the fields the receipt box shows under Status.
+
+        Keys: ``order_id``; ``state``, one of ``open``, ``final`` (answered,
+        its reward awaiting a claim), ``reclaimable`` (final with no answers,
+        so :meth:`reclaim` refunds it) or ``closed`` (claimed or reclaimed:
+        the chain records both alike); ``open_until``, the block the order
+        stays open until, ``None`` unless ``open``; ``answers``, the number of
+        solvers that answered; and ``leader``, the SS58 of the solver ranked
+        first, ``None`` with no answers.
+
+        Raises:
+            QuipConnectionError: if the order or the head block cannot be read.
+        """
+        outcome = self._outcome()
+        state = "reclaimable" if outcome.status == "final" and outcome.answers == 0 else outcome.status
+        return {
+            "order_id": self._order_id,
+            "state": state,
+            "open_until": outcome.open_until,
+            "answers": outcome.answers,
+            "leader": outcome.leader,
         }
 
     def wait(self) -> Self:
@@ -427,6 +455,7 @@ class JobOrderReceipt:
             answers=_solution_count(order),
             leader=None if leader is None else self._ss58(leader["solver"]),
             energy_milli=None if leader is None else int(leader["energy_milli"]),
+            open_until=lifecycle["effective_expiry"] if status == "open" else None,
         )
 
     def _ss58(self, account: Any) -> str:

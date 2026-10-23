@@ -852,6 +852,17 @@ class TestListOrders:
     def test_state_filter(self, monkeypatch, state, expected) -> None:
         assert self._solver(monkeypatch, [3, 7, 9], final={7}).list_orders(state=state) == expected
 
+    def test_unanswered_keeps_final_orders_with_no_answers(self, monkeypatch) -> None:
+        orders = {
+            3: _receipt_order(status="Opened", solution_count=0),  # final by height, unanswered.
+            5: _receipt_order(status="Opened", solution_count=1),  # final, answered.
+            7: _receipt_order(status="Closed", solution_count=0),  # closed: no longer reclaimable.
+            9: _receipt_order(status="Opened", solution_count=0, deadline_blocks=1_000),  # still open.
+        }
+        solver = self._solver(monkeypatch, list(orders), head=200)
+        monkeypatch.setattr(solver, "_fetch_order", orders.__getitem__)
+        assert solver.list_orders(state="unanswered") == [3]
+
     def test_unknown_state_refused(self, monkeypatch) -> None:
         with pytest.raises(ValueError, match="state='open'"):
             self._solver(monkeypatch, [1]).list_orders(state="open")
@@ -935,6 +946,28 @@ class TestReadOnlyClient:
         solver = _make_solver(monkeypatch, iface=_default_iface(balance=6 * UNIT))
         assert solver.balance() == solver._free_balance() == 6 * UNIT
 
+    def test_reserved_and_order_slots_given_an_account(self, monkeypatch) -> None:
+        solver = self._solver(monkeypatch)
+        solver._iface.storage[("System", "Account")] = {"nonce": 0, "data": {"free": UNIT, "reserved": 3 * UNIT}}
+        solver._iface.constants[(MEMPOOL, "MaxOrdersPerProposer")] = 32
+        assert solver.reserved(account=self.OTHER) == 3 * UNIT
+        assert solver.order_slots(account=self.OTHER) == (2, 32)
+
+    def test_order_slots_without_a_cap(self, monkeypatch) -> None:
+        assert self._solver(monkeypatch).order_slots(account=self.OTHER) == (2, None)
+
+    def test_reserved_unreadable_raises(self, monkeypatch) -> None:
+        solver = self._solver(monkeypatch, balance=UNIT)  # data carries no reserved field.
+        with pytest.raises(QuipConnectionError, match="could not read the reserved balance"):
+            solver.reserved(account=self.OTHER)
+
+    def test_account_names_the_signer_and_is_refused_read_only(self, monkeypatch) -> None:
+        pytest.importorskip("scalecodec.utils.ss58")
+        signing = _make_solver(monkeypatch, iface=_default_iface())
+        assert signing.account == chain.ss58_address(signing._iface, signing._signer.account_id)
+        with pytest.raises(QuipSigningError, match="this client has no signer"):
+            _ = self._solver(monkeypatch).account
+
 
 PROPOSER = "0x" + "11" * 32
 SOLVER = "0x" + "cd" * 32
@@ -960,6 +993,33 @@ def _display_for(monkeypatch, *, head: int = 200, fee: int | None = FEE, ms: int
 
 def _rows(text: str) -> list[str]:
     return [line[2:-2].rstrip() for line in text.splitlines() if line.startswith("│")]
+
+
+class TestSummary:
+    @pytest.mark.parametrize(
+        ("order", "head", "front", "expected"),
+        [
+            pytest.param(_receipt_order(status="Opened"), 50, LEADING, ("open", 100, 1), id="open"),
+            pytest.param(_receipt_order(status="Opened"), 200, LEADING, ("final", None, 1), id="final"),
+            pytest.param(
+                _receipt_order(status="Opened", solution_count=0), 200, None, ("reclaimable", None, 0), id="reclaimable"
+            ),
+            pytest.param(
+                _receipt_order(status="Closed", solution_count=0), 200, None, ("closed", None, 0), id="closed"
+            ),
+        ],
+    )
+    def test_states(self, monkeypatch, order, head, front, expected) -> None:
+        receipt = _receipt_for(monkeypatch, order=order, head=head, front=front)
+        summary = receipt.summary()
+        assert summary.keys() == {"order_id", "state", "open_until", "answers", "leader"}
+        assert (summary["order_id"], summary["state"], summary["open_until"], summary["answers"]) == (1, *expected)
+        assert (summary["leader"] is None) == (front is None)
+
+    def test_leader_matches_the_box(self, monkeypatch) -> None:
+        pytest.importorskip("scalecodec.utils.ss58")
+        receipt = _display_for(monkeypatch, answers=[_answer(SOLVER, -1500, 9)], front=LEADING)
+        assert f"Leader      {receipt.summary()['leader']}" in str(receipt)
 
 
 class TestJobOrderReceiptDisplay:
