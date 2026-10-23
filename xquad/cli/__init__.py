@@ -17,7 +17,8 @@
 
 """The `xquad` command.
 
-`xquad vm asm|dis|run|check` are the XQVM tools. The old top-level names
+`xquad vm asm|dis|run|check` are the XQVM tools; `xquad quip ...` manages
+Quip accounts and order receipts. The old top-level names
 `xquad asm|dism|run|verify` stay as hidden aliases that warn on stderr
 until v0.5.0. Each command module imports only `click` at module level
 and its backing package inside the command, so `xquad --help` stays fast.
@@ -32,6 +33,7 @@ import click
 from xquad.cli.asm import asm
 from xquad.cli.check import check
 from xquad.cli.dis import dis
+from xquad.cli.quip import quip
 from xquad.cli.run import run
 
 __all__ = ["main"]
@@ -51,6 +53,8 @@ def vm() -> None:
 
 for _command in (asm, dis, run, check):
     vm.add_command(_command)
+
+main.add_command(quip)
 
 
 def _deprecated_alias(old: str, command: click.Command) -> click.Command:

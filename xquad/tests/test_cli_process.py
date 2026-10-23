@@ -98,3 +98,17 @@ def test_run_trace_without_file_writes_to_stderr(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert result.stderr.splitlines()[0].split()[:3] == ["step", "offset", "instruction"]
     assert result.stdout == "stack (bottom to top):\n  42\n"
+
+
+def test_quip_without_the_extra_prints_the_hint() -> None:
+    code = (
+        "import sys\n"
+        "sys.modules['substrateinterface'] = None\n"
+        "from xquad.cli import main\n"
+        "sys.argv = ['xquad', 'quip', 'account', 'list']\n"
+        "main()\n"
+    )
+    result = _run([sys.executable, "-c", code])
+    assert result.returncode == 1
+    assert result.stderr == "`xquad quip` needs the Quip extra: `pip install 'xquad[quip]'`\n"
+    assert result.stdout == ""
