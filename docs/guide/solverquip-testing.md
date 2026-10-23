@@ -88,16 +88,17 @@ A funded run places nine orders, of three kinds:
 | `TestMortalEra` | the runtime accepts the mortal `propose_job` | funding |
 | `TestUnanswered` | an order only our account may answer: `solve()` times out, `on_initialize` expires it (`OrderExpired` in the `Initialization` phase), and its receipt reclaims it; auto-reclaim of a 1-block order | funding; the auto-reclaim test patches `MIN_DEADLINE_BLOCKS` to 1 |
 | `TestNetwork` | spin and native round trips through `solve()`; the deprecated `query()` and `status()` | the network to answer (skips otherwise) |
-| `TestSelfSolved` | the draft lifecycle and a four-vector binary answer read back, also on a fresh client; a mixed-sign `TopNWeighted(2)` split claimed by the second account (runtime 119 and later); a `TopNEqual(2)` tie that keeps our lead; a type allowlist that refuses the second account; the solution, diversity and energy floors with a refusal for each | `second_funded_keystore` |
+| `TestSelfSolved` | the draft lifecycle, the reclaim refusals for an open and an answered order, and a four-vector binary answer read back, also on a fresh client; a mixed-sign `TopNWeighted(2)` split claimed by the second account (runtime 119 and later); a `TopNEqual(2)` tie that keeps our lead; a type allowlist that refuses the second account; the solution, diversity and energy floors with a refusal for each | `second_funded_keystore`, except the lifecycle test, which needs funding only |
 | `TestPayoutRules` | `TopNWeighted` refused below runtime 119 (skips on 119 and later) | funding |
 
 Self-solved orders go through the real `submit()`, with an allowlist of our
-own two accounts, or of our solver type plus a keyless account (so ours is
-admitted by type alone), and each account answers in a separate
-`submit_solution` extrinsic. Refused answers go first: a refusal does not
-start the order's `block_wait` countdown, while an accepted answer does. Each
-answer checks that it landed before the order's expiry, so a slow answer fails
-as a timing failure naming the order's `deadline_blocks` and `block_wait`. The
+own two accounts, of our account plus a keyless one, or of our solver type
+plus a keyless account (so ours is admitted by type alone), and each account
+answers in a separate `submit_solution` extrinsic. Refused answers go first: a
+refusal does not start the order's `block_wait` countdown, while an accepted
+answer does. The chain refuses an answer after the order's expiry with
+`OrderNotOpen`, and the test reports that as a timing failure naming the
+order's `deadline_blocks` and `block_wait`. The
 orders are then claimed with `claim_reward`, so nothing stays reserved.
 
 Registration is permanent: every account a run registers stays on chain as a

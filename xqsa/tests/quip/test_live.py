@@ -32,8 +32,9 @@ Three kinds of order:
   test that the network answers. When nobody answers before the deadline they
   skip with a ``network:`` reason.
 * SELF-SOLVED orders (``TestSelfSolved``) test chain rules. They go through the
-  real submit, admit only our own two accounts (or our solver type and a
-  keyless account), and are answered by those accounts in separate
+  real submit, admit only our own accounts (our two, ours beside a keyless
+  one, or our solver type beside a keyless one), and are answered by those
+  accounts in separate
   extrinsics, so ranks, energies and leaders are fixed by the test.
 * UNANSWERED orders expire with nothing touching them: the timeout path,
   auto-reclaim, and reclaiming through a receipt.
@@ -76,7 +77,7 @@ from xqsa.quip import (
     SolverQuip,
 )
 from xqsa.quip import chain as quip_chain
-from xqsa.quip.client import _is_native
+from xqsa.quip.client import _close, _is_native
 from xqsa.quip.codec import (
     DEFAULT_ISING_SPEC_ID,
     PlacementError,
@@ -185,7 +186,10 @@ def _new_solver_keystore(tmp_path_factory, name: str, solver_type: str) -> str:
     """
     path = _new_funded_keystore(tmp_path_factory, name)
     solver = SolverQuip(url=RPC_URL, keystore=path, **SOLVER_KWARGS)
-    solver._submit_extrinsic("QuantumComputeMempool", "register_solver", {"solver_type": solver_type})
+    try:
+        solver._submit_extrinsic("QuantumComputeMempool", "register_solver", {"solver_type": solver_type})
+    finally:
+        _close(solver._iface)
     return path
 
 
@@ -220,12 +224,16 @@ def make_solver(funded_keystore):
         return solver
 
     yield _make
+    for solver in solvers:
+        _close(solver._iface)
 
 
 @pytest.fixture
-def second_solver(second_funded_keystore) -> SolverQuip:
+def second_solver(second_funded_keystore):
     """A SolverQuip on the second funded keystore, whose account is a ``Gpu`` solver."""
-    return SolverQuip(url=RPC_URL, keystore=second_funded_keystore, **SOLVER_KWARGS)
+    solver = SolverQuip(url=RPC_URL, keystore=second_funded_keystore, **SOLVER_KWARGS)
+    yield solver
+    _close(solver._iface)
 
 
 # ---------------------------------------------------------------------------
@@ -310,10 +318,6 @@ def _submit_answer(solver: SolverQuip, order_id: int, vectors: list[list[int]]):
         if f"{pallet}.OrderNotOpen" in str(exc):
             late(str(exc))
         raise
-    landed = quip_chain.block_number(solver._iface, sent.block_hash)
-    expiry = solver.get_receipt(order_id).status()["effective_expiry"]
-    if landed > expiry:
-        late(f"landed in block {landed}, expiry {expiry}")
     return sent
 
 
@@ -571,7 +575,7 @@ class TestUnanswered:
         expired once submit() returns, and solve() then reclaims it itself.
         """
         solver = make_solver(timeout=0.5)
-        account = "0x" + solver._signer.account_id.hex()
+        account = _account(solver)
         rule = AccessAllow(accounts=[account])
         with pytest.raises(QuipTimeoutError) as excinfo:
             solver.solve(_asymmetric_spin_model(), access=rule, deadline_blocks=10, block_wait=1)
@@ -579,7 +583,9 @@ class TestUnanswered:
         assert isinstance(order_id, int)
         assert excinfo.value.receipt.order_id == order_id
 
-        receipt = make_solver().get_receipt(order_id).wait()
+        # Every read after the wait goes through the client that waited: solver's connection sat idle meanwhile.
+        solver = make_solver()
+        receipt = solver.get_receipt(order_id).wait()
         snap = receipt.status()
         assert (snap["state"], snap["solution_count"]) == ("finalized", 0)
         # on_initialize finalised it: Expired at the expiry block, by an event outside any extrinsic.
@@ -626,7 +632,7 @@ class TestUnanswered:
         # test only: it exercises the reclaim, not the option checks.
         monkeypatch.setattr("xqsa.quip.order.MIN_DEADLINE_BLOCKS", 1)
         solver = make_solver(deadline_blocks=1, block_wait=1, timeout=150.0)
-        account = "0x" + solver._signer.account_id.hex()
+        account = _account(solver)
 
         def reserved() -> int:
             return solver._iface.query("System", "Account", [account]).value["data"]["reserved"]
@@ -707,14 +713,14 @@ class TestNetwork:
 
 
 class TestSelfSolved:
-    """Orders only our two accounts can answer, through the real submit, answered in separate extrinsics.
+    """Orders only our own accounts can answer, through the real submit, answered in separate extrinsics.
 
     Nobody else can answer, so ranks, energies and leaders are fixed by the
     test. Refusals go before any accepted answer: a refused answer does not
     start the ``block_wait`` countdown, while an accepted one does.
     """
 
-    def test_order_lifecycle_reads_back(self, make_solver, second_solver) -> None:
+    def test_order_lifecycle_reads_back(self, make_solver) -> None:
         """One order through its draft lifecycle, answered with four vectors, read back here and on a fresh client."""
         model = XQMX.binary_model(3)
         model.set_linear(0, -1)
@@ -722,7 +728,8 @@ class TestSelfSolved:
         model.set_quadratic(0, 1, -3)
         model.set_quadratic(1, 2, 1)
         solver = make_solver()
-        rule = AccessAllow(accounts=[_account(solver), _account(second_solver)])
+        # A keyless account beside ours keeps the order closed to the fleet with one funded account.
+        rule = AccessAllow(accounts=[_account(solver), "0x" + "00" * 32])
         order = solver.create_order(model, access=rule)
         assert isinstance(order, JobOrder)
         order.set(deadline_blocks=30, block_wait=4)
@@ -747,6 +754,8 @@ class TestSelfSolved:
         assert int(stored["timing"]["block_wait"]) == 4
         with pytest.raises(QuipSubmissionError, match="works only on a draft"):
             order.set(deadline_blocks=200)
+        with pytest.raises(QuipSubmissionError, match="is open until block"):
+            order.reclaim()  # refused locally, before signing.
 
         # The best four, sent worst first: the decode puts them back in order.
         job = order._job
@@ -756,6 +765,7 @@ class TestSelfSolved:
         snap = receipt.status()
         assert snap["state"] == "finalized"
         assert snap["first_solution_at"] > snap["created_at"]
+        assert len(order.solutions()) == len(vectors)
 
         ours = _ss58(solver)
         solutions = decode_answers(receipt, job, model, solver=ours)
@@ -784,6 +794,8 @@ class TestSelfSolved:
             "winners": [{"solver": ours, "energy_milli": solutions[0].energy_milli, "allocation_planck": order.reward}],
         }
 
+        with pytest.raises(QuipSubmissionError, match="was answered by"):
+            receipt.reclaim()
         paid, _block = _claim_from(solver, order_id)
         assert paid == {bytes(solver._signer.account_id): order.reward}
 
@@ -816,7 +828,7 @@ class TestSelfSolved:
         assert [entry["solver"] for entry in receipt.solvers()] == [ours, theirs]
         # Weights k - r over total k(k+1)/2 = 3 with k = 2 ranked, remainder to rank 0.
         reward = order.reward
-        second_share = (reward // 3) * 1 + (reward % 3) * 1 // 3
+        second_share = reward // 3
         expected = [reward - second_share, second_share]
         settlement = receipt.settlement()
         assert [(w["solver"], w["allocation_planck"]) for w in settlement["winners"]] == list(
