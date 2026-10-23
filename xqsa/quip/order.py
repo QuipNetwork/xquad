@@ -141,8 +141,9 @@ def check_client_defaults(delivery: Any) -> None:
     """
     if delivery != _SUPPORTED_DELIVERY:
         raise ValueError(
-            f"delivery={delivery!r}: result delivery is not supported yet: ResultReady only fires on a claim, "
-            "which network solvers do not make"
+            f"delivery={delivery!r}: result delivery is not supported yet: the chain only echoes the endpoint "
+            "in ResultReady when the order expires, and nothing delivers to it; JobOrder.wait() or "
+            "SolverQuip.get_receipt(order_id) returns the result"
         )
 
 

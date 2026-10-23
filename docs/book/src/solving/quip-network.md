@@ -202,10 +202,10 @@ override a preset.
 `SolverQuip` reads the runtime's `specVersion` once, when it connects; a
 client that stays connected across an upgrade keeps the version it read
 until it reconnects. Runtime 119 renamed the order's energy-ceiling
-field from `min_energy_milli` to `max_energy_milli`. xquad 0.4.3 sends
-the ceiling under both names and the encoder keeps the one the runtime
-lists, so it proposes on runtimes before and after 119. xquad 0.4.2 and
-earlier cannot propose on 119.
+field from `min_energy_milli` to `max_energy_milli`. xquad 0.4.5 and
+later send the ceiling as `max_energy_milli` only, so they need runtime
+119 or later: on an older runtime the proposal fails to encode. xquad
+0.4.2 and earlier cannot propose on 119.
 
 `ResolutionTopNWeighted` needs runtime 119 or later. On an older runtime
 every order that uses it is refused before signing, because older

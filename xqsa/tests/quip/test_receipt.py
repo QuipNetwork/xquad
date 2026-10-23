@@ -1248,12 +1248,11 @@ class TestFloorsText:
 
 
 class TestReceiptFloors:
-    @pytest.mark.parametrize("key", ["min_energy_milli", "max_energy_milli"])
-    def test_facts_read_the_ceiling_under_either_key(self, monkeypatch, key) -> None:
+    def test_facts_read_the_ceiling(self, monkeypatch) -> None:
         order = _receipt_order(proposer=PROPOSER)
         order["ising_params"] = {
             **order["ising_params"],
-            key: -1250,
+            "max_energy_milli": -1250,
             "min_solutions": 5,
             "min_diversity_milli": 400,
         }
@@ -1265,7 +1264,7 @@ class TestReceiptFloors:
         order = _receipt_order(proposer=PROPOSER)
         order["ising_params"] = {
             **order["ising_params"],
-            "min_energy_milli": None,
+            "max_energy_milli": None,
             "min_solutions": None,
             "min_diversity_milli": None,
         }
@@ -1273,7 +1272,7 @@ class TestReceiptFloors:
 
     def test_floors_text_reads_the_cached_facts(self, monkeypatch) -> None:
         order = _receipt_order(proposer=PROPOSER)
-        order["ising_params"] = {**order["ising_params"], "min_energy_milli": -1250, "min_solutions": 5}
+        order["ising_params"] = {**order["ising_params"], "max_energy_milli": -1250, "min_solutions": 5}
         receipt = _display_for(monkeypatch, order=order)
         receipt._facts()
         assert receipt._facts_cache is not None

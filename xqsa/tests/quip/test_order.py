@@ -298,15 +298,16 @@ class TestCeilingAgainstThePlacedModel:
             order.set(max_energy=10)
         assert record[0].filename == __file__
 
-    def test_ceiling_goes_under_both_keys(self, monkeypatch) -> None:
+    def test_ceiling_goes_under_the_runtime_119_key(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
         ising = solver.create_order(_binary_model(), topology="native", max_energy=-2)._call_params()["ising_params"]
-        assert ising["min_energy_milli"] == ising["max_energy_milli"] == -1250
+        assert ising["max_energy_milli"] == -1250
+        assert "min_energy_milli" not in ising
 
     def test_solve_passes_the_ceiling(self, monkeypatch) -> None:
         solver, captured = _ready(monkeypatch)
         solver.solve(_model(), max_energy=-2)
-        assert captured["call_params"]["ising_params"]["min_energy_milli"] == -2000
+        assert captured["call_params"]["ising_params"]["max_energy_milli"] == -2000
 
 
 class TestSolutionFloorOptions:

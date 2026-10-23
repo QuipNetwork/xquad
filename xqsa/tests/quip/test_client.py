@@ -2444,7 +2444,7 @@ class TestSolverQuipSubmission:
         assert ising["edges"] == ([list(edge) for edge in job.edges],)
         assert ising["h_values"] == (list(job.h_values),)
         assert ising["j_values"] == (list(job.j_values),)
-        assert ising["min_energy_milli"] is None
+        assert "min_energy_milli" not in ising
         assert ising["max_energy_milli"] is None
         assert ising["min_solutions"] is None
 
@@ -2488,12 +2488,12 @@ class TestSolverQuipSubmission:
         assert params["resolution"] == {"TopNEqual": {"n": 2}}
 
     @pytest.mark.parametrize("ceiling", [None, -1250])
-    def test_ceiling_keys_encode_as_the_runtime_field(self, monkeypatch, ceiling) -> None:
-        """Both ceiling keys encode byte-identical to the one key the runtime lists.
+    @pytest.mark.parametrize(("field", "encodes"), [("max_energy_milli", True), ("min_energy_milli", False)])
+    def test_ceiling_encodes_on_runtime_119_only(self, monkeypatch, ceiling, field, encodes) -> None:
+        """The proposal encodes against runtime 119's ``IsingParams`` and not runtime 118's.
 
-        The struct below mirrors aglais's ``IsingParams`` (spec 118), which lists
-        ``min_energy_milli`` only; a runtime with QUI-1612 lists
-        ``max_energy_milli`` instead and takes the other key the same way.
+        The struct below mirrors ``IsingParams``, whose ceiling field is
+        ``min_energy_milli`` before runtime 119 renames it ``max_energy_milli``.
         """
         base = pytest.importorskip("scalecodec.base", reason="scalecodec not installed ([quip] extra)")
         presets = pytest.importorskip("scalecodec.type_registry")
@@ -2512,7 +2512,7 @@ class TestSolverQuipSubmission:
                             ["edges", "BoundedEdges"],
                             ["h_values", "BoundedI32"],
                             ["j_values", "BoundedI32"],
-                            ["min_energy_milli", "Option<i64>"],
+                            [field, "Option<i64>"],
                             ["min_diversity_milli", "Option<u32>"],
                             ["min_solutions", "Option<u32>"],
                         ],
@@ -2522,12 +2522,13 @@ class TestSolverQuipSubmission:
         )
         solver = _make_solver(monkeypatch)
         ising = solver._propose_call_params(self._simple_job(), solver._default_options())["ising_params"]
-        ising = {**ising, "min_energy_milli": ceiling, "max_energy_milli": ceiling}
-        single = {key: value for key, value in ising.items() if key != "max_energy_milli"}
+        ising = {**ising, "max_energy_milli": ceiling}
 
-        both = config.create_scale_object("IsingParams").encode(ising)
-
-        assert both == config.create_scale_object("IsingParams").encode(single)
+        if encodes:
+            assert config.create_scale_object("IsingParams").encode(ising)
+        else:
+            with pytest.raises(ValueError):
+                config.create_scale_object("IsingParams").encode(ising)
 
     def test_build_extrinsic_returns_wire_and_hash(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch)
@@ -2918,7 +2919,7 @@ class TestSolverQuipCollect:
         [
             ({}, "finalized with no solutions; "),
             (
-                {"min_energy_milli": -2000, "min_solutions": 5, "min_diversity_milli": None},
+                {"max_energy_milli": -2000, "min_solutions": 5, "min_diversity_milli": None},
                 "finalized with no solutions under its quality floors (energy <= -2, 5 solutions), which solvers "
                 "may have been unable to meet; ",
             ),
