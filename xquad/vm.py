@@ -46,8 +46,8 @@ from xqvm_py.xqmx import XQMX, XQMXDomain, domain_description
 __all__ = ["DEFAULT_STEP_LIMIT", "VM", "VMBackend"]
 
 #: Default step budget, read from the Rust VM rather than restated here so
-#: the two cannot drift. Same number as the `xquad run --step-limit`
-#: default, which now reads it from the same place.
+#: the two cannot drift. Same number as the `xquad vm run --step-limit`
+#: default, which is the VM's own.
 #:
 #: Unbounded execution has to be asked for rather than stumbled into, so
 #: `None` is reserved for a caller who writes it. Defaulting to `None` made

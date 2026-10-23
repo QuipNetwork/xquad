@@ -147,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command != "run":
         parser.error(f"unknown command: {args.command}")
 
-    # Mirrors `xqcli run`: the two flags conflict, so an unbounded run is
+    # Mirrors `xquad vm run`: the two flags conflict, so an unbounded run is
     # something the caller says rather than something a default produces.
     # argparse cannot express "was --step-limit given" against a non-None
     # default, so the comparison is against the default itself.

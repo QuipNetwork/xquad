@@ -105,6 +105,7 @@ vecs
 venv
 verifier
 Verifier
+vm
 VMs
 walkthrough
 Websocket

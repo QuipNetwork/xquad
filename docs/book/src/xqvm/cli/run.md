@@ -1,4 +1,4 @@
-# xquad run
+# xquad vm run
 
 Execute XQVM bytecode or assembly source, printing the residual outputs and
 stack, with optional step-by-step tracing.
@@ -6,7 +6,7 @@ stack, with optional step-by-step tracing.
 ## Usage
 
 ```sh
-xquad run [OPTIONS] <FILE>
+xquad vm run [OPTIONS] <FILE>
 ```
 
 ## Arguments
@@ -22,17 +22,17 @@ xquad run [OPTIONS] <FILE>
 | `--text` | off | Treat `FILE` as assembly source and assemble it before running. |
 | `--calldata <CALLDATA>` | none | Comma-separated `i64` integers passed to `INPUT` instructions. |
 | `--outputs <OUTPUTS>` | `16` | Number of output slots available for `OUTPUT` instructions. |
-| `--step-limit <STEP_LIMIT>` | `10000000` | Maximum number of instructions to execute. The limit is exact: `0` executes nothing. Conflicts with `--unlimited-steps`. See [Step limits](../../running/#step-limits). |
+| `--step-limit <STEP_LIMIT>` | `10000000`, the VM's `DEFAULT_STEP_LIMIT` | Maximum number of steps to execute. The limit is exact: `0` executes nothing. Conflicts with `--unlimited-steps`. See [Step limits](../../running/#step-limits). |
 | `--unlimited-steps` | off | Run without a step limit. Conflicts with `--step-limit`. A program that never halts will not return. |
-| `--memory-limit <MEMORY_LIMIT>` | `1073741824` | Allocation budget in bytes for models, samples and vectors. See [The allocation budget](../limits-and-errors.md#the-allocation-budget). |
+| `--memory-limit <MEMORY_LIMIT>` | `1073741824` (1 GiB), the VM's `DEFAULT_MEMORY_LIMIT` | Allocation budget in bytes for models, samples and vectors. See [The allocation budget](../limits-and-errors.md#the-allocation-budget). |
 | `--trace` | off | Enable step-by-step execution tracing. |
 | `--trace-format <TRACE_FORMAT>` | `text` | Trace output format: `text` or `json`. Requires `--trace`. |
 | `--trace-file <TRACE_FILE>` | stderr | Write trace output to a file instead of stderr. Requires `--trace`. |
 
-`xquad run` does not call the verifier. A program that fails verification
-can still be handed to `run`; some defects (an unset register read, for
+`xquad vm run` does not call the verifier. A program that fails
+verification can still be handed to `run`; some defects (an unset register read, for
 example) are also caught by the VM's own runtime checks and abort with a
-runtime error, but others are not. See [xquad verify](verify.md) and
+runtime error, but others are not. See [`xquad vm check`](check.md) and
 [Verification](../../running/verification.md) for what static verification
 does and does not guarantee.
 
@@ -41,7 +41,7 @@ does and does not guarantee.
 ### Run bytecode
 
 ```sh
-xquad run add.xqb
+xquad vm run add.xqb
 ```
 
 ```
@@ -52,10 +52,10 @@ stack (bottom to top):
 ### Run assembly directly
 
 ```sh
-xquad run --text add.xqasm
+xquad vm run --text add.xqasm
 ```
 
-Skips the separate `xquad asm` step; the source is assembled in memory and
+Skips the separate `xquad vm asm` step; the source is assembled in memory and
 run immediately.
 
 ### Pass calldata and read outputs
@@ -68,7 +68,7 @@ pushed explicitly before each call: `PUSH 0; INPUT r0; ...; PUSH 0;
 OUTPUT r1; HALT`.
 
 ```sh
-xquad run io.xqb --calldata 41
+xquad vm run io.xqb --calldata 41
 ```
 
 ```
@@ -88,7 +88,7 @@ for the full set of `INPUT`/`OUTPUT` error modes.
 ### Enable tracing
 
 ```sh
-xquad run regs.xqb --trace
+xquad vm run regs.xqb --trace
 ```
 
 Trace lines go to stderr:
@@ -113,13 +113,13 @@ interleaved with them in a terminal. Redirect stderr separately to
 capture the trace on its own:
 
 ```sh
-xquad run regs.xqb --trace 2>trace.txt
+xquad vm run regs.xqb --trace 2>trace.txt
 ```
 
 ### JSON trace
 
 ```sh
-xquad run regs.xqb --trace --trace-format json --trace-file trace.jsonl
+xquad vm run regs.xqb --trace --trace-format json --trace-file trace.jsonl
 ```
 
 `trace.jsonl` then holds one JSON object per step:
@@ -139,38 +139,37 @@ six encoded instructions, 14 executed steps, because the body and its
 aborts the run:
 
 ```sh
-xquad run countloop.xqb --step-limit 3
+xquad vm run countloop.xqb --step-limit 3
 ```
 
 ```
-Error: xqvm::runtime_error
-
-  × step limit of 3 exceeded
+Error: run failed: StepLimitExceeded { pos: None, requested: 1, used: 3, limit: 3 }
 ```
 
 The limit is exact, and `0` is not a sentinel for "unlimited". A zero
 budget permits no instructions at all, so the first fetch fails:
 
 ```sh
-xquad run countloop.xqb --step-limit 0
+xquad vm run countloop.xqb --step-limit 0
 ```
 
 ```
-Error: xqvm::runtime_error
-
-  × step limit of 0 exceeded
+Error: run failed: StepLimitExceeded { pos: None, requested: 1, used: 0, limit: 0 }
 ```
 
-Passing `--unlimited-steps` alongside `--step-limit` is rejected by the
-argument parser rather than resolved by precedence, so opting out of the
+Passing `--unlimited-steps` alongside `--step-limit` is a usage error
+(exit `2`) rather than resolved by precedence, so opting out of the
 bound cannot be said two ways at once:
 
 ```sh
-xquad run countloop.xqb --step-limit 0 --unlimited-steps
+xquad vm run countloop.xqb --step-limit 0 --unlimited-steps
 ```
 
 ```
-error: the argument '--step-limit <STEP_LIMIT>' cannot be used with '--unlimited-steps'
+Usage: xquad vm run [OPTIONS] FILE
+Try 'xquad vm run --help' for help.
+
+Error: --step-limit cannot be used with --unlimited-steps
 ```
 
 The conflict fires on an explicit `--step-limit`, not on the default, so
@@ -179,7 +178,7 @@ entirely, which is only safe where you control the program or can
 abandon the thread -- a program that never halts will not return:
 
 ```sh
-xquad run countloop.xqb --unlimited-steps
+xquad vm run countloop.xqb --unlimited-steps
 ```
 
 prints nothing, since the program leaves no outputs and no residual
@@ -187,7 +186,7 @@ stack. To raise the limit rather than remove it, pass a larger number,
 up to `u64::MAX`:
 
 ```sh
-xquad run countloop.xqb --step-limit 18446744073709551615
+xquad vm run countloop.xqb --step-limit 18446744073709551615
 ```
 
 also runs to completion, but for a different reason: the limit is higher,
@@ -197,7 +196,7 @@ not absent. A budget that exactly covers the program succeeds --
 
 ## Output
 
-After execution, `xquad run` prints, in order:
+After execution, `xquad vm run` prints, in order:
 
 1. **Outputs** -- every output slot that was written, with its index and
    value.
@@ -216,23 +215,18 @@ stack (bottom to top):
 
 ## Error reporting
 
-Runtime errors print the faulting instruction with a disassembled context
-listing around it. `underflow.xqb` is `PUSH 1 / ADD / HALT`: `ADD` needs
-two stack values and only one was pushed.
+A runtime fault is one line on stderr naming the VM error and the byte
+offset it happened at, and the command exits `1`. `underflow.xqb` is
+`PUSH 1 / ADD / HALT`: `ADD` needs two stack values and only one was
+pushed.
 
 ```sh
-xquad run underflow.xqb
+xquad vm run underflow.xqb
 ```
 
 ```
-Error: xqvm::runtime_error
-
-  × stack underflow at byte 0x0002
-   ╭─[underflow.xqb:2:1]
- 1 │   0x0000:  PUSH1   1
- 2 │   0x0002:  ADD     
-   · ─────────┬─────────
-   ·          ╰── execution failed here
- 3 │   0x0003:  HALT    
-   ╰────
+Error: run failed: StackUnderflow { pos: 2 }
 ```
+
+`xquad vm dis underflow.xqb` shows the `ADD` at `0x0002`. The trace
+options above write the steps that led there.

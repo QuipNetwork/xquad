@@ -172,7 +172,7 @@ def measure_point(adapter: Adapter, backend_name: str, solver_name: str, n: int,
     """Run one full pipeline pass, timing each stage. Never raises: stage
     and post-processing failures come back as ``status: error`` records so
     the orchestrator can log them and stop the lane."""
-    from xquad.sa import build_solver
+    from xquad import sa
     from xquad.vm import VMBackend
 
     record: dict[str, Any] = {
@@ -202,7 +202,7 @@ def measure_point(adapter: Adapter, backend_name: str, solver_name: str, n: int,
 
         stage = "solve"
         t0 = time.perf_counter()
-        sample = build_solver(solver_name, seed=seed).solve(model).sample
+        sample = sa.build_solver(solver_name, seed=seed).solve(model).sample
         stages["solve"] = time.perf_counter() - t0
 
         stage = "verify"

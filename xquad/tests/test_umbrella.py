@@ -19,9 +19,10 @@
 
 Guards three invariants:
 
-1. Every umbrella subnamespace (`xquad.vm`, `xquad.asm`, `xquad.cp`,
-   `xquad.sa`, `xquad.types`) re-exports the *identical* symbols from
-   its peer package — no shadow classes, no forks.
+1. Every aliased subnamespace (`xquad.asm`, `xquad.verifier`, `xquad.cp`,
+   `xquad.sa`) *is* its peer module, through attribute access and dotted
+   imports alike, and `xquad.types` re-exports the *identical* symbols
+   -- no shadow classes, no forks. `import xquad` alone loads no peer.
 
 2. A minimal encode → execute pipeline runs end-to-end through the
    umbrella imports alone, which catches regressions where a peer
@@ -32,11 +33,13 @@ Guards three invariants:
 
 from __future__ import annotations
 
+import subprocess
 import sys
 
 import pytest
 
 import xqcp as _xqcp
+import xqffi as _xqffi
 import xqsa as _xqsa
 import xqsa.quip as _xqsa_quip
 import xquad
@@ -44,6 +47,71 @@ import xqvm_py.vector as _xqvm_py_vector
 import xqvm_py.xqmx as _xqvm_py_xqmx
 from xqsa._deprecated import FLAT_QUIP_NAMES
 from xquad import asm, cp, sa, types, vm
+
+
+def test_aliases_are_the_peer_modules():
+    """`xquad.<alias>` is the peer module itself, not a copy."""
+    assert cp is _xqcp
+    assert sa is _xqsa
+    assert sa.quip is _xqsa_quip
+    assert asm is _xqffi.asm
+    assert xquad.verifier is _xqffi.verifier
+
+
+def test_dotted_imports_resolve():
+    """Each documented dotted import resolves to the peer's objects."""
+    import xquad.asm
+    import xquad.sa.quip
+    from xquad.cp import Problem
+    from xquad.sa.quip import SolverQuip
+    from xquad.verifier import verify
+
+    assert Problem is _xqcp.Problem
+    assert SolverQuip is _xqsa_quip.SolverQuip
+    assert verify is _xqffi.verifier.verify
+    assert xquad.asm is _xqffi.asm
+    assert sys.modules["xquad.sa.quip"] is _xqsa_quip
+
+
+def test_alias_import_keeps_the_target_spec():
+    """Importing through an alias leaves the target's own spec, so reload and resources work."""
+    import importlib
+
+    import xquad.cp
+    import xquad.sa.quip
+
+    assert _xqcp.__spec__.name == "xqcp"
+    assert _xqsa_quip.__spec__.name == "xqsa.quip"
+    assert _xqsa_quip.__spec__.origin is not None
+    assert importlib.reload(xquad.cp) is _xqcp
+
+
+def test_pyo3_alias_has_a_spec():
+    """`xqffi.asm` has no spec of its own, so the alias keeps one and `find_spec` still answers."""
+    import importlib.util
+
+    from xquad import asm
+
+    assert asm.__spec__ is not None
+    assert importlib.util.find_spec("xquad.asm") is asm.__spec__
+
+
+def test_import_xquad_loads_no_peer():
+    """`import xquad` alone leaves the peer packages unimported."""
+    code = "import sys, xquad; print(' '.join(m for m in ('xqcp', 'xqsa', 'xqvm_py') if m in sys.modules))"
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
+    assert out.strip() == ""
+
+
+def test_dir_lists_every_subnamespace():
+    """`dir(xquad)` lists every public name, loaded or not."""
+    assert set(xquad.__all__) <= set(dir(xquad))
+    assert not {"importlib", "sys", "ModuleSpec", "_ALIASES"} & set(dir(xquad))
+
+
+def test_unknown_attribute_raises():
+    with pytest.raises(AttributeError, match="no attribute 'nope'"):
+        _ = xquad.nope
 
 
 def test_identity_reexports():
@@ -73,6 +141,7 @@ def test_quip_subpackage_reexports():
     assert sa.quip is quip
 
 
+# `xquad.sa` is `xqsa`, so its warning names `xqsa`; the second case guards the alias path.
 @pytest.mark.parametrize(("flat", "home"), [(_xqsa, _xqsa_quip), (sa, sa.quip)], ids=["xqsa", "xquad.sa"])
 @pytest.mark.parametrize("name", sorted(FLAT_QUIP_NAMES))
 def test_flat_quip_name_warns_at_caller(flat, home, name):
@@ -97,6 +166,7 @@ def test_top_level_namespace():
     assert xquad.cp is cp
     assert xquad.sa is sa
     assert xquad.types is types
+    assert xquad.verifier is _xqffi.verifier
     assert hasattr(xquad, "program")
 
 

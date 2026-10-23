@@ -40,8 +40,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Domain, Problem, Types
-from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
+from xquad import cp, sa
 from xquad.types import XQMX, Vec
 from xquad.vm import VM, VMBackend
 
@@ -49,7 +48,7 @@ from xquad.vm import VM, VMBackend
 _P_AUX = 100
 
 
-def build_problem(n: int, m: int, terms: list[tuple[int, int, int, int]]) -> Problem:
+def build_problem(n: int, m: int, terms: list[tuple[int, int, int, int]]) -> cp.Problem:
     """Construct a cubic binary optimisation QUBO via REDUCE.
 
     Objective: sum(c * x_i * x_j * x_k) - sum(x_v)
@@ -57,13 +56,13 @@ def build_problem(n: int, m: int, terms: list[tuple[int, int, int, int]]) -> Pro
     then ADDQUAD(w, k, c) encodes c*w*x_k = c*x_i*x_j*x_k.
     Terms are passed as a flat vec of stride 4: [i, j, k, c, ...].
     """
-    problem = Problem("CubicOpt")
+    problem = cp.Problem("CubicOpt")
 
-    num_vars = problem.input("num_vars", type=Types.Int)
-    num_terms = problem.input("num_terms", type=Types.Int)
-    terms_in = problem.input("terms", type=Types.Vec)
+    num_vars = problem.input("num_vars", type=cp.Types.Int)
+    num_terms = problem.input("num_terms", type=cp.Types.Int)
+    terms_in = problem.input("terms", type=cp.Types.Vec)
 
-    problem.define_model(size=num_vars, domain=Domain.BINARY)
+    problem.define_model(size=num_vars, domain=cp.Domain.BINARY)
 
     # Linear bias: -1 per variable to reward selection
     with problem.range(0, num_vars) as v:
@@ -81,7 +80,7 @@ def build_problem(n: int, m: int, terms: list[tuple[int, int, int, int]]) -> Pro
         problem.model.quadratic[w, tk].add(coeff)
 
     # Output: variable assignment
-    assignment = problem.output("assignment", type=Types.Vec)
+    assignment = problem.output("assignment", type=cp.Types.Vec)
     with problem.range(0, num_vars) as v:
         assignment.append(problem.sample.getline(v))
 
@@ -114,7 +113,7 @@ def run(
     assert isinstance(model, XQMX)
 
     try:
-        solver = build_solver(solver_name, seed=seed)
+        solver = sa.build_solver(solver_name, seed=seed)
         sample = solver.solve(model).sample
     except (ImportError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -153,8 +152,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--solver",
-        choices=sorted(SOLVERS),
-        default=DEFAULT_SOLVER,
+        choices=sorted(sa.SOLVERS),
+        default=sa.DEFAULT_SOLVER,
         help="XQSA solver backend to sample the model with",
     )
     parser.add_argument(

@@ -102,7 +102,7 @@ class TestRunReporting:
     def test_unlimited_steps_conflicts_with_an_explicit_limit(self, tmp_path):
         """Opting out of the bound is said, not defaulted into.
 
-        Mirrors `xqcli run`, where the two flags conflict for the same
+        Mirrors `xquad vm run`, where the two flags conflict for the same
         reason.
         """
         with pytest.raises(SystemExit):
@@ -126,7 +126,7 @@ class TestRunReporting:
 
         `--memory-limit` defaults to `DEFAULT_MEMORY_LIMIT`, which restates
         `xqvm::DEFAULT_MEMORY_LIMIT` in Python. Without this assertion,
-        moving the Rust constant would move `xquad run` and leave
+        moving the Rust constant would move `xquad vm run` and leave
         `xqvm_py run` on the old budget with nothing failing -- the drift
         that made the Rust constant public in the first place.
         """

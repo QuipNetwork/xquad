@@ -36,27 +36,26 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Domain, Problem, Types
-from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
+from xquad import cp, sa
 from xquad.types import XQMX, Vec
 from xquad.vm import VM, VMBackend
 
 
-def build_problem(n: int, weights: list[int], values: list[int], capacity: int) -> Problem:
+def build_problem(n: int, weights: list[int], values: list[int], capacity: int) -> cp.Problem:
     """Construct a Knapsack QUBO via SLACK + EQUALITY.
 
     Decision variables x_i in {0,1}: x_i=1 means item i is selected.
     Objective: maximise sum(v_i * x_i)  =>  minimise -sum(v_i * x_i).
     Constraint: sum(w_i * x_i) <= W  via SLACK + EQUALITY.
     """
-    problem = Problem("Knapsack")
+    problem = cp.Problem("Knapsack")
 
-    num_items = problem.input("num_items", type=Types.Int)
-    weights_in = problem.input("weights", type=Types.Vec)
-    values_in = problem.input("values", type=Types.Vec)
-    capacity_in = problem.input("capacity", type=Types.Int)
+    num_items = problem.input("num_items", type=cp.Types.Int)
+    weights_in = problem.input("weights", type=cp.Types.Vec)
+    values_in = problem.input("values", type=cp.Types.Vec)
+    capacity_in = problem.input("capacity", type=cp.Types.Int)
 
-    problem.define_model(size=num_items, domain=Domain.BINARY)
+    problem.define_model(size=num_items, domain=cp.Domain.BINARY)
 
     # Objective: minimise -sum(v_i * x_i)
     with problem.range(0, num_items) as i:
@@ -78,7 +77,7 @@ def build_problem(n: int, weights: list[int], values: list[int], capacity: int) 
     problem.model.apply_equality(indices, coeffs, capacity_in, 100)
 
     # Output: selected items
-    selected = problem.output("selected", type=Types.Vec)
+    selected = problem.output("selected", type=cp.Types.Vec)
     with problem.range(0, num_items) as i:
         selected.append(problem.sample.getline(i))
 
@@ -112,7 +111,7 @@ def run(
     assert isinstance(model, XQMX)
 
     try:
-        solver = build_solver(solver_name, seed=seed)
+        solver = sa.build_solver(solver_name, seed=seed)
         sample = solver.solve(model).sample
     except (ImportError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -150,8 +149,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--solver",
-        choices=sorted(SOLVERS),
-        default=DEFAULT_SOLVER,
+        choices=sorted(sa.SOLVERS),
+        default=sa.DEFAULT_SOLVER,
         help="XQSA solver backend to sample the model with",
     )
     parser.add_argument(

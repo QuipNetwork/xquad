@@ -28,20 +28,20 @@ reproducible. The encoder runs on your machine; nothing touches the
 network yet.
 
 ```python
-from xquad.cp import Domain, Problem, Types, xq_triu
+from xquad import cp
 from xquad.vm import VM
 
 n = 4
 distances = [12, 30, 25, 18, 40, 22]  # xq_triu order: 0-1, 0-2, 1-2, 0-3, 1-3, 2-3
 
-problem = Problem("TSP")
-num_cities = problem.input("num_cities", type=Types.Int)
-distance_matrix = problem.input("distance_matrix", type=Types.Vec)
-problem.define_model(size=num_cities * num_cities, domain=Domain.BINARY, rows=num_cities, cols=num_cities)
+problem = cp.Problem("TSP")
+num_cities = problem.input("num_cities", type=cp.Types.Int)
+distance_matrix = problem.input("distance_matrix", type=cp.Types.Vec)
+problem.define_model(size=num_cities * num_cities, domain=cp.Domain.BINARY, rows=num_cities, cols=num_cities)
 
 with problem.range(0, num_cities - 1) as city_i:
     with problem.range(city_i + 1, num_cities) as city_j:
-        dist = problem.stow("dist", distance_matrix.get(xq_triu(city_i, city_j)))
+        dist = problem.stow("dist", distance_matrix.get(cp.xq_triu(city_i, city_j)))
         with problem.range(0, num_cities) as position:
             next_position = (position + 1) % num_cities
             problem.model.quadratic[(city_i, position), (city_j, next_position)].add(dist)
@@ -52,7 +52,7 @@ with problem.range(0, num_cities) as city:
 with problem.range(0, num_cities) as position:
     problem.model.apply_onehot_col(position, penalty=100)
 
-tour = problem.output("tour", type=Types.Vec)
+tour = problem.output("tour", type=cp.Types.Vec)
 with problem.range(0, num_cities) as position:
     tour.append(problem.sample.colfind(col=position, value=1))
 
@@ -71,9 +71,9 @@ position.
 ## Connect and Quote
 
 ```python
-from xquad.sa.quip import SolverQuip
+from xquad import sa
 
-solver = SolverQuip.for_network("aglais", topology="native")
+solver = sa.quip.SolverQuip.for_network("aglais", topology="native")
 order = solver.create_order(model)
 print(order)
 print(order.quote())
@@ -137,7 +137,7 @@ so the account starts empty. Keep the file: it is the account, and the
 `Account` row shows its address. To use a different one, pass it:
 
 ```python
-solver = SolverQuip.for_network("aglais", keystore="~/.quip/work.json", topology="native")
+solver = sa.quip.SolverQuip.for_network("aglais", keystore="~/.quip/work.json", topology="native")
 ```
 
 `quote()` signs the order's `propose_job` extrinsic and asks the chain
@@ -301,12 +301,12 @@ Answering anything but `y` raises `QuipCancelledError`, which carries
 the quote:
 
 ```python
-from xquad.sa.quip import QuipCancelledError
+from xquad import sa
 
-solver = SolverQuip.for_network("aglais", topology="native", autoconfirm=False)
+solver = sa.quip.SolverQuip.for_network("aglais", topology="native", autoconfirm=False)
 try:
     result = solver.solve(model)
-except QuipCancelledError as exc:
+except sa.quip.QuipCancelledError as exc:
     print("cancelled:", exc)
     print(exc.quote.total_planck)
 ```
@@ -343,7 +343,7 @@ and returns whether to submit. This one accepts any job up to 2 AGLS (a
 token here has 12 decimals):
 
 ```python
-solver = SolverQuip.for_network(
+solver = sa.quip.SolverQuip.for_network(
     "aglais",
     topology="native",
     autoconfirm=lambda quote: quote.total_planck <= 2 * 10**12,
@@ -402,11 +402,11 @@ instead, carrying `order_id` and the order's receipt. The job is still
 live on chain, so wait on the receipt again:
 
 ```python
-from xquad.sa.quip import QuipTimeoutError
+from xquad import sa
 
 try:
     order.wait()
-except QuipTimeoutError as exc:
+except sa.quip.QuipTimeoutError as exc:
     exc.receipt.wait()
 ```
 
@@ -416,7 +416,7 @@ The order lives on chain, not in your session. A new process lists the
 account's orders and rebuilds any one's receipt from its id:
 
 ```python
-solver = SolverQuip.for_network("aglais")
+solver = sa.quip.SolverQuip.for_network("aglais")
 print(solver.list_orders())
 receipt = solver.get_receipt(20)
 print(receipt.status())

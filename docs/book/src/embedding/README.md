@@ -11,13 +11,10 @@ a Python process in the loop, and compiling for `no_std` targets.
 |---|---|---|
 | [`xqvm`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm) | Opcode table, `InstructionBuilder`, the wire codec, and the `Vm` interpreter | Yes, with `--no-default-features` |
 | [`xqasm`](https://gitlab.com/quip.network/xquad/-/tree/main/xqasm) | Parses `.xqasm` text into an `xqvm::Program` | No |
-| [`xqcli`](https://gitlab.com/quip.network/xquad/-/tree/main/xqcli) | Builds the `xquad` CLI binary on top of the two crates above | No |
 
 A Rust program that only needs to build and run bytecode depends on `xqvm`
 alone; add `xqasm` to parse `.xqasm` source instead of building bytecode by
-hand with [`InstructionBuilder`](builder-api.md). `xqcli` is the CLI's own
-crate, useful as a reference for wiring the other two together rather than
-as a library dependency.
+hand with [`InstructionBuilder`](builder-api.md).
 
 ## The `no_std` Story
 

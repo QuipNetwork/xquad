@@ -18,9 +18,9 @@ captured on `aglais` at `specVersion 119` on 2026-10-15, from the
 ## Orders
 
 ```python
-from xquad.sa.quip import SolverQuip
+from xquad import sa
 
-solver = SolverQuip.for_network("aglais", topology="native")
+solver = sa.quip.SolverQuip.for_network("aglais", topology="native")
 order = solver.create_order(model, deadline_blocks=200)
 print(order)
 print(order.quote())
@@ -113,8 +113,8 @@ moved, so `submit()` signs again. Two drafts quoted together and then
 submitted show it:
 
 ```python
-a = solver.create_order(model, resolution=ResolutionTopNEqual(2))
-b = solver.create_order(model, access=AccessAllow(accounts=[me]), deadline_blocks=10, block_wait=0)
+a = solver.create_order(model, resolution=sa.quip.ResolutionTopNEqual(2))
+b = solver.create_order(model, access=sa.quip.AccessAllow(accounts=[me]), deadline_blocks=10, block_wait=0)
 a.quote(), b.quote()
 a.submit()
 b.submit()
@@ -203,9 +203,9 @@ The `resolution` option decides how the reward is split:
   decide only the order.
 
 ```python
-from xquad.sa.quip import ResolutionTopNEqual
+from xquad import sa
 
-order = solver.create_order(model, resolution=ResolutionTopNEqual(2))
+order = solver.create_order(model, resolution=sa.quip.ResolutionTopNEqual(2))
 ```
 
 `n` runs from 1 to 32. The rule's own constructor checks it, so a bad
@@ -274,9 +274,9 @@ the default, admits every registered solver.
 is listed or whose declared type is listed:
 
 ```python
-from xquad.sa.quip import AccessAllow
+from xquad import sa
 
-order = solver.create_order(model, access=AccessAllow(types=["QpuDwave"]))
+order = solver.create_order(model, access=sa.quip.AccessAllow(types=["QpuDwave"]))
 ```
 
 Solver types are self-declared when a solver registers, and the protocol
@@ -388,7 +388,7 @@ chain on every call. `order.receipt()` returns it; on a draft it raises
 session rebuilds a receipt from the order id:
 
 ```python
-solver = SolverQuip.for_network("aglais")
+solver = sa.quip.SolverQuip.for_network("aglais")
 print(solver.list_orders())
 receipt = solver.get_receipt(20)
 print(receipt.status())
@@ -437,11 +437,11 @@ the old keys, `status` and `is_final`, in place of `state` and
 caller can wait again instead of rebuilding it:
 
 ```python
-from xquad.sa.quip import QuipTimeoutError
+from xquad import sa
 
 try:
     order.wait()
-except QuipTimeoutError as exc:
+except sa.quip.QuipTimeoutError as exc:
     receipt = exc.receipt
     receipt.wait()
 ```

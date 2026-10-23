@@ -9,15 +9,11 @@ expected gets coerced to a literal automatically; anything else raises
 `TypeError`. This page groups the resulting vocabulary by what you are
 trying to compute, not by class hierarchy.
 
-Every `xq_*` function below imports from the same module as `Problem` and
+Every `xq_*` function below lives in the same namespace as `Problem` and
 `Types`:
 
 ```python
-from xquad.cp import (
-    xq_not, xq_and, xq_or, xq_xor, xq_bnot,
-    xq_sqr, xq_abs, xq_min, xq_max, xq_bitlen,
-    xq_triu, xq_grid,
-)
+from xquad import cp
 ```
 
 ## Arithmetic: Computing a Value
@@ -67,7 +63,7 @@ constant `False` regardless of `a` and `b`. Write `xq_not(a == b)`
 instead:
 
 ```python
-model.linear[0] = xq_not(a == b)
+model.linear[0] = cp.xq_not(a == b)
 ```
 
 compiles to `LOAD`, `LOAD`, `EQ`, `NOT`, and gives `1` when `a` and `b`
@@ -87,8 +83,8 @@ Two functions turn a pair (or triple) of coordinates into a single flat
 index:
 
 ```python
-xq_triu(i, j)            # IDXTRIU: upper-triangular packed index for (i, j)
-xq_grid(row, col, cols)  # IDXGRID: row * cols + col, grid flat index
+cp.xq_triu(i, j)            # IDXTRIU: upper-triangular packed index for (i, j)
+cp.xq_grid(row, col, cols)  # IDXGRID: row * cols + col, grid flat index
 ```
 
 `xq_grid` is what a 2D model's tuple-coordinate coefficient access uses
@@ -109,12 +105,12 @@ you functions in their place. The first four work on the 0/1 convention
 comparisons use, not on Python truthiness:
 
 ```python
-xq_not(x)       # NOT:  0 -> 1, non-zero -> 0
-xq_and(a, b)    # AND
-xq_or(a, b)     # OR
-xq_xor(a, b)    # XOR
-xq_bnot(x)      # BNOT: bitwise complement, the same opcode as ~ above,
-                # kept as a function for symmetry -- not the same as xq_not
+cp.xq_not(x)                # NOT:  0 -> 1, non-zero -> 0
+cp.xq_and(a, b)             # AND
+cp.xq_or(a, b)              # OR
+cp.xq_xor(a, b)             # XOR
+cp.xq_bnot(x)               # BNOT: bitwise complement, the same opcode as ~ above,
+                            # kept as a function for symmetry -- not the same as xq_not
 ```
 
 Writing `a and b`, `a or b`, `not a`, or using an expression as an `if`
@@ -134,11 +130,11 @@ Five more free functions round out the arithmetic vocabulary that has no
 Python operator:
 
 ```python
-xq_sqr(x)       # SQR:  x * x
-xq_abs(x)       # ABS:  absolute value
-xq_min(a, b)    # MIN
-xq_max(a, b)    # MAX
-xq_bitlen(x)    # BITLEN: floor(log2(x)) + 1, and 0 for x <= 0
+cp.xq_sqr(x)                # SQR:  x * x
+cp.xq_abs(x)                # ABS:  absolute value
+cp.xq_min(a, b)             # MIN
+cp.xq_max(a, b)             # MAX
+cp.xq_bitlen(x)             # BITLEN: floor(log2(x)) + 1, and 0 for x <= 0
 ```
 
 ## Naming an Expression: `stow`

@@ -1,7 +1,7 @@
 # Assembly Language
 
 XQVM programs are written in a simple assembly language and stored in `.xqasm`
-files. The assembler (the `xqasm` crate, invoked via `xquad asm`) parses
+files. The assembler (the `xqasm` crate, invoked via `xquad vm asm`) parses
 the source, resolves labels, and emits compact bytecode.
 
 ## Overview
@@ -193,5 +193,6 @@ Error: xqasm::unknown_mnemonic
    ╰────
 ```
 
-[`xquad asm`](cli/asm.md#error-reporting) shows the same diagnostics from the
-command line.
+These are the Rust API's diagnostics. [`xquad vm asm`](cli/asm.md#error-reporting)
+reports the same error from the command line as one line, without the
+snippet.

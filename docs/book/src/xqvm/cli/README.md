@@ -1,67 +1,82 @@
 # CLI Reference
 
-`xquad` is the unified command-line driver for the XQVM toolchain. It is
-built by the `xqcli` crate, but the crate and the binary have different
-names: `cargo install xqcli` installs a command called `xquad`, not
-`xqcli`. Running `xqcli --help` after installing fails because no such
-binary exists.
+`xquad` is the command-line driver for the XQuad toolchain. It ships with
+the `xquad` Python package, so the install that gives you the Python API
+also puts the command on your `PATH`.
 
 ## Installation
 
 ```sh
-cargo install xqcli
+pip install xquad
 xquad --help
 ```
 
-Or build from this repository:
+If your shell reports `xquad: command not found`, the script directory
+of that Python environment is not on `PATH`. `python -m xquad` runs the
+same command without it:
 
 ```sh
-cargo build -p xqcli --release
+python -m xquad --help
 ```
 
-The binary is at `target/release/xquad`.
+From a checkout of this repository, `make xquad` syncs the workspace
+virtual environment, and `uv run xquad` runs the command from it.
 
-## Subcommands
+The command used to be a Rust binary from the `xqcli` crate, installed
+with `cargo install`. That crate is retired. If you installed it, run
+`cargo uninstall xqcli`, or the old binary in `~/.cargo/bin` may shadow
+the new command on `PATH`.
 
-`xquad` has four subcommands, one per stage of the toolchain:
+## Commands
+
+The XQVM tools sit under `xquad vm`, one per stage of the toolchain:
 
 | Command | Description |
 |---------|-------------|
-| [`xquad asm`](asm.md) | Assemble `.xqasm` source into binary bytecode. |
-| [`xquad dism`](dism.md) | Disassemble bytecode into a human-readable listing. |
-| [`xquad run`](run.md) | Execute bytecode or assembly, with optional tracing. |
-| [`xquad verify`](verify.md) | Run the bytecode verifier over a program without running it. |
+| [`xquad vm asm`](asm.md) | Assemble `.xqasm` source into binary bytecode. |
+| [`xquad vm dis`](dis.md) | Disassemble bytecode into a human-readable listing. |
+| [`xquad vm run`](run.md) | Execute bytecode or assembly, with optional tracing. |
+| [`xquad vm check`](check.md) | Run the bytecode verifier over a program without running it. |
+
+The old top-level names `xquad asm`, `xquad dism`, `xquad run` and `xquad
+verify` still work in this release. Each prints one deprecation warning
+to stderr when it runs and otherwise behaves exactly like its `xquad vm`
+counterpart, so stdout and the exit code are unchanged. They are removed
+in v0.5.0.
 
 ## General usage
 
 ```sh
-xquad <COMMAND> [OPTIONS] [ARGS]
+xquad vm <COMMAND> [OPTIONS] [ARGS]
 xquad --help
-xquad <COMMAND> --help
+xquad vm <COMMAND> --help
+xquad --version
 ```
 
-`xquad asm` reads `.xqasm` source and writes bytecode; it has no `--text`
-flag and rejects a `.xqb` file. `xquad dism` reads bytecode from a file or
-stdin, also with no `--text` flag. `xquad run` and `xquad verify` read
-bytecode by default and read `.xqasm` assembly instead when `--text` is
-passed.
+`xquad vm asm` reads `.xqasm` source and writes bytecode; it has no
+`--text` flag. `xquad vm dis` reads bytecode from a file or stdin, also
+with no `--text` flag. `xquad vm run` and `xquad vm check` read bytecode
+by default and read `.xqasm` assembly instead when `--text` is passed.
 
-Error reporting is not uniform across the four subcommands. Only `xquad
-asm` propagates the real `xqasm::Error`, with its `NamedSource` and
-`SourceSpan`, so only `asm` prints a highlighted source snippet pointing
-at the failing token. `xquad run --text` and `xquad verify --text` both
-flatten an assembly failure through `miette::miette!("{e}")`, which
-formats the error to a plain string and discards the span; `xquad verify`
-on a `.xqb` file flattens a verifier failure the same way. Decode errors
-(a malformed `.xqb` file) go through `.into_diagnostic()`, which also
-carries no span. So an assembly, verification or decode failure reaches
-you as a bare message -- see [`xquad verify`](verify.md#a-failing-program)
-for what that looks like in practice. A VM runtime fault under `xquad
-run` is the one exception: it goes through `into_diagnostic()`, which
-disassembles the program around the failing offset and annotates it, so
-that path does print a snippet. Argument-parsing failures, such as
-`asm`'s `-o`/`--stdout` conflict, are plain `clap` errors, a third and
-unrelated error path.
+## Exit codes and errors
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success. |
+| `1` | The command ran and failed: an unreadable file, an assembly or decode error, a verifier violation, or a VM fault. |
+| `2` | A usage error: an unknown option, a missing argument, or two options that cannot be combined. |
+
+Errors are one line on stderr, prefixed `Error:` and naming the stage
+that failed:
+
+```
+Error: assembly failed: unknown mnemonic `BADOP`
+```
+
+A usage error prints the command's usage line first. Errors carry no
+source snippet: a VM fault names the error variant and its byte offset
+(`run failed: StackUnderflow { pos: 2 }`), and `xquad vm dis` on the same
+bytecode shows the instruction at that offset.
 
 ## A minimal round trip
 
@@ -74,12 +89,12 @@ ADD
 HALT
 EOF
 
-xquad asm add.xqasm -o add.xqb
-xquad verify add.xqb
-xquad run add.xqb
+xquad vm asm add.xqasm -o add.xqb
+xquad vm check add.xqb
+xquad vm run add.xqb
 ```
 
-`xquad run add.xqb` prints the residual stack:
+`xquad vm run add.xqb` prints the residual stack:
 
 ```
 stack (bottom to top):

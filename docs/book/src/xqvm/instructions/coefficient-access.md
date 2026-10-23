@@ -19,7 +19,7 @@ sample's per-variable assignment at the same index instead. `GETLINE r0` on
 a freshly allocated `BSMX` sample (no coefficients, only assignments)
 returns the assigned value at that index.
 
-`xquad verify` accepts the same programs. It did not until QUI-1168:
+`xquad vm check` accepts the same programs. It did not until QUI-1168:
 [`xqvm/src/verifier/reg_type.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/verifier/reg_type.rs)
 grouped the linear trio with the quadratic and constraint opcodes under a
 single check requiring `Model`, so `GETLINE r0` on the program above failed

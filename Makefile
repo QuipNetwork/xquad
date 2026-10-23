@@ -204,8 +204,8 @@ set-version:
 # resolving xqasm's path+version dependency on xqvm. It replaces
 # scripts/validate-crate-publish.sh, deleted in this change.
 #
-# --workspace covers exactly xqvm, xqasm and xqcli. The workspace has
-# six members (Cargo.toml `members`); the other three carry
+# --workspace covers exactly xqvm and xqasm. The workspace has
+# five members (Cargo.toml `members`); the other three carry
 # publish = false and are skipped: xqffi (pyo3 cdylib, shipped as a
 # PyPI wheel), conformance (cross-implementation test harness) and
 # fixtures/xqvm-wasm (no_std build fixture). Enumerated in full because
@@ -226,7 +226,7 @@ set-version:
 # step fails on a method the tree plainly has.
 #
 # Both halves of that state have to go, because the dry-run writes to
-# both. Verifying xqcli resolves xqvm and xqasm through the temporary
+# both. Verifying xqasm resolves xqvm through the temporary
 # local registry rather than by path, and cargo extracts those .crate
 # files into $CARGO_HOME/registry/src/ -- the shared, cached one. Scoping
 # only CARGO_TARGET_DIR left that extraction pointed at the cache and the
@@ -345,14 +345,14 @@ preflight: preflight-rs preflight-py preflight-parity preflight-docs preflight-p
 #     with the maturin-built xqffi extension; each package's editable
 #     install puts the repo root on sys.path, so any script in the
 #     repo can `import xqcp` etc.
-#   - Rust CLI installed as the `xquad` binary under ~/.cargo/bin/ so
-#     `xquad run …`, `xquad dism …`, etc. work from any shell.
+#   - the `xquad` command, installed into .venv/bin/ by the same sync
+#     from the umbrella package's console script, so `uv run xquad vm
+#     run …` (or `xquad` with the venv active) works.
 #
 # Run once per environment; re-run after a pull that touches Rust
 # sources or workspace deps. Publishing / wheel distribution is out
 # of scope (see QUI-442).
 xquad: deps-py
-	cargo install --path xqcli --locked --force
 
 # -- Dependencies -----------------------------------------------------------
 

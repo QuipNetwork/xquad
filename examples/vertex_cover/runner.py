@@ -36,26 +36,25 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Domain, Problem, Types
-from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
+from xquad import cp, sa
 from xquad.types import XQMX, Vec
 from xquad.vm import VM, VMBackend
 
 
-def build_problem(n: int, edges: list[tuple[int, int]]) -> Problem:
+def build_problem(n: int, edges: list[tuple[int, int]]) -> cp.Problem:
     """Construct a Vertex Cover QUBO via ATLEAST per edge.
 
     Decision variables x_v in {0,1}: x_v=1 if vertex v is in the cover.
     Objective: minimise sum(x_v).
     Constraint per edge (i,j): x_i + x_j >= 1  (ATLEAST with k=1).
     """
-    problem = Problem("VertexCover")
+    problem = cp.Problem("VertexCover")
 
-    num_nodes = problem.input("num_nodes", type=Types.Int)
-    num_edges = problem.input("num_edges", type=Types.Int)
-    edges_in = problem.input("edges", type=Types.Vec)
+    num_nodes = problem.input("num_nodes", type=cp.Types.Int)
+    num_edges = problem.input("num_edges", type=cp.Types.Int)
+    edges_in = problem.input("edges", type=cp.Types.Vec)
 
-    problem.define_model(size=num_nodes, domain=Domain.BINARY)
+    problem.define_model(size=num_nodes, domain=cp.Domain.BINARY)
 
     # Objective: minimise cover size
     with problem.range(0, num_nodes) as v:
@@ -74,7 +73,7 @@ def build_problem(n: int, edges: list[tuple[int, int]]) -> Problem:
         problem.model.apply_atleast(edge_indices, 1, 200)
 
     # Output: cover membership
-    cover = problem.output("cover", type=Types.Vec)
+    cover = problem.output("cover", type=cp.Types.Vec)
     with problem.range(0, num_nodes) as v:
         cover.append(problem.sample.getline(v))
 
@@ -113,7 +112,7 @@ def run(
     assert isinstance(model, XQMX)
 
     try:
-        solver = build_solver(solver_name, seed=seed)
+        solver = sa.build_solver(solver_name, seed=seed)
         sample = solver.solve(model).sample
     except (ImportError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -151,8 +150,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--solver",
-        choices=sorted(SOLVERS),
-        default=DEFAULT_SOLVER,
+        choices=sorted(sa.SOLVERS),
+        default=sa.DEFAULT_SOLVER,
         help="XQSA solver backend to sample the model with",
     )
     parser.add_argument(

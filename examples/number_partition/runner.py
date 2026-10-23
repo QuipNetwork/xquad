@@ -36,13 +36,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Domain, Problem, Types
-from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
+from xquad import cp, sa
 from xquad.types import XQMX, Vec
 from xquad.vm import VM, VMBackend
 
 
-def build_problem(n: int, numbers: list[int]) -> Problem:
+def build_problem(n: int, numbers: list[int]) -> cp.Problem:
     """Construct a Number Partitioning QUBO via EQUALITY.
 
     Decision variables x_i in {0,1}: x_i=1 puts number a_i in subset A.
@@ -50,10 +49,10 @@ def build_problem(n: int, numbers: list[int]) -> Problem:
     Minimising the penalty P*(sum(a_i*x_i) - S/2)^2 drives the partition
     toward balance.
     """
-    problem = Problem("NumberPartition")
+    problem = cp.Problem("NumberPartition")
 
-    num_items = problem.input("num_items", type=Types.Int)
-    numbers_in = problem.input("numbers", type=Types.Vec)
+    num_items = problem.input("num_items", type=cp.Types.Int)
+    numbers_in = problem.input("numbers", type=cp.Types.Vec)
 
     # Compute total sum S over the input vec
     total = problem.stow("total", 0)
@@ -63,7 +62,7 @@ def build_problem(n: int, numbers: list[int]) -> Problem:
     # target = S // 2
     target = problem.stow("target", total // 2)
 
-    problem.define_model(size=num_items, domain=Domain.BINARY)
+    problem.define_model(size=num_items, domain=cp.Domain.BINARY)
 
     # Build index and coefficient vecs
     indices = problem.vec()
@@ -76,7 +75,7 @@ def build_problem(n: int, numbers: list[int]) -> Problem:
     problem.model.apply_equality(indices, coeffs, target, 100)
 
     # Output: partition assignment (0 = subset B, 1 = subset A)
-    assignment = problem.output("assignment", type=Types.Vec)
+    assignment = problem.output("assignment", type=cp.Types.Vec)
     with problem.range(0, num_items) as i:
         assignment.append(problem.sample.getline(i))
 
@@ -107,7 +106,7 @@ def run(
     assert isinstance(model, XQMX)
 
     try:
-        solver = build_solver(solver_name, seed=seed)
+        solver = sa.build_solver(solver_name, seed=seed)
         sample = solver.solve(model).sample
     except (ImportError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -145,8 +144,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--solver",
-        choices=sorted(SOLVERS),
-        default=DEFAULT_SOLVER,
+        choices=sorted(sa.SOLVERS),
+        default=sa.DEFAULT_SOLVER,
         help="XQSA solver backend to sample the model with",
     )
     parser.add_argument(
