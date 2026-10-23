@@ -22,8 +22,15 @@ members = [ "xqffi", "xqvm_py", "xqcp", "xqsa", "xquad" ]
 # checks and `debug_assert!`s stay on for test-py, parity and example
 # smoke, and a Rust edit costs an unoptimized rebuild. Without it the
 # PEP 517 build defaults to release.
+#
+# `exclude-newer-package` exempts certifi from any `exclude-newer` cooldown a
+# machine sets in its own uv config, as the macOS Metal runner does. The quip
+# extra's certifi floor (xqsa/pyproject.toml) is a security fix that can be
+# younger than such a cooldown, and uv resolves every extra of the workspace,
+# so without this exemption a cooldown fails `uv sync` for any extra.
 [tool.uv]
 config-settings-package = { xqffi = { build-args = "--locked --profile dev" } }
+exclude-newer-package   = { certifi = false }
 
 [dependency-groups]
 dev = [
