@@ -991,6 +991,15 @@ def _display_for(monkeypatch, *, head: int = 200, fee: int | None = FEE, ms: int
     return receipt
 
 
+def _raising(exc: Exception):
+    """A chain reader that always raises ``exc``."""
+
+    def read(*args, **kwargs):
+        raise exc
+
+    return read
+
+
 def _rows(text: str) -> list[str]:
     return [line[2:-2].rstrip() for line in text.splitlines() if line.startswith("│")]
 
@@ -1184,6 +1193,39 @@ class TestJobOrderReceiptDisplay:
         assert "│ Submitted   block 0, time unknown " in text
         assert any("the submission time of order 1" in record.getMessage() for record in caplog.records)
         assert f"{FEE / 10**12:.12f} AGLS" in text  # the fee still reads.
+
+    def test_pruned_block_renders_once_unknown_without_a_warning(self, monkeypatch, caplog) -> None:
+        receipt = _display_for(monkeypatch)
+        iface = receipt._client._iface
+        pruned = Exception("{'code': 4003, 'message': 'Client error: State already discarded for 0xblock'}")
+        reads: list[str] = []
+
+        def discarded(*args, **kwargs):
+            reads.append("read")
+            raise pruned
+
+        monkeypatch.setattr(iface, "get_events", discarded)
+        monkeypatch.setattr(chain, "block_timestamp", discarded)
+        with caplog.at_level(logging.DEBUG, logger="xqsa.quip"):
+            text = str(receipt)
+            assert str(receipt) == text
+        assert "│ Submitted   block 0, time unknown " in text
+        assert "│ Fee         unknown " in text
+        assert len(reads) == 2  # the time and the fee, read once each.
+        assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+
+    def test_transport_fault_is_retried_beside_a_pruned_read(self, monkeypatch) -> None:
+        receipt = _display_for(monkeypatch)
+        monkeypatch.setattr(chain, "block_timestamp", _raising(Exception("State already discarded")))
+        real_fee = chain.proposal_fee
+        monkeypatch.setattr(chain, "proposal_fee", _raising(QuipConnectionError("connection reset")))
+        assert "│ Fee         unknown " in str(receipt)
+        assert receipt._facts_cache is None
+        monkeypatch.setattr(chain, "proposal_fee", real_fee)  # the node recovers.
+        text = str(receipt)
+        assert f"│ Fee         {FEE / 10**12:.12f} AGLS " in text
+        assert "time unknown" in text
+        assert receipt._facts_cache is not None
 
     def test_time_renders_in_utc(self, monkeypatch) -> None:
         assert f"│ Submitted   block 0, {SUBMITTED_TEXT} " in str(_display_for(monkeypatch))
