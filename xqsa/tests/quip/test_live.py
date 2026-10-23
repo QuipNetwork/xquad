@@ -32,9 +32,9 @@ Three kinds of order:
   test that the network answers. When nobody answers before the deadline they
   skip with a ``network:`` reason.
 * SELF-SOLVED orders (``TestSelfSolved``) test chain rules. They go through the
-  real submit, admit only our own two accounts (or a solver type), and are
-  answered by those accounts in separate extrinsics, so ranks, energies and
-  leaders are fixed by the test.
+  real submit, admit only our own two accounts (or our solver type and a
+  keyless account), and are answered by those accounts in separate
+  extrinsics, so ranks, energies and leaders are fixed by the test.
 * UNANSWERED orders expire with nothing touching them: the timeout path,
   auto-reclaim, and reclaiming through a receipt.
 
@@ -137,7 +137,7 @@ def chain():
     Built through ``xqsa.quip.metadata.connect`` for the same reason SolverQuip
     is: Quip runtimes serve metadata V16, which scalecodec cannot decode, so a
     stock ``SubstrateInterface`` fails on the first query. Opened per test: the
-    node drops a websocket left idle while funded fixtures run.
+    node likely drops a websocket left idle while funded fixtures run.
     """
     iface = connect_shimmed(RPC_URL)
     yield iface
@@ -761,6 +761,7 @@ class TestSelfSolved:
         solutions = decode_answers(receipt, job, model, solver=ours)
         assert [s.energy_milli for s in solutions] == [ising_energy_milli(job, v) for v in vectors]
         assert [solutions[0].sample.get_linear(var) for var in range(model.size)] == [1, 1, 0]  # the ground state.
+        assert pick_best(receipt, job, model).energy_matches_chain is True  # binary energy matches the chain's.
 
         assert receipt._facts().access == rule
         text = str(receipt)
@@ -830,6 +831,7 @@ class TestSelfSolved:
             bytes(solver._signer.account_id): expected[0],
             bytes(second_solver._signer.account_id): expected[1],
         }
+        # Regression guard only: an OnChainOnly order never emitted ResultReady on claim.
         assert _events_named(solver._iface, block, "ResultReady") == []
 
     def test_tie_splits_equally_and_keeps_our_lead(self, make_solver, second_solver) -> None:
@@ -871,6 +873,8 @@ class TestSelfSolved:
         text = str(receipt)
         print(text)
         assert "│ Payout      top 2, equal split" in text
+        assert text.count("│ Winner ") == 2
+        assert settlement["claimed"] is False
 
         paid, _block = _claim_from(solver, order_id)
         assert paid == {
@@ -879,10 +883,12 @@ class TestSelfSolved:
         }
 
     def test_type_allowlist_admits_and_refuses_by_type(self, make_solver, second_solver) -> None:
-        """An allowlist of our account's solver type refuses the Gpu second account and admits ours alone."""
+        """Our solver type plus a keyless account: the Gpu second account is refused, ours is admitted alone."""
         model = _asymmetric_spin_model()
         solver = make_solver()
-        rule = AccessAllow(types=[OWN_SOLVER_TYPE])
+        # The account list names a keyless account, so ours gets in by type alone
+        # and the second account is refused by both lists.
+        rule = AccessAllow(accounts=["0x" + "00" * 32], types=[OWN_SOLVER_TYPE])
         order = _place(solver, model, access=rule, deadline_blocks=30, block_wait=4)
         order_id = order.order_id()
         ground = _ranked_vectors(order._job)[0]
@@ -905,7 +911,7 @@ class TestSelfSolved:
             solver,
             model,
             access=rule,
-            max_energy=0,
+            max_energy=-2,
             min_solutions=2,
             min_diversity=0.1,
             deadline_blocks=30,
@@ -915,13 +921,14 @@ class TestSelfSolved:
         vectors = _ranked_vectors(job)
         ground, low, high = vectors[0], vectors[1], vectors[-1]  # -6, -2 and +6 on this model.
         positive = vectors[5]  # +2
+        assert ising_energy_milli(job, low) == -2000  # on the ceiling, so it is kept.
         # The chain measures diversity over the order's placed nodes, here 3: two
         # copies of one vector score 0, and ground against low scores at least 1/3.
 
         refusals = (
             ([ground], "InsufficientSolutions"),
             ([ground, ground], "InsufficientDiversity"),
-            ([positive, high], "InsufficientEnergy"),  # the ceiling drops both.
+            ([positive, high], "InsufficientEnergy"),  # the -2 ceiling drops both.
         )
         for answer, error in refusals:
             with pytest.raises(QuipSubmissionError, match=f"QuantumComputeMempool.{error}"):
@@ -930,13 +937,13 @@ class TestSelfSolved:
         receipt = order.wait().receipt()
 
         params = solver._fetch_order(order_id)["ising_params"]
-        assert params.get("max_energy_milli", params.get("min_energy_milli")) == 0
+        assert params.get("max_energy_milli", params.get("min_energy_milli")) == -2000
         assert (params["min_solutions"], params["min_diversity_milli"]) == (2, 100)
-        assert receipt._floors_text() == floors_text(Floors(0, 2, 100))
+        assert receipt._floors_text() == floors_text(Floors(-2000, 2, 100))
         (answer,) = solver._fetch_solutions(order_id)
         stored = [[int(spin) for spin in vector] for vector in answer["solutions"]]
         assert len(stored) == 2
-        assert all(ising_energy_milli(job, vector) <= 0 for vector in stored)
+        assert all(ising_energy_milli(job, vector) <= -2000 for vector in stored)
         assert int(answer["diversity_milli"]) >= 100
         paid, _block = _claim_from(solver, order_id)
         assert paid == {bytes(solver._signer.account_id): order.reward}

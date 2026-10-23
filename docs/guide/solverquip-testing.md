@@ -92,7 +92,8 @@ A funded run places nine orders, of three kinds:
 | `TestPayoutRules` | `TopNWeighted` refused below runtime 119 (skips on 119 and later) | funding |
 
 Self-solved orders go through the real `submit()`, with an allowlist of our
-own two accounts or of a solver type, and each account answers in a separate
+own two accounts, or of our solver type plus a keyless account (so ours is
+admitted by type alone), and each account answers in a separate
 `submit_solution` extrinsic. Refused answers go first: a refusal does not
 start the order's `block_wait` countdown, while an accepted answer does. Each
 answer checks that it landed before the order's expiry, so a slow answer fails
