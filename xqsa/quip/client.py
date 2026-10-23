@@ -413,9 +413,10 @@ class SolverQuip(Solver):
             # The raw value, so a path the resolver could not expand fails here as it always has.
             return quip_signing.load_or_generate_keystore(source.value).signer
         if source.problem is not None:
+            unset = "--unset --global" if source.step == "user" else "--unset"
             raise QuipSigningError(
                 f"the {source.step} account preference cannot sign: {source.problem}. "
-                f"Fix it, or clear it with `xquad quip account use --unset`"
+                f"Fix it, or clear it with `xquad quip account use {unset}`"
             )
         logger.info("using the %s account preference %r, keystore %s", source.step, source.value, source.path)
         try:

@@ -4586,8 +4586,17 @@ class TestSignerPrecedence:
         self._configure(monkeypatch, tmp_path, ("user",))
         (home / ".quip" / "keystores" / "u.json").unlink()
         with pytest.raises(
-            QuipSigningError, match=r"user account preference cannot sign: no keystore named 'u'.*--unset"
+            QuipSigningError, match=r"user account preference cannot sign: no keystore named 'u'.*--unset --global`$"
         ):
+            SolverQuip(url="ws://fake")
+
+    def test_missing_project_keystore_hint_has_no_global_flag(self, monkeypatch, tmp_path, quip_home) -> None:
+        from xqsa.quip import QuipSigningError, SolverQuip
+
+        _, project = quip_home
+        self._configure(monkeypatch, tmp_path, ("project",))
+        (project / ".quip" / "keystores" / "p.json").unlink()
+        with pytest.raises(QuipSigningError, match=r"no keystore named 'p'.*`xquad quip account use --unset`$"):
             SolverQuip(url="ws://fake")
 
     def test_unusable_preferred_keystore_raises(self, monkeypatch, tmp_path, quip_home) -> None:
