@@ -53,11 +53,10 @@ rebuilds `xqffi` when its Rust sources changed, then pytest through
 | `QUIP_RPC_URL` | required for e2e | chain RPC, `ws://` (DevNet) or `wss://` (aglais). `make test-quip` / `make test-quip-e2e` pass it through explicitly. |
 | `QUIP_FAUCET_URL` | optional | faucet **base** URL; the funded fixture POSTs to `<QUIP_FAUCET_URL>/request`. `SolverQuip` reads it too, as the faucet `autofund` draws from, but only when its RPC URL also comes from `QUIP_RPC_URL`; the fixtures pass `url=` and fund directly. Without it only the read-only connectivity tests run. |
 | `QUIP_TOPOLOGY` | optional | registered topology hash for `SolverQuip` to target instead of the chain default. Unlike the rest of this table it configures the solver, not the harness, so it also applies outside the tests. Setting it un-skips the override tier. |
-| `QUIP_MINER_PROBE_TIMEOUT` | optional (default 60) | how long the `solving_miner` probe waits before skipping the end-to-end tier. Raise it on a slow or remote fleet. |
 
 Any variable exported in your shell -- or passed as `make VAR=val` -- reaches
-pytest, so you can set `QUIP_MINER_PROBE_TIMEOUT` alongside the two the
-recipe forwards. On macOS, whose python.org and uv Pythons ship no CA
+pytest, so you can set `QUIP_TOPOLOGY` alongside the two the recipe
+forwards. On macOS, whose python.org and uv Pythons ship no CA
 bundle, `xqsa.quip.metadata.connect` and the suite's faucet requests verify
 TLS against certifi's bundle unless `SSL_CERT_FILE` or `SSL_CERT_DIR` is
 set, or `WEBSOCKET_CLIENT_CA_BUNDLE` names an existing file or directory, so
@@ -65,43 +64,65 @@ aglais needs no CA export.
 
 ### The test tiers
 
-The live suite runs in three tiers, by what a test needs from the chain:
+The live suite runs in two tiers, by what a test needs from the chain:
 
 - **read-only** (`TestConnectivity`): any reachable chain. Without
   `QUIP_FAUCET_URL`, these are the only tests that run.
 - **funded**: `QUIP_FAUCET_URL` set. The `funded_keystore` fixture generates a
   fresh keystore and draws one faucet drip into it; `second_funded_keystore`
   draws a second for another account and skips its tests if the funding has not
-  landed within 60 s. A full session makes up to three faucet requests.
-- **solved**: an answer to the order. Some tests wait for the solver fleet
-  through the `solving_miner` fixture, which proposes a throwaway order and
-  skips the tier cleanly when nothing answers within `QUIP_MINER_PROBE_TIMEOUT`.
-  Others answer their own orders (self-solve, below) and need no fleet.
+  landed within 60 s. A full session makes two faucet requests.
+
+A funded run places nine orders, of three kinds:
+
+- **network** orders go through `solve()` with open access and test that the
+  network answers. An order nobody answers before its deadline skips.
+- **self-solved** orders test chain rules. Nobody but our own accounts can
+  answer them, so ranks, energies and leaders are fixed by the test.
+- **unanswered** orders expire with nothing touching them.
 
 | Class | Covers | Needs |
 | --- | --- | --- |
 | `TestConnectivity` | chain constants, the topology decode, the V14 metadata shim, the runtime check (`check_runtime`), the topology override | a reachable chain; a few tests fund an account; the override test needs `QUIP_TOPOLOGY` |
-| `TestSubmitPath` | the balance pre-check, a proposal that times out and is recovered, auto-reclaim of an expired unanswered order | funding; patches `MIN_DEADLINE_BLOCKS` to 1 so an order can expire inside the test |
-| `TestJobOrder` | `create_order`, `set()`, `quote()` and `submit()`, the stored order read back, `set()` refused after submit | funding |
-| `TestReceipt` | an unanswered order reclaimed through its receipt (`Reward  reclaimed`), `list_orders()`, a repeated reclaim refused | funding; patches `MIN_DEADLINE_BLOCKS` to 1 |
-| `TestEndToEnd` | spin, binary and native round trips; a receipt rebuilt in a fresh session (reclaims and skips if unanswered); the deprecated `query()` and `status()` | the fleet (`solving_miner`) |
-| `TestLeader` | a tied order follows our lead (skips without a tie); a four-vector answer comes back whole (skips if `MaxSolutions` is below 4) | funding and self-solve; the tie test also needs the fleet |
-| `TestPayoutRules` | a `TopNEqual(2)` split matches the claim; `TopNWeighted` refused below runtime 119 (skips on 119 and later) | `second_funded_keystore` and self-solve |
-| `TestAccess` | an allowlisted account answers; a type allowlist admits by type; an unlisted solver is refused (`NotEligibleSolver`) | self-solve; two tests use `second_funded_keystore` |
-| `TestQualityFloors` | the ceiling drops the vector above it (self-answered); an order with floors comes back whole (reclaims and skips if no solver meets them) | funding; the second test needs the fleet |
+| `TestSubmitPath` | the balance pre-check | funding |
+| `TestMortalEra` | the runtime accepts the mortal `propose_job` | funding |
+| `TestUnanswered` | an order only our account may answer: `solve()` times out, `on_initialize` expires it (`OrderExpired` in the `Initialization` phase), and its receipt reclaims it; auto-reclaim of a 1-block order | funding; the auto-reclaim test patches `MIN_DEADLINE_BLOCKS` to 1 |
+| `TestNetwork` | spin and native round trips through `solve()`; the deprecated `query()` and `status()` | the network to answer (skips otherwise) |
+| `TestSelfSolved` | the draft lifecycle, the reclaim refusals for an open and an answered order, and a four-vector binary answer read back, also on a fresh client; a mixed-sign `TopNWeighted(2)` split claimed by the second account (runtime 119 and later); a `TopNEqual(2)` tie that keeps our lead; a type allowlist that refuses the second account; the solution, diversity and energy floors with a refusal for each | `second_funded_keystore`, except the lifecycle test, which needs funding only |
+| `TestPayoutRules` | `TopNWeighted` refused below runtime 119 (skips on 119 and later) | funding |
 
-Self-solve tests answer their own orders. A helper registers the test account as
-a `Cpu` solver if it is not one, then proposes the order and submits its answer
-in one `Utility.batch_all`, predicting the order id from `NextOrderId` and
-retrying up to three times when another proposal takes it; payout tests then
-send `claim_reward`. Registration is permanent: every account a run registers
-stays on chain as a `Cpu` solver. The fixtures use throwaway keystores for that
-reason, so a run adds up to two solver accounts to the network.
+Self-solved orders go through the real `submit()`, with an allowlist of our
+own two accounts, of our account plus a keyless one, or of our solver type
+plus a keyless account (so ours is admitted by type alone), and each account
+answers in a separate `submit_solution` extrinsic. Refused answers go first: a
+refusal does not start the order's `block_wait` countdown, while an accepted
+answer does. The chain refuses an answer after the order's expiry with
+`OrderNotOpen`, and the test reports that as a timing failure naming the
+order's `deadline_blocks` and `block_wait`. The
+orders are then claimed with `claim_reward`, so nothing stays reserved.
 
-A fresh order's first answer took 1 to 25 blocks on aglais, measured across
-twelve answered orders on 2026-09-18 (median 1 to 2). The suite therefore runs
-with `deadline_blocks=100` and `block_wait=10` (`SOLVER_KWARGS` in
-`test_live.py`), so a slow answer still lands before the deadline.
+Registration is permanent: every account a run registers stays on chain as a
+solver. The fixtures use throwaway keystores for that reason, so a run adds two
+solver accounts to the network: the first account as `QpuPasqal`, and the
+second as `Gpu`. The network's solvers register as `Cpu` or `Gpu`, so an
+allowlist of `QpuPasqal` admits our first account alone and refuses the second.
+Both accounts are registered in their fixtures, before any test answers.
+
+Timing is set per order. Self-solved orders use a 30-block deadline with a
+`block_wait` of 4 to 8 blocks, long enough for the answers they wait on. The
+unanswered orders use 10 blocks and 1 block. Network orders keep
+`deadline_blocks=100` and `block_wait=10` (`SOLVER_KWARGS` in `test_live.py`):
+a fresh order's first answer took 1 to 25 blocks on aglais, measured across
+twelve answered orders on 2026-09-18 (median 1 to 2), so a slow answer still
+lands before the deadline. If an order fails on timing, raise that order's
+values, not the shared ones.
+
+Every skip reason starts with `network:` (the network failed to do something
+on the day: no answer, faucet funding not landing) or `designed:` (config,
+chain or runtime makes the test inapplicable). `make test-quip-e2e` passes
+`-rs` so each reason is printed, and a summary hook in
+`xqsa/tests/quip/conftest.py` counts both kinds and lists any skip with
+neither prefix.
 
 ## Common prerequisites
 
@@ -339,8 +360,7 @@ a complete graph on 16 nodes (K16), hash
 at block 232673. It is registered, not mineable, and not the default. Point
 `QUIP_TOPOLOGY` at it to run the whole suite against it:
 
-    QUIP_MINER_PROBE_TIMEOUT=180 \
-      QUIP_TOPOLOGY=0x830abc16c0b28b26f119f3a1279d07811bdeb9c0234d7f442ae46d6698d9a797 \
+    QUIP_TOPOLOGY=0x830abc16c0b28b26f119f3a1279d07811bdeb9c0234d7f442ae46d6698d9a797 \
       make test-quip \
         QUIP_RPC_URL=wss://bootnode-1.aglais.quip.network:20049/rpc \
         QUIP_FAUCET_URL=https://faucet.aglais.quip.network
@@ -350,14 +370,13 @@ registration is permanent.
 
 ### Run the suite
 
-    QUIP_MINER_PROBE_TIMEOUT=180 \
-      make test-quip \
-        QUIP_RPC_URL=wss://bootnode-1.aglais.quip.network:20049/rpc \
-        QUIP_FAUCET_URL=https://faucet.aglais.quip.network
+    make test-quip \
+      QUIP_RPC_URL=wss://bootnode-1.aglais.quip.network:20049/rpc \
+      QUIP_FAUCET_URL=https://faucet.aglais.quip.network
 
-The submit-path tests always run; the `TestEndToEnd` cases are gated behind the
-`solving_miner` probe. If the probe skips (no solution within the window), retry
-once when the fleet is active.
+Only the two `TestNetwork` orders depend on the fleet; each skips with a
+`network:` reason when nobody answers it. If they skip, retry once when the
+fleet is active.
 
 ### Learnings / gotchas
 
@@ -400,7 +419,7 @@ once when the fleet is active.
   that is not the global optimum -- observed: a 3-var binary model whose true
   optimum is -2 came back as -1, while the controlled DevNet CPU fleet returns
   -2 deterministically. Do not assert global optimality against a live fleet.
-  `TestEndToEnd` asserts only pipeline correctness (`energy_matches_chain`, a
+  `TestNetwork` asserts only pipeline correctness (`energy_matches_chain`, a
   returned solution, domain feasibility); encoding and optimality correctness
   are guarded deterministically offline by
   `test_client.py::test_encoded_problem_argmin_decodes_to_optimum`.

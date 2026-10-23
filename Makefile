@@ -681,8 +681,8 @@ test-quip-sign:
 #
 # QUIP_RPC_URL gates the whole module (unset -> every test skips), so the
 # target hard-errors when it is missing rather than reporting a hollow, all-
-# skipped pass. QUIP_FAUCET_URL is optional but needed for the funded submit
-# and end-to-end tiers; without it only the read-only connectivity tests run.
+# skipped pass. QUIP_FAUCET_URL is optional but needed for the funded tier;
+# without it only the read-only connectivity tests run.
 #
 # Same two-step shape as test-quip-sign above, for the same reason. See
 # its comment; not repeated here.
@@ -693,7 +693,7 @@ test-quip-e2e:
 	fi
 	uv sync --extra quip
 	QUIP_RPC_URL="$(QUIP_RPC_URL)" QUIP_FAUCET_URL="$(QUIP_FAUCET_URL)" \
-		uv run --no-sync pytest xqsa/tests/quip/test_live.py -m quip -v
+		uv run --no-sync pytest xqsa/tests/quip/test_live.py -m quip -v -rs
 
 # Real-hardware xqsa solver tests -- CUDA, D-Wave QPU, Apple Metal -- each
 # exercising the encode -> solve -> verify -> decode pipeline against an

@@ -26,19 +26,21 @@ env vars at its RPC + faucet:
     QUIP_FAUCET_URL=http://localhost:20049/api/faucet \\
         uv run --extra quip pytest xqsa/tests/quip/test_live.py -m quip -v
 
-Two tiers:
+Three kinds of order:
 
-* SUBMIT + lifecycle tests run against any healthy devnet. They validate the
-  parts of SolverQuip that do not need a returned solution: connectivity, the
-  live ``propose_job`` SCALE/extras contract (a clean submission with no
-  ``System.ExtrinsicFailed``), the topology fetch, the balance pre-check, the
-  timeout path, expired-no-solution auto-reclaim, and reclaiming an
-  unanswered order through its receipt.
-* END-TO-END tests need the miner to actually return a solution. They are
-  guarded by the ``solving_miner`` fixture, which probes the fleet once and
-  skips them when no solution comes back within the probe window. They run
-  whenever a live solver fleet is active (a fresh order solves in ~1-2 blocks)
-  and skip cleanly when the fleet is idle or unavailable.
+* NETWORK orders (``TestNetwork``) go through ``solve()`` with open access and
+  test that the network answers. When nobody answers before the deadline they
+  skip with a ``network:`` reason.
+* SELF-SOLVED orders (``TestSelfSolved``) test chain rules. They go through the
+  real submit, admit only our own accounts (our two, ours beside a keyless
+  one, or our solver type beside a keyless one), and are answered by those
+  accounts in separate
+  extrinsics, so ranks, energies and leaders are fixed by the test.
+* UNANSWERED orders expire with nothing touching them: the timeout path,
+  auto-reclaim, and reclaiming through a receipt.
+
+The read-only connectivity tests run against any healthy devnet. Every skip
+reason starts with ``network:`` or ``designed:``; ``conftest.py`` counts both.
 
 Crypto known-answer vectors belong to ``quip_signer``'s own ``test_parity.py``,
 not here.
@@ -54,16 +56,18 @@ import pytest
 
 pytest.importorskip(
     "substrateinterface",
-    reason="substrate-interface not installed (run `uv sync --extra quip`)",
+    reason="designed: substrate-interface not installed (run `uv sync --extra quip`)",
 )
 pytest.importorskip(
     "quip_signer",
-    reason="quip_signer extension not installed (run `uv sync --extra quip`)",
+    reason="designed: quip_signer extension not installed (run `uv sync --extra quip`)",
 )
 
+from xqsa import SolverResult
 from xqsa.quip import (
     AccessAllow,
     JobOrder,
+    QuipFaucetError,
     QuipJobFailedError,
     QuipOrderOptionError,
     QuipSubmissionError,
@@ -73,12 +77,13 @@ from xqsa.quip import (
     SolverQuip,
 )
 from xqsa.quip import chain as quip_chain
-from xqsa.quip.client import _is_native
+from xqsa.quip.client import _close, _is_native
 from xqsa.quip.codec import (
     DEFAULT_ISING_SPEC_ID,
     PlacementError,
     _as_hex,
     _canonical_hex,
+    _event_ids,
     _require_h256,
     ising_energy_milli,
 )
@@ -88,7 +93,7 @@ from xqsa.quip.metadata import connect as connect_shimmed
 from xqsa.quip.resolution import MIN_RANK_WEIGHTED_SPEC
 from xqsa.quip.signing import check_runtime, load_or_generate_keystore
 from xqsa.quip.solution import decode_answers, pick_best
-from xqvm_py.xqmx import XQMX, compute_energy
+from xqvm_py.xqmx import XQMX
 
 RPC_URL = os.environ.get("QUIP_RPC_URL")
 FAUCET_URL = os.environ.get("QUIP_FAUCET_URL")
@@ -101,49 +106,39 @@ TOPOLOGY_OVERRIDE = os.environ.get("QUIP_TOPOLOGY")
 NATIVE_MODE = _is_native(TOPOLOGY_OVERRIDE)
 requires_hash_topology = pytest.mark.skipif(
     NATIVE_MODE,
-    reason="assumes a chain-registered topology hash; QUIP_TOPOLOGY=native resolves none",
+    reason="designed: assumes a chain-registered topology hash; QUIP_TOPOLOGY=native resolves none",
 )
 
 pytestmark = [
     pytest.mark.quip,
-    pytest.mark.skipif(not RPC_URL, reason="QUIP_RPC_URL unset; live chain tests skipped"),
+    pytest.mark.skipif(not RPC_URL, reason="designed: QUIP_RPC_URL unset; live chain tests skipped"),
 ]
 
 UNIT = 10**12
 
-# Production lifecycle bounds. An earlier revision tightened these to
-# deadline_blocks=30 / block_wait=5 so a live solve reached finality in tens of
-# seconds, on the assumption in MINER_IDLE_SKIP below that a fresh order solves
-# in ~1-2 blocks. Measured against aglais on 2026-09-18 that assumption holds
+# Production lifecycle bounds, which the network orders keep. An earlier
+# revision tightened these to deadline_blocks=30 / block_wait=5 so a live solve
+# reached finality in tens of seconds, on the assumption that a fresh order
+# solves in ~1-2 blocks. Measured against aglais on 2026-09-18 that assumption holds
 # only for the median: first-solution latency ran 1, 1, 1, 2, 5, 6, 9, 12 and 25
 # blocks across twelve answered orders, so a 30-block deadline sat inside the
 # tail and orders were finalizing empty. poll_interval stays tight so an
 # answered order still returns promptly; timeout clears 100 blocks at ~6s.
 SOLVER_KWARGS = dict(deadline_blocks=100, block_wait=10, poll_interval=3.0, timeout=660.0)
 
-# How long the capability probe waits for the miner to submit ANY solution
-# before declaring the E2E tier unavailable. Overridable for slow hosts.
-PROBE_TIMEOUT = float(os.environ.get("QUIP_MINER_PROBE_TIMEOUT", "60"))
-
-MINER_IDLE_SKIP = (
-    "miner returned no solution within the probe window -- the live solver "
-    "fleet is idle or unavailable. E2E validation needs an active fleet; a "
-    "fresh order solves in ~1-2 blocks when one is running."
-)
-
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def chain():
     """A read-only substrate-interface connection for direct chain assertions.
 
     Built through ``xqsa.quip.metadata.connect`` for the same reason SolverQuip
     is: Quip runtimes serve metadata V16, which scalecodec cannot decode, so a
-    stock ``SubstrateInterface`` fails on the first query.
+    stock ``SubstrateInterface`` fails on the first query. Opened per test: the
+    node likely drops a websocket left idle while funded fixtures run.
     """
     iface = connect_shimmed(RPC_URL)
     yield iface
@@ -153,12 +148,15 @@ def chain():
 def _new_funded_keystore(tmp_path_factory, name: str) -> str:
     """Generate a keystore under ``name``, fund it from the faucet and wait for the transfer; returns its path."""
     if not FAUCET_URL:
-        pytest.skip("QUIP_FAUCET_URL unset; funded live tests skipped")
+        pytest.skip("designed: QUIP_FAUCET_URL unset; funded live tests skipped")
     path = str(tmp_path_factory.mktemp(name) / "keystore.json")
     keystore = load_or_generate_keystore(path)
     dest = "0x" + keystore.account_id.hex()
 
-    fund_from_faucet(dest, url=FAUCET_URL)
+    try:
+        fund_from_faucet(dest, url=FAUCET_URL)
+    except QuipFaucetError as exc:
+        pytest.skip(f"network: the faucet refused funding: {exc}")
 
     # Wait for the transfer to land.
     iface = connect_shimmed(RPC_URL)
@@ -170,26 +168,48 @@ def _new_funded_keystore(tmp_path_factory, name: str) -> str:
                 break
             time.sleep(3)
         else:
-            pytest.skip("faucet funding did not land within 60s")
+            pytest.skip("network: faucet funding did not land within 60s")
     finally:
         iface.close()
     return path
 
 
+# The first account's solver type. The network's solvers register as Cpu or
+# Gpu, so an allowlist of this type admits our account and nobody else's.
+OWN_SOLVER_TYPE = "QpuPasqal"
+
+
+def _new_solver_keystore(tmp_path_factory, name: str, solver_type: str) -> str:
+    """A funded keystore whose account is registered as a ``solver_type`` solver; returns its path.
+
+    Registration is permanent, so it happens once, here, before any test answers an order.
+    """
+    path = _new_funded_keystore(tmp_path_factory, name)
+    solver = SolverQuip(url=RPC_URL, keystore=path, **SOLVER_KWARGS)
+    try:
+        solver._submit_extrinsic("QuantumComputeMempool", "register_solver", {"solver_type": solver_type})
+    finally:
+        _close(solver._iface)
+    return path
+
+
 @pytest.fixture(scope="session")
 def funded_keystore(tmp_path_factory):
-    """A fresh keystore funded via the chain's faucet.
+    """A fresh keystore funded via the chain's faucet, its account a solver of ``OWN_SOLVER_TYPE``.
 
     Skips the whole funded tier when ``QUIP_FAUCET_URL`` is unset -- without a
     funder we cannot reserve a reward.
     """
-    return _new_funded_keystore(tmp_path_factory, "quip")
+    return _new_solver_keystore(tmp_path_factory, "quip", OWN_SOLVER_TYPE)
 
 
 @pytest.fixture(scope="session")
 def second_funded_keystore(tmp_path_factory):
-    """Another funded keystore, for a second solver account on one order."""
-    return _new_funded_keystore(tmp_path_factory, "quip-second")
+    """Another funded keystore, for a second solver account on one order, registered as a ``Gpu`` solver.
+
+    Its type is what lets an allowlist of ``OWN_SOLVER_TYPE`` refuse it.
+    """
+    return _new_solver_keystore(tmp_path_factory, "quip-second", "Gpu")
 
 
 @pytest.fixture
@@ -204,58 +224,16 @@ def make_solver(funded_keystore):
         return solver
 
     yield _make
-
-
-@pytest.fixture(scope="session")
-def _miner_solves(tmp_path_factory) -> bool:
-    """Probe once whether the miner returns a solution; cached for the session.
-
-    Proposes the gated tests' own model and polls ``OrderSolutions`` for any
-    submission. Fast when the miner works (returns on the first solution);
-    bounded by ``PROBE_TIMEOUT`` when it does not. Returns False (rather than
-    erroring) so the E2E tier skips cleanly when the fleet is idle.
-    """
-    if not FAUCET_URL:
-        return False
-    path = str(tmp_path_factory.mktemp("quip-probe") / "keystore.json")
-    keystore = load_or_generate_keystore(path)
-    dest = "0x" + keystore.account_id.hex()
-    try:
-        fund_from_faucet(dest, url=FAUCET_URL)
-    except Exception:
-        return False
-
-    solver = SolverQuip(url=RPC_URL, keystore=path, **SOLVER_KWARGS)
-    # Give the funding a moment to land before reserving a reward.
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        if solver._free_balance() > UNIT:
-            break
-        time.sleep(3)
-
-    # The same model the gated tests propose. A smaller one would place onto
-    # different hardware nodes and so prove nothing about them: placement is
-    # per-model, and whether an order is answered depends on the nodes it lands
-    # on. A gate must exercise what it gates, native mode included.
-    try:
-        order_id = solver.create_order(_asymmetric_spin_model()).submit().order_id()
-    except Exception:
-        return False
-
-    probe_deadline = time.monotonic() + PROBE_TIMEOUT
-    while time.monotonic() < probe_deadline:
-        sols = list(solver._iface.query_map("QuantumComputeMempool", "OrderSolutions", [order_id]))
-        if sols:
-            return True
-        time.sleep(3)
-    return False
+    for solver in solvers:
+        _close(solver._iface)
 
 
 @pytest.fixture
-def solving_miner(_miner_solves) -> None:
-    """Skip the test unless the probe confirmed the miner returns solutions."""
-    if not _miner_solves:
-        pytest.skip(MINER_IDLE_SKIP)
+def second_solver(second_funded_keystore):
+    """A SolverQuip on the second funded keystore, whose account is a ``Gpu`` solver."""
+    solver = SolverQuip(url=RPC_URL, keystore=second_funded_keystore, **SOLVER_KWARGS)
+    yield solver
+    _close(solver._iface)
 
 
 # ---------------------------------------------------------------------------
@@ -299,114 +277,99 @@ def _model_vector(job, spins: dict[int, int]) -> list[int]:
     return vector
 
 
-def _by_energy(model: XQMX) -> list[dict[int, int]]:
-    """Every spin assignment of a small SPIN model, lowest energy first."""
-    assignments = [{var: 1 if bits >> var & 1 else -1 for var in range(model.size)} for bits in range(2**model.size)]
+def _ranked_vectors(job) -> list[list[int]]:
+    """Every assignment of the placed variables as a per-node vector, lowest chain energy first.
 
-    def energy(spins: dict[int, int]) -> int:
-        sample = XQMX.spin_sample(model.size, model.rows, model.cols)
-        for var, spin in spins.items():
-            sample.set_linear(var, spin)
-        return int(compute_energy(model, sample))
-
-    return sorted(assignments, key=energy)
-
-
-def _self_solve(solver: SolverQuip, model: XQMX, vectors: list[list[int]], **options) -> int:
-    """Propose ``model`` with ``options`` and answer it with ``vectors`` in one ``batch_all``; returns the order id.
-
-    The answer lands in the proposal's own extrinsic, so it is the order's
-    first and its account leads unless a strictly lower energy arrives. The
-    account registers as a solver first if it is not one. The next order id
-    is predicted, so a proposal from elsewhere in the same block reverts the
-    batch; that is retried. It returns once the order is in finalized state:
-    a batch reported in a block can be retracted with that block and land
-    again later, and a read at the best head in between would not find it.
+    Works for SPIN and BINARY models alike, because the chain stores spins.
     """
-    pallet = "QuantumComputeMempool"
-    account = "0x" + bytes(solver._signer.account_id).hex()
-    if solver._iface.query(pallet, "Solvers", [account]).value is None:
-        solver._submit_extrinsic(pallet, "register_solver", {"solver_type": "Cpu"})
-    propose = solver.create_order(model, **options)._call_params()
-    solutions = quip_chain.wrap_bounded([quip_chain.wrap_bounded(list(vector)) for vector in vectors])
-    refusals: list[str] = []
-    for _attempt in range(3):
-        order_id = int(solver._iface.query(pallet, "NextOrderId").value)
-        calls = [
-            {"call_module": pallet, "call_function": "propose_job", "call_args": propose},
-            {
-                "call_module": pallet,
-                "call_function": "submit_solution",
-                "call_args": {"order_id": order_id, "solutions": solutions},
-            },
-        ]
-        try:
-            sent = solver._submit_extrinsic("Utility", "batch_all", {"calls": calls})
-        except QuipSubmissionError as exc:
-            refusals.append(str(exc))
-            continue
-        _await_final_order(solver, order_id, sent.block_hash)
-        return order_id
-    pytest.fail("the self-solve batch was refused three times:\n" + "\n".join(refusals))
-
-
-def _await_final_order(solver: SolverQuip, order_id: int, in_block: str, timeout: float = 180.0) -> None:
-    """Wait until ``order_id`` is in the state of the finalized head; ``in_block`` is where its batch was reported.
-
-    The order must be ``solver``'s: after a retraction another account's
-    proposal can take the predicted id, and the batch's answer then lands on
-    their order while ours gets the next id.
-    """
-    deadline = time.monotonic() + timeout
-    while True:
-        final = solver._iface.get_chain_finalised_head()
-        order = solver._iface.query("QuantumComputeMempool", "JobOrders", [order_id], block_hash=final).value
-        if order is not None:
-            if quip_chain.account_bytes(order["proposer"]) != bytes(solver._signer.account_id):
-                pytest.fail(
-                    f"order {order_id} was proposed by another account; the batch reported in {in_block} "
-                    f"placed ours at a later id, likely {order_id + 1}"
-                )
-            return
-        if time.monotonic() > deadline:
-            pytest.fail(f"order {order_id} is not finalized {timeout:.0f} s after its batch was reported in {in_block}")
-        time.sleep(3)
-
-
-def _answer(solver: SolverQuip, order_id: int, vectors: list[list[int]]) -> None:
-    """Answer ``order_id`` with ``vectors`` from ``solver``'s account, registering it as a solver in the same batch."""
-    pallet = "QuantumComputeMempool"
-    solutions = quip_chain.wrap_bounded([quip_chain.wrap_bounded(list(vector)) for vector in vectors])
-    calls = [
-        {
-            "call_module": pallet,
-            "call_function": "submit_solution",
-            "call_args": {"order_id": order_id, "solutions": solutions},
-        }
+    variables = sorted(job.mapping)
+    vectors = [
+        _model_vector(job, {var: 1 if bits >> i & 1 else -1 for i, var in enumerate(variables)})
+        for bits in range(2 ** len(variables))
     ]
-    account = "0x" + bytes(solver._signer.account_id).hex()
-    if solver._iface.query(pallet, "Solvers", [account]).value is None:
-        calls.insert(
-            0, {"call_module": pallet, "call_function": "register_solver", "call_args": {"solver_type": "Cpu"}}
-        )
-    solver._submit_extrinsic("Utility", "batch_all", {"calls": calls})
+    return sorted(vectors, key=lambda vector: ising_energy_milli(job, vector))
 
 
-def _register(solver: SolverQuip) -> str:
-    """Register ``solver``'s account as a ``Cpu`` solver if it is not one; returns the account as ``0x`` hex."""
+def _place(solver: SolverQuip, model: XQMX, **options) -> JobOrder:
+    """Create and submit an order for ``model`` with ``options`` through the real submit; returns the order."""
+    return solver.create_order(model, **options).submit()
+
+
+def _submit_answer(solver: SolverQuip, order_id: int, vectors: list[list[int]]):
+    """Answer ``order_id`` with ``vectors`` from ``solver``'s registered account; returns the extrinsic receipt.
+
+    A refusal raises QuipSubmissionError naming ``QuantumComputeMempool.<Error>``.
+    An answer that arrives after the order expired fails the test as a timing
+    failure, naming the order's timing, rather than as the error it expected.
+    """
     pallet = "QuantumComputeMempool"
-    account = "0x" + bytes(solver._signer.account_id).hex()
-    if solver._iface.query(pallet, "Solvers", [account]).value is None:
-        solver._submit_extrinsic(pallet, "register_solver", {"solver_type": "Cpu"})
-    return account
+    solutions = quip_chain.wrap_bounded([quip_chain.wrap_bounded(list(vector)) for vector in vectors])
 
+    def late(where: str) -> None:
+        timing = solver._fetch_order(order_id)["timing"]
+        pytest.fail(
+            f"the answer to order {order_id} arrived after its expiry ({where}); raise this order's "
+            f"deadline_blocks ({timing['deadline_blocks']}) or block_wait ({timing['block_wait']})"
+        )
 
-def _claim(solver: SolverQuip, order_id: int) -> None:
-    """Claim a self-answered order's reward back, best-effort, so the test leaves nothing reserved."""
     try:
-        solver._submit_extrinsic("QuantumComputeMempool", "claim_reward", {"order_id": order_id})
-    except QuipSubmissionError:
-        pass
+        sent = solver._submit_extrinsic(pallet, "submit_solution", {"order_id": order_id, "solutions": solutions})
+    except QuipSubmissionError as exc:
+        if f"{pallet}.OrderNotOpen" in str(exc):
+            late(str(exc))
+        raise
+    return sent
+
+
+def _events_named(iface, block_hash: str, name: str) -> list[tuple[object, object]]:
+    """The ``QuantumComputeMempool`` events called ``name`` in a block, as ``(phase, attributes)``.
+
+    The phase is the record's own: ``Initialization``, ``Finalization`` or an
+    ``ApplyExtrinsic`` index. ``quip_chain._events`` reads it as an extrinsic
+    index, which reports both block phases as ``None``.
+    """
+    events = []
+    for record in iface.get_events(block_hash=block_hash) or []:
+        value = record.value if hasattr(record, "value") else record
+        inner = value.get("event", value)
+        if _event_ids(inner) == ("QuantumComputeMempool", name):
+            events.append((value.get("phase"), inner.get("attributes", inner.get("params"))))
+    return events
+
+
+def _claim_from(solver: SolverQuip, order_id: int) -> tuple[dict[bytes, int], str]:
+    """Send ``claim_reward`` for ``order_id`` from ``solver``'s account.
+
+    Returns what the claim paid, ``{account bytes: amount}`` from the block's
+    ``RewardClaimed`` events for the order, and the block's hash.
+    """
+    sent = solver._submit_extrinsic("QuantumComputeMempool", "claim_reward", {"order_id": order_id})
+    paid = {
+        quip_chain.account_bytes(attrs["solver"]): int(attrs["amount"])
+        for _phase, attrs in _events_named(solver._iface, sent.block_hash, "RewardClaimed")
+        if int(attrs["order_id"]) == order_id
+    }
+    return paid, sent.block_hash
+
+
+def _ss58(solver: SolverQuip) -> str:
+    """``solver``'s account in SS58, as receipts name solvers."""
+    return quip_chain.ss58_address(solver._iface, bytes(solver._signer.account_id))
+
+
+def _solve_or_skip(solver: SolverQuip, model: XQMX, **kwargs):
+    """``solver.solve(model, **kwargs)``, skipping the test when the network left the order unanswered."""
+    try:
+        return solver.solve(model, **kwargs)
+    except QuipJobFailedError as exc:
+        if "finalized with no solutions" not in str(exc):
+            raise
+        pytest.skip(f"network: no solver answered order {exc.order_id} before it expired")
+
+
+def _account(solver: SolverQuip) -> str:
+    """``solver``'s account as ``0x`` hex, as an allowlist takes it."""
+    return "0x" + bytes(solver._signer.account_id).hex()
 
 
 # ---------------------------------------------------------------------------
@@ -493,7 +456,7 @@ class TestConnectivity:
         # nothing in the codebase carries a hash, because a hash is only ever
         # valid on the deployment that registered it.
         if TOPOLOGY_OVERRIDE:
-            pytest.skip("QUIP_TOPOLOGY displaces the chain default this test asserts")
+            pytest.skip("designed: QUIP_TOPOLOGY displaces the chain default this test asserts")
         default = chain.query("QuantumPow", "DefaultTopology").value
         assert default is not None
         solver = make_solver()
@@ -527,7 +490,9 @@ class TestConnectivity:
         solver = make_solver()
         mineable = solver._mineable_topologies()
         if not mineable:
-            pytest.skip("MineableTopologies is empty/unset on this node; expected the default topology seeded")
+            pytest.skip(
+                "designed: MineableTopologies is empty/unset on this node; expected the default topology seeded"
+            )
         assert _canonical_hex(default) in mineable
 
     def test_override_topology_is_registered_but_not_mineable(self, chain, make_solver) -> None:
@@ -537,9 +502,9 @@ class TestConnectivity:
         # _fetch_topology requires; absent from the mining set is the condition
         # solve() used to reject.
         if not TOPOLOGY_OVERRIDE:
-            pytest.skip("QUIP_TOPOLOGY unset; the non-mineable path is opt-in")
+            pytest.skip("designed: QUIP_TOPOLOGY unset; the non-mineable path is opt-in")
         if NATIVE_MODE:
-            pytest.skip("QUIP_TOPOLOGY=native names no registered topology")
+            pytest.skip("designed: QUIP_TOPOLOGY=native names no registered topology")
         # Normalize once, the way the constructor does, and compare against that.
         # _as_hex only prefixes 0x, while the constructor resolves through
         # _require_h256, which also strips and lower-cases. An override spelled in
@@ -574,98 +539,6 @@ class TestSubmitPath:
         with pytest.raises(QuipSubmissionError):
             solver.solve(_asymmetric_spin_model())
 
-    def test_propose_succeeds_then_times_out_recoverably(self, make_solver) -> None:
-        # A clean propose_job (no System.ExtrinsicFailed -> SCALE shapes + extras
-        # order correct) followed by a tiny timeout: the order id is recoverable.
-        solver = make_solver(timeout=0.5)
-        with pytest.raises(QuipTimeoutError) as excinfo:
-            solver.solve(_asymmetric_spin_model())
-        order_id = excinfo.value.order_id
-        assert isinstance(order_id, int)
-        assert excinfo.value.receipt.order_id == order_id
-        snap = solver.get_receipt(order_id).status()
-        assert snap["order_id"] == order_id
-        assert snap["chain_status"] in ("Opened", "Expired", "Closed")
-
-    def test_expired_no_solution_auto_reclaims(self, make_solver, monkeypatch) -> None:
-        # A 1-block deadline finalizes empty regardless of fleet activity: the
-        # order hard-expires at created_at+1, before any solver can land a
-        # solution (the miner observes the JobProposed event ~1 block after
-        # proposal and needs 1-2 more to solve, and its own deadline-margin
-        # guard drops sub-margin orders). solve() then auto-reclaims the
-        # reserved reward and raises QuipJobFailedError. A longer deadline is
-        # unsafe here: once a live solver fleet is active it solves the order
-        # before expiry (a 4-block deadline is beaten in ~1-2 blocks). Orders
-        # refuse deadlines under 10 blocks, so the floor is lowered for this
-        # test only: it exercises the reclaim, not the option checks.
-        monkeypatch.setattr("xqsa.quip.order.MIN_DEADLINE_BLOCKS", 1)
-        solver = make_solver(deadline_blocks=1, block_wait=1, timeout=150.0)
-        account = "0x" + solver._signer.account_id.hex()
-
-        def reserved() -> int:
-            return solver._iface.query("System", "Account", [account]).value["data"]["reserved"]
-
-        before = reserved()
-        with pytest.raises(QuipJobFailedError) as excinfo:
-            solver.solve(_asymmetric_spin_model())
-        assert isinstance(excinfo.value.order_id, int)
-
-        # The order finalized with no solutions, which is the precondition that
-        # triggers auto-reclaim. Confirm it directly on the order (account-
-        # independent, so unaffected by state left by other session tests).
-        snap = solver.get_receipt(excinfo.value.order_id).status()
-        assert snap["solution_count"] == 0
-        assert snap["chain_status"] in ("Expired", "Closed")
-        assert snap["state"] == "finalized"
-
-        # This order's reward was reserved at propose and released on reclaim, so
-        # the reserved balance does not GROW across the solve. The reclaim itself
-        # is confirmed by the failure message: a non-release of this order would
-        # push reserved above `before`. `<= before` (not `==`) tolerates rewards
-        # reserved by other session-scoped orders (e.g. the earlier
-        # deadline_blocks=30 timeout test) also being reclaimed within this
-        # window on a live testnet (~6s blocks), which drops reserved below
-        # `before`. The message assert prevents the bare `<=` from passing
-        # falsely: both orders reserve the same default 1 UNIT, so a genuine
-        # non-release could otherwise cancel against the earlier order's release.
-        assert "was reclaimed" in str(excinfo.value)
-        assert reserved() <= before
-
-
-class TestJobOrder:
-    def test_create_set_quote_submit_reads_back(self, make_solver) -> None:
-        # One order through its whole draft lifecycle, then read back from
-        # JobOrders: the chain stores the options the order was set to, not
-        # the client defaults. Costs one fee; the 1-unit reward is answered or
-        # reclaimable once the order closes.
-        solver = make_solver()
-        order = solver.create_order(_asymmetric_spin_model())
-        assert isinstance(order, JobOrder)
-        order.set(deadline_blocks=120, block_wait=5)
-
-        quote = order.quote()
-        assert quote.affordable
-        assert quote.reward_planck == order.reward
-        assert quote.account is not None and not quote.account.startswith("0x")  # SS58, not hex.
-        assert {len(line) for line in str(quote).splitlines()} == {72}
-        # The mortal proposal, checked here rather than in a test of its own:
-        # each submit reserves a reward the session's one faucet drip must cover.
-        signed = order._signed
-        assert quote.inclusion_window_blocks == 64
-        assert signed.window_end - signed.checkpoint == 63
-
-        order.submit()
-        assert order.status()["state"] in ("submitted", "finalized")
-        order_id = order.order_id()
-        assert isinstance(order_id, int)
-        assert signed.checkpoint < order._included_block <= signed.window_end  # landed inside its window.
-
-        stored = solver._fetch_order(order_id)
-        assert int(stored["timing"]["deadline_blocks"]) == 120
-        assert int(stored["timing"]["block_wait"]) == 5
-        with pytest.raises(QuipSubmissionError, match="works only on a draft"):
-            order.set(deadline_blocks=200)
-
 
 class TestMortalEra:
     """``propose_job`` is signed mortal from the finalized head; the runtime must accept it."""
@@ -690,29 +563,51 @@ class TestMortalEra:
         assert result.startswith("0x00"), f"the runtime refused the mortal era: {result}"
 
 
-class TestReceipt:
-    def test_unanswered_order_reclaims_through_its_receipt(self, make_solver, monkeypatch) -> None:
-        # The 1-block deadline of test_expired_no_solution_auto_reclaims, so the
-        # order finalizes unanswered whatever the fleet does. Here nothing
-        # reclaims on its own: the receipt does it, and its display, the
-        # account's order list and a repeated reclaim all read the result back.
-        monkeypatch.setattr("xqsa.quip.order.MIN_DEADLINE_BLOCKS", 1)
-        solver = make_solver(deadline_blocks=1, block_wait=1, timeout=150.0)
-        account = "0x" + solver._signer.account_id.hex()
+class TestUnanswered:
+    """Orders that expire with nothing touching them."""
+
+    def test_timeout_expiry_and_reclaim(self, make_solver) -> None:
+        """An order only our account may answer times out in solve(), expires on its own, and reclaims by receipt.
+
+        Nobody else may answer and we never do, so the order expires unanswered
+        whatever the network does. Its deadline is long enough that solve()
+        is still waiting when its timeout fires; a shorter one is already
+        expired once submit() returns, and solve() then reclaims it itself.
+        """
+        solver = make_solver(timeout=0.5)
+        account = _account(solver)
+        rule = AccessAllow(accounts=[account])
+        with pytest.raises(QuipTimeoutError) as excinfo:
+            solver.solve(_asymmetric_spin_model(), access=rule, deadline_blocks=10, block_wait=1)
+        order_id = excinfo.value.order_id
+        assert isinstance(order_id, int)
+        assert excinfo.value.receipt.order_id == order_id
+
+        # Every read after the wait goes through the client that waited: solver's connection sat idle meanwhile.
+        solver = make_solver()
+        receipt = solver.get_receipt(order_id).wait()
+        snap = receipt.status()
+        assert (snap["state"], snap["solution_count"]) == ("finalized", 0)
+        # on_initialize finalised it: Expired at the expiry block, by an event outside any extrinsic.
+        expiry_block = quip_chain.block_hash(solver._iface, snap["effective_expiry"])
+        stored = solver._iface.query("QuantumComputeMempool", "JobOrders", [order_id], block_hash=expiry_block).value
+        assert quip_chain._status_str(stored["status"]) == "Expired"
+        phases = [
+            phase
+            for phase, attrs in _events_named(solver._iface, expiry_block, "OrderExpired")
+            if int(attrs["order_id"]) == order_id
+        ]
+        assert phases == ["Initialization"]
+        assert solver.list_orders()[0] == order_id
+        assert order_id in solver.list_orders(state="finalized")
 
         def reserved() -> int:
             return solver._iface.query("System", "Account", [account]).value["data"]["reserved"]
 
-        order = solver.create_order(_asymmetric_spin_model()).submit().wait()
-        receipt = order.receipt()
-        snap = receipt.status()
-        assert (snap["state"], snap["solution_count"]) == ("finalized", 0)
-        assert solver.list_orders()[0] == order.order_id()
-        assert order.order_id() in solver.list_orders(state="finalized")
-
+        reward = receipt._facts().reward
         before = reserved()
-        assert receipt.reclaim() == order.reward
-        assert before - reserved() >= order.reward
+        assert receipt.reclaim() == reward
+        assert before - reserved() >= reward
         assert receipt.status()["chain_status"] == "Closed"
         assert receipt.settlement() == {"claimed": False, "winners": []}
         with pytest.raises(QuipSubmissionError, match="is already closed"):
@@ -724,122 +619,255 @@ class TestReceipt:
         assert "unknown" not in text  # the fee and submission time were read from the chain.
         assert receipt._genesis_hash not in text
 
+    def test_expired_order_auto_reclaims(self, make_solver, monkeypatch) -> None:
+        # A 1-block deadline finalizes empty regardless of fleet activity: the
+        # order hard-expires at created_at+1, before any solver can land a
+        # solution (the miner observes the JobProposed event ~1 block after
+        # proposal and needs 1-2 more to solve, and its own deadline-margin
+        # guard drops sub-margin orders). solve() then auto-reclaims the
+        # reserved reward and raises QuipJobFailedError. A longer deadline is
+        # unsafe here: once a live solver fleet is active it solves the order
+        # before expiry (a 4-block deadline is beaten in ~1-2 blocks). Orders
+        # refuse deadlines under 10 blocks, so the floor is lowered for this
+        # test only: it exercises the reclaim, not the option checks.
+        monkeypatch.setattr("xqsa.quip.order.MIN_DEADLINE_BLOCKS", 1)
+        solver = make_solver(deadline_blocks=1, block_wait=1, timeout=150.0)
+        account = _account(solver)
+
+        def reserved() -> int:
+            return solver._iface.query("System", "Account", [account]).value["data"]["reserved"]
+
+        before = reserved()
+        with pytest.raises(QuipJobFailedError) as excinfo:
+            solver.solve(_asymmetric_spin_model())
+        assert isinstance(excinfo.value.order_id, int)
+
+        # The order finalized with no solutions, which is the precondition that
+        # triggers auto-reclaim. Confirm it directly on the order (account-
+        # independent, so unaffected by state left by other session tests).
+        snap = solver.get_receipt(excinfo.value.order_id).status()
+        assert snap["solution_count"] == 0
+        assert snap["chain_status"] == "Closed"
+        assert snap["state"] == "finalized"
+
+        # This order's reward was reserved at propose and released on reclaim, so
+        # the reserved balance does not GROW across the solve. The reclaim itself
+        # is confirmed by the failure message: a non-release of this order would
+        # push reserved above `before`. `<= before` (not `==`) tolerates rewards
+        # reserved by other session-scoped orders (e.g. another test's order
+        # being claimed or reclaimed) also being released within this
+        # window on a live testnet (~6s blocks), which drops reserved below
+        # `before`. The message assert prevents the bare `<=` from passing
+        # falsely: both orders reserve the same default 1 UNIT, so a genuine
+        # non-release could otherwise cancel against the earlier order's release.
+        assert "was reclaimed" in str(excinfo.value)
+        assert reserved() <= before
+
 
 # ---------------------------------------------------------------------------
-# End-to-end -- needs the miner to actually return a solution
+# Network, self-solved and payout-rule orders
 # ---------------------------------------------------------------------------
 
 
-class TestEndToEnd:
-    def test_spin_roundtrip_pipeline(self, make_solver, solving_miner) -> None:
-        """The live pipeline returns a feasible, chain-consistent spin result.
+class TestNetwork:
+    """Open orders through ``solve()``: the network answers them, or they skip with a ``network:`` reason."""
+
+    def test_network_solves_our_order(self, make_solver) -> None:
+        """The live pipeline returns a feasible, chain-consistent result, and the deprecated pair reads it back.
 
         Optimality and encoding correctness are guarded deterministically by
         ``test_encoded_problem_argmin_decodes_to_optimum`` in ``test_client.py``.
-        This test covers propose, fleet solve, chain record, and decode without
-        requiring the probabilistic live fleet to reach the global optimum.
+        This test covers propose, network solve, chain record, and decode without
+        requiring the probabilistic live network to reach the global optimum.
         """
         model = _asymmetric_spin_model()
         solver = make_solver()
-        result = solver.solve(model)
+        result = _solve_or_skip(solver, model)
+        assert isinstance(result, SolverResult)
         assert result.metadata["energy_matches_chain"] is True
         assert result.metadata["num_solutions"] >= 1
         assert _feasible(result.sample, model.size, {-1, 1})
+        order_id = result.metadata["order_id"]
+        snap = solver.get_receipt(order_id).status()
+        assert snap["first_solution_at"] > snap["created_at"]
 
-    def test_binary_roundtrip_pipeline(self, make_solver, solving_miner) -> None:
-        """The live pipeline returns a feasible, chain-consistent binary result.
+        # The deprecated pair keeps working until QUI-1608.
+        with pytest.warns(DeprecationWarning):
+            assert solver.status(order_id)["is_final"] is True
+        with pytest.warns(DeprecationWarning):
+            recovered = solver.query(order_id, model)
+        assert recovered is not None
+        assert recovered.energy == result.energy
 
-        Optimality and encoding correctness are guarded deterministically by
-        ``test_encoded_problem_argmin_decodes_to_optimum`` in ``test_client.py``.
-        This test covers propose, fleet solve, chain record, and decode without
-        requiring the probabilistic live fleet to reach the global optimum.
-        """
-        model = XQMX.binary_model(3)
-        model.set_linear(0, -1)
-        model.set_linear(1, 2)
-        model.set_quadratic(0, 1, -3)
-        model.set_quadratic(1, 2, 1)
-        solver = make_solver()
-        result = solver.solve(model)
-        assert result.metadata["energy_matches_chain"] is True
-        assert result.metadata["num_solutions"] >= 1
-        assert _feasible(result.sample, model.size, {0, 1})
-
-    def test_native_topology_dense_model_round_trip(self, make_solver, solving_miner) -> None:
+    def test_network_solves_a_native_order(self, make_solver) -> None:
         """A K6 model, which the default topology cannot place, solves in native mode."""
         model = _dense_spin_model()
         solver = make_solver()
         if not TOPOLOGY_OVERRIDE:  # the chain default; a registered override may hold K6.
             with pytest.raises(PlacementError):
                 solver._job_for(model, None, None)
-        result = solver.solve(model, topology="native")
+        result = _solve_or_skip(solver, model, topology="native")
         assert result.metadata["energy_matches_chain"] is True
         assert result.metadata["num_solutions"] >= 1
         assert _feasible(result.sample, model.size, {-1, 1})
 
-    def test_receipt_rebuilt_in_a_fresh_session(self, make_solver, solving_miner) -> None:
-        """A receipt rebuilt by id on another client reports what the submitting order's receipt does."""
+
+class TestSelfSolved:
+    """Orders only our own accounts can answer, through the real submit, answered in separate extrinsics.
+
+    Nobody else can answer, so ranks, energies and leaders are fixed by the
+    test. Refusals go before any accepted answer: a refused answer does not
+    start the ``block_wait`` countdown, while an accepted one does.
+    """
+
+    def test_order_lifecycle_reads_back(self, make_solver) -> None:
+        """One order through its draft lifecycle, answered with four vectors, read back here and on a fresh client."""
+        model = XQMX.binary_model(3)
+        model.set_linear(0, -1)
+        model.set_linear(1, 2)
+        model.set_quadratic(0, 1, -3)
+        model.set_quadratic(1, 2, 1)
         solver = make_solver()
-        order = solver.create_order(_asymmetric_spin_model()).submit()
+        # A keyless account beside ours keeps the order closed to the fleet with one funded account.
+        rule = AccessAllow(accounts=[_account(solver), "0x" + "00" * 32])
+        order = solver.create_order(model, access=rule)
+        assert isinstance(order, JobOrder)
+        order.set(deadline_blocks=30, block_wait=4)
+
+        quote = order.quote()
+        assert quote.affordable
+        assert quote.reward_planck == order.reward
+        assert quote.account is not None and not quote.account.startswith("0x")  # SS58, not hex.
+        assert {len(line) for line in str(quote).splitlines()} == {72}
+        signed = order._signed
+        assert quote.inclusion_window_blocks == 64
+        assert signed.window_end - signed.checkpoint == 63
+
+        order.submit()
+        assert order.status()["state"] in ("submitted", "finalized")
+        order_id = order.order_id()
+        assert isinstance(order_id, int)
+        assert signed.checkpoint < order._included_block <= signed.window_end  # landed inside its window.
+        assert solver.list_orders()[0] == order_id
+        stored = solver._fetch_order(order_id)
+        assert int(stored["timing"]["deadline_blocks"]) == 30
+        assert int(stored["timing"]["block_wait"]) == 4
+        with pytest.raises(QuipSubmissionError, match="works only on a draft"):
+            order.set(deadline_blocks=200)
         with pytest.raises(QuipSubmissionError, match="is open until block"):
             order.reclaim()  # refused locally, before signing.
 
-        rebuilt = make_solver().get_receipt(order.order_id())
-        rebuilt.wait()
-        if not rebuilt.status()["solution_count"]:
-            assert rebuilt.reclaim() == order.reward  # through the rebuilt receipt; nothing stays reserved.
-            pytest.skip("no solver answered this order; the comparison needs an answer")
+        # The best four, sent worst first: the decode puts them back in order.
+        job = order._job
+        vectors = _ranked_vectors(job)[: min(4, solver._limits.max_solutions or 4)]
+        _submit_answer(solver, order_id, vectors[::-1])
+        receipt = order.wait().receipt()
+        snap = receipt.status()
+        assert snap["state"] == "finalized"
+        assert snap["first_solution_at"] > snap["created_at"]
+        assert len(order.solutions()) == len(vectors)
 
-        # Only what final orders keep: a winner's claim may still close the
-        # order, moving chain_status and claimed, between the paired reads.
-        stable = ("state", "order_id", "created_at", "first_solution_at", "effective_expiry", "solution_count")
-        original = order.receipt()
-        assert rebuilt._genesis_hash == original._genesis_hash
-        assert [rebuilt.status()[key] for key in stable] == [original.status()[key] for key in stable]
-        assert rebuilt.solvers() == original.solvers()
-        winners = rebuilt.settlement()["winners"]
-        assert winners == original.settlement()["winners"]
-        assert rebuilt.solvers()[0]["solver"] == winners[0]["solver"]
-        with pytest.raises(QuipSubmissionError, match="was answered by|is already closed"):
-            rebuilt.reclaim()
-        text = str(rebuilt)
+        ours = _ss58(solver)
+        solutions = decode_answers(receipt, job, model, solver=ours)
+        assert [s.energy_milli for s in solutions] == [ising_energy_milli(job, v) for v in vectors]
+        assert [solutions[0].sample.get_linear(var) for var in range(model.size)] == [1, 1, 0]  # the ground state.
+        assert pick_best(receipt, job, model).energy_matches_chain is True  # binary energy matches the chain's.
+
+        assert receipt._facts().access == rule
+        text = str(receipt)
+        print(text)
         assert {len(line) for line in text.splitlines()} == {72}
-        assert "unknown" not in text
-        assert rebuilt._genesis_hash not in text
+        assert "│ Access      allowlist (accounts " in text
+        assert "unknown" not in text  # the fee and submission time were read from the chain.
+        assert receipt._genesis_hash not in text
 
-    def test_query_and_status_after_solve(self, make_solver, solving_miner) -> None:
-        # The deprecated pair keeps working until QUI-1608.
+        rebuilt = make_solver().get_receipt(order_id)
+        stable = ("state", "order_id", "created_at", "first_solution_at", "effective_expiry", "solution_count")
+        assert rebuilt._genesis_hash == receipt._genesis_hash
+        assert [rebuilt.status()[key] for key in stable] == [snap[key] for key in stable]
+        assert rebuilt.solvers() == receipt.solvers()
+        settlement = receipt.settlement()
+        assert rebuilt.settlement() == settlement
+        assert [entry["solver"] for entry in receipt.solvers()] == [ours]
+        assert settlement == {
+            "claimed": False,
+            "winners": [{"solver": ours, "energy_milli": solutions[0].energy_milli, "allocation_planck": order.reward}],
+        }
+
+        with pytest.raises(QuipSubmissionError, match="was answered by"):
+            receipt.reclaim()
+        paid, _block = _claim_from(solver, order_id)
+        assert paid == {bytes(solver._signer.account_id): order.reward}
+
+    def test_rank_weighted_split_on_runtime_119(self, make_solver, second_solver) -> None:
+        """A mixed-sign TopNWeighted(2) order pays by rank alone; the second account's claim pays the split."""
+        solver = make_solver()
+        if (solver._limits.spec_version or 0) < MIN_RANK_WEIGHTED_SPEC:
+            pytest.skip(f"designed: runtime {solver._limits.spec_version} weights by energy, not by rank")
+        model = _asymmetric_spin_model()
+        rule = AccessAllow(accounts=[_account(solver), _account(second_solver)])
+        # An odd reward, so rank 0 takes a remainder.
+        order = _place(
+            solver,
+            model,
+            resolution=ResolutionTopNWeighted(2),
+            access=rule,
+            reward=solver._reward + 1,
+            deadline_blocks=30,
+            block_wait=8,
+        )
+        order_id = order.order_id()
+        vectors = _ranked_vectors(order._job)
+        ground, positive = vectors[0], vectors[5]  # -6 and +2 on this model.
+        assert ising_energy_milli(order._job, ground) < 0 < ising_energy_milli(order._job, positive)
+        _submit_answer(solver, order_id, [ground])
+        _submit_answer(second_solver, order_id, [positive])
+        receipt = order.wait().receipt()
+
+        ours, theirs = _ss58(solver), _ss58(second_solver)
+        assert [entry["solver"] for entry in receipt.solvers()] == [ours, theirs]
+        # Weights k - r over total k(k+1)/2 = 3 with k = 2 ranked, remainder to rank 0.
+        reward = order.reward
+        second_share = reward // 3
+        expected = [reward - second_share, second_share]
+        settlement = receipt.settlement()
+        assert [(w["solver"], w["allocation_planck"]) for w in settlement["winners"]] == list(
+            zip([ours, theirs], expected, strict=True)
+        )
+        text = str(receipt)
+        print(text)
+        assert "│ Payout      top 2, weighted by rank" in text
+
+        paid, block = _claim_from(second_solver, order_id)  # any account may claim.
+        assert paid == {
+            bytes(solver._signer.account_id): expected[0],
+            bytes(second_solver._signer.account_id): expected[1],
+        }
+        # Regression guard only: an OnChainOnly order never emitted ResultReady on claim.
+        assert _events_named(solver._iface, block, "ResultReady") == []
+
+    def test_tie_splits_equally_and_keeps_our_lead(self, make_solver, second_solver) -> None:
+        """Both accounts answer the ground state; the first answer keeps rank 0 and the reward splits equally."""
         model = _asymmetric_spin_model()
         solver = make_solver()
-        result = solver.solve(model)
-        order_id = result.metadata["order_id"]
+        rule = AccessAllow(accounts=[_account(solver), _account(second_solver)])
+        order = _place(
+            solver,
+            model,
+            resolution=ResolutionTopNEqual(2),
+            access=rule,
+            reward=solver._reward + 1,
+            deadline_blocks=30,
+            block_wait=8,
+        )
+        order_id, job = order.order_id(), order._job
+        ground = _ranked_vectors(job)[0]
+        _submit_answer(solver, order_id, [ground])
+        _submit_answer(second_solver, order_id, [ground])
+        receipt = order.wait().receipt()
 
-        with pytest.warns(DeprecationWarning):
-            snap = solver.status(order_id)
-        assert snap["is_final"] is True
-
-        with pytest.warns(DeprecationWarning):
-            recovered = solver.query(order_id, model)
-        assert recovered is not None
-        assert recovered.energy == result.energy
-
-
-class TestLeader:
-    def test_tied_order_follows_our_lead(self, make_solver, solving_miner) -> None:
-        """Our ground-state answer lands first; a fleet answer can only tie it, so we stay the leader."""
-        model = _asymmetric_spin_model()
-        solver = make_solver()
-        job = solver.create_order(model)._job
-        order_id = _self_solve(solver, model, [_model_vector(job, _by_energy(model)[0])])
-        receipt = solver.get_receipt(order_id).wait()
-
-        ours = quip_chain.ss58_address(solver._iface, bytes(solver._signer.account_id))
-        entries = receipt.solvers()
-        assert entries[0]["solver"] == ours
-        if not any(entry["energy_milli"] == entries[0]["ranked_energy_milli"] for entry in entries[1:]):
-            _claim(solver, order_id)
-            pytest.skip("no other solver tied our answer; the tie-break went unexercised")
-
+        ours, theirs = _ss58(solver), _ss58(second_solver)
+        assert [entry["solver"] for entry in receipt.solvers()] == [ours, theirs]
         pick = pick_best(receipt, job, model)
         assert (pick.solution.solver, pick.solution.leader, pick.leader_read) == (ours, True, True)
         assert pick.energy_matches_chain is True
@@ -847,158 +875,100 @@ class TestLeader:
             result = solver.query(order_id, model)
         assert result is not None
         assert result.metadata["solver"] == ours
-        _claim(solver, order_id)
 
-    def test_four_vector_answer_comes_back_whole(self, make_solver) -> None:
-        """A 4-vector answer is stored and decoded in full, best first."""
-        model = _asymmetric_spin_model()
-        solver = make_solver()
-        if (solver._limits.max_solutions or 4) < 4:
-            pytest.skip("the chain's MaxSolutions is under 4")
-        job = solver.create_order(model)._job
-        assignments = _by_energy(model)[:4]
-        vectors = [_model_vector(job, spins) for spins in reversed(assignments)]
-        order_id = _self_solve(solver, model, vectors)
-        receipt = solver.get_receipt(order_id).wait()
-
-        ours = quip_chain.ss58_address(solver._iface, bytes(solver._signer.account_id))
-        solutions = decode_answers(receipt, job, model, solver=ours)
-        assert len(solutions) == 4
-        assert [s.energy_milli for s in solutions] == sorted(ising_energy_milli(job, v) for v in vectors)
-        assert [solutions[0].sample.get_linear(var) for var in range(model.size)] == [
-            assignments[0][var] for var in range(model.size)
-        ]
-        _claim(solver, order_id)
-
-
-class TestPayoutRules:
-    def test_top_n_equal_split_matches_the_claim(self, make_solver, second_funded_keystore) -> None:
-        """Two of our accounts answer a TopNEqual(2) order; the receipt's split is what the claim pays."""
-        model = _asymmetric_spin_model()
-        first = make_solver()
-        second = SolverQuip(url=RPC_URL, keystore=second_funded_keystore, **SOLVER_KWARGS)
-        job = first.create_order(model)._job
-        ground = [_model_vector(job, _by_energy(model)[0])]
-        # An odd reward, so the remainder goes to rank 0; a wait long enough for the second answer to land.
-        order_id = _self_solve(
-            first, model, ground, resolution=ResolutionTopNEqual(2), reward=first._reward + 1, block_wait=30
-        )
-        _answer(second, order_id, ground)
-        receipt = first.get_receipt(order_id).wait()
-
+        reward = order.reward
+        expected = [reward - reward // 2, reward // 2]
         settlement = receipt.settlement()
-        assert settlement["claimed"] is False
-        ours = quip_chain.ss58_address(first._iface, bytes(first._signer.account_id))
-        assert settlement["winners"][0]["solver"] == ours  # first answer, ground state: rank 0 on any tie.
-        assert len(settlement["winners"]) == 2
-        assert sum(w["allocation_planck"] for w in settlement["winners"]) == first._reward + 1
-
-        sent = first._submit_extrinsic("QuantumComputeMempool", "claim_reward", {"order_id": order_id})
-        paid = {
-            quip_chain.account_bytes(attrs["solver"]): int(attrs["amount"])
-            for _phase, module, event, attrs in quip_chain._events(first._iface, sent.block_hash)
-            if (module, event) == ("QuantumComputeMempool", "RewardClaimed") and int(attrs["order_id"]) == order_id
-        }
-        assert paid == {quip_chain.account_bytes(w["solver"]): w["allocation_planck"] for w in settlement["winners"]}
+        assert [(w["solver"], w["allocation_planck"]) for w in settlement["winners"]] == list(
+            zip([ours, theirs], expected, strict=True)
+        )
         text = str(receipt)
         print(text)
         assert "│ Payout      top 2, equal split" in text
         assert text.count("│ Winner ") == 2
+        assert settlement["claimed"] is False
 
+        paid, _block = _claim_from(solver, order_id)
+        assert paid == {
+            bytes(solver._signer.account_id): expected[0],
+            bytes(second_solver._signer.account_id): expected[1],
+        }
+
+    def test_type_allowlist_admits_and_refuses_by_type(self, make_solver, second_solver) -> None:
+        """Our solver type plus a keyless account: the Gpu second account is refused, ours is admitted alone."""
+        model = _asymmetric_spin_model()
+        solver = make_solver()
+        # The account list names a keyless account, so ours gets in by type alone
+        # and the second account is refused by both lists.
+        rule = AccessAllow(accounts=["0x" + "00" * 32], types=[OWN_SOLVER_TYPE])
+        order = _place(solver, model, access=rule, deadline_blocks=30, block_wait=4)
+        order_id = order.order_id()
+        ground = _ranked_vectors(order._job)[0]
+        with pytest.raises(QuipSubmissionError, match="QuantumComputeMempool.NotEligibleSolver"):
+            _submit_answer(second_solver, order_id, [ground])
+        _submit_answer(solver, order_id, [ground])
+        receipt = order.wait().receipt()
+
+        assert receipt._facts().access == rule
+        assert [entry["solver"] for entry in receipt.solvers()] == [_ss58(solver)]
+        paid, _block = _claim_from(solver, order_id)
+        assert paid == {bytes(solver._signer.account_id): order.reward}
+
+    def test_quality_floors_and_ceiling(self, make_solver, second_solver) -> None:
+        """The second account's answers each miss one floor; ours meets them all once the ceiling drops a vector."""
+        model = _asymmetric_spin_model()
+        solver = make_solver()
+        rule = AccessAllow(accounts=[_account(solver), _account(second_solver)])
+        order = _place(
+            solver,
+            model,
+            access=rule,
+            max_energy=-2,
+            min_solutions=2,
+            min_diversity=0.1,
+            deadline_blocks=30,
+            block_wait=6,
+        )
+        order_id, job = order.order_id(), order._job
+        vectors = _ranked_vectors(job)
+        ground, low, high = vectors[0], vectors[1], vectors[-1]  # -6, -2 and +6 on this model.
+        positive = vectors[5]  # +2
+        assert ising_energy_milli(job, low) == -2000  # on the ceiling, so it is kept.
+        # The chain measures diversity over the order's placed nodes, here 3: two
+        # copies of one vector score 0, and ground against low scores at least 1/3.
+
+        refusals = (
+            ([ground], "InsufficientSolutions"),
+            ([ground, ground], "InsufficientDiversity"),
+            ([positive, high], "InsufficientEnergy"),  # the -2 ceiling drops both.
+        )
+        for answer, error in refusals:
+            with pytest.raises(QuipSubmissionError, match=f"QuantumComputeMempool.{error}"):
+                _submit_answer(second_solver, order_id, answer)
+        _submit_answer(solver, order_id, [ground, low, high])
+        receipt = order.wait().receipt()
+
+        params = solver._fetch_order(order_id)["ising_params"]
+        assert params.get("max_energy_milli", params.get("min_energy_milli")) == -2000
+        assert (params["min_solutions"], params["min_diversity_milli"]) == (2, 100)
+        assert receipt._floors_text() == floors_text(Floors(-2000, 2, 100))
+        (answer,) = solver._fetch_solutions(order_id)
+        stored = [[int(spin) for spin in vector] for vector in answer["solutions"]]
+        assert len(stored) == 2
+        assert all(ising_energy_milli(job, vector) <= -2000 for vector in stored)
+        assert int(answer["diversity_milli"]) >= 100
+        paid, _block = _claim_from(solver, order_id)
+        assert paid == {bytes(solver._signer.account_id): order.reward}
+
+
+class TestPayoutRules:
     def test_top_n_weighted_refused_below_runtime_119(self, make_solver) -> None:
         """create_order refuses rank weighting on a runtime that weights by energy, before anything is signed."""
         solver = make_solver()
         if (solver._limits.spec_version or 0) >= MIN_RANK_WEIGHTED_SPEC:
-            pytest.skip(f"the chain runs runtime {solver._limits.spec_version}; QUI-1674 tests TopNWeighted live")
+            pytest.skip(
+                f"designed: the chain runs runtime {solver._limits.spec_version}; "
+                "TestSelfSolved::test_rank_weighted_split_on_runtime_119 covers it"
+            )
         with pytest.raises(QuipOrderOptionError, match=f"runtime {solver._limits.spec_version}"):
             solver.create_order(_asymmetric_spin_model(), resolution=ResolutionTopNWeighted(2))
-
-
-class TestAccess:
-    def test_allowlisted_account_answers_and_reads_back(self, make_solver, second_funded_keystore) -> None:
-        """An order listing two of our accounts is answered by one, and its receipt reads the allowlist back."""
-        model = _asymmetric_spin_model()
-        first = make_solver()
-        second = SolverQuip(url=RPC_URL, keystore=second_funded_keystore, **SOLVER_KWARGS)
-        rule = AccessAllow(accounts=[_register(first), _register(second)])
-        job = first.create_order(model, access=rule)._job
-        order_id = _self_solve(first, model, [_model_vector(job, _by_energy(model)[0])], access=rule)
-        receipt = first.get_receipt(order_id).wait()
-
-        assert receipt._facts().access == rule
-        ours = quip_chain.ss58_address(first._iface, bytes(first._signer.account_id))
-        assert receipt.solvers()[0]["solver"] == ours
-        text = str(receipt)
-        print(text)
-        assert "│ Access      allowlist (accounts " in text
-        _claim(first, order_id)
-
-    def test_type_allowlist_admits_by_type(self, make_solver) -> None:
-        """A types-only allowlist, encoded with no account list, admits a solver of a listed type."""
-        model = _asymmetric_spin_model()
-        solver = make_solver()
-        _register(solver)  # as Cpu
-        rule = AccessAllow(types=["Cpu"])
-        job = solver.create_order(model)._job
-        order_id = _self_solve(solver, model, [_model_vector(job, _by_energy(model)[0])], access=rule)
-        receipt = solver.get_receipt(order_id).wait()
-
-        assert receipt._facts().access == rule
-        assert receipt.status()["solution_count"] >= 1
-        _claim(solver, order_id)
-
-    def test_unlisted_solver_is_refused(self, make_solver, second_funded_keystore) -> None:
-        """A registered solver missing from the allowlist fails NotEligibleSolver."""
-        model = _asymmetric_spin_model()
-        first = make_solver()
-        second = SolverQuip(url=RPC_URL, keystore=second_funded_keystore, **SOLVER_KWARGS)
-        _register(second)
-        rule = AccessAllow(accounts=[_register(first)], types=["QpuIonq"])
-        job = first.create_order(model)._job
-        ground = [_model_vector(job, _by_energy(model)[0])]
-        # A wait long enough for the second answer to land after the first is finalized.
-        order_id = _self_solve(first, model, ground, access=rule, block_wait=30)
-        with pytest.raises(QuipSubmissionError, match="QuantumComputeMempool.NotEligibleSolver"):
-            _answer(second, order_id, ground)
-        first.get_receipt(order_id).wait()
-        _claim(first, order_id)
-
-
-class TestQualityFloors:
-    def test_ceiling_drops_the_vector_above_it(self, make_solver) -> None:
-        """Of a ground-state and a top-energy vector, the chain stores only the one under the ceiling."""
-        model = _asymmetric_spin_model()
-        solver = make_solver()
-        job = solver.create_order(model)._job
-        assignments = _by_energy(model)
-        vectors = [_model_vector(job, assignments[-1]), _model_vector(job, assignments[0])]
-        ground, top = sorted(ising_energy_milli(job, v) for v in vectors)
-        assert ground < top
-        order_id = _self_solve(solver, model, vectors, max_energy=ground / 1000)
-        receipt = solver.get_receipt(order_id).wait()
-
-        params = solver._fetch_order(order_id)["ising_params"]
-        assert params.get("max_energy_milli", params.get("min_energy_milli")) == ground
-        assert receipt._floors_text() == floors_text(Floors(ground, None, None))
-        ours = quip_chain.ss58_address(solver._iface, bytes(solver._signer.account_id))
-        solutions = decode_answers(receipt, job, model, solver=ours)
-        assert [s.energy_milli for s in solutions] == [ground]
-        assert all(entry["energy_milli"] <= ground for entry in receipt.solvers())  # fleet answers too.
-        _claim(solver, order_id)
-
-    def test_floors_order_comes_back_whole(self, make_solver, solving_miner) -> None:
-        """A network-answered order with a solution count and diversity floor; every stored vector decodes."""
-        solver = make_solver()
-        order = solver.create_order(_asymmetric_spin_model(), min_solutions=2, min_diversity=0.1).submit().wait()
-        order_id = order.order_id()
-        params = solver._fetch_order(order_id)["ising_params"]
-        assert (params["min_solutions"], params["min_diversity_milli"]) == (2, 100)
-        answers = solver._fetch_solutions(order_id)
-        if not answers:
-            assert order.reclaim() == order.reward
-            pytest.skip("no solver met the floors on this order")
-
-        for answer in answers:
-            assert len(answer["solutions"]) >= 2
-            assert int(answer["diversity_milli"]) >= 100
-        assert len(order.solutions()) == sum(len(answer["solutions"]) for answer in answers)
