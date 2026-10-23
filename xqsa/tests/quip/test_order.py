@@ -523,7 +523,11 @@ class TestClientDefaults:
 
     @pytest.mark.parametrize("delivery", ["ResultReady", {"Callback": {}}])
     def test_delivery_refused(self, delivery) -> None:
-        with pytest.raises(ValueError, match="result delivery is not supported yet"):
+        with pytest.raises(
+            ValueError,
+            match=r"result delivery is not supported yet: the chain only echoes the endpoint in ResultReady when the "
+            r"order expires.*get_receipt\(order_id\)",
+        ):
             check_client_defaults(delivery)
 
     def test_constructor_checks_before_connecting(self, monkeypatch) -> None:
