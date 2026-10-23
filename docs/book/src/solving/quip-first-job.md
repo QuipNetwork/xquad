@@ -20,6 +20,52 @@ extension that signs extrinsics. `quip-signer` ships a prebuilt wheel on
 Linux and builds from source with a local Rust toolchain on macOS and
 Windows.
 
+## Set Up an Account
+
+`xquad quip account show` is the setup check: it prints the account in
+effect, where it comes from, and its balance. On a first run there is
+none, so it prints the guidance and exits 1 without creating anything:
+
+```sh
+xquad quip --network aglais account show
+```
+
+```text
+Error: No Quip account is set up.
+
+No keystores found. Create one with `xquad quip account new`, or bring a seed with `xquad quip account import`.
+
+Resolution order (the first match signs):
+
+  1  QUIP_SIGNER_SEED     unset
+  2  QUIP_KEYSTORE        unset
+  3  project preference   unset
+  4  user preference      unset
+* 5  default              ~/.quip/keystore.json
+```
+
+Create the account, then check it again:
+
+```sh
+xquad quip account new
+xquad quip --network aglais account show
+```
+
+```text
+created default at the user level: ~/.quip/keystore.json
+  5GGt9yK5EbpdQNv3fCnpZLo93DgL663VsT7VeS5ueJqNoaBD
+it is the user default, which signs when nothing else is set
+Account   5GGt9yK5EbpdQNv3fCnpZLo93DgL663VsT7VeS5ueJqNoaBD
+Source    default keystore ~/.quip/keystore.json
+Balance   0.000000000000 AGLS
+Reserved  0.000000000000 AGLS
+Orders    0 of 32 slots used
+```
+
+The keystore holds the account's signing key. Keep the file: it is the
+account. It starts empty; [Submit](#submit) funds it from the faucet.
+These two blocks were captured on 2026-10-24, with a fresh account.
+
 ## Build the Model
 
 The model is the [TSP example](../examples/tsp.md) at `n = 4`, with a
@@ -130,11 +176,9 @@ quality floors, a 100-block deadline and a 10-block wait after the first
 answer. Nothing has been signed or sent. [Job Orders](quip-orders.md)
 covers every option a draft takes.
 
-No signer is passed, so `SolverQuip` uses the keystore at
-`~/.quip/keystore.json`. On a first run the file does not exist yet:
-`SolverQuip` creates it with a new signing key and warns with its path,
-so the account starts empty. Keep the file: it is the account, and the
-`Account` row shows its address. To use a different one, pass it:
+No signer is passed, so `SolverQuip` signs with the account
+`xquad quip account show` reported. To use a different keystore, pass
+it:
 
 ```python
 solver = sa.quip.SolverQuip.for_network("aglais", keystore="~/.quip/work.json", topology="native")
