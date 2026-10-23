@@ -344,6 +344,8 @@ def connect(url: str, **kwargs: Any) -> Any:
     ``VERIFY_CRL_CHECK_CHAIN`` set (without a loaded CRL every handshake
     fails), and cannot check OCSP at all; OCSP needs a different TLS stack,
     one that fails closed when the check does not finish.
+    ``SolverQuip(ssl_context=)`` sets this context for its own connection and
+    its faucet request.
 
     Raises:
         ImportError: if ``substrate-interface`` is not installed, or ``certifi``

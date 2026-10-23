@@ -29,6 +29,7 @@ import itertools
 import json
 import logging
 import math
+import ssl
 import sys
 import types
 import warnings
@@ -1979,6 +1980,90 @@ class TestSolverQuipConstruction:
             solver._chain_default_spec_id()
 
 
+class TestSolverQuipSslContext:
+    """``ssl_context`` reaches the RPC connection, its reconnects and the faucet; unset, nothing changes."""
+
+    @staticmethod
+    def _connects(monkeypatch, iface: FakeSubstrate) -> list[dict]:
+        """Record the keywords of every ``quip_metadata.connect`` call, each returning ``iface``."""
+        from xqsa.quip import metadata
+
+        seen: list[dict] = []
+        monkeypatch.setattr(metadata, "connect", lambda url, **kwargs: seen.append(kwargs) or iface)
+        return seen
+
+    def test_context_reaches_connect(self, monkeypatch) -> None:
+        ctx = ssl.create_default_context()
+        iface = _default_iface()
+        seen = self._connects(monkeypatch, iface)
+        _make_solver(monkeypatch, iface=iface, ssl_context=ctx)
+        assert seen == [{"ws_options": {"sslopt": {"context": ctx}}}]
+
+    def test_unset_passes_no_ws_options(self, monkeypatch) -> None:
+        iface = _default_iface()
+        seen = self._connects(monkeypatch, iface)
+        _make_solver(monkeypatch, iface=iface)
+        assert seen == [{}]
+
+    def test_for_network_forwards_the_context(self, monkeypatch) -> None:
+        from xqsa.quip import SolverQuip
+
+        ctx = ssl.create_default_context()
+        iface = _default_iface()
+        _install(monkeypatch, iface)
+        _clear_quip_env(monkeypatch)
+        seen = self._connects(monkeypatch, iface)
+        SolverQuip.for_network("aglais", seed=VALID_SEED, ssl_context=ctx)
+        assert seen == [{"ws_options": {"sslopt": {"context": ctx}}}]
+
+    def test_reconnect_uses_the_same_context(self, monkeypatch) -> None:
+        ctx = ssl.create_default_context()
+        solver = _make_solver(monkeypatch, ssl_context=ctx)
+        fresh = _default_iface()
+        seen = self._connects(monkeypatch, fresh)
+        solver._reconnect()
+        assert solver._iface is fresh
+        assert seen == [{"ws_options": {"sslopt": {"context": ctx}}}]
+
+    def test_a_non_context_is_refused_before_connecting(self, monkeypatch) -> None:
+        iface = _default_iface()
+        seen = self._connects(monkeypatch, iface)
+        with pytest.raises(TypeError, match="ssl_context must be an ssl.SSLContext, got str"):
+            _make_solver(monkeypatch, iface=iface, ssl_context="x")
+        assert seen == []
+
+    @pytest.mark.parametrize("url", ["https://rpc.example", " HTTPS://rpc.example"])
+    def test_an_https_rpc_url_is_refused_before_connecting(self, monkeypatch, url) -> None:
+        # substrate-interface sends https:// over requests, which would drop the context.
+        iface = _default_iface()
+        seen = self._connects(monkeypatch, iface)
+        with pytest.raises(ValueError, match="ssl_context needs a wss:// RPC URL"):
+            _make_solver(monkeypatch, iface=iface, url=url, ssl_context=ssl.create_default_context())
+        assert seen == []
+
+    def test_an_https_rpc_url_without_a_context_still_connects(self, monkeypatch) -> None:
+        iface = _default_iface()
+        seen = self._connects(monkeypatch, iface)
+        _make_solver(monkeypatch, iface=iface, url="https://rpc.example")
+        assert seen == [{}]
+
+    def test_autofund_passes_the_context_to_the_faucet(self, monkeypatch) -> None:
+        ctx = ssl.create_default_context()
+        solver, iface = _solve_ready_short(monkeypatch, ssl_context=ctx)
+        calls: list[dict] = []
+
+        def fake_fund(dest, **kwargs):
+            calls.append(kwargs)
+            iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
+            return {}
+
+        monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", fake_fund)
+        _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
+        solver.solve(_model())
+        [kwargs] = calls
+        assert kwargs["ssl_context"] is ctx
+
+
 class TestSolverQuipMetadataErrors:
     """QuipMetadataError reaches the caller instead of being renamed en route.
 
@@ -3635,7 +3720,7 @@ class TestAccountDisplaysInSs58:
         solver, _iface = _solve_ready_short(monkeypatch)
         sent: list[str] = []
 
-        def post(url, dest, amount, timeout):
+        def post(url, dest, amount, timeout, ssl_context=None):
             sent.append(dest)
             return 403, {}
 
