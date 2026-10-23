@@ -266,6 +266,34 @@ def test_run_prints_outputs_in_rust_debug_form(tmp_path: Path) -> None:
     ]
 
 
+def test_run_prints_samples_domains_coefficients_and_empty_vecxqmx(tmp_path: Path) -> None:
+    src = write(
+        tmp_path,
+        "prog.xqasm",
+        "PUSH 2\nSQMX r0\nPUSH 0\nPUSH 3\nSETLINE r0\nPUSH 0\nPUSH 1\nPUSH -2\nSETQUAD r0\nPUSH 0\nOUTPUT r0\n"
+        "PUSH 2\nPUSH 3\nXSMX r1\nPUSH 1\nPUSH 2\nSETLINE r1\nPUSH 1\nOUTPUT r1\n"
+        "VECX r2\nPUSH 2\nOUTPUT r2\nHALT\n",
+    )
+    result = invoke(["vm", "run", "--text", str(src)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines() == [
+        "outputs:",
+        "  [0] = Model(XqmxModel { domain: Spin, size: 2, linear: {0: 3}, quadratic: {(0, 1): -2}, rows: 0, cols: 0 })",
+        "  [1] = Sample(XqmxSample { domain: Integer(3), values: [0, 2], rows: 0, cols: 0 })",
+        "  [2] = VecXqmx([])",
+    ]
+
+
+def test_outputs_debug_leaves_unset_slots_none() -> None:
+    from xqffi.asm import assemble_source
+    from xqffi.vm import Vm
+
+    vm = Vm()
+    vm.set_output_slots(2)
+    vm.run(assemble_source("PUSH 7\nSTOW r0\nPUSH 1\nOUTPUT r0\nHALT\n"))
+    assert vm.outputs_debug() == [None, "Int(7)"]
+
+
 # -- check --
 
 

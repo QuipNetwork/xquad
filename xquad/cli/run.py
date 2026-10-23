@@ -63,36 +63,6 @@ def _calldata(ctx: click.Context, param: click.Parameter, value: tuple[str, ...]
     return ints
 
 
-def _debug(value: object) -> str:
-    """Render an output slot the way Rust's `{:?}` prints the `RegVal` it came from."""
-    from xqffi.vm import XqmxModel, XqmxSample
-
-    def domain(v: XqmxModel | XqmxSample) -> str:
-        return f"Integer({v.k})" if v.domain == "integer" else v.domain.capitalize()
-
-    def model(m: XqmxModel) -> str:
-        linear = dict(sorted(m.linear_items()))
-        quadratic = dict(sorted(m.quadratic_items()))
-        return (
-            f"XqmxModel {{ domain: {domain(m)}, size: {m.size}, linear: {linear}, "
-            f"quadratic: {quadratic}, rows: {m.rows}, cols: {m.cols} }}"
-        )
-
-    if isinstance(value, XqmxModel):
-        return f"Model({model(value)})"
-    if isinstance(value, XqmxSample):
-        return (
-            f"Sample(XqmxSample {{ domain: {domain(value)}, values: {value.values}, "
-            f"rows: {value.rows}, cols: {value.cols} }})"
-        )
-    if isinstance(value, list):
-        # shortcut: an empty VecXqmx comes back as [] and prints as VecInt([]); the binding does not tell them apart.
-        if value and isinstance(value[0], XqmxModel):
-            return f"VecXqmx([{', '.join(model(m) for m in value)}])"
-        return f"VecInt({value})"
-    return f"Int({value})"
-
-
 @click.command()
 @click.option("--text", is_flag=True, help="Treat FILE as assembly text and assemble before running.")
 @click.option(
@@ -188,11 +158,11 @@ def run(
         if swap:
             signal.signal(signal.SIGINT, sigint)
 
-    slots = [(i, v) for i, v in enumerate(vm.outputs()) if v is not None]
+    slots = [(i, v) for i, v in enumerate(vm.outputs_debug()) if v is not None]
     if slots:
         click.echo("outputs:")
         for i, v in slots:
-            click.echo(f"  [{i}] = {_debug(v)}")
+            click.echo(f"  [{i}] = {v}")
     stack = vm.stack()
     if stack:
         click.echo("stack (bottom to top):")

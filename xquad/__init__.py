@@ -78,7 +78,10 @@ class _AliasLoader:
     def exec_module(self, module: ModuleType) -> None:
         # The import system has just set the alias's spec on the target; give it its own back, or
         # `importlib.reload` and `importlib.resources` see a spec with no origin and no real loader.
-        module.__spec__ = self._target_spec
+        # The PyO3 submodules (`xqffi.asm`, `xqffi.verifier`) have none, so they keep the alias spec
+        # for `find_spec`; `importlib.reload` does not work on them either way.
+        if self._target_spec is not None:
+            module.__spec__ = self._target_spec
 
 
 class _AliasFinder:
@@ -106,4 +109,4 @@ def __getattr__(name: str) -> ModuleType:
 
 
 def __dir__() -> list[str]:
-    return sorted(set(globals()) | set(__all__))
+    return sorted(set(__all__) | {n for n in globals() if n.startswith("__")})

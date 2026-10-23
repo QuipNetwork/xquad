@@ -86,6 +86,16 @@ def test_alias_import_keeps_the_target_spec():
     assert importlib.reload(xquad.cp) is _xqcp
 
 
+def test_pyo3_alias_has_a_spec():
+    """`xqffi.asm` has no spec of its own, so the alias keeps one and `find_spec` still answers."""
+    import importlib.util
+
+    from xquad import asm
+
+    assert asm.__spec__ is not None
+    assert importlib.util.find_spec("xquad.asm") is asm.__spec__
+
+
 def test_import_xquad_loads_no_peer():
     """`import xquad` alone leaves the peer packages unimported."""
     code = "import sys, xquad; print(' '.join(m for m in ('xqcp', 'xqsa', 'xqvm_py') if m in sys.modules))"
@@ -96,6 +106,7 @@ def test_import_xquad_loads_no_peer():
 def test_dir_lists_every_subnamespace():
     """`dir(xquad)` lists every public name, loaded or not."""
     assert set(xquad.__all__) <= set(dir(xquad))
+    assert not {"importlib", "sys", "ModuleSpec", "_ALIASES"} & set(dir(xquad))
 
 
 def test_unknown_attribute_raises():

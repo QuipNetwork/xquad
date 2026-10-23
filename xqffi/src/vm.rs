@@ -404,6 +404,16 @@ impl PyVm {
         Ok(list)
     }
 
+    /// Return the current output slots as Rust's `{:?}` form of each
+    /// `RegVal` (`Int(42)`, `VecXqmx([])`, ...), or `None` for unset slots.
+    fn outputs_debug(&self) -> Vec<Option<String>> {
+        self.inner
+            .outputs()
+            .iter()
+            .map(|rv| (!matches!(rv, RegVal::Unset)).then(|| format!("{rv:?}")))
+            .collect()
+    }
+
     /// Return the residual stack as `list[int]` (bottom to top).
     fn stack(&self) -> Vec<i64> {
         self.inner.stack().to_vec()

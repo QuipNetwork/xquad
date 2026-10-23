@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xquad"
-description = "Umbrella meta-package for the XQuad toolchain — xqffi, xqcp, xqsa under a unified namespace, and the xquad command."
+description = "Umbrella meta-package for the XQuad toolchain -- xqffi, xqcp, xqsa under a unified namespace, and the xquad command."
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "AGPL-3.0-or-later" }

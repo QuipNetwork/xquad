@@ -10,7 +10,7 @@
 ; RegisterType { expected: "model" }). It also regresses the verifier rule
 ; QUI-1168 corrected: reg_type.rs required a Model register for all three
 ; linear opcodes, so this program assembled and ran but could not pass
-; `xquad verify`.
+; `xquad vm check`.
 ;
 ; Every write stays inside the binary domain {0, 1}. An earlier revision
 ; wrote 3 and accumulated to 8 into this same binary sample, which reads as
