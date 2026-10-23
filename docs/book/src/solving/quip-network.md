@@ -110,7 +110,9 @@ preference:
 
 The project level is the nearest `.quip/` directory found walking up
 from the working directory, stopping below the home directory, so
-`~/.quip/` is never a project. A preference is the single line
+`~/.quip/` is never a project. A `.quip/` owned by another user or
+writable by everyone is skipped, so a shared directory such as `/tmp`
+cannot choose the signer. A preference is the single line
 `account = "<name>"`. A project preference may name a project or a user
 keystore, and a name present at both levels resolves to the project one;
 a user preference applies in every directory, so it names a user

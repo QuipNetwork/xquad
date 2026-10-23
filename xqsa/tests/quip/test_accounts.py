@@ -315,6 +315,7 @@ class TestResolve:
             ({"scheme": "other"}, None, "scheme 'other' not supported"),
             ({"account_id_hex": None}, None, "no readable 'account_id_hex'"),
             ({"account_id_hex": "0xabcd"}, None, "2 bytes, not 32"),
+            ({"encrypted": True}, None, "passphrase-encrypted"),
         ],
     )
     def test_unusable_keystores_listed(self, quip_home, fields, raw, problem) -> None:
@@ -390,6 +391,31 @@ class TestEdgeCases:
         assert resolution.in_effect.step == "seed="
         assert resolution.accounts == ()
         assert next(s for s in resolution.sources if s.step == "default").path is None
+
+    @pytest.mark.parametrize(
+        "call", [lambda: create_account("a", level="user"), lambda: use_account("a", level="user")]
+    )
+    def test_no_home_directory_write_raises_value_error(self, quip_home, monkeypatch, call) -> None:
+        def no_home(cls):
+            raise RuntimeError("Could not determine home directory.")
+
+        monkeypatch.setattr(Path, "home", classmethod(no_home))
+        with pytest.raises(ValueError, match="cannot determine the home directory"):
+            call()
+
+    @pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+    @pytest.mark.parametrize("untrusted", ["world-writable", "another user's"])
+    def test_untrusted_project_dir_is_skipped(self, quip_home, monkeypatch, untrusted) -> None:
+        _, project = quip_home
+        create_account("p", level="project", seed=SEED_A)
+        use_account("p", level="project")
+        if untrusted == "world-writable":
+            (project / ".quip").chmod(0o777)
+        else:
+            uid = os.getuid()
+            monkeypatch.setattr(os, "getuid", lambda: uid + 1)
+        assert resolve_accounts().in_effect.step == "default"
+        assert all(account.level == "user" for account in resolve_accounts().accounts)
 
     def test_quip_file_in_working_directory_refused(self, quip_home) -> None:
         _, project = quip_home

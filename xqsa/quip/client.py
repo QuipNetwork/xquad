@@ -389,7 +389,11 @@ class SolverQuip(Solver):
                 f"the {source.step} account preference cannot sign: {source.problem}. "
                 f"Fix it, or clear it with `xquad quip account use --unset`"
             )
-        return quip_signing.load_keystore(source.path).signer
+        logger.info("using the %s account preference %r, keystore %s", source.step, source.value, source.path)
+        try:
+            return quip_signing.load_keystore(source.path).signer
+        except QuipSigningError as exc:
+            raise QuipSigningError(f"the {source.step} account preference cannot sign: {exc}") from exc
 
     @staticmethod
     def _load_default_keystore(quip_signing: Any) -> Any:
@@ -598,8 +602,11 @@ class SolverQuip(Solver):
             ValueError: if ``account`` cannot be read as an account.
             QuipConnectionError: if the balance cannot be read.
         """
-        owner = self._signer.account_id if account is None else chain.account_bytes(account)
-        return chain.free_balance(self._iface, owner)
+        return chain.free_balance(self._iface, self._owner(account))
+
+    def _owner(self, account: Any) -> bytes:
+        """The account ``account`` names, or this client's signer when it is ``None``."""
+        return self._signer.account_id if account is None else chain.account_bytes(account)
 
     @property
     def _account_ss58(self) -> str:
@@ -607,8 +614,8 @@ class SolverQuip(Solver):
         return chain.ss58_address(self._iface, self._signer.account_id)
 
     def _free_balance(self) -> int:
-        """See :func:`xqsa.quip.chain.free_balance`."""
-        return chain.free_balance(self._iface, self._signer.account_id)
+        """The signer's free balance; see :meth:`balance`."""
+        return self.balance()
 
     def _query_fee(self, wire: bytes) -> tuple[int, bool]:
         """See :func:`xqsa.quip.chain.query_fee`."""
@@ -1701,8 +1708,7 @@ class SolverQuip(Solver):
         """
         if state not in (None, "submitted", "finalized"):
             raise ValueError(f"state={state!r}; expected 'submitted', 'finalized' or None")
-        owner = self._signer.account_id if account is None else chain.account_bytes(account)
-        order_ids = chain.proposer_orders(self._iface, owner)[::-1]
+        order_ids = chain.proposer_orders(self._iface, self._owner(account))[::-1]
         if state is not None:
             current_block = self._current_block()
             order_ids = [

@@ -55,6 +55,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -217,7 +218,14 @@ def use_account(name: str, *, level: Level) -> None:
     base.mkdir(parents=True, exist_ok=True)
     if level == "project":
         _write_gitignore(base)
-    config.write_text(f'account = "{name}"\n')
+    # A temp file and a replace, so a concurrent reader never sees a partial preference.
+    fd, tmp_name = tempfile.mkstemp(dir=base, prefix=f".{_CONFIG}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(f'account = "{name}"\n')
+        os.replace(tmp_name, config)
+    finally:
+        Path(tmp_name).unlink(missing_ok=True)
 
 
 def clear_account(*, level: Level) -> None:
@@ -237,14 +245,17 @@ def clear_account(*, level: Level) -> None:
 
 
 def _user_dir() -> Path:
-    return Path.home() / _QUIP_DIR
+    try:
+        return Path.home() / _QUIP_DIR
+    except RuntimeError as exc:
+        raise ValueError("cannot determine the home directory") from exc
 
 
 def _find_user_dir() -> Path | None:
     """Return the user ``.quip/``, or ``None`` when no home directory can be determined."""
     try:
         return _user_dir()
-    except RuntimeError:
+    except ValueError:
         return None
 
 
@@ -252,7 +263,8 @@ def _find_project() -> Path | None:
     """Return the nearest project ``.quip/``, walking up and stopping below home.
 
     A working directory that no longer exists has no project, and a ``.quip``
-    that resolves to the user level (a symlink) is never one.
+    that resolves to the user level (a symlink), belongs to another user or is
+    world-writable is never one.
     """
     try:
         cwd = Path.cwd().resolve()
@@ -265,9 +277,20 @@ def _find_project() -> Path | None:
         if directory == home:
             return None
         candidate = directory / _QUIP_DIR
-        if candidate.is_dir() and candidate.resolve() != user_quip:
+        if candidate.is_dir() and candidate.resolve() != user_quip and _trusted(candidate):
             return candidate
     return None
+
+
+def _trusted(directory: Path) -> bool:
+    """Whether ``directory`` is owned by this user and not world-writable, so no other user planted it."""
+    if not hasattr(os, "getuid"):
+        return True  # shortcut: no ownership check on Windows; add an ACL check if shared Windows hosts matter.
+    try:
+        info = directory.stat()
+    except OSError:
+        return False
+    return info.st_uid == os.getuid() and not info.st_mode & 0o002
 
 
 def _level_dir_for_write(level: Level) -> Path:
@@ -279,12 +302,13 @@ def _level_dir_for_write(level: Level) -> Path:
     if project is not None:
         return project
     cwd = Path.cwd().resolve()
-    if cwd == Path.home().resolve():
+    if cwd == _user_dir().parent.resolve():
         raise ValueError("the home directory is the user level; use `--global`")
     candidate = cwd / _QUIP_DIR
     if candidate.exists() or candidate.is_symlink():
         raise ValueError(
-            f"{candidate} exists but is not a project .quip/ directory (a file, or a link to the user level)"
+            f"{candidate} exists but is not a project .quip/ directory "
+            "(a file, a link to the user level, another user's or world-writable)"
         )
     return candidate
 
@@ -319,7 +343,7 @@ def _write_gitignore(base: Path) -> None:
 
 
 def _list_accounts(base: Path | None, level: Level) -> list[Account]:
-    """List the keystores under ``base``; a directory the process cannot enter lists none."""
+    """List the keystores under ``base``; what the process cannot read is left out."""
     if base is None:
         return []
     found = []
@@ -335,7 +359,7 @@ def _list_accounts(base: Path | None, level: Level) -> list[Account]:
                     account = Account(account.name, level, path, account.account_id, problem)
                 found.append(account)
     except OSError:
-        return []
+        pass  # keep what was read before the level became unreadable.
     return found
 
 
@@ -366,6 +390,8 @@ def _cached_account_id(path: Path) -> tuple[bytes | None, str | None]:
         return None, "an H3 account the chain no longer accepts; create a new one"
     if scheme != signing.KEYSTORE_SCHEME:
         return None, f"keystore scheme {scheme!r} not supported"
+    if raw.get("encrypted"):
+        return None, "passphrase-encrypted keystores are not supported yet"
     cached = raw.get("account_id_hex")
     try:
         account_id = bytes.fromhex(signing._strip_0x(cached)) if isinstance(cached, str) else None

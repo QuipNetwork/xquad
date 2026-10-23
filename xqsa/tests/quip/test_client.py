@@ -26,6 +26,7 @@ No chain or networking dependency, so these run everywhere.
 from __future__ import annotations
 
 import itertools
+import json
 import logging
 import math
 import sys
@@ -4512,6 +4513,28 @@ class TestSignerPrecedence:
         (project / ".quip" / "keystores" / "p.json").write_text("{not json")
         with pytest.raises(QuipSigningError, match="project account preference cannot sign: not readable JSON"):
             SolverQuip(url="ws://fake")
+
+    def test_tampered_preferred_keystore_names_the_preference(self, monkeypatch, tmp_path, quip_home) -> None:
+        from xqsa.quip import QuipSigningError, SolverQuip
+
+        home, _ = quip_home
+        self._configure(monkeypatch, tmp_path, ("user",))
+        path = home / ".quip" / "keystores" / "u.json"
+        raw = json.loads(path.read_text())
+        raw["account_id_hex"] = "0x" + "00" * 32
+        path.write_text(json.dumps(raw))
+        with pytest.raises(QuipSigningError, match="user account preference cannot sign: "):
+            SolverQuip(url="ws://fake")
+
+    def test_preferred_signer_is_logged(self, monkeypatch, tmp_path, quip_home, caplog) -> None:
+        from xqsa.quip import SolverQuip
+
+        home, _ = quip_home
+        self._configure(monkeypatch, tmp_path, ("user",))
+        with caplog.at_level(logging.INFO, logger="xqsa.quip"):
+            SolverQuip(url="ws://fake")
+        path = str(home / ".quip" / "keystores" / "u.json")
+        assert any("user account preference 'u'" in r.getMessage() and path in r.getMessage() for r in caplog.records)
 
     def test_preferred_keystore_is_never_generated(self, monkeypatch, tmp_path, quip_home) -> None:
         from xqsa.quip import QuipSigningError, SolverQuip
