@@ -33,7 +33,9 @@ metal = [ "pyobjc-framework-Metal>=11.0; sys_platform == 'darwin'" ]
 # through the same installed binding that produced it, so a suite change keeping
 # the same byte lengths self-verifies locally and is rejected only by the chain.
 # `certifi` arrives through substrate-interface anyway; it is listed because
-# `xqsa.quip.metadata.connect` imports it directly for the wss:// CA default.
+# `xqsa.quip.metadata.connect` imports it directly for the wss:// CA default,
+# used on a macOS Python whose trust store is empty (RPC and faucet alike);
+# an https:// RPC goes through requests, which uses it on every platform.
 # The floor is the first certifi without the emSign ECC Root CA - G3, dropped
 # after eMudhra revoked eight Global TLS intermediates in October 2026.
 quip = [ "substrate-interface>=1.7.4,<2", "quip-signer>=0.3.0,<0.4", "certifi>=2026.10.19" ]

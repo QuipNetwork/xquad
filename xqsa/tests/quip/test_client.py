@@ -2032,6 +2032,21 @@ class TestSolverQuipSslContext:
             _make_solver(monkeypatch, iface=iface, ssl_context="x")
         assert seen == []
 
+    @pytest.mark.parametrize("url", ["https://rpc.example", " HTTPS://rpc.example"])
+    def test_an_https_rpc_url_is_refused_before_connecting(self, monkeypatch, url) -> None:
+        # substrate-interface sends https:// over requests, which would drop the context.
+        iface = _default_iface()
+        seen = self._connects(monkeypatch, iface)
+        with pytest.raises(ValueError, match="ssl_context needs a wss:// RPC URL"):
+            _make_solver(monkeypatch, iface=iface, url=url, ssl_context=ssl.create_default_context())
+        assert seen == []
+
+    def test_an_https_rpc_url_without_a_context_still_connects(self, monkeypatch) -> None:
+        iface = _default_iface()
+        seen = self._connects(monkeypatch, iface)
+        _make_solver(monkeypatch, iface=iface, url="https://rpc.example")
+        assert seen == [{}]
+
     def test_autofund_passes_the_context_to_the_faucet(self, monkeypatch) -> None:
         ctx = ssl.create_default_context()
         solver, iface = _solve_ready_short(monkeypatch, ssl_context=ctx)
@@ -3670,7 +3685,7 @@ class TestAccountDisplaysInSs58:
     def test_autofund_prompt(self, monkeypatch) -> None:
         solver, iface = _solve_ready_short(monkeypatch, autofund=False)
 
-        def fake_fund(dest, *, url, amount=None, dest_label=None, ssl_context=None):
+        def fake_fund(dest, *, url, amount=None, dest_label=None):
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
 
@@ -4118,7 +4133,7 @@ class TestSolveAutofundGate:
         solver, iface = _solve_ready_short(monkeypatch)
         calls: list[tuple] = []
 
-        def fake_fund(dest, *, url, amount=None, dest_label=None, ssl_context=None):
+        def fake_fund(dest, *, url, amount=None, dest_label=None):
             calls.append((dest, url, amount))
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
@@ -4157,7 +4172,7 @@ class TestSolveAutofundGate:
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver))
         solver.solve(_model())
         label = quip_chain.ss58_address(solver._iface, solver._signer.account_id)
-        assert calls == [{"url": "http://faucet", "dest_label": label, "ssl_context": None}]
+        assert calls == [{"url": "http://faucet", "dest_label": label}]
 
     def test_shortfall_beyond_one_drip_raises_without_asking(self, monkeypatch) -> None:
         from xqsa.quip import QuipSubmissionError
@@ -4218,7 +4233,7 @@ class TestSolveAutofundGate:
 
         solver, _iface = _solve_ready_short(monkeypatch)
 
-        def refuse(dest, *, url, amount=None, dest_label=None, ssl_context=None):
+        def refuse(dest, *, url, amount=None, dest_label=None):
             raise QuipFaucetError(403, {"error": "destination already funded"}, "refused")
 
         monkeypatch.setattr("xqsa.quip.client.fund_from_faucet", refuse)
@@ -4230,7 +4245,7 @@ class TestSolveAutofundGate:
     def test_prompt_goes_to_stderr(self, monkeypatch) -> None:
         solver, iface = _solve_ready_short(monkeypatch, autofund=False)
 
-        def fake_fund(dest, *, url, amount=None, dest_label=None, ssl_context=None):
+        def fake_fund(dest, *, url, amount=None, dest_label=None):
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
 
@@ -4248,7 +4263,7 @@ class TestSolveAutofundGate:
     def test_prompt_goes_to_stdout_when_stderr_is_redirected(self, monkeypatch) -> None:
         solver, iface = _solve_ready_short(monkeypatch, autofund=False)
 
-        def fake_fund(dest, *, url, amount=None, dest_label=None, ssl_context=None):
+        def fake_fund(dest, *, url, amount=None, dest_label=None):
             iface.storage[("System", "Account")] = {"data": {"free": 100 * UNIT}}
             return {}
 

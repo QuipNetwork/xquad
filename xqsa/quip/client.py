@@ -73,7 +73,7 @@ from xqsa.quip.errors import (  # noqa: F401 -- the Quip* errors stay importable
     QuipTopologyError,
     QuipUnconfirmedError,
 )
-from xqsa.quip.faucet import DEFAULT_DRIP_PLANCK, fund_from_faucet
+from xqsa.quip.faucet import DEFAULT_DRIP_PLANCK, _check_ssl_context, fund_from_faucet
 from xqsa.quip.networks import NETWORKS
 from xqsa.quip.order import (
     DEFAULT_INCLUSION_WINDOW_BLOCKS,
@@ -142,7 +142,11 @@ def _is_native(topology: str | None) -> bool:
 
 
 def _open(url: str, ssl_context: ssl.SSLContext | None = None) -> Any:
-    """Connect to ``url`` and load its runtime; the connection is closed on any failure."""
+    """Connect to ``url`` and load its runtime; the connection is closed on any failure.
+
+    A given ``ssl_context`` goes to ``connect`` as ``ws_options["sslopt"]["context"]``:
+    it applies to ``wss://`` only and replaces the certifi CA default there.
+    """
     # Not substrateinterface.SubstrateInterface directly: Quip runtimes serve
     # metadata V16, which scalecodec cannot decode. The subclass pulls V14
     # through the versioned runtime API instead, and confines that to instances
@@ -205,7 +209,8 @@ class SolverQuip(Solver):
     ``ssl_context=`` takes an ``ssl.SSLContext`` used as-is for both the
     ``wss://`` RPC connection (reconnects included) and the ``autofund``
     faucet request, in place of the default CA-bundle context; it is ignored
-    for ``ws://`` and ``http://`` URLs. It adds no revocation checking of its
+    for ``ws://`` and ``http://`` URLs, and refused with an ``https://`` RPC
+    URL, whose transport cannot use it. It adds no revocation checking of its
     own: a stdlib context checks only CRLs the caller loads, with
     ``VERIFY_CRL_CHECK_LEAF`` or ``VERIFY_CRL_CHECK_CHAIN`` set, and cannot
     check OCSP.
@@ -215,7 +220,8 @@ class SolverQuip(Solver):
             (``pip install xqsa[quip]`` -- provides ``substrate-interface`` and
             the ``quip_signer`` signing extension).
         ValueError: if no RPC URL is configured, ``read_only=True`` comes with
-            ``seed=`` or ``keystore=``, or ``access``, ``resolution``
+            ``seed=`` or ``keystore=``, ``ssl_context`` comes with an
+            ``https://`` RPC URL, or ``access``, ``resolution``
             or ``delivery`` names a value no order can use yet (checked before
             connecting).
         TypeError: if both ``access`` and the deprecated ``mode`` are given,
@@ -284,11 +290,14 @@ class SolverQuip(Solver):
 
         if read_only and (seed is not None or keystore is not None):
             raise ValueError("read_only=True takes no seed= or keystore=")
-        if ssl_context is not None and not isinstance(ssl_context, ssl.SSLContext):
-            raise TypeError(f"ssl_context must be an ssl.SSLContext, got {type(ssl_context).__name__}")
+        _check_ssl_context(ssl_context)
         resolved_url = url or os.environ.get("QUIP_RPC_URL")
         if not resolved_url:
             raise ValueError("A Quip RPC URL is required. Pass url= or set QUIP_RPC_URL.")
+        # substrate-interface sends an https:// URL over requests, which never sees
+        # the context; going ahead would drop the caller's TLS policy silently.
+        if ssl_context is not None and resolved_url.strip().lower().startswith("https://"):
+            raise ValueError("ssl_context needs a wss:// RPC URL; an https:// RPC connection cannot use it")
         access = _take_mode(access, mode, stacklevel=2)
         if access is None:
             access = AccessOpen()
@@ -1525,11 +1534,14 @@ class SolverQuip(Solver):
         """
         # No amount: the faucet's default drip. solve() only gets here when the
         # shortfall fits in one, so a mistyped reward is never funded.
+        # The context only when set, as _open does, so a stand-in for
+        # fund_from_faucet written before ssl_context existed still fits.
+        tls = {} if self._ssl_context is None else {"ssl_context": self._ssl_context}
         fund_from_faucet(
             "0x" + bytes(self._signer.account_id).hex(),
             url=self._faucet,
             dest_label=self._account_ss58,
-            ssl_context=self._ssl_context,
+            **tls,
         )
         deadline = time.monotonic() + FUND_WAIT_SECONDS
         while (balance := self._free_balance()) < quote.total_planck:

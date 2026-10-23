@@ -43,17 +43,23 @@ revocation lists, pass an `ssl.SSLContext` as `ssl_context` to
 `SolverQuip`, `SolverQuip.for_network` or `fund_from_faucet`. Both
 clients then use it in place of the default CA-bundle context,
 reconnects and `autofund` included; it is ignored for `ws://` and
-`http://` URLs. A standard-library context checks only revocation lists
-you fetch and load yourself. With `VERIFY_CRL_CHECK_LEAF`, as below, it
-needs the list from the server certificate's issuer; with
-`VERIFY_CRL_CHECK_CHAIN`, one for every certificate in the chain. A
-handshake missing a list it needs fails.
+`http://` URLs, and `SolverQuip` refuses it with an `https://` RPC URL,
+whose transport cannot use it. The context replaces the default
+entirely, so it must carry its own trusted roots: on a macOS Python whose
+trust store is empty, load certifi's bundle as below. A
+standard-library context checks only revocation lists you fetch and
+load yourself. With `VERIFY_CRL_CHECK_LEAF`, as below, it needs the list
+from each server certificate's issuer; with `VERIFY_CRL_CHECK_CHAIN`,
+one for every certificate in each chain. One context serves both
+servers, so with `autofund` on, load the lists for the faucet's issuer
+as well as the RPC node's. A handshake missing a list it needs fails.
 
 ```python
 import ssl
+import certifi
 from xqsa.quip import SolverQuip
 
-ctx = ssl.create_default_context()
+ctx = ssl.create_default_context(cafile=certifi.where())
 ctx.load_verify_locations(cafile="issuer-crl.pem")  # a PEM CRL you fetched
 ctx.verify_flags |= ssl.VERIFY_CRL_CHECK_LEAF
 solver = SolverQuip.for_network("aglais", ssl_context=ctx)
@@ -81,7 +87,7 @@ environment variables:
 | `deadline_blocks` | none | Blocks an order stays open; defaults to `100` |
 | `block_wait` | none | Blocks an order keeps accepting answers after the first one arrives; defaults to `10` |
 | `autofund` | `QUIP_AUTOFUND` | Whether to draw one drip from `faucet` when the account cannot cover the quoted job; a shortfall larger than one drip, or an account already holding more than one drip, raises instead. Same forms and default as `autoconfirm` |
-| `ssl_context` | none | An `ssl.SSLContext` used for both the `wss://` RPC connection and the faucet request in place of the default CA-bundle context; ignored for `ws://` and `http://` URLs. See the revocation note above |
+| `ssl_context` | none | An `ssl.SSLContext` used for both the `wss://` RPC connection and the faucet request in place of the default CA-bundle context; ignored for `ws://` and `http://` URLs, refused with an `https://` RPC URL. See the revocation note above |
 
 The signer comes from the first of these that is set: `seed`,
 `keystore`, `QUIP_SIGNER_SEED`, `QUIP_KEYSTORE`, the project account
