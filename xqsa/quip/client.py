@@ -34,6 +34,7 @@ from xqsa.quip import chain
 from xqsa.quip import metadata as quip_metadata
 from xqsa.quip.access import Access, AccessOpen, coerce_access
 from xqsa.quip.access import from_chain as access_from_chain
+from xqsa.quip.accounts import resolve_accounts
 from xqsa.quip.chain import (  # noqa: F401 -- FEE_HEADROOM_PLANCK and the pallet names stay importable from here.
     FEE_HEADROOM_PLANCK,
     JOB_ORDERS_STORAGE,
@@ -64,6 +65,7 @@ from xqsa.quip.errors import (  # noqa: F401 -- the Quip* errors stay importable
     QuipMetadataError,
     QuipOrderOptionError,
     QuipReclaimRefusedError,
+    QuipSigningError,
     QuipSubmissionError,
     QuipSubmitIncompleteError,
     QuipTimeoutError,
@@ -124,7 +126,7 @@ FUND_WAIT_SECONDS = 30.0
 # see the warning it raises past it.
 LIST_ORDERS_LIMIT = 32
 
-# Keystore used when no seed or keystore is configured; created on first use.
+# Keystore used when no seed, keystore or account preference is configured; created on first use.
 DEFAULT_KEYSTORE = "~/.quip/keystore.json"
 
 
@@ -190,11 +192,18 @@ class SolverQuip(Solver):
     :mod:`~xqsa.quip.networks` presets do. A pruning node stops a submit with
     :class:`QuipSubmitIncompleteError`, the order left ``sending``.
 
+    ``read_only=True`` connects and reads without resolving a signer, so it
+    ignores ``QUIP_SIGNER_SEED`` and ``QUIP_KEYSTORE`` and never creates a
+    keystore. :meth:`get_receipt` works, as do :meth:`list_orders` and
+    :meth:`balance` given ``account=``; everything that signs, and those two
+    without ``account=``, raise :class:`QuipSigningError`.
+
     Raises:
         ImportError: if the ``[quip]`` extra is not installed
             (``pip install xqsa[quip]`` -- provides ``substrate-interface`` and
             the ``quip_signer`` signing extension).
-        ValueError: if no RPC URL is configured, or ``access``, ``resolution``
+        ValueError: if no RPC URL is configured, ``read_only=True`` comes with
+            ``seed=`` or ``keystore=``, or ``access``, ``resolution``
             or ``delivery`` names a value no order can use yet (checked before
             connecting).
         TypeError: if both ``access`` and the deprecated ``mode`` are given,
@@ -214,6 +223,9 @@ class SolverQuip(Solver):
             this client encodes. Raised in its own right rather than folded
             into QuipConnectionError, because the remedy is upgrading xquad,
             not a retry.
+        QuipSigningError: if the signer cannot be built: the seed is not 32
+            bytes, a keystore is unusable, or an account preference is broken
+            or names a missing or unusable keystore.
     """
 
     def __init__(
@@ -237,6 +249,7 @@ class SolverQuip(Solver):
         faucet: str | None = None,
         autoconfirm: bool | Callable[[JobQuote], bool] | None = None,
         autofund: bool | Callable[[JobQuote], bool] | None = None,
+        read_only: bool = False,
         _network: str | None = None,
     ) -> None:
         # Two distinct guards, one per piece of the [quip] extra: client + signer.
@@ -254,6 +267,8 @@ class SolverQuip(Solver):
             ) from exc
         from xqsa.quip import signing as quip_signing
 
+        if read_only and (seed is not None or keystore is not None):
+            raise ValueError("read_only=True takes no seed= or keystore=")
         resolved_url = url or os.environ.get("QUIP_RPC_URL")
         if not resolved_url:
             raise ValueError("A Quip RPC URL is required. Pass url= or set QUIP_RPC_URL.")
@@ -269,7 +284,8 @@ class SolverQuip(Solver):
         self._access = coerce_access(access)
         self._resolution = coerce_resolution(resolution)
 
-        self._signer = self._build_signer(quip_signing, seed=seed, keystore=keystore)
+        # A read-only client resolves no signer, so it never generates a keystore.
+        self._signer_or_none = None if read_only else self._build_signer(quip_signing, seed=seed, keystore=keystore)
 
         self._delivery = delivery
         self._deadline_blocks = deadline_blocks
@@ -346,19 +362,42 @@ class SolverQuip(Solver):
 
     @staticmethod
     def _build_signer(quip_signing: Any, *, seed: str | None, keystore: str | None) -> Any:
-        """Build the hybrid signer from a seed or keystore (env fallbacks applied).
+        """Build the hybrid signer from the step :func:`~xqsa.quip.accounts.resolve_accounts` puts in effect.
 
-        Resolution: ``seed``, ``QUIP_SIGNER_SEED``, ``keystore``, ``QUIP_KEYSTORE``,
-        then :data:`DEFAULT_KEYSTORE`. Falling back to the default warns when the
-        file is new, since that is a fresh, empty account a caller may not have
-        meant to use, and logs its path at INFO when an existing file is loaded.
+        Resolution: ``seed``, ``keystore``, ``QUIP_SIGNER_SEED``, ``QUIP_KEYSTORE``,
+        the project account preference, the user one, then :data:`DEFAULT_KEYSTORE`.
+        An explicit or environment keystore path is created when missing, as is
+        the default; falling back to the default warns when the file is new,
+        since that is a fresh, empty account a caller may not have meant to use,
+        and logs its path at INFO when an existing file is loaded. This is the
+        one place a seed is loaded.
+
+        Raises:
+            QuipSigningError: if a preferred account is missing or unusable,
+                or the keystore or seed in effect cannot be loaded.
         """
-        resolved_seed = seed or os.environ.get("QUIP_SIGNER_SEED")
-        if resolved_seed:
-            return quip_signing.signer_from_seed(resolved_seed)
-        resolved_keystore = keystore or os.environ.get("QUIP_KEYSTORE")
-        if resolved_keystore:
-            return quip_signing.load_or_generate_keystore(resolved_keystore).signer
+        source = resolve_accounts(seed=seed, keystore=keystore).in_effect
+        if source is None or source.step == "default":
+            return SolverQuip._load_default_keystore(quip_signing)
+        if source.step in ("seed=", "QUIP_SIGNER_SEED"):
+            return quip_signing.signer_from_seed(seed or os.environ["QUIP_SIGNER_SEED"])
+        if source.step in ("keystore=", "QUIP_KEYSTORE"):
+            # The raw value, so a path the resolver could not expand fails here as it always has.
+            return quip_signing.load_or_generate_keystore(source.value).signer
+        if source.problem is not None:
+            raise QuipSigningError(
+                f"the {source.step} account preference cannot sign: {source.problem}. "
+                f"Fix it, or clear it with `xquad quip account use --unset`"
+            )
+        logger.info("using the %s account preference %r, keystore %s", source.step, source.value, source.path)
+        try:
+            return quip_signing.load_keystore(source.path).signer
+        except QuipSigningError as exc:
+            raise QuipSigningError(f"the {source.step} account preference cannot sign: {exc}") from exc
+
+    @staticmethod
+    def _load_default_keystore(quip_signing: Any) -> Any:
+        """Load or generate :data:`DEFAULT_KEYSTORE`, warning when it is new."""
         default_path = Path(DEFAULT_KEYSTORE).expanduser()
         existed = default_path.exists()
         ks = quip_signing.load_or_generate_keystore(default_path)
@@ -540,13 +579,43 @@ class SolverQuip(Solver):
         return chain.mineable_topologies(self._iface)
 
     @property
+    def _signer(self) -> Any:
+        """The hybrid signer; every signing path reaches it, so a read-only client refuses here.
+
+        Raises:
+            QuipSigningError: if this client was built with ``read_only=True``.
+        """
+        if self._signer_or_none is None:
+            raise QuipSigningError("this client has no signer; see `xquad quip account show`")
+        return self._signer_or_none
+
+    def balance(self, account: Any = None) -> int:
+        """Return an account's free balance in planck.
+
+        ``account`` reads another account instead of this client's signer, as
+        SS58 text, ``0x`` hex or bytes, so a read-only client can read any
+        account. The free balance is what an order's reward and fee are paid
+        from; reserved funds are not included.
+
+        Raises:
+            QuipSigningError: if ``account`` is omitted on a read-only client.
+            ValueError: if ``account`` cannot be read as an account.
+            QuipConnectionError: if the balance cannot be read.
+        """
+        return chain.free_balance(self._iface, self._owner(account))
+
+    def _owner(self, account: Any) -> bytes:
+        """The account ``account`` names, or this client's signer when it is ``None``."""
+        return self._signer.account_id if account is None else chain.account_bytes(account)
+
+    @property
     def _account_ss58(self) -> str:
         """The signer's account in SS58, as every message names it."""
         return chain.ss58_address(self._iface, self._signer.account_id)
 
     def _free_balance(self) -> int:
-        """See :func:`xqsa.quip.chain.free_balance`."""
-        return chain.free_balance(self._iface, self._signer.account_id)
+        """The signer's free balance; see :meth:`balance`."""
+        return self.balance()
 
     def _query_fee(self, wire: bytes) -> tuple[int, bool]:
         """See :func:`xqsa.quip.chain.query_fee`."""
@@ -1634,12 +1703,12 @@ class SolverQuip(Solver):
         Raises:
             ValueError: if ``state`` is not ``"submitted"`` or ``"finalized"``,
                 or ``account`` cannot be read as an account.
+            QuipSigningError: if ``account`` is omitted on a read-only client.
             QuipConnectionError: if an order or the head block cannot be read.
         """
         if state not in (None, "submitted", "finalized"):
             raise ValueError(f"state={state!r}; expected 'submitted', 'finalized' or None")
-        owner = self._signer.account_id if account is None else chain.account_bytes(account)
-        order_ids = chain.proposer_orders(self._iface, owner)[::-1]
+        order_ids = chain.proposer_orders(self._iface, self._owner(account))[::-1]
         if state is not None:
             current_block = self._current_block()
             order_ids = [

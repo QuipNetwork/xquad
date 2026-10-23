@@ -39,8 +39,10 @@ Configuration is resolved from constructor arguments first, then environment:
     ``autofund``           ``QUIP_AUTOFUND``     fund from the faucet without asking
     =====================  =======================================================================
 
-A seed wins over a keystore. With neither configured, the keystore at
-``~/.quip/keystore.json`` is loaded, or generated on first use.
+The signer comes from the first of ``seed``, ``keystore``,
+``QUIP_SIGNER_SEED``, ``QUIP_KEYSTORE``, the project account preference, the
+user one, then ``~/.quip/keystore.json``, loaded or generated on first use
+(see :mod:`xqsa.quip.accounts`). ``read_only=True`` resolves no signer.
 
 The order options among them (``reward``, ``deadline_blocks``,
 ``block_wait``) are client defaults. :meth:`SolverQuip.create_order` returns a
@@ -119,6 +121,16 @@ import warnings
 
 from . import errors as _errors
 from .access import Access, AccessAllow, AccessOpen
+from .accounts import (
+    Account,
+    AccountResolution,
+    Level,
+    SignerSource,
+    clear_account,
+    create_account,
+    resolve_accounts,
+    use_account,
+)
 from .chain import (
     FEE_HEADROOM_PLANCK,
     JOB_ORDERS_STORAGE,
@@ -183,6 +195,14 @@ __all__ = [
     "ResolutionTopNEqual",
     "ResolutionTopNWeighted",
     "Solution",
+    "Account",
+    "AccountResolution",
+    "Level",
+    "SignerSource",
+    "resolve_accounts",
+    "create_account",
+    "use_account",
+    "clear_account",
     "QuipError",
     "QuipCancelledError",
     "QuipConnectionError",

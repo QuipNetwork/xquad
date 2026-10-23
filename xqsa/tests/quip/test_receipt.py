@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -31,6 +32,7 @@ from xqsa.quip import (
     QuipConnectionError,
     QuipMetadataError,
     QuipReclaimRefusedError,
+    QuipSigningError,
     QuipSubmissionError,
     QuipTimeoutError,
     chain,
@@ -59,7 +61,10 @@ from .test_client import (
     UNIT,
     FakeSubstrate,
     _chain_iface,
+    _clear_quip_env,
+    _default_iface,
     _force_timeout,
+    _install,
     _job_proposed_event,
     _make_solver,
     _model,
@@ -871,6 +876,64 @@ class TestListOrders:
     def test_exactly_32_does_not_warn(self, monkeypatch, recwarn) -> None:
         assert len(self._solver(monkeypatch, list(range(32))).list_orders()) == 32
         assert not [w for w in recwarn if "orders on this account" in str(w.message)]
+
+
+class TestReadOnlyClient:
+    """``read_only=True`` reads orders, receipts and balances and refuses to sign."""
+
+    OTHER = "0x" + "11" * 32
+
+    def _solver(self, monkeypatch, *, balance: int | None = None):
+        iface = _chain_iface(order=_receipt_order(proposer=self.OTHER), head=200)
+        iface.storage[(MEMPOOL, "ProposerOrders")] = [3, 7]
+        if balance is not None:
+            iface.storage[("System", "Account")] = {"nonce": 0, "data": {"free": balance}}
+        return _make_solver(monkeypatch, iface=iface, topology=TOPO_HASH, seed=None, read_only=True)
+
+    def test_creates_no_keystore_and_ignores_the_signer_variables(self, monkeypatch, tmp_path) -> None:
+        from xqsa.quip import SolverQuip
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        monkeypatch.setenv("QUIP_SIGNER_SEED", "not a seed")
+        monkeypatch.setenv("QUIP_KEYSTORE", str(tmp_path / "env.json"))
+        SolverQuip(url="ws://fake", read_only=True)
+        assert not (tmp_path / "env.json").exists()
+        assert not (Path.home() / ".quip").exists()  # HOME is a temporary tree here.
+
+    @pytest.mark.parametrize("kwargs", [{"seed": "0x" + "01" * 32}, {"keystore": "ks.json"}])
+    def test_refuses_seed_or_keystore_before_connecting(self, monkeypatch, kwargs) -> None:
+        iface = _default_iface()
+        with pytest.raises(ValueError, match=r"read_only=True takes no seed= or keystore="):
+            _make_solver(monkeypatch, iface=iface, read_only=True, **{"seed": None, **kwargs})
+        assert iface.rpc_calls == []
+
+    def test_reads_work_given_an_account(self, monkeypatch) -> None:
+        solver = self._solver(monkeypatch, balance=4 * UNIT)
+        assert solver.get_receipt(1).order_id == 1
+        assert solver.list_orders(account=self.OTHER) == [7, 3]
+        assert solver.balance(account=self.OTHER) == 4 * UNIT
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda solver: solver.list_orders(),
+            lambda solver: solver.balance(),
+            lambda solver: solver.create_order(_model()).quote(),
+            lambda solver: solver.create_order(_model()).submit(),
+            lambda solver: solver.solve(_model()),
+            lambda solver: solver.get_receipt(1).reclaim(),
+        ],
+        ids=["list_orders", "balance", "quote", "submit", "solve", "reclaim"],
+    )
+    def test_signing_and_signer_reads_refused(self, monkeypatch, call) -> None:
+        solver = self._solver(monkeypatch, balance=4 * UNIT)
+        with pytest.raises(QuipSigningError, match="this client has no signer; see `xquad quip account show`"):
+            call(solver)
+
+    def test_balance_of_a_signing_client_is_the_free_balance(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch, iface=_default_iface(balance=6 * UNIT))
+        assert solver.balance() == solver._free_balance() == 6 * UNIT
 
 
 PROPOSER = "0x" + "11" * 32

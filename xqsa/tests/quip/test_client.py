@@ -26,6 +26,7 @@ No chain or networking dependency, so these run everywhere.
 from __future__ import annotations
 
 import itertools
+import json
 import logging
 import math
 import sys
@@ -4416,3 +4417,153 @@ class TestSettleProposal:
     def test_binary_search_finds_the_first_block_past_the_nonce(self, spent) -> None:
         history = _History([5] * spent + [6] * (41 - spent))
         assert quip_chain.first_block_past_nonce(history, b"", 5, 0, 40) == spent
+
+
+# One seed per precedence step, so the signer built names the step that won.
+PRECEDENCE = ("seed=", "keystore=", "QUIP_SIGNER_SEED", "QUIP_KEYSTORE", "project", "user")
+STEP_SEEDS = {step: "0x" + f"{i + 1:02x}" * 32 for i, step in enumerate((*PRECEDENCE, "default"))}
+
+
+def _write_keystore_at(path, seed: str) -> None:
+    from xqsa.quip import signing as quip_signing
+
+    raw = bytes.fromhex(seed[2:])
+    quip_signing._write_keystore(path, raw, quip_signing.signer_from_seed(raw), overwrite=False)
+
+
+@pytest.mark.usefixtures("seed_signer", "quip_home")
+class TestSignerPrecedence:
+    """``seed=``, ``keystore=``, the two variables, the two preferences, then ``default``."""
+
+    @staticmethod
+    def _configure(monkeypatch, tmp_path, enabled) -> dict:
+        from xqsa.quip import create_account, use_account
+
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        create_account(level="user", seed=STEP_SEEDS["default"])
+        kwargs: dict = {}
+        if "seed=" in enabled:
+            kwargs["seed"] = STEP_SEEDS["seed="]
+        if "keystore=" in enabled:
+            _write_keystore_at(tmp_path / "arg.json", STEP_SEEDS["keystore="])
+            kwargs["keystore"] = str(tmp_path / "arg.json")
+        if "QUIP_SIGNER_SEED" in enabled:
+            monkeypatch.setenv("QUIP_SIGNER_SEED", STEP_SEEDS["QUIP_SIGNER_SEED"])
+        if "QUIP_KEYSTORE" in enabled:
+            _write_keystore_at(tmp_path / "env.json", STEP_SEEDS["QUIP_KEYSTORE"])
+            monkeypatch.setenv("QUIP_KEYSTORE", str(tmp_path / "env.json"))
+        if "project" in enabled:
+            create_account("p", level="project", seed=STEP_SEEDS["project"])
+            use_account("p", level="project")
+        if "user" in enabled:
+            create_account("u", level="user", seed=STEP_SEEDS["user"])
+            use_account("u", level="user")
+        return kwargs
+
+    @pytest.mark.parametrize(
+        "enabled",
+        [combo for size in range(len(PRECEDENCE) + 1) for combo in itertools.combinations(PRECEDENCE, size)],
+        ids=lambda combo: "+".join(combo) or "nothing",
+    )
+    def test_every_combination(self, monkeypatch, tmp_path, enabled) -> None:
+        from xqsa.quip import SolverQuip, resolve_accounts
+
+        kwargs = self._configure(monkeypatch, tmp_path, enabled)
+        expected = next((step for step in PRECEDENCE if step in enabled), "default")
+        assert resolve_accounts(**kwargs).in_effect.step == expected
+        solver = SolverQuip(url="ws://fake", **kwargs)
+        assert solver._signer.seed == bytes.fromhex(STEP_SEEDS[expected][2:])
+
+    def test_keystore_arg_beats_seed_env(self, monkeypatch, tmp_path) -> None:
+        from xqsa.quip import SolverQuip
+
+        kwargs = self._configure(monkeypatch, tmp_path, ("keystore=", "QUIP_SIGNER_SEED"))
+        solver = SolverQuip(url="ws://fake", **kwargs)
+        assert solver._signer.seed == bytes.fromhex(STEP_SEEDS["keystore="][2:])
+
+    @pytest.mark.parametrize("step", ["keystore=", "QUIP_KEYSTORE"])
+    def test_missing_keystore_path_still_created(self, monkeypatch, tmp_path, step) -> None:
+        from xqsa.quip import SolverQuip
+
+        self._configure(monkeypatch, tmp_path, ())
+        path = tmp_path / "new.json"
+        kwargs = {"keystore": str(path)} if step == "keystore=" else {}
+        if step == "QUIP_KEYSTORE":
+            monkeypatch.setenv("QUIP_KEYSTORE", str(path))
+        SolverQuip(url="ws://fake", **kwargs)
+        assert path.exists()
+
+    def test_missing_preferred_keystore_raises(self, monkeypatch, tmp_path, quip_home) -> None:
+        from xqsa.quip import QuipSigningError, SolverQuip
+
+        home, _ = quip_home
+        self._configure(monkeypatch, tmp_path, ("user",))
+        (home / ".quip" / "keystores" / "u.json").unlink()
+        with pytest.raises(
+            QuipSigningError, match=r"user account preference cannot sign: no keystore named 'u'.*--unset"
+        ):
+            SolverQuip(url="ws://fake")
+
+    def test_unusable_preferred_keystore_raises(self, monkeypatch, tmp_path, quip_home) -> None:
+        from xqsa.quip import QuipSigningError, SolverQuip
+
+        _, project = quip_home
+        self._configure(monkeypatch, tmp_path, ("project",))
+        (project / ".quip" / "keystores" / "p.json").write_text("{not json")
+        with pytest.raises(QuipSigningError, match="project account preference cannot sign: not readable JSON"):
+            SolverQuip(url="ws://fake")
+
+    def test_tampered_preferred_keystore_names_the_preference(self, monkeypatch, tmp_path, quip_home) -> None:
+        from xqsa.quip import QuipSigningError, SolverQuip
+
+        home, _ = quip_home
+        self._configure(monkeypatch, tmp_path, ("user",))
+        path = home / ".quip" / "keystores" / "u.json"
+        raw = json.loads(path.read_text())
+        raw["account_id_hex"] = "0x" + "00" * 32
+        path.write_text(json.dumps(raw))
+        with pytest.raises(QuipSigningError, match="user account preference cannot sign: "):
+            SolverQuip(url="ws://fake")
+
+    def test_preferred_signer_is_logged(self, monkeypatch, tmp_path, quip_home, caplog) -> None:
+        from xqsa.quip import SolverQuip
+
+        home, _ = quip_home
+        self._configure(monkeypatch, tmp_path, ("user",))
+        with caplog.at_level(logging.INFO, logger="xqsa.quip"):
+            SolverQuip(url="ws://fake")
+        path = str(home / ".quip" / "keystores" / "u.json")
+        assert any("user account preference 'u'" in r.getMessage() and path in r.getMessage() for r in caplog.records)
+
+    def test_preferred_keystore_is_never_generated(self, monkeypatch, tmp_path, quip_home) -> None:
+        from xqsa.quip import QuipSigningError, SolverQuip
+
+        home, _ = quip_home
+        self._configure(monkeypatch, tmp_path, ())
+        (home / ".quip" / "config.toml").write_text('account = "typo"\n')
+        with pytest.raises(QuipSigningError, match="no keystore named 'typo'"):
+            SolverQuip(url="ws://fake")
+        assert not list(home.rglob("typo*"))
+
+    def test_unusable_default_raises_as_the_resolver_reports(self, monkeypatch, tmp_path, quip_home) -> None:
+        from xqsa.quip import QuipSigningError, SolverQuip, resolve_accounts
+
+        home, _ = quip_home
+        _install(monkeypatch, _default_iface())
+        _clear_quip_env(monkeypatch)
+        (home / ".quip").mkdir()
+        (home / ".quip" / "keystore.json").write_text("{not json")
+        (home / ".quip" / "keystore.json").chmod(0o600)
+        assert "not readable JSON" in resolve_accounts().in_effect.problem
+        with pytest.raises(QuipSigningError, match="not readable JSON"):
+            SolverQuip(url="ws://fake")
+
+    def test_unexpandable_keystore_in_effect_fails_as_before(self, monkeypatch, tmp_path) -> None:
+        from xqsa.quip import SolverQuip
+
+        self._configure(monkeypatch, tmp_path, ())
+        monkeypatch.setenv("QUIP_KEYSTORE", "~nosuchuser_qui1610/k.json")
+        with pytest.raises(RuntimeError, match="home directory"):
+            SolverQuip(url="ws://fake")
+        assert not (tmp_path / "~nosuchuser_qui1610").exists()
