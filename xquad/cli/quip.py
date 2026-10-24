@@ -31,7 +31,7 @@ import contextlib
 import json
 import os
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -49,9 +49,9 @@ _ROWS = (
 )
 _SETTING_HELP = """Setting the account:
 
-  xquad quip account use <name>             prefer <name> in this project
+  xquad quip account use <name>             prefer <name> in this project, else for your user
   xquad quip account use <name> --global    prefer <name> for your user
-  xquad quip account use --unset [--global] clear a preference
+  xquad quip account use --unset [--global] clear the preference at that level
   --keystore PATH, QUIP_KEYSTORE, QUIP_SIGNER_SEED override the preferences"""
 _NO_KEYSTORES = (
     "No keystores found. Create one with `xquad quip account new`, or bring a seed with `xquad quip account import`."
@@ -200,7 +200,7 @@ def account_import(opts: _Options, name: str, user_level: bool, project_level: b
     work as for `account new`.
     """
     level = _level(user_level, project_level)
-    _create(opts, name, level, seed=_read_seed(), force=False, no_use=no_use)
+    _create(opts, name, level, seed=_read_seed, force=False, no_use=no_use)
 
 
 @account.command("use")
@@ -299,7 +299,7 @@ def reclaim(opts: _Options, order_id: int | None, reclaim_all: bool, yes: bool) 
     reclaimable orders and their total, then asks before signing, since each
     reclaim pays its own fee.
     """
-    from xqsa.quip import QuipSubmissionError, resolve_accounts
+    from xqsa.quip import QuipError, resolve_accounts
 
     if reclaim_all == (order_id is not None):
         raise click.UsageError("pass an order id or --all")
@@ -339,7 +339,7 @@ def reclaim(opts: _Options, order_id: int | None, reclaim_all: bool, yes: bool) 
         for i in ids:
             try:
                 refunded = solver.get_receipt(i).reclaim()
-            except QuipSubmissionError as exc:  # refused, or sent with its outcome unknown: report and go on.
+            except QuipError as exc:  # refused, failed, or sent with its outcome unknown: report and go on.
                 refused.append({"order_id": i, "reason": str(exc)})
                 click.echo(f"order {i} not reclaimed: {exc}", err=True)
                 continue
@@ -430,7 +430,10 @@ def _no_account(resolution: Any) -> str:
         else:
             fix = "point it at a usable keystore"
         return f"the {where} cannot sign: {source.problem}; {fix}"
-    return f"the {where} names no keystore: {source.path} does not exist"
+    way_out = "drop --keystore" if source.step == "keystore=" else "unset QUIP_KEYSTORE"
+    return (
+        f"the {where} names no keystore: {source.path} does not exist; {way_out}, or point it at an existing keystore"
+    )
 
 
 def _offer_account() -> bool:
@@ -442,7 +445,7 @@ def _offer_account() -> bool:
         return False
     level = click.prompt("Level", type=click.Choice(["project", "user"]), default=_level(False, False))
     name = click.prompt("Name", default="default")
-    seed = click.prompt("Seed (hex)", hide_input=True) if choice == "import" else None
+    seed = (lambda: click.prompt("Seed (hex)", hide_input=True)) if choice == "import" else None
     _create(_Options(None, None, None, json=False), name, level, seed=seed, force=False, no_use=False)
     click.echo()
     return True
@@ -458,16 +461,22 @@ def _read_seed() -> str:
     return seed
 
 
-def _create(opts: _Options, name: str, level: str, *, seed: str | None, force: bool, no_use: bool) -> None:
-    """Write a keystore, then set the preference at its level unless `no_use` or it is the user default."""
+def _create(
+    opts: _Options, name: str, level: str, *, seed: Callable[[], str] | None, force: bool, no_use: bool
+) -> None:
+    """Write a keystore, then set the preference at its level unless `no_use` or it is the user default.
+
+    `seed` reads the seed to import, after the name is known to be free; None makes a fresh one.
+    """
     from xqsa.quip import accounts, create_account, resolve_accounts, use_account
 
     with _errors():
         path = accounts._keystore_path(accounts._level_dir_for_write(level), level, name)
         if path.exists() and not force:
-            raise click.ClickException(f"an account named {name!r} already exists at {path}; --force replaces it")
+            fix = "--force replaces it" if seed is None else "choose another --name"
+            raise click.ClickException(f"an account named {name!r} already exists at {path}; {fix}")
         replaced = next((a for a in resolve_accounts().accounts if a.path == path), None)
-        created = create_account(name, level=level, seed=seed, overwrite=force)
+        created = create_account(name, level=level, seed=None if seed is None else seed(), overwrite=force)
     user_default = level == "user" and name == "default"
     use_error = None
     if not (no_use or user_default):
@@ -514,7 +523,7 @@ def _listing(resolution: Any) -> str:
             is_override = override is not None and override.value is not None and override.path == path
             suffix = "  (override)" if is_override else ""
             lines.append(f"{'*' if marked else ' '} {name:<{width}}  {level:<7}  {_display_path(path)}{suffix}")
-            detail = _ss58(account_id) if account_id is not None else f"! {problem}"
+            detail = _ss58(account_id) if account_id is not None else f"! {problem or 'does not exist'}"
             lines.append(f"{'':<{width + 4}}{detail}")
         keystores = "\n".join(lines)
     else:

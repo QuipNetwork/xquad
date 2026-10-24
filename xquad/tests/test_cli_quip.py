@@ -28,9 +28,15 @@ from click.testing import CliRunner, Result
 
 pytest.importorskip("scalecodec.utils.ss58")  # accounts print as SS58.
 
-from xqsa.quip import JobOrderReceipt, QuipReclaimRefusedError, create_account, use_account  # noqa: E402
+from xqsa.quip import (  # noqa: E402
+    JobOrderReceipt,
+    QuipConnectionError,
+    QuipReclaimRefusedError,
+    create_account,
+    use_account,
+)
 from xqsa.tests.quip.test_client import UNIT, _chain_iface, _clear_quip_env, _install  # noqa: E402
-from xqsa.tests.quip.test_receipt import _receipt_order  # noqa: E402
+from xqsa.tests.quip.test_receipt import LEADING, SOLVER, _receipt_order  # noqa: E402
 from xquad.cli import main  # noqa: E402
 
 # `xquad.cli.quip` names the click group the package re-exports, so reach the module itself.
@@ -195,7 +201,16 @@ class TestAccountShow:
         result = quip("--keystore", str(tmp_path / "gone.json"), "account", "show")
         assert result.exit_code == 1
         assert "names no keystore" in result.stderr and "gone.json does not exist" in result.stderr
+        assert "drop --keystore, or point it at an existing keystore" in result.stderr
+        listing = quip("--keystore", str(tmp_path / "gone.json"), "account", "list").stdout
+        assert "gone.json  (override)" in listing and "! does not exist" in listing
         assert not (tmp_path / "gone.json").exists()
+
+    def test_missing_quip_keystore_names_its_way_out(self, chain, monkeypatch, tmp_path) -> None:
+        monkeypatch.setenv("QUIP_KEYSTORE", str(tmp_path / "gone.json"))
+        result = quip("account", "show")
+        assert result.exit_code == 1
+        assert "unset QUIP_KEYSTORE, or point it at an existing keystore" in result.stderr
 
     def test_prompt_creates_then_shows(self, chain, monkeypatch, quip_home) -> None:
         home, _ = quip_home
@@ -263,6 +278,13 @@ class TestAccountNewImportUse:
         assert "The keystore stays" in result.stderr
         assert (Path.home() / ".quip" / "keystores" / "a.json").exists()
 
+    def test_import_refuses_a_taken_name_before_reading_the_seed(self, chain) -> None:
+        create_account("w", level="user", seed=SEED_A)
+        result = quip("account", "import", "--name", "w", "--global", stdin="")
+        assert result.exit_code == 1
+        assert "already exists" in result.stderr and "choose another --name" in result.stderr
+        assert "no seed on stdin" not in result.stderr
+
     def test_import_from_stdin_never_echoes(self, chain, seed_signer) -> None:
         result = quip("--json", "account", "import", "--name", "w", "--global", stdin=SEED_B + "\n")
         assert result.exit_code == 0, result.output
@@ -323,18 +345,25 @@ class TestOrdersAndStatus:
         assert seen == [False]
 
     @pytest.mark.parametrize(
-        ("order", "head", "line"),
+        ("order", "head", "front", "line"),
         [
-            pytest.param(_receipt_order(), 50, "1\topen until block 100\tnone", id="open"),
-            pytest.param(_receipt_order(solution_count=0), 200, "1\treclaimable\tnone", id="reclaimable"),
-            pytest.param(_receipt_order(status="Closed"), 200, "1\tclosed\tnone", id="closed"),
+            pytest.param(_receipt_order(), 50, None, "1\topen until block 100\tnone", id="open"),
+            pytest.param(_receipt_order(), 200, LEADING, "1\tfinal\t{leader}", id="final"),
+            pytest.param(_receipt_order(solution_count=0), 200, None, "1\treclaimable\tnone", id="reclaimable"),
+            pytest.param(_receipt_order(status="Closed"), 200, None, "1\tclosed\tnone", id="closed"),
         ],
     )
-    def test_status_short(self, chain, order, head, line) -> None:
+    def test_status_short(self, chain, order, head, front, line) -> None:
         chain.storage[(MEMPOOL, "JobOrders")] = order
+        if front is not None:
+            chain.storage[(MEMPOOL, "OrderFrontRunner")] = front
         chain.head = head
+        leader = _ss58(bytes.fromhex(SOLVER[2:]))
+        line = line.format(leader=leader)
         assert quip("status", "1", "--short").stdout == line + "\n"
-        assert json.loads(quip("--json", "status", "1", "--short").stdout)["state"] == line.split("\t")[1].split()[0]
+        data = json.loads(quip("--json", "status", "1", "--short").stdout)
+        assert data["state"] == line.split("\t")[1].split()[0]
+        assert data["leader"] == (leader if front is not None else None)
 
     def test_status_prints_the_receipt(self, chain) -> None:
         result = quip("status", "1")
@@ -356,12 +385,12 @@ class TestReclaim:
     def _account(self, chain) -> None:
         create_account(level="user", seed=SEED_A)
 
-    def _reclaims(self, monkeypatch, refuse=frozenset()) -> list[int]:
+    def _reclaims(self, monkeypatch, refuse=frozenset(), error=QuipReclaimRefusedError) -> list[int]:
         done: list[int] = []
 
         def fake(receipt):
             if receipt.order_id in refuse:
-                raise QuipReclaimRefusedError(f"order {receipt.order_id} was answered")
+                raise error(f"order {receipt.order_id} was answered")
             done.append(receipt.order_id)
             return UNIT
 
@@ -430,6 +459,14 @@ class TestReclaim:
             "total": UNIT,
         }
         assert "order 3 not reclaimed: order 3 was answered" in result.stderr
+
+    def test_all_reports_what_landed_when_one_fails(self, chain, monkeypatch) -> None:
+        done = self._reclaims(monkeypatch, refuse={3}, error=QuipConnectionError)
+        self._unanswered(monkeypatch, [7, 3])
+        result = quip("--json", "reclaim", "--all", "--yes")
+        assert result.exit_code == 1
+        assert done == [7]
+        assert json.loads(result.stdout)["reclaimed"] == [{"order_id": 7, "refunded": UNIT}]
 
     @pytest.mark.parametrize("args", [[], ["3", "--all"]])
     def test_usage(self, chain, args) -> None:

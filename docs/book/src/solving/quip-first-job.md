@@ -24,14 +24,16 @@ Windows.
 
 `xquad quip account show` is the setup check: it prints the account in
 effect, where it comes from, and its balance. On a first run there is
-none, so it prints the guidance and exits 1 without creating anything:
+none. At a terminal it prints the guidance, then offers to create an
+account; the answer defaults to `skip`, and nothing is written until the
+last answer:
 
 ```sh
 xquad quip --network aglais account show
 ```
 
 ```text
-Error: No Quip account is set up.
+No Quip account is set up.
 
 No keystores found. Create one with `xquad quip account new`, or bring a seed with `xquad quip account import`.
 
@@ -42,7 +44,19 @@ Resolution order (the first match signs):
   3  project preference   unset
   4  user preference      unset
 * 5  default              ~/.quip/keystore.json
+
+Setting the account:
+
+  xquad quip account use <name>             prefer <name> in this project, else for your user
+  xquad quip account use <name> --global    prefer <name> for your user
+  xquad quip account use --unset [--global] clear the preference at that level
+  --keystore PATH, QUIP_KEYSTORE, QUIP_SIGNER_SEED override the preferences
+Create one now? (new, import, skip) [skip]: skip
 ```
+
+Answering `new` creates the account there and then. Off a terminal, or
+with `--json`, the command prints the same guidance as an error and exits
+1 without asking or creating anything.
 
 Create the account, then check it again:
 
@@ -65,6 +79,8 @@ Orders    0 of 32 slots used
 The keystore holds the account's signing key. Keep the file: it is the
 account. It starts empty; [Submit](#submit) funds it from the faucet.
 These two blocks were captured on 2026-10-24, with a fresh account.
+The receipts further down came from a different, funded account, so
+their `Account` line is not the one shown here.
 
 ## Build the Model
 
