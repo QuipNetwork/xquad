@@ -87,6 +87,7 @@ environment variables:
 | `deadline_blocks` | none | Blocks an order stays open; defaults to `100` |
 | `block_wait` | none | Blocks an order keeps accepting answers after the first one arrives; defaults to `10` |
 | `autofund` | `QUIP_AUTOFUND` | Whether to draw one drip from `faucet` when the account cannot cover the quoted job; a shortfall larger than one drip, or an account already holding more than one drip, raises instead. Same forms and default as `autoconfirm` |
+| `inclusion_window_blocks` | none | Blocks a signed proposal stays valid for, from the finalized block it was signed at: 64 to 2048, rounded up to a power of two. Defaults to 64, `DEFAULT_INCLUSION_WINDOW_BLOCKS`. A client setting, not an order option; see [Settling a send](quip-orders.md#settling-a-send) |
 | `ssl_context` | none | An `ssl.SSLContext` used for both the `wss://` RPC connection and the faucet request in place of the default CA-bundle context; ignored for `ws://` and `http://` URLs, refused with an `https://` RPC URL. See the revocation note above |
 
 The signer comes from the first of these that is set: `seed`,
@@ -158,7 +159,11 @@ in the working directory, and anything created under a project `.quip/`
 also writes a `.quip/.gitignore` of `*` when there is none.
 `use_account` and `clear_account` set and remove a preference.
 `resolve_accounts` lists every keystore with its account and walks the
-signer order above, reporting the step in effect. It never writes a file
+signer order above, reporting the step in effect. Each step is a
+`SignerSource`, whose `account_id` is the 32-byte account of the
+keystore it points at, read from the account the keystore caches, so no
+seed is loaded; it is `None` for the seed steps and for a missing or
+unusable keystore. `resolve_accounts` never writes a file
 or reads a seed, so an unusable keystore or a broken preference is
 listed with the problem rather than raised. `SolverQuip` raises
 `QuipSigningError` only when such a step is the one it would sign with.
@@ -171,11 +176,34 @@ print(solver.balance(account=address))  # SS58 text, 0x hex or bytes
 ```
 
 A read-only client resolves no signer, so it never creates a keystore,
-and refuses `seed` and `keystore`. `get_receipt`,
-`list_orders(account=...)` and `balance(account=...)`, the account's
-free balance in planck, work on it. Everything that signs, and
-`list_orders` or `balance` without an account, raises
-`QuipSigningError`.
+and refuses `seed` and `keystore`. `get_receipt`, and `list_orders`,
+`balance`, `reserved` and `order_slots` given `account=`, work on it.
+Everything that signs, `account`, and those four without an account
+raise `QuipSigningError`.
+
+A signing client reads its own account the same way:
+
+```python
+solver = SolverQuip.for_network("aglais")
+print(solver.account)
+print(solver.balance(), solver.reserved(), solver.order_slots())
+```
+
+```text
+5FXRydTJYE4cPGBH9CSf3dyGvaJNnYATEZJMyFqMiLPHv9oc
+0 0 (0, 32)
+```
+
+`account` is the signer's account in SS58. `balance()` is the free
+balance in planck, which an order's reward and fee are paid from.
+`reserved()` is the reserved balance: the chain reserves an order's
+reward when it is proposed and releases it when a claim or a reclaim
+closes the order. `order_slots()` returns `(used, limit)`: the orders
+not yet closed, each holding a slot until a claim or a reclaim closes
+it, and the runtime's `MaxOrdersPerProposer`, `None` when the runtime
+sets no cap. Each takes `account=` to read another account. `xquad
+quip account show` prints all four; see [Accounts](../cli/quip/accounts.md).
+(Captured on 2026-10-26 with a fresh, unfunded account.)
 
 ### Named networks
 
@@ -193,9 +221,19 @@ The RPC and faucet coordinates behind each preset live in
 patch releases. The test network's own page,
 [aglais.quip.network](https://aglais.quip.network), publishes the
 current endpoints and the faucet; check the preset against it if a
-connection fails. The preset also names its network's faucet, which the
-solver uses unless `faucet=` names another; `QUIP_FAUCET_URL` does not
-override a preset.
+connection fails. The preset also names its network's faucet, if it
+has one, which the solver uses unless `faucet=` names another;
+`QUIP_FAUCET_URL` does not override a preset.
+
+A preset may also pin its network's genesis hash and may have no
+faucet. With a pinned genesis, `for_network()` refuses a node that
+serves another chain with a `QuipConnectionError` naming both hashes.
+With no faucet, an account that cannot cover a quote is refused with a
+`QuipSubmissionError` that says `<network> has no faucet; fund the
+account another way.` Neither current preset does either: both name a
+faucet, and both leave the genesis open, because a test network
+relaunches with a new genesis. The Quip MainNet preset will pin its
+genesis and have no faucet.
 
 ### Runtime compatibility
 
@@ -216,6 +254,30 @@ Moving a network to runtime 119 starts it afresh instead of upgrading it
 in place. Orders placed before the move do not carry over, so an order
 id recorded before it does not name the same order after it. `aglais`
 has run runtime 119 since its relaunch on 2026-10-15.
+
+The signed-extension order comes from the chain's metadata, not from
+a list in the client. At its first connect, `SolverQuip` checks that it
+can encode the extrinsic envelope and every signed extension the
+runtime declares, and every signature is checked against the runtime
+the same way. A runtime it cannot read or sign for raises
+`QuipMetadataError`: at connect, or at signing when the runtime
+changed under a live client, before anything is sent. The remedy is
+upgrading xquad; retrying the same node gives the same answer.
+
+Every reconnect must reach the chain the first connection reached: a
+node that serves another genesis is refused with a
+`QuipConnectionError` naming both hashes. A reconnect checks the genesis
+only. A `submit()` that is settling a send stops at once on either
+fault and leaves the order `sending` (see [Settling a
+send](quip-orders.md#settling-a-send)).
+
+Each connection logs the network, runtime and genesis at `INFO` on the
+`xqsa.quip` logger, with `reconnected to` in place of `connected to` on
+a reconnect (captured on 2026-10-26):
+
+```text
+connected to Quip aglais at wss://bootnode-1.aglais.quip.network:20049/rpc: specVersion 119, transactionVersion 7, genesis 0x542a9915acf840b8940d35ca6de242f669a0c6e3b40f9a8d8c14b9bf7b8ebecb
+```
 
 ## Job Lifecycle
 
@@ -509,9 +571,9 @@ fallbacks.
 
 ## Failure Taxonomy
 
-Fifteen exception classes cover this backend, all exported from
-`xqsa.quip` and `xquad.sa.quip` -- one base class and fourteen concrete
-failures, spanning local encoding checks, order checks, the consent and
+Sixteen exception classes cover this backend, all exported from
+`xqsa.quip` and `xquad.sa.quip` -- one base class and fifteen concrete
+failures, one of them deprecated, spanning local encoding checks, order checks, the consent and
 funding gates, and network-dependent lifecycle failures:
 
 | Exception | Raised when |
@@ -520,12 +582,13 @@ funding gates, and network-dependent lifecycle failures:
 | `EncodingError` | The model is not `MODEL`-mode, its domain is unsupported, or both its `linear` and `quadratic` dicts are empty. Also covers a NaN coefficient, a model whose coefficients all round to zero at milli scale, a coefficient whose rounded milli value overflows `i32` (see [Coefficient Encoding](#coefficient-encoding)), and a native order over the mempool's `MaxNodes` or `MaxEdges` |
 | `PlacementError` | The model's coupling graph is not a subgraph of the target topology. Raised in default mode only; see [Native topology mode](#native-topology-mode) |
 | `QuipSigningError` | Extrinsic assembly, keystore handling, or submission fails |
-| `QuipConnectionError` | The node is unreachable; a configured Ising spec or topology is not registered on-chain; a mempool constant cannot be read (`MinReward`, `MaxDeadlineBlocks`, `MaxBlockWait`, `MaxSolutions` and `MaxBidMiners` at construction, `MaxNodes` and `MaxEdges` per native order); the chain defines no `MinReward` and no reward was given; an order id names no order; or a balance, nonce or block read fails. Most come from the constructor or `for_network()`, which read the limits once |
-| `QuipMetadataError` | The node's runtime metadata cannot be decoded by this client |
-| `QuipSubmissionError` | An extrinsic cannot be submitted or the chain rejects it. Raised when `propose_job` fails on chain (the fee was paid, no order was placed, and the order moves to `failed`), and when the account's nonce moves twice while submitting because another client is sending from the account. Also raised before proposing when the account cannot cover the quote and `autofund` cannot help: no faucet is configured, the shortfall is larger than one drip, or the balance already exceeds one drip |
+| `QuipConnectionError` | The node is unreachable; a configured Ising spec or topology is not registered on-chain; a mempool constant cannot be read (`MinReward`, `MaxDeadlineBlocks`, `MaxBlockWait`, `MaxSolutions` and `MaxBidMiners` at construction, `MaxNodes` and `MaxEdges` per native order); the chain defines no `MinReward` and no reward was given; an order id names no order; a balance, nonce or block read fails; or the node serves another chain than the preset pins or the first connection reached, named by both genesis hashes. Most come from the constructor or `for_network()`, which read the limits once |
+| `QuipMetadataError` | This client cannot read or sign for the node's runtime: its metadata, an extrinsic envelope or signed extension it cannot encode, or blocks or events it cannot decode while settling a send. Raised at connect and at signing; the remedy is upgrading xquad, not retrying |
+| `QuipSubmissionError` | An extrinsic cannot be submitted or the chain rejects it. Raised when `propose_job` fails on chain (the fee was paid, no order was placed, and the order moves to `failed`), and when the account's nonce moves twice while submitting because another client is sending from the account. Also raised before proposing when the account cannot cover the quote and `autofund` cannot help, with a hint for each case: a named network with no faucet says to fund the account another way, a raw `url=` with none says how to name one, a shortfall larger than one drip suggests checking `reward=`, and a balance already above one drip is one the faucet will not top up. Also raised when a sent proposal certainly never reached the chain: the order stays a draft |
 | `QuipOrderOptionError` | A `QuipSubmissionError`: an order option fails a check before signing, such as a reward below `MinReward`, a deadline or block wait out of range, a bad payout or access rule, or a quality floor out of range. Carries the option's name as `option`. Nothing is spent |
 | `QuipReclaimRefusedError` | A `QuipSubmissionError`: `reclaim()` refuses before signing because another account proposed the order, it is already closed, it is still open, or it was answered; or the chain refuses the reclaim and charges the fee |
-| `QuipUnconfirmedError` | A `QuipSubmissionError`: `propose_job` was sent but its outcome or order id is unknown. The order may be on chain, so it is never resent; the order moves to `unconfirmed`. Carries `extrinsic_hash` and `block_hash` (`None` when not seen in a block) |
+| `QuipSubmitIncompleteError` | A `QuipSubmissionError`: a sent `propose_job` could not be settled by the end of its window, or a reconnect reached another chain or a runtime this client cannot sign for. The order is `sending`; calling `submit()` again resumes it and never places a second order. Carries `order`, `extrinsic_hash`, `nonce` and `window_end`, with the cause as `__cause__`; see [Settling a send](quip-orders.md#settling-a-send) |
+| `QuipUnconfirmedError` | Deprecated, and no longer raised since v0.4.5; importing it from `xqsa.quip` warns. A `QuipSubmissionError` that carried `extrinsic_hash` and `block_hash` for a send whose outcome was unknown; `QuipSubmitIncompleteError` replaces it |
 | `QuipCancelledError` | The `autoconfirm` or `autofund` gate declines the job, at the prompt, by callable, or for want of a terminal; carries the declined `JobQuote` as `quote`. Nothing has been proposed or funded |
 | `QuipFaucetError` | The faucet refuses a drip or cannot be reached; carries the HTTP `status` (`None` for a transport failure) and the parsed JSON `body` |
 | `QuipTopologyError` | Retained for compatibility; nothing raises it. It reported a topology absent from `MineableTopologies`, which does not gate the mempool |
@@ -551,21 +614,25 @@ The one exception is the native size check, which reads `MaxNodes` and
 are also raised before anything is signed or proposed. The rest depend
 on chain state or the round trip completing.
 
-## Deprecated in v0.4.3
+## Deprecated APIs
 
 Each of these warns with a `DeprecationWarning` and is removed in
 v0.5.0:
 
-| Deprecated | Use instead | Notes |
-|---|---|---|
-| `SolverQuip.quote(model, ...)` | `solver.create_order(model, ...).quote()` | |
-| `SolverQuip.status(order_id)` | `solver.get_receipt(order_id).status()` | The keys differ: `state` and `chain_status` replace `status` and `is_final` |
-| `SolverQuip.query(order_id, model, ...)` | `solver.get_receipt(order_id)` to follow an order; `JobOrder.wait()` and `best()` in the session that submitted it | Still reclaims an unanswered order; see below |
-| `mode=` on the constructor, `for_network()`, `quote()` and `solve()` | `access=` | |
-| A raw chain dict for `access` or `resolution` on `solve()` or `quote()` | `AccessOpen()`, `AccessAllow(...)`, or a `Resolution` rule | |
-| An unknown keyword on `solve()` or `quote()`, including `delivery=` and `spec_id=` | None; the option is dropped | |
-| `xqsa.quip_codec`, `quip_signing`, `quip_metadata`, `quip_faucet`, `quip_networks` | `xqsa.quip.codec`, `.signing`, `.metadata`, `.faucet`, `.networks` | Warns on the first import only |
-| The 27 Quip names on `xqsa` and `xquad.sa`, such as `xqsa.SolverQuip` | The same names on `xqsa.quip` or `xquad.sa.quip` | They left both `__all__` lists, so `from xqsa import *` no longer brings them in |
+| Deprecated | Since | Use instead | Notes |
+|---|---|---|---|
+| `SolverQuip.quote(model, ...)` | v0.4.3 | `solver.create_order(model, ...).quote()` | |
+| `SolverQuip.status(order_id)` | v0.4.3 | `solver.get_receipt(order_id).status()` | The keys differ: `state` and `chain_status` replace `status` and `is_final` |
+| `SolverQuip.query(order_id, model, ...)` | v0.4.3 | `solver.get_receipt(order_id)` to follow an order; `JobOrder.wait()` and `best()` in the session that submitted it | Still reclaims an unanswered order; see below |
+| `mode=` on the constructor, `for_network()`, `quote()` and `solve()` | v0.4.3 | `access=` | |
+| A raw chain dict for `access` or `resolution` on `solve()` or `quote()` | v0.4.3 | `AccessOpen()`, `AccessAllow(...)`, or a `Resolution` rule | |
+| An unknown keyword on `solve()` or `quote()`, including `delivery=` and `spec_id=` | v0.4.3 | None; the option is dropped | |
+| `xqsa.quip_codec`, `quip_signing`, `quip_metadata`, `quip_faucet`, `quip_networks` | v0.4.3 | `xqsa.quip.codec`, `.signing`, `.metadata`, `.faucet`, `.networks` | Warns on the first import only |
+| The 27 Quip names on `xqsa` and `xquad.sa`, such as `xqsa.SolverQuip` | v0.4.3 | The same names on `xqsa.quip` or `xquad.sa.quip` | They left both `__all__` lists, so `from xqsa import *` no longer brings them in |
+| `QuipUnconfirmedError` | v0.4.5 | `QuipSubmitIncompleteError` | No longer raised; warns on import from `xqsa.quip` |
+| Loading a pickled `unconfirmed` order | v0.4.5 | None | Orders pickled by 0.4.3 or 0.4.4 in that state still load, warn, and are never sent again; look up the extrinsic the warning names |
+| `xqsa.quip.signing.SIGNED_EXTENSIONS` | v0.4.5 | None | The signed-extension order now comes from the runtime metadata |
+| The top-level commands `xquad asm`, `dism`, `run` and `verify` | v0.4.5 | `xquad vm asm`, `dis`, `run` and `check` | Print a warning line to stderr rather than a `DeprecationWarning`; see [xquad vm](../cli/vm/) |
 
 `solve()` is not deprecated, and neither is a typed `resolution=` on
 `solve()`. The strict paths refuse what the deprecated ones accept:

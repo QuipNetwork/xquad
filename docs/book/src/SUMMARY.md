@@ -61,6 +61,9 @@
     - [Disassemble](cli/vm/dis.md)
     - [Run](cli/vm/run.md)
     - [Check](cli/vm/check.md)
+  - [xquad quip](cli/quip/README.md)
+    - [Accounts](cli/quip/accounts.md)
+    - [Orders](cli/quip/orders.md)
 
 - [XQVM Reference](xqvm/README.md)
   - [VM Architecture](xqvm/machine-model.md)

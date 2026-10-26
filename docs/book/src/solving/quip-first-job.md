@@ -251,7 +251,8 @@ terminal, as here. It then runs two gates with their defaults.
 `autoconfirm=True` accepts the price. The account is short, so
 `autofund=True` draws one drip of 10 AGLS from the faucet. Finally it
 sends the signed `propose_job`, which reserves the reward, and returns
-the order, now `submitted`. The order is read-only from here: `set()`,
+the order, now `submitted`, once the block holding it is finalized, a
+few blocks after it is included. The order is read-only from here: `set()`,
 `quote()` and `submit()` refuse it.
 
 ## Read the Result
@@ -498,13 +499,17 @@ receipt also lists the solvers that answered and their raw spin vectors,
 shows the settlement, and reclaims an unanswered order with
 `receipt.reclaim()`.
 
+From a shell, `xquad quip --network aglais orders` lists the same
+orders, one line each, and `xquad quip --network aglais status 20`
+prints the receipt box; see [Orders](../cli/quip/orders.md).
+
 A receipt does not hold your model, so it cannot decode an answer into a
 tour. Decoding needs the `JobOrder` from the session that submitted it.
 From a new session, the deprecated
 `solver.query(order_id, model, topology="native")` still returns a
 decoded `SolverResult`, with the same `topology` the order was proposed
-with; it warns and is removed in v0.5.0 (see [Deprecated in
-v0.4.3](quip-network.md#deprecated-in-v043)).
+with; it warns and is removed in v0.5.0 (see [Deprecated
+APIs](quip-network.md#deprecated-apis)).
 
 ## What Native Mode Gives Up
 

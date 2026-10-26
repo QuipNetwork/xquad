@@ -59,16 +59,18 @@ TypeError: unknown order option 'mode'; expected one of access, block_wait, dead
 
 ### States
 
-An order is in one of five states. `status()["state"]` reports it, and
-the order box shows it in its title.
+An order is in one of five states, or the deprecated `unconfirmed`.
+`status()["state"]` reports it, and the order box shows it in its
+title.
 
 | State | Meaning |
 |---|---|
 | `draft` | Built by `create_order()`; nothing is on chain. Only a draft accepts `set()`, `quote()` and `submit()` |
-| `submitted` | Proposed and included; the order has an id and a receipt |
+| `sending` | `submit()` sent the signed `propose_job` but has not settled it: the proposal may still land. The order keeps its signed bytes and nonce, pickling included, and is never signed again while they can land; see [Settling a send](#settling-a-send) |
+| `submitted` | Proposed, and the block holding it is finalized; the order has an id and a receipt |
 | `finalized` | The chain head reached the order's effective expiry (see [Job Lifecycle](quip-network.md#job-lifecycle)); `wait()` and `status()` move a submitted order here |
-| `failed` | `propose_job` was included but its dispatch failed: the fee was paid and no order was placed |
-| `unconfirmed` | `propose_job` was sent, but its outcome or order id is unknown. The order may be on chain, so it is never resent |
+| `failed` | `propose_job` was included in a finalized block but its dispatch failed: the fee was paid and no order was placed |
+| `unconfirmed` | Deprecated, and no longer produced since v0.4.5. An order pickled in this state by xquad 0.4.3 or 0.4.4 loads with a `DeprecationWarning` and is never sent again; see [Deprecated APIs](quip-network.md#deprecated-apis) |
 
 Calling `set()`, `quote()` or `submit()` on anything but a draft raises
 `QuipSubmissionError`:
@@ -98,14 +100,19 @@ Model](quip-network.md#cost-model) lists its fields.
 
 `submit()` sends the cached extrinsic, signing first if the order was
 never quoted. Before sending, it quotes again and runs the `autoconfirm`
-and `autofund` gates, as `solve()` does. It ends in one of three states:
+and `autofund` gates, as `solve()` does. Once the proposal is sent, it
+ends in one of three states:
 
-- `submitted`: the order is on chain, and `submit()` returns the order.
+- `submitted`: the order is in a finalized block, and `submit()`
+  returns the order.
 - `failed`: the dispatch failed, and `submit()` raises
   `QuipSubmissionError("propose_job 0x... failed on chain in block 0x...: <error>. The fee was paid and no order was placed.")`.
-- `unconfirmed`: the outcome is unknown, and `submit()` raises
-  `QuipUnconfirmedError`, which carries `extrinsic_hash` and
-  `block_hash`.
+- `sending`: the send could not be settled, and `submit()` raises
+  `QuipSubmitIncompleteError`; see [Settling a send](#settling-a-send).
+
+A proposal the node refuses, or one proven never to have reached the
+chain, leaves the order a draft, and `submit()` raises
+`QuipSubmissionError`; submitting it again signs afresh.
 
 A signature carries the account's nonce. When another order from the
 same account is sent between `quote()` and `submit()`, the nonce has
@@ -133,6 +140,102 @@ race the other client:
 
 `submit()` logs the quote box at `INFO` on the `xqsa.quip` logger, and
 also prints it to stderr when stderr is a terminal.
+
+### Settling a send
+
+Every proposal is signed mortal: the chain accepts it only within
+`inclusion_window_blocks` of the finalized block it was signed at, and
+never after. The window is a client setting, not an order option.
+`SolverQuip` and `for_network()` take 64 to 2048 blocks, rounded up to
+the next power of two, so `inclusion_window_blocks=100` gives 128; a
+value outside that range raises `QuipOrderOptionError`
+(`inclusion_window_blocks=4096 must be from 64 to 2048`) before
+connecting. The default, `DEFAULT_INCLUSION_WINDOW_BLOCKS`, is 64
+blocks, about 6.4 minutes. A longer window rides out more congestion
+or a longer outage, but a send that never lands takes longer to be
+proven dead. The quote box shows the window in its `Window` row
+(`included within 64 blocks`), and a draft's
+`status()["inclusion_window_blocks"]` reports it.
+
+`quote()` signs once, but `submit()` signs again when the account nonce
+has moved or half of the cached bytes' window has passed, so a quote
+left sitting never sends bytes that could expire before they land. It
+refuses to sign at all while finality lags the best block by half the
+window or more:
+`QuipSubmissionError: finality lags 40 blocks behind the best block, at least half the 64-block inclusion window; nothing was sent, try again once it catches up`.
+
+`submit()` reads the outcome from finalized state alone. The order
+becomes `submitted`, with its order id, or `failed` once the block
+holding the proposal is finalized, so `submit()` returns a few blocks
+after the proposal is included, not at inclusion. A failed dispatch is
+read from that block's events, as `System.ExtrinsicFailed: <error>`.
+While the proposal may still land, `submit()` sends the same bytes
+again, so a node that lost them learns them again; the bytes carry one
+hash and one nonce, so they land once at most. A lost connection is
+reopened with backoff. Settling reads past blocks' state, so the node
+must keep full state history (`--state-pruning=archive`); the named
+network presets do.
+
+When `submit()` cannot settle the send by the end of its window,
+because no node could be reached, finality stalled, or the block's
+events could not be decoded, it raises `QuipSubmitIncompleteError` and
+leaves the order `sending`. It stops at once, with the same error, when
+a reconnect reaches another chain, a runtime this client cannot sign
+for, or a node that has discarded the state it needs. The error is a
+`QuipSubmissionError`, so existing handlers still catch it. It carries
+`order` (`None` after pickling, since the order holds a live
+connection), `extrinsic_hash`, `nonce` and `window_end`, the last block
+that can include the proposal; the specific cause is its `__cause__`.
+The message ends with what to do. This example is illustrative, built
+from the message in `xqsa/quip/client.py`, not captured:
+
+```text
+QuipSubmitIncompleteError: propose_job 0x5e0c...81d4 (nonce 3) was sent but is not settled (<the last error>). Its window ends at block 4160. The order is sending: calling submit() again resumes it; it never places a second order.
+```
+
+Calling `submit()` on a `sending` order resumes it. It settles the
+bytes already sent, up to the end of their window, and signs nothing. If
+they landed, the order is `submitted` (or `failed`, raised as above). If
+they are proven never on chain, the order is a draft again and is
+quoted, gated, signed and sent as a new one. Either way it never places
+a second order:
+
+```python
+from xquad import sa
+
+try:
+    order.submit()
+except sa.quip.QuipSubmitIncompleteError as exc:
+    print(exc.extrinsic_hash, exc.nonce, exc.window_end)
+    exc.order.submit()  # resumes; never places a second order
+```
+
+A `KeyboardInterrupt`, or any other exception, after the bytes may have
+reached the node also leaves the order `sending`. `submit()` prints the
+hash, nonce and window end to stderr and re-raises the exception
+unchanged:
+
+```text
+[quip] submit() stopped after propose_job 0x5e0c...81d4 (nonce 3) may have reached the node; its window ends at block 4160. The order is sending: calling submit() again resumes it; it never places a second order.
+```
+
+Before that point the order stays a draft. While an order is `sending`,
+every other method settles it first: `status()` makes one read without
+waiting and reports the state it settles to, or, while it cannot,
+`state`, `extrinsic_hash`, `nonce` and `window_end`. The order box shows
+the hash, nonce and window end in its `Receipt` row. A `sending` order
+pickles with its signed bytes, but `copy()` and `deepcopy()` refuse it,
+since two live orders must not share one nonce.
+
+Each send spends one account nonce, and the chain includes an account's
+transactions in nonce order. A send signed while an earlier one from the
+same account is still waiting in the node's pool takes the next nonce,
+so it cannot land before the earlier one. If the earlier send's window
+ends with it never on chain, its nonce stays unspent: it settles back
+to a draft, and the later send cannot land either. That one settles
+back to a draft when its own window ends, and its `submit()` raises
+`QuipSubmissionError: propose_job 0x... never reached the chain`.
+Submitting either again signs with the current nonce.
 
 ### Checks before signing
 
@@ -188,8 +291,8 @@ it: the fee the chain charged, read from the order's
 them for comparison. The quoted fee is an estimate at the head block, so
 the two can differ. When the fee cannot be read, the row says
 `fee unknown`. A failed order paid the fee but placed nothing, so its
-`Paid` row shows the fee and the quote with no reward. An unconfirmed
-order's outcome is unknown, so its `Quoted` row shows the quote alone.
+`Paid` row shows the fee and the quote with no reward. A `sending`
+order's outcome is unknown, so a `Quoted` row shows the quote alone.
 
 ## Payout rules
 
@@ -413,6 +516,24 @@ signer. It returns at most the newest 32 ids, after the `state` filter,
 and warns when there are more:
 `showing 32 of N orders on this account. This 32-order page limit was imposed for the old protocol cap of 32 orders per account; please flag it to the xquad team so it can be lifted.`
 
+`receipt.summary()` returns the order's outcome as one flat dict, the
+fields the receipt box shows under its status rows; `xquad quip orders`
+and `status --short` print it as one line (see [Orders](../cli/quip/orders.md)):
+
+```python
+print(solver.get_receipt(20).summary())
+```
+
+```text
+{'order_id': 20, 'state': 'final', 'open_until': None, 'answers': 2, 'leader': '5GqG8c8zWHX33ruGJX4FDokxCTFrASVi268einKJY1XnHNYn'}
+```
+
+Its `state` is `open`, `final` (answered, the reward awaiting a claim),
+`reclaimable` (final with no answers, so `reclaim()` refunds it) or
+`closed` (claimed or reclaimed). `open_until` is the block an open order
+closes at, `None` otherwise; `leader` is `None` with no answers.
+Captured on 2026-10-26.
+
 The receipt and the in-session `JobOrder` share these methods:
 
 | Method | Returns |
@@ -577,5 +698,5 @@ Decoding needs the in-session `JobOrder`, because a receipt does not
 hold the model. From another session, `get_receipt(order_id)` gives you
 the order's status, solvers, raw vectors, settlement and reclaim, but
 not a decoded sample; the deprecated `query(order_id, model, ...)` is
-the only way to decode one there (see [Deprecated in
-v0.4.3](quip-network.md#deprecated-in-v043)).
+the only way to decode one there (see [Deprecated
+APIs](quip-network.md#deprecated-apis)).
