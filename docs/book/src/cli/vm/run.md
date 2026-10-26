@@ -24,7 +24,7 @@ xquad vm run [OPTIONS] <FILE>
 | `--outputs <OUTPUTS>` | `16` | Number of output slots available for `OUTPUT` instructions. |
 | `--step-limit <STEP_LIMIT>` | `10000000`, the VM's `DEFAULT_STEP_LIMIT` | Maximum number of steps to execute. The limit is exact: `0` executes nothing. Conflicts with `--unlimited-steps`. See [Step limits](../../running/#step-limits). |
 | `--unlimited-steps` | off | Run without a step limit. Conflicts with `--step-limit`. A program that never halts will not return. |
-| `--memory-limit <MEMORY_LIMIT>` | `1073741824` (1 GiB), the VM's `DEFAULT_MEMORY_LIMIT` | Allocation budget in bytes for models, samples and vectors. See [The allocation budget](../limits-and-errors.md#the-allocation-budget). |
+| `--memory-limit <MEMORY_LIMIT>` | `1073741824` (1 GiB), the VM's `DEFAULT_MEMORY_LIMIT` | Allocation budget in bytes for models, samples and vectors. See [The allocation budget](../../xqvm/limits-and-errors.md#the-allocation-budget). |
 | `--trace` | off | Enable step-by-step execution tracing. |
 | `--trace-format <TRACE_FORMAT>` | `text` | Trace output format: `text` or `json`. Requires `--trace`. |
 | `--trace-file <TRACE_FILE>` | stderr | Write trace output to a file instead of stderr. Requires `--trace`. |
@@ -82,7 +82,7 @@ if the register it reads was never written, the same as `LOAD`. Both
 `INPUT` and `OUTPUT` fault with `CallDataIndex`/`OutputIndex`
 respectively if the popped index is out of range for the calldata or
 output-slot array -- the index itself is not guaranteed to be valid just
-because it came off the stack. See [Register I/O](../instructions/register-io.md)
+because it came off the stack. See [Register I/O](../../xqvm/instructions/register-io.md)
 for the full set of `INPUT`/`OUTPUT` error modes.
 
 ### Enable tracing

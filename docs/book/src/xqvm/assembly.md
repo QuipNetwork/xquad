@@ -193,6 +193,6 @@ Error: xqasm::unknown_mnemonic
    ╰────
 ```
 
-These are the Rust API's diagnostics. [`xquad vm asm`](cli/asm.md#error-reporting)
+These are the Rust API's diagnostics. [`xquad vm asm`](../cli/vm/asm.md#error-reporting)
 reports the same error from the command line as one line, without the
 snippet.

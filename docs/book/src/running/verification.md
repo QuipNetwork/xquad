@@ -10,7 +10,7 @@ firing and what to change.
 `xquad vm check --text file.xqasm` assembles the source in memory and
 verifies the result; `xquad vm check file.xqb` verifies pre-assembled
 bytecode. Both forms and their exit codes are covered in
-[CLI: check](../xqvm/cli/check.md); this page assumes you already know how
+[CLI: check](../cli/vm/check.md); this page assumes you already know how
 to invoke it.
 
 ## Reading an error

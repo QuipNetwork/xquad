@@ -32,13 +32,25 @@ supported backend.
 
 ### Python (from PyPI)
 
+Install XQuad into a project environment first: a virtual environment, or a `uv` project.
+
 ```sh
-pip install xquad             # umbrella -- full pipeline and the `xquad` CLI
-# or pick individual pieces:
-pip install xqffi xqcp xqsa   # FFI bindings + DSL + solvers
+python -m venv .venv && source .venv/bin/activate
+pip install xquad
+# or, in a uv project:
+uv add xquad
 ```
 
-`pip install xquad` puts the `xquad` command on `PATH` (`xquad vm asm|dis|run|check`); `python -m xquad` runs the same command when the script directory is not on `PATH`. Prebuilt wheels are available for Linux x86_64 and aarch64 (CPython >= 3.13). On macOS and Windows, pip builds the `xqffi` Rust extension from source -- this requires a [Rust toolchain](https://rustup.rs/) (>= 1.85).
+For the `xquad` command alone, outside any project, install it as a `uv` tool, with the `quip` extra for the `xquad quip` commands:
+
+```sh
+uv tool install xquad            # the xquad command
+uv tool install 'xquad[quip]'    # with the xquad quip commands
+```
+
+On macOS, a user install (`pip install --user`, or pip falling back to one) puts the `xquad` command in `~/Library/Python/3.x/bin`, which is not on `PATH`; `python -m xquad` runs the same command without it.
+
+The `xquad` package is the umbrella: the full pipeline and the `xquad` command. To pick individual pieces instead, install `xqffi`, `xqcp` and `xqsa` (FFI bindings, DSL, solvers). Prebuilt wheels are available for Linux x86_64 and aarch64 (CPython >= 3.13). On macOS and Windows, pip builds the `xqffi` Rust extension from source -- this requires a [Rust toolchain](https://rustup.rs/) (>= 1.85).
 
 ### GPU/QPU support
 
@@ -46,12 +58,12 @@ The base install includes CPU simulated annealing only. To use GPU or quantum ha
 
 | Solver | Install | Prerequisite |
 |--------|---------|-------------|
-| NVIDIA CUDA GPU (`cuda-gpu`) | `pip install xquad[cuda]` | CUDA 12.x driver + NVIDIA GPU |
-| Apple Metal GPU (`metal-gpu`) | `pip install xquad[metal]` | Apple Silicon Mac with a Metal device |
-| D-Wave Advantage QPU (`dwave-qpu`) | `pip install xquad[dwave]` | D-Wave Leap account + API token |
-| Quip Network solver (`quip`) | `pip install xquad[quip]` | `QUIP_RPC_URL` + a configured signer |
+| NVIDIA CUDA GPU (`cuda-gpu`) | `pip install 'xquad[cuda]'` | CUDA 12.x driver + NVIDIA GPU |
+| Apple Metal GPU (`metal-gpu`) | `pip install 'xquad[metal]'` | Apple Silicon Mac with a Metal device |
+| D-Wave Advantage QPU (`dwave-qpu`) | `pip install 'xquad[dwave]'` | D-Wave Leap account + API token |
+| Quip Network solver (`quip`) | `pip install 'xquad[quip]'` | `QUIP_RPC_URL` + a configured signer |
 
-Extras are composable: `pip install xquad[cuda,dwave]`. See [`xqsa/README.md`](xqsa/README.md#install) for driver prerequisites and per-solver quick-starts.
+Extras are composable: `pip install 'xquad[cuda,dwave]'`. See [`xqsa/README.md`](xqsa/README.md#install) for driver prerequisites and per-solver quick-starts.
 
 For a guided walkthrough that installs XQuad, verifies it, and runs a
 complete problem end to end, see

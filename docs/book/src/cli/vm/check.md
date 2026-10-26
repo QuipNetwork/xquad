@@ -22,7 +22,7 @@ xquad vm check [OPTIONS] <FILE>
 | `--text` | off | Treat `FILE` as assembly source and assemble it before checking. |
 
 `xquad vm check` runs the same default pipeline documented in
-[Verifier](../verifier.md): structural checks, jump-target checks,
+[Verifier](../../xqvm/verifier.md): structural checks, jump-target checks,
 loop-nesting balance, register type-state, must-init analysis, and stack
 depth, in that order, stopping at the first phase that fails. This page
 covers only the command's own behaviour; for what each phase checks and
@@ -102,7 +102,7 @@ loop bound and every arithmetic operand are runtime quantities, so a
 program that allocates a negative model, resizes past its own variable
 count, overflows an `i64` or exhausts its step or allocation budget
 verifies cleanly and faults when run. See
-[Verifier](../verifier.md#what-passing-verification-guarantees) for the
+[Verifier](../../xqvm/verifier.md#what-passing-verification-guarantees) for the
 precise scope of what a pass proves, and [Limits and
-Errors](../limits-and-errors.md#vm-runtime-errors) for the faults that
+Errors](../../xqvm/limits-and-errors.md#vm-runtime-errors) for the faults that
 have no static counterpart.

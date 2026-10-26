@@ -5,10 +5,12 @@ allowlist
 allowlisted
 annealer
 annealers
+APIs
 arity
 asm
 backend
 backends
+backoff
 benchmarked
 bitwise
 Bitwise
@@ -20,6 +22,7 @@ canonicalising
 codec
 coeffs
 composable
+config
 Config
 cutover
 dataclass
@@ -48,6 +51,8 @@ Iter
 Iverson
 keystore
 Keystore
+keystores
+Keystores
 lockfile
 lockfiles
 maximiser

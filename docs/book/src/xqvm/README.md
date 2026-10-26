@@ -49,6 +49,6 @@ add.xqasm` skips the separate assembly step and runs the source directly.
 - **[Opcode Reference](opcodes.md)** -- the generated opcode table.
 - **[Bytecode Format](bytecode-format.md)** -- the `.xqb` wire format.
 - **[Verifier](verifier.md)** -- what the pre-execution verifier checks.
-- **[CLI](cli/)** -- the `xquad` command-line tool.
+- **[CLI](../cli/vm/)** -- `xquad vm`, the XQVM commands.
 - **[Limits and Errors](limits-and-errors.md)** -- fixed and configurable
   limits, and every runtime and verifier error.
