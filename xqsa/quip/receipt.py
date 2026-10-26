@@ -547,8 +547,7 @@ def _minutes_until(blocks: int, block_time_ms: int | None) -> str:
 def _floors_of(params: Mapping[str, Any]) -> Floors:
     """Read the quality floors from an order's ``ising_params``."""
     return Floors(
-        # The ceiling's field is min_energy_milli until QUI-1612 renames it max_energy_milli.
-        max_energy_milli=_optional_int(params.get("max_energy_milli", params.get("min_energy_milli"))),
+        max_energy_milli=_optional_int(params.get("max_energy_milli")),
         min_solutions=_optional_int(params.get("min_solutions")),
         min_diversity_milli=_optional_int(params.get("min_diversity_milli")),
     )

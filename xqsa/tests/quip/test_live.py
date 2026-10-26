@@ -949,7 +949,7 @@ class TestSelfSolved:
         receipt = order.wait().receipt()
 
         params = solver._fetch_order(order_id)["ising_params"]
-        assert params.get("max_energy_milli", params.get("min_energy_milli")) == -2000
+        assert params["max_energy_milli"] == -2000
         assert (params["min_solutions"], params["min_diversity_milli"]) == (2, 100)
         assert receipt._floors_text() == floors_text(Floors(-2000, 2, 100))
         (answer,) = solver._fetch_solutions(order_id)

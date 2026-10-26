@@ -758,10 +758,6 @@ class SolverQuip(Solver):
             "edges": self._wrap_bounded([list(edge) for edge in job.edges]),
             "h_values": self._wrap_bounded(list(job.h_values)),
             "j_values": self._wrap_bounded(list(job.j_values)),
-            # The ceiling goes under both names: the struct encoder takes only
-            # the field the runtime lists, so this proposes before and after
-            # QUI-1612 renames min_energy_milli to max_energy_milli (QUI-1674).
-            "min_energy_milli": floors.max_energy_milli,
             "max_energy_milli": floors.max_energy_milli,
             "min_diversity_milli": floors.min_diversity_milli,
             "min_solutions": floors.min_solutions,
