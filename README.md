@@ -32,13 +32,25 @@ supported backend.
 
 ### Python (from PyPI)
 
+Install XQuad into a project environment first: a virtual environment, or a `uv` project.
+
 ```sh
-pip install xquad             # umbrella -- full pipeline and the `xquad` CLI
-# or pick individual pieces:
-pip install xqffi xqcp xqsa   # FFI bindings + DSL + solvers
+python -m venv .venv && source .venv/bin/activate
+pip install xquad
+# or, in a uv project:
+uv add xquad
 ```
 
-`pip install xquad` puts the `xquad` command on `PATH` (`xquad vm asm|dis|run|check`); `python -m xquad` runs the same command when the script directory is not on `PATH`. Prebuilt wheels are available for Linux x86_64 and aarch64 (CPython >= 3.13). On macOS and Windows, pip builds the `xqffi` Rust extension from source -- this requires a [Rust toolchain](https://rustup.rs/) (>= 1.85).
+For the `xquad` command alone, outside any project, install it as a `uv` tool, with the `quip` extra for the `xquad quip` commands:
+
+```sh
+uv tool install xquad            # the xquad command
+uv tool install 'xquad[quip]'    # with the xquad quip commands
+```
+
+On macOS, `pip install` outside a virtual environment puts the `xquad` command in a folder that is not on `PATH`; `python -m xquad` runs the same command without it.
+
+The `xquad` package is the umbrella: the full pipeline and the `xquad` command. To pick individual pieces instead, install `xqffi`, `xqcp` and `xqsa` (FFI bindings, DSL, solvers). Prebuilt wheels are available for Linux x86_64 and aarch64 (CPython >= 3.13). On macOS and Windows, pip builds the `xqffi` Rust extension from source -- this requires a [Rust toolchain](https://rustup.rs/) (>= 1.85).
 
 ### GPU/QPU support
 

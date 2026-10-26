@@ -6,18 +6,31 @@ also puts the command on your `PATH`.
 
 ## Installation
 
+Install XQuad into a project environment first: a virtual environment,
+or a `uv` project.
+
 ```sh
+python -m venv .venv && source .venv/bin/activate
 pip install xquad
-xquad --help
+# or, in a uv project:
+uv add xquad
 ```
 
-If your shell reports `xquad: command not found`, the script directory
-of that Python environment is not on `PATH`. `python -m xquad` runs the
-same command without it:
+For the `xquad` command alone, outside any project, install it as a
+`uv` tool, with the `quip` extra for the `xquad quip` commands:
 
 ```sh
-python -m xquad --help
+uv tool install xquad            # the xquad command
+uv tool install 'xquad[quip]'    # with the xquad quip commands
 ```
+
+On macOS, `pip install` outside a virtual environment puts the `xquad`
+command in a folder that is not on `PATH`; `python -m xquad` runs the
+same command without it.
+
+More generally, if your shell reports `xquad: command not found`, the
+script directory of that Python environment is not on `PATH`, and
+`python -m xquad --help` works in its place.
 
 From a checkout of this repository, `make xquad` syncs the workspace
 virtual environment, and `uv run xquad` runs the command from it.

@@ -180,7 +180,7 @@ log in, use `docker login registry.gitlab.com` with a `read_registry` PAT.
 
 From `nodes.quip.network`:
 
-    cp env.example .env          # then set PUID=0 / PGID=0 (see macOS notes)
+    cp env.example .env          # then set PUID=1000 / PGID=1000 (see macOS notes)
     make localdev                # wipe + pull + seed topology + bring up the stack
 
 `make localdev` is idempotent and destructive by design: it tears down, wipes
@@ -194,10 +194,11 @@ self-bootstraps: it faucet-funds its account, registers as a PoW miner, and
 auto-registers as a mempool solver (`mempool solver guard: registered (cpu)`).
 Bootstrap completes ~60-90s after the miner container starts.
 
-**macOS (Apple Silicon):** set `PUID=0` and `PGID=0` in `.env`. Do NOT use
-`PGID=$(id -g)` -- on macOS that is `20` (`staff`), which collides with the
+**macOS (Apple Silicon):** set `PUID=1000` and `PGID=1000` in `.env`. Do NOT
+use `PGID=$(id -g)` -- on macOS that is `20` (`staff`), which collides with the
 miner image's GID `20` (`dialout`) and crash-loops the entrypoint's group
-remap. The miner and faucet images are amd64-only and run under emulation, so
+remap. Do not use `0` either: the dashboard refuses it, and the RPC and faucet
+on `:20049` go down with it. The miner and faucet images are amd64-only and run under emulation, so
 the first pull is slow and CPU is higher than native -- expected, not a hang.
 
 ### Verify the stack
@@ -246,7 +247,8 @@ on-chain solution under emulation).
 
 From `nodes.quip.network`: `make down` (stop), `make clean-chain` (wipe chain
 only), `make clean` (full reset). Re-run `make localdev` after any wipe -- state
-is non-persistent and order ids reset, so never hard-code one.
+is non-persistent and order ids reset, so never hard-code one. After a network
+reset, also clear `dashboard-data-localdev/` before running `make localdev`.
 
 ### Troubleshooting
 
@@ -266,7 +268,7 @@ is non-persistent and order ids reset, so never hard-code one.
   every run, so a stale image is far less likely than it used to be; a stale
   `.env` pinning `QUIP_*_TAG` is the remaining way to get one.
 - **macOS miner crash-loop before any app logs:** `PGID=20` group collision --
-  set `PUID=0` / `PGID=0`.
+  set `PUID=1000` / `PGID=1000`.
 - **Faucet:** on a fresh bring-up the miner's first requests hit
   `Connection refused` for ~30s until the faucet is up, then fund on retry
   (expected). After that the faucet's two gates apply, as described
