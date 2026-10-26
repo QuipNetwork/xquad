@@ -41,13 +41,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Domain, Problem, Types, xq_triu
-from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
+from xquad import cp, sa
 from xquad.types import XqmxModel, triu
 from xquad.vm import VM
 
 
-def build_problem(n: int, seed: int) -> tuple[Problem, list[int]]:
+def build_problem(n: int, seed: int) -> tuple[cp.Problem, list[int]]:
     """Construct a TSP problem with a random symmetric distance matrix.
 
     Distances live in the upper triangle only (`n*(n-1)/2` entries)
@@ -56,21 +55,21 @@ def build_problem(n: int, seed: int) -> tuple[Problem, list[int]]:
     rng = random.Random(seed)
     distances = [rng.randint(1, 100) for _ in range(n * (n - 1) // 2)]
 
-    problem = Problem("TSP")
+    problem = cp.Problem("TSP")
 
-    num_cities = problem.input("num_cities", type=Types.Int)
-    distance_matrix = problem.input("distance_matrix", type=Types.Vec)
+    num_cities = problem.input("num_cities", type=cp.Types.Int)
+    distance_matrix = problem.input("distance_matrix", type=cp.Types.Vec)
 
     problem.define_model(
         size=num_cities * num_cities,
-        domain=Domain.BINARY,
+        domain=cp.Domain.BINARY,
         rows=num_cities,
         cols=num_cities,
     )
 
     with problem.range(0, num_cities - 1) as city_i:
         with problem.range(city_i + 1, num_cities) as city_j:
-            dist = problem.stow("dist", distance_matrix.get(xq_triu(city_i, city_j)))
+            dist = problem.stow("dist", distance_matrix.get(cp.xq_triu(city_i, city_j)))
             with problem.range(0, num_cities) as position:
                 next_position = (position + 1) % num_cities
                 problem.model.quadratic[(city_i, position), (city_j, next_position)].add(dist)
@@ -81,7 +80,7 @@ def build_problem(n: int, seed: int) -> tuple[Problem, list[int]]:
     with problem.range(0, num_cities) as position:
         problem.model.apply_onehot_col(position, penalty=100)
 
-    tour = problem.output("tour", type=Types.Vec)
+    tour = problem.output("tour", type=cp.Types.Vec)
     with problem.range(0, num_cities) as position:
         tour.append(problem.sample.colfind(col=position, value=1))
 
@@ -140,7 +139,7 @@ def run(programs: Any, n: int, distances: list[int], seed: int, solver_name: str
     assert isinstance(model, XqmxModel)
 
     try:
-        solver = build_solver(solver_name, seed=seed)
+        solver = sa.build_solver(solver_name, seed=seed)
         sample = solver.solve(model).sample
     except (ImportError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -169,8 +168,8 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     parser.add_argument(
         "--solver",
-        choices=sorted(SOLVERS),
-        default=DEFAULT_SOLVER,
+        choices=sorted(sa.SOLVERS),
+        default=sa.DEFAULT_SOLVER,
         help="XQSA solver backend to sample the model with",
     )
     parser.add_argument(

@@ -118,7 +118,7 @@ def write_tree(root: Path, cargo: str = CARGO_DEV, pep: str = PEP_DEV) -> Path:
     write(
         "Cargo.toml",
         "[workspace]\n"
-        'members = [ "xqvm", "xqasm", "xqcli", "xqffi", "fixtures/xqvm-wasm" ]\n'
+        'members = [ "xqvm", "xqasm", "xqffi", "fixtures/xqvm-wasm" ]\n'
         'exclude = [ "fixtures/pallet-xqvm" ]\n'
         "\n"
         "[workspace.dependencies]\n"
@@ -127,7 +127,7 @@ def write_tree(root: Path, cargo: str = CARGO_DEV, pep: str = PEP_DEV) -> Path:
         'clap      = { version = "4", features = [ "derive" ] }\n'
         'thiserror = { version = "2", default-features = false }\n',
     )
-    for name in ("xqvm", "xqasm", "xqcli", "xqffi"):
+    for name in ("xqvm", "xqasm", "xqffi"):
         write(f"{name}/Cargo.toml", _CRATE.format(name=name, cargo=cargo))
     # The version-less path-only dev-dep that must never gain a version.
     write(
@@ -216,7 +216,7 @@ def test_release_candidate_passes_against_its_own_spellings(bumped: Path) -> Non
     """v0.4.0-rc1 against 0.4.0-rc1 / 0.4.0rc1 is the release candidate flow."""
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 0, result.stderr
-    assert "19 sites at 0.4.0-rc1 / 0.4.0rc1" in result.stdout
+    assert "18 sites at 0.4.0-rc1 / 0.4.0rc1" in result.stdout
 
 
 def test_python_site_in_cargo_spelling_fails(bumped: Path) -> None:
@@ -224,7 +224,7 @@ def test_python_site_in_cargo_spelling_fails(bumped: Path) -> None:
     patch(bumped, "xqcp/pyproject.toml", f'version = "{PEP_RC}"', f'version = "{CARGO_RC}"')
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert "disagrees with 1 of 19" in result.stderr
+    assert "disagrees with 1 of 18" in result.stderr
     assert f"xqcp/pyproject.toml:3: project version: found {CARGO_RC}, expected {PEP_RC}" in result.stderr
 
 
@@ -232,7 +232,7 @@ def test_release_tag_against_dev_tree_fails(tree: Path) -> None:
     """The live gap: tagging v0.4.0 against a -dev main would publish 0.4.0-dev."""
     result = run_guard(tree, tag="v0.4.0")
     assert result.returncode == 1
-    assert "disagrees with 19 of 19" in result.stderr
+    assert "disagrees with 18 of 18" in result.stderr
     for expected in (
         "Cargo.toml:6: workspace dependency xqvm",
         "xqffi/Cargo.toml:3: package version",
@@ -272,7 +272,7 @@ def test_partial_bump_reports_exactly_the_stale_site(
     patch(bumped, rel, old, new)
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert f"disagrees with {count} of 19" in result.stderr
+    assert f"disagrees with {count} of 18" in result.stderr
     assert site in result.stderr
 
 
@@ -288,7 +288,7 @@ def test_every_xquad_pin_missed_reports_three_sites(bumped: Path) -> None:
         patch(bumped, "xquad/pyproject.toml", f'"{dist}=={PEP_RC}"', f'"{dist}=={PEP_DEV}"')
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert "disagrees with 3 of 19" in result.stderr
+    assert "disagrees with 3 of 18" in result.stderr
     assert "project version" not in result.stderr
 
 
@@ -298,7 +298,7 @@ def test_unrelated_stale_sites_are_all_reported(bumped: Path) -> None:
     patch(bumped, "xquad/pyproject.toml", f'version = "{PEP_RC}"', f'version = "{PEP_DEV}"')
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert "disagrees with 2 of 19" in result.stderr
+    assert "disagrees with 2 of 18" in result.stderr
 
 
 def test_environment_tag_is_used_when_no_argument_is_given(bumped: Path) -> None:
@@ -475,10 +475,10 @@ def test_excluded_fixtures_are_left_alone(tree: Path) -> None:
 
 def test_missing_declared_site_is_a_setup_error(tree: Path) -> None:
     """Deleting a site is as much a table change as adding one."""
-    (tree / "xqcli/Cargo.toml").unlink()
+    (tree / "xqasm/Cargo.toml").unlink()
     result = run_guard(tree)
     assert result.returncode == 2
-    assert "xqcli/Cargo.toml: declared in the site table but missing" in result.stderr
+    assert "xqasm/Cargo.toml: declared in the site table but missing" in result.stderr
 
 
 def test_literal_version_on_a_dynamic_package_is_a_setup_error(tree: Path) -> None:
@@ -503,7 +503,7 @@ def test_lock_version_for_a_dynamic_package_is_a_setup_error(tree: Path) -> None
 def test_list_prints_every_site(tree: Path) -> None:
     result = run_guard(tree, "--list")
     assert result.returncode == 0
-    assert result.stdout.rstrip().endswith("19 version sites")
+    assert result.stdout.rstrip().endswith("18 version sites")
 
 
 def test_print_version_reports_the_canonical_spelling(tree: Path) -> None:

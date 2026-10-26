@@ -27,6 +27,12 @@ ignore = [
     # the fix is unreachable until the fixture moves to a rev that lifts the
     # pin. The fixture's tests log no untrusted input to a terminal.
     { id = "RUSTSEC-2025-0055", reason = "pinned =0.3.19 by polkadot-sdk rev 89495ec; see comment" },
+    # crypto-bigint 0.5.5 (secret-dependent branches in "constant-time" ops;
+    # fixed only in 0.7.6). Reached via sp-core -> k256 0.13 ->
+    # elliptic-curve 0.13, which caps it at 0.5, so the fix is unreachable
+    # until polkadot-sdk moves to the 0.14 elliptic-curve line. The fixture
+    # signs nothing with secret keys; the root workspace does not depend on it.
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 capped by polkadot-sdk rev 89495ec; see comment" },
 ]
 
 [licenses]

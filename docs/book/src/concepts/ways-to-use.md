@@ -10,7 +10,7 @@ the map.
 | `xquad` Program/Session API | `Program` / `Session` / `RunResult`: load a program once, run it repeatedly with fresh [calldata](../xqvm/io.md) | Driving an existing compiled program from Python -- a REPL, a notebook, a script |
 | `xqffi.vm` FFI | `Vm`: a thin wrapper over the Rust interpreter | Python code building its own convenience layer on top of the raw Rust VM |
 | `xquad.vm` VM wrapper | `VM`: runs `.xqasm` source text or bytecode on the Rust interpreter, keeping calldata, output slots and limits across runs | Scripts that run several programs in a row with the same settings; the surface every example runner under `examples/` uses |
-| `xquad` CLI | `xquad asm` / `run` / `dism` / `verify` | Assembling, running, inspecting, or verifying one `.xqasm`/`.xqb` file, no Python involved |
+| `xquad` CLI | `xquad vm asm` / `run` / `dis` / `check` | Assembling, running, inspecting, or verifying one `.xqasm`/`.xqb` file, no Python involved |
 | Rust embedding | `xqvm::InstructionBuilder`, building a `Program` directly, no text assembly step | Embedding XQVM in a Rust host: `no_std` target, WASM runtime, on-chain pallet |
 
 ## `xqcp` -- The DSL
@@ -80,19 +80,19 @@ Programs](../running/#the-other-two-vm-surfaces).
 
 ## `xquad` CLI
 
-`xquad asm`, `xquad run`, `xquad dism`, `xquad verify` -- four
+`xquad vm asm`, `xquad vm run`, `xquad vm dis`, `xquad vm check` -- four
 subcommands, entirely in the shell. Assemble a `.xqasm` file to bytecode, run
 a `.xqb` file (or a `.xqasm` file with `--text`) against calldata,
 disassemble bytecode back to a readable listing, or verify a compiled
 program before running it.
-`xquad asm add.xqasm -o add.xqb` followed by `xquad run add.xqb`,
-`xquad dism add.xqb`, and `xquad verify add.xqb` assembles, runs,
+`xquad vm asm add.xqasm -o add.xqb` followed by `xquad vm run add.xqb`,
+`xquad vm dis add.xqb`, and `xquad vm check add.xqb` assembles, runs,
 disassembles, and verifies the four-instruction `add.xqasm` from
 [Toolchain Map](./).
 
 Stop here if you are working from a shell or from CI. Keep reading if you
 need to drive many runs programmatically rather than one at a time. Full
-coverage: [CLI](../xqvm/cli/).
+coverage: [CLI](../cli/).
 
 ## Rust Embedding
 

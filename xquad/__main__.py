@@ -15,32 +15,10 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""`xquad.sa` -- re-export of `xqsa` (solver adapters: dwave-samplers + pluggable solvers)."""
+"""`python -m xquad`: the same command as the `xquad` script."""
 
-from xqsa import (
-    DEFAULT_SOLVER,
-    SOLVERS,
-    Solver,
-    SolverCPU,
-    SolverDWave,
-    SolverGPU,
-    SolverResult,
-    build_solver,
-)
-from xqsa._deprecated import flat_quip_dir, flat_quip_getattr
-from xquad.sa import quip as quip
+if __name__ == "__main__":
+    from xquad.cli import main
 
-__all__ = [
-    "Solver",
-    "SolverCPU",
-    "SolverDWave",
-    "SolverGPU",
-    "SolverResult",
-    "SOLVERS",
-    "DEFAULT_SOLVER",
-    "build_solver",
-]
-
-# The Quip names live in xquad.sa.quip; the flat ones warn until v0.5.0 (QUI-1608).
-__getattr__ = flat_quip_getattr(__name__, "xquad.sa.quip")
-__dir__ = flat_quip_dir(__name__)
+    # Otherwise click names the program `python -m xquad` in usage and error lines.
+    main(prog_name="xquad")

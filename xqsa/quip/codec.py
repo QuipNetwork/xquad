@@ -54,7 +54,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import dimod
 
@@ -966,3 +966,37 @@ def _event_ids(inner: Mapping[str, object]) -> tuple[object, object]:
     module_id = inner.get("module_id") or inner.get("event_module") or inner.get("pallet") or inner.get("pallet_name")
     event_id = inner.get("event_id") or inner.get("event_name") or inner.get("variant")
     return module_id, event_id
+
+
+def _dispatch_error_text(iface: Any, attrs: Any) -> str:
+    """Name the ``DispatchError`` in ``ExtrinsicFailed`` attributes, or return them as ``repr`` if it cannot be named.
+
+    A module error arrives as pallet and error indices (``{'index': 9,
+    'error': '0x06000000'}``, the error index in the first byte), so it is
+    looked up in the runtime metadata: ``QuantumComputeMempool.NotEligibleSolver``
+    with its doc line. Any other variant (``BadOrigin``, ``Token``, ...) is
+    rendered as its name and value. The attributes arrive as a dict, or, on
+    builds that decode them positionally, as ``[dispatch_error, dispatch_info]``.
+    """
+    if isinstance(attrs, dict):
+        error = attrs.get("dispatch_error")
+    else:
+        error = attrs[0] if isinstance(attrs, (list, tuple)) and attrs else None
+    if isinstance(error, str):
+        return error
+    if not isinstance(error, dict) or len(error) != 1:
+        return repr(attrs)
+    [(variant, value)] = error.items()
+    if variant != "Module":
+        return f"{variant}: {value}" if value is not None else variant
+    try:
+        # Older builds decode the indices as a tuple.
+        module_index, error_index = value[:2] if isinstance(value, tuple) else (value["index"], value["error"])
+        if isinstance(error_index, str):
+            error_index = bytes.fromhex(_strip_0x(error_index))[0]
+        pallet = iface.metadata.get_pallet_by_index(int(module_index)).name
+        entry = iface.metadata.get_module_error(module_index=int(module_index), error_index=int(error_index))
+        name, docs = entry.name, " ".join(entry.docs).strip()
+    except Exception:  # noqa: BLE001 -- an unnamed error still reads as the raw value, never hides it.
+        return repr(attrs)
+    return f"{pallet}.{name}" + (f" ({docs})" if docs else "")

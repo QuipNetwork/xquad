@@ -39,13 +39,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Domain, Problem, Types
-from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
+from xquad import cp, sa
 from xquad.types import XqmxModel
 from xquad.vm import VM
 
 
-def build_problem(n: int, num_colors: int, edges: list[tuple[int, int]]) -> Problem:
+def build_problem(n: int, num_colors: int, edges: list[tuple[int, int]]) -> cp.Problem:
     """Construct a Graph Coloring QUBO from one categorical variable per node.
 
     ``Domain.CATEGORICAL`` records the N x C binary grid and the one-hot row
@@ -55,16 +54,16 @@ def build_problem(n: int, num_colors: int, edges: list[tuple[int, int]]) -> Prob
     EXCLUDE per (edge, color): x[u,c] and x[v,c] cannot both be 1
       (adjacent nodes may not share a color).
     """
-    problem = Problem("GraphColoring")
+    problem = cp.Problem("GraphColoring")
 
-    num_nodes = problem.input("num_nodes", type=Types.Int)
-    num_colors_in = problem.input("num_colors", type=Types.Int)
-    num_edges = problem.input("num_edges", type=Types.Int)
-    edges_in = problem.input("edges", type=Types.Vec)
+    num_nodes = problem.input("num_nodes", type=cp.Types.Int)
+    num_colors_in = problem.input("num_colors", type=cp.Types.Int)
+    num_edges = problem.input("num_edges", type=cp.Types.Int)
+    edges_in = problem.input("edges", type=cp.Types.Vec)
 
     problem.define_model(
         size=num_nodes,
-        domain=Domain.CATEGORICAL,
+        domain=cp.Domain.CATEGORICAL,
         k=num_colors_in,
         penalty=200,
     )
@@ -79,7 +78,7 @@ def build_problem(n: int, num_colors: int, edges: list[tuple[int, int]]) -> Prob
             problem.model.apply_exclude((u, c), (v, c), 200)
 
     # Output: the color each node took, or -1 where its row stayed empty
-    colors = problem.output("colors", type=Types.Vec)
+    colors = problem.output("colors", type=cp.Types.Vec)
     with problem.range(0, num_nodes) as node:
         colors.append(problem.sample.case(node))
 
@@ -118,7 +117,7 @@ def run(
     assert isinstance(model, XqmxModel)
 
     try:
-        solver = build_solver(solver_name, seed=seed)
+        solver = sa.build_solver(solver_name, seed=seed)
         sample = solver.solve(model).sample
     except (ImportError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -148,8 +147,8 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     parser.add_argument(
         "--solver",
-        choices=sorted(SOLVERS),
-        default=DEFAULT_SOLVER,
+        choices=sorted(sa.SOLVERS),
+        default=sa.DEFAULT_SOLVER,
         help="XQSA solver backend to sample the model with",
     )
     parser.add_argument(

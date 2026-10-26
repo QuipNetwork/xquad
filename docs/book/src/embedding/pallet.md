@@ -141,7 +141,7 @@ must verify before it executes, for the reasons set out in
 [On-Chain Admissibility](admissibility.md).
 
 Off-chain, produce the bytecode however you like; the assembler CLI is
-`xquad asm`.
+`xquad vm asm`.
 
 The cargo profile the runtime is built with is a second default an
 operator must not inherit without reading it. Do not compile the runtime

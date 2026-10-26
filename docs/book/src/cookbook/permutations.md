@@ -24,12 +24,12 @@ distance objective out leaves the pattern on its own -- allocate the grid,
 apply both one-hot families, decode with `colfind`:
 
 ```python
-from xquad.cp import Domain, Problem, Types
+from xquad import cp
 
-def build_problem(n: int) -> Problem:
-    problem = Problem("PurePermutation")
-    num_items = problem.input("num_items", type=Types.Int)
-    problem.define_model(size=num_items * num_items, domain=Domain.BINARY,
+def build_problem(n: int) -> cp.Problem:
+    problem = cp.Problem("PurePermutation")
+    num_items = problem.input("num_items", type=cp.Types.Int)
+    problem.define_model(size=num_items * num_items, domain=cp.Domain.BINARY,
                           rows=num_items, cols=num_items)
 
     with problem.range(0, num_items) as row:
@@ -37,7 +37,7 @@ def build_problem(n: int) -> Problem:
     with problem.range(0, num_items) as col:
         problem.model.apply_onehot_col(col, penalty=10)
 
-    perm = problem.output("perm", type=Types.Vec)
+    perm = problem.output("perm", type=cp.Types.Vec)
     with problem.range(0, num_items) as position:
         perm.append(problem.sample.colfind(col=position, value=1))
     return problem
@@ -54,13 +54,13 @@ is a permutation of range(N): True
 energy: -60
 ```
 
-`xquad verify --text` accepts the compiled encoder:
+`xquad vm check --text` accepts the compiled encoder:
 
 ```text
 ok: permutation_encoder.xqasm (29 instructions)
 ```
 
-and `xquad run --text ... --calldata 3` reproduces the same model
+and `xquad vm run --text ... --calldata 3` reproduces the same model
 deterministically from the assembled bytecode, independent of the Python
 solve above:
 
@@ -98,7 +98,7 @@ is structural rather than semantic: `ONEHOTR`/`ONEHOTC` read grid
 dimensions from `RESIZE`, so a model with no grid set has no row or
 column for them to constrain. Both raise `InvalidGridDimensions` at the
 instruction that needed the grid -- see
-[High-Level Constraints](../xqvm/instructions/constraints.md). `xquad
-verify` does not catch it, since grid dimensions are runtime values, so
+[High-Level Constraints](../xqvm/instructions/constraints.md). `xquad vm
+check` does not catch it, since grid dimensions are runtime values, so
 the failure surfaces when the encoder runs rather than when it compiles.
 

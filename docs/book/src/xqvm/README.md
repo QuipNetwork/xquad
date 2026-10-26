@@ -22,15 +22,15 @@ HALT
 ```
 
 ```sh
-$ xquad asm add.xqasm -o add.xqb
+$ xquad vm asm add.xqasm -o add.xqb
 assembled 4 instructions (21 bytes) -> add.xqb
-$ xquad run add.xqb
+$ xquad vm run add.xqb
 stack (bottom to top):
   42
 ```
 
 The program pushes 10 and 32 onto the value stack, adds them, and halts. The
-result remains on the stack and is printed by `xquad run`. `xquad run --text
+result remains on the stack and is printed by `xquad vm run`. `xquad vm run --text
 add.xqasm` skips the separate assembly step and runs the source directly.
 
 ## What this section covers
@@ -49,6 +49,6 @@ add.xqasm` skips the separate assembly step and runs the source directly.
 - **[Opcode Reference](opcodes.md)** -- the generated opcode table.
 - **[Bytecode Format](bytecode-format.md)** -- the `.xqb` wire format.
 - **[Verifier](verifier.md)** -- what the pre-execution verifier checks.
-- **[CLI](cli/)** -- the `xquad` command-line tool.
+- **[CLI](../cli/vm/)** -- `xquad vm`, the XQVM commands.
 - **[Limits and Errors](limits-and-errors.md)** -- fixed and configurable
   limits, and every runtime and verifier error.

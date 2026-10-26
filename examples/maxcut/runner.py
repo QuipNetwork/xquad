@@ -42,13 +42,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Domain, Problem, Types
-from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
+from xquad import cp, sa
 from xquad.types import XqmxModel
 from xquad.vm import VM
 
 
-def build_problem(n: int, seed: int) -> tuple[Problem, list[tuple[int, int, int]]]:
+def build_problem(n: int, seed: int) -> tuple[cp.Problem, list[tuple[int, int, int]]]:
     """Construct a Max-Cut problem with a random weighted complete graph.
 
     Edges are `(i, j, w)` triples with `i < j`, fed to the VM as a flat
@@ -57,12 +56,12 @@ def build_problem(n: int, seed: int) -> tuple[Problem, list[tuple[int, int, int]
     rng = random.Random(seed)
     edges: list[tuple[int, int, int]] = [(i, j, rng.randint(1, 100)) for i in range(n) for j in range(i + 1, n)]
 
-    problem = Problem("MaxCut")
+    problem = cp.Problem("MaxCut")
 
-    num_nodes = problem.input("num_nodes", type=Types.Int)
-    edges_in = problem.input("edges", type=Types.Vec)
+    num_nodes = problem.input("num_nodes", type=cp.Types.Int)
+    edges_in = problem.input("edges", type=cp.Types.Vec)
 
-    problem.define_model(size=num_nodes, domain=Domain.BINARY)
+    problem.define_model(size=num_nodes, domain=cp.Domain.BINARY)
 
     edge_count = problem.stow("edge_count", edges_in.veclen() // 3)
     with problem.range(0, edge_count) as e:
@@ -74,7 +73,7 @@ def build_problem(n: int, seed: int) -> tuple[Problem, list[tuple[int, int, int]
         problem.model.linear[j].add(-w)
         problem.model.quadratic[i, j].add(w * 2)
 
-    partition = problem.output("partition", type=Types.Vec)
+    partition = problem.output("partition", type=cp.Types.Vec)
     with problem.range(0, num_nodes) as node:
         partition.append(problem.sample.getline(node))
 
@@ -116,7 +115,7 @@ def run(
     assert isinstance(model, XqmxModel)
 
     try:
-        solver = build_solver(solver_name, seed=seed)
+        solver = sa.build_solver(solver_name, seed=seed)
         sample = solver.solve(model).sample
     except (ImportError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -145,8 +144,8 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     parser.add_argument(
         "--solver",
-        choices=sorted(SOLVERS),
-        default=DEFAULT_SOLVER,
+        choices=sorted(sa.SOLVERS),
+        default=sa.DEFAULT_SOLVER,
         help="XQSA solver backend to sample the model with",
     )
     parser.add_argument(

@@ -55,6 +55,16 @@
     - [Soft vs. Hard Constraints](cookbook/soft-vs-hard-constraints.md)
     - [Integer Scaling](cookbook/integer-scaling.md)
 
+- [CLI Reference](cli/README.md)
+  - [xquad vm](cli/vm/README.md)
+    - [Assemble](cli/vm/asm.md)
+    - [Disassemble](cli/vm/dis.md)
+    - [Run](cli/vm/run.md)
+    - [Check](cli/vm/check.md)
+  - [xquad quip](cli/quip/README.md)
+    - [Accounts](cli/quip/accounts.md)
+    - [Orders](cli/quip/orders.md)
+
 - [XQVM Reference](xqvm/README.md)
   - [VM Architecture](xqvm/machine-model.md)
   - [Loop Stack](xqvm/loops.md)
@@ -80,11 +90,6 @@
   - [Opcode Reference](xqvm/opcodes.md)
   - [Bytecode Format](xqvm/bytecode-format.md)
   - [Verifier](xqvm/verifier.md)
-  - [CLI](xqvm/cli/README.md)
-    - [Assemble](xqvm/cli/asm.md)
-    - [Disassemble](xqvm/cli/dism.md)
-    - [Run](xqvm/cli/run.md)
-    - [Verify](xqvm/cli/verify.md)
   - [Limits and Errors](xqvm/limits-and-errors.md)
 
 - [Embedding and Internals](embedding/README.md)

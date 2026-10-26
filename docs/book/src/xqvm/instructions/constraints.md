@@ -14,7 +14,7 @@ rather than producing a model missing a constraint. A `row` outside
 rather than applying the constraint to variables the grid does not
 address -- the same fault the four
 [grid opcodes](grid.md) raise for an out-of-range row or column.
-`xquad verify` cannot catch either,
+`xquad vm check` cannot catch either,
 because the grid dimensions and the index alike are popped stack values
 rather than something the verifier's dataflow passes track. Vec-based
 opcodes (`EQUALITY`, `ATLEAST`, `ATLEASTW`, `REDUCE`) operate on

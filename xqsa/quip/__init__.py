@@ -39,8 +39,10 @@ Configuration is resolved from constructor arguments first, then environment:
     ``autofund``           ``QUIP_AUTOFUND``     fund from the faucet without asking
     =====================  =======================================================================
 
-A seed wins over a keystore. With neither configured, the keystore at
-``~/.quip/keystore.json`` is loaded, or generated on first use.
+The signer comes from the first of ``seed``, ``keystore``,
+``QUIP_SIGNER_SEED``, ``QUIP_KEYSTORE``, the project account preference, the
+user one, then ``~/.quip/keystore.json``, loaded or generated on first use
+(see :mod:`xqsa.quip.accounts`). ``read_only=True`` resolves no signer.
 
 The order options among them (``reward``, ``deadline_blocks``,
 ``block_wait``) are client defaults. :meth:`SolverQuip.create_order` returns a
@@ -115,7 +117,20 @@ the signed-extension layout, and economic parameters can change between
 releases; pin a node image and re-validate after upgrades.
 """
 
+import warnings
+
+from . import errors as _errors
 from .access import Access, AccessAllow, AccessOpen
+from .accounts import (
+    Account,
+    AccountResolution,
+    Level,
+    SignerSource,
+    clear_account,
+    create_account,
+    resolve_accounts,
+    use_account,
+)
 from .chain import (
     FEE_HEADROOM_PLANCK,
     JOB_ORDERS_STORAGE,
@@ -129,6 +144,7 @@ from .chain import (
 from .client import (
     DEFAULT_BLOCK_WAIT,
     DEFAULT_DEADLINE_BLOCKS,
+    DEFAULT_INCLUSION_WINDOW_BLOCKS,
     DEFAULT_KEYSTORE,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_TIMEOUT,
@@ -149,9 +165,9 @@ from .errors import (
     QuipReclaimRefusedError,
     QuipSigningError,
     QuipSubmissionError,
+    QuipSubmitIncompleteError,
     QuipTimeoutError,
     QuipTopologyError,
-    QuipUnconfirmedError,
 )
 from .faucet import fund_from_faucet
 from .networks import NETWORKS
@@ -179,16 +195,24 @@ __all__ = [
     "ResolutionTopNEqual",
     "ResolutionTopNWeighted",
     "Solution",
+    "Account",
+    "AccountResolution",
+    "Level",
+    "SignerSource",
+    "resolve_accounts",
+    "create_account",
+    "use_account",
+    "clear_account",
     "QuipError",
     "QuipCancelledError",
     "QuipConnectionError",
     "QuipMetadataError",
     "QuipSubmissionError",
     "QuipOrderOptionError",
+    "QuipSubmitIncompleteError",
     "QuipReclaimRefusedError",
     "QuipTimeoutError",
     "QuipTopologyError",
-    "QuipUnconfirmedError",
     "QuipJobFailedError",
     "QuipSigningError",
     "QuipFaucetError",
@@ -198,6 +222,7 @@ __all__ = [
     "fund_from_faucet",
     "DEFAULT_BLOCK_WAIT",
     "DEFAULT_DEADLINE_BLOCKS",
+    "DEFAULT_INCLUSION_WINDOW_BLOCKS",
     "DEFAULT_KEYSTORE",
     "DEFAULT_POLL_INTERVAL",
     "DEFAULT_TIMEOUT",
@@ -212,3 +237,24 @@ __all__ = [
     "ORDER_SOLUTIONS_STORAGE",
     "MINEABLE_TOPOLOGIES_STORAGE",
 ]
+
+# Importable, with a warning, until QUI-1608 removes them in v0.5.0.
+_DEPRECATED = {
+    "QuipUnconfirmedError": (
+        "QuipUnconfirmedError is deprecated and no longer produced since v0.4.5: a send submit() cannot settle "
+        "raises QuipSubmitIncompleteError; removed in v0.5.0"
+    ),
+}
+
+
+def _deprecated(name: str, module: str, stacklevel: int) -> object:
+    """Warn about the deprecated ``name`` and return it, or raise ``AttributeError`` naming ``module``."""
+    if name not in _DEPRECATED:
+        raise AttributeError(f"module {module!r} has no attribute {name!r}")
+    warnings.warn(_DEPRECATED[name], DeprecationWarning, stacklevel=stacklevel + 1)
+    return getattr(_errors, name)
+
+
+def __getattr__(name: str) -> object:
+    """Serve the deprecated names (PEP 562), warning at the caller's line."""
+    return _deprecated(name, __name__, stacklevel=2)

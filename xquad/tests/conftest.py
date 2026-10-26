@@ -15,9 +15,6 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""`xquad.cp` — re-export of `xqcp` (constraint programming DSL)."""
+"""Fixtures the `xquad quip` tests share with the xqsa Quip tests."""
 
-from xqcp import *  # noqa: F401, F403
-from xqcp import __all__ as _xqcp_all
-
-__all__ = list(_xqcp_all)
+from xqsa.tests.quip.conftest import quip_home, seed_signer  # noqa: F401 -- re-exported fixtures.

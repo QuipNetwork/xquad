@@ -6,7 +6,7 @@ Python: loading it, supplying calldata, running it, and reading outputs back.
 is the full coverage for three of them: `xquad.program`, and the two VM
 wrappers underneath and alongside it. For writing a problem with the `xqcp`
 DSL, see
-[Modelling](../modelling/). For what `xquad verify` checks and how
+[Modelling](../modelling/). For what `xquad vm check` checks and how
 to fix a rejected program, see [Verification](verification.md).
 
 All three surfaces run the same Rust `xqvm` interpreter, and every example
@@ -106,7 +106,7 @@ steps, so `set_step_limit(11)` runs it and `set_step_limit(10)` does not.
 ## Loading bytecode directly
 
 `Program.load(bytes)` parses raw wire-format bytes -- a `.xqb` blob produced
-by `xquad asm` or by `program.bytecode()`. No source is retained:
+by `xquad vm asm` or by `program.bytecode()`. No source is retained:
 
 ```python
 blob = program.bytecode()

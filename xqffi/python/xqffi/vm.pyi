@@ -17,7 +17,8 @@
 
 """Type stubs for `xqffi.vm`, the bindings around the Rust XQVM."""
 
-from typing import ClassVar, Final, Self, final
+from os import PathLike
+from typing import ClassVar, Final, Literal, Self, final
 
 __all__ = [
     "Vm",
@@ -215,11 +216,18 @@ class Vm:
     def set_unlimited_steps(self) -> None: ...
     def set_memory_limit(self, bytes: int) -> None: ...
     def memory_used(self) -> int: ...
-    def run(self, bytecode: bytes) -> None:
+    def run(
+        self,
+        bytecode: bytes,
+        trace: Literal["text", "json"] | None = None,
+        trace_file: str | PathLike[str] | None = None,
+    ) -> None:
         """Raises the `XqvmError` subclass named for a fault, or `RuntimeError`
-        if `bytecode` does not decode."""
+        if `bytecode` does not decode. `ValueError` for an unknown `trace` or a
+        `trace_file` without one; `OSError` when `trace_file` cannot be created."""
 
     def outputs(self) -> list[_Output]: ...
+    def outputs_debug(self) -> list[str | None]: ...
     def stack(self) -> list[int]: ...
     def steps(self) -> int: ...
     def instructions(self) -> int: ...

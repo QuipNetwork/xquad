@@ -64,7 +64,7 @@ verifier energy -14418 valid 1
 Items 3 and 5 (weights `5` and `7`, values `8` and `10`), weight exactly at
 capacity, value `18`. Brute-forcing all 64 subsets confirms `18` is the
 true optimum, not just a feasible value: 28 of the 64 fit within capacity,
-and no other reaches value `18`. `xquad verify` on the compiled encoder
+and no other reaches value `18`. `xquad vm check` on the compiled encoder
 (43 instructions) passes.
 
 ## Cost in Variables

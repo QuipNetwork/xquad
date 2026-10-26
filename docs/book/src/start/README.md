@@ -11,18 +11,37 @@ The [root README's Install section](https://gitlab.com/quip.network/xquad/-/blob
 is the canonical install reference for both ecosystems this project ships
 into -- prebuilt wheel platforms, the Rust toolchain required to build the
 `xqffi` extension from source, and installing individual Python packages
-instead of the umbrella. The two commands most readers need:
+instead of the umbrella.
+
+Install XQuad into a project environment first: a virtual environment,
+or a `uv` project.
 
 ```sh
-cargo install xqcli      # gives you the `xquad` binary
-pip install xquad        # Python umbrella: the full pipeline
+python -m venv .venv && source .venv/bin/activate
+pip install xquad
+# or, in a uv project:
+uv add xquad
 ```
+
+For the `xquad` command alone, outside any project, install it as a
+`uv` tool, with the `quip` extra for the `xquad quip` commands:
+
+```sh
+uv tool install xquad            # the xquad command
+uv tool install 'xquad[quip]'    # with the xquad quip commands
+```
+
+On macOS, a user install (`pip install --user`, or pip falling back to
+one) puts the `xquad` command in `~/Library/Python/3.x/bin`, which is
+not on `PATH`; `python -m xquad` runs the same command without it.
 
 ## Verify the Install
 
-`xquad --version` prints the installed CLI's version, confirming the
-`xqcli` binary is on `PATH` and runs. Importing the umbrella package
-confirms the Python half:
+`xquad --version` prints the installed version, confirming the command
+is on `PATH` and runs. If your shell reports `xquad: command not found`,
+that Python environment's script directory is not on `PATH`; `python -m
+xquad --version` runs the same command without it. Importing the
+umbrella package confirms the Python API:
 
 ```sh
 $ python -c "import xquad; print('ok')"
@@ -33,8 +52,8 @@ ok
 
 Every `uv run python examples/...` command in this book, including on
 the next page, runs against a checkout of this repository -- the
-examples are not part of any published package, so `cargo install` and
-`pip install` above do not put them on disk. Get one and set up the
+examples are not part of any published package, so `pip install` above
+does not put them on disk. Get one and set up the
 Python workspace once:
 
 ```sh
@@ -44,7 +63,8 @@ make deps-py
 ```
 
 `make deps-py` needs [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
-and the Rust toolchain `cargo install xqcli` above already needed. It
+and a [Rust toolchain](https://rustup.rs/), which builds the `xqffi`
+extension from source. It
 syncs the Python workspace and wires up cross-package imports, so
 `uv run python examples/<name>/runner.py` then works from the repository
 root -- the same command every example and cookbook page in this book
@@ -78,7 +98,7 @@ local GPU (`[cuda]` or `[metal]`) is another option; see [Local
 Solvers](../solving/local.md#driver-prerequisites) for those two extras
 and their driver checks.
 
-`pip install xquad[cuda]`, `xquad[metal]`, `xquad[dwave]`, and
+`pip install "xquad[cuda]"`, `xquad[metal]`, `xquad[dwave]`, and
 `xquad[quip]` each forward to the matching `xqsa` extra, and extras are
 composable: `pip install "xquad[cuda,dwave]"`.
 

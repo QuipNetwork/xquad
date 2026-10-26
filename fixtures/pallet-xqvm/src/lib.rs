@@ -252,7 +252,7 @@ pub mod pallet {
             // ExecutionFailed. spec/xqvm/ENCODING.md is explicit that
             // neither header count is a slot count and that neither may be
             // used to pre-size a slot array. Every other host in the tree
-            // (xqcli's --outputs, the wasm fixture) fixes it independently.
+            // (`xquad vm run --outputs`, the wasm fixture) fixes it independently.
             let output_count = usize::try_from(output_slots).unwrap_or(usize::MAX);
 
             let calldata_regs: Vec<xqvm::RegVal> =

@@ -19,8 +19,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import ssl
 import sys
 import time
 import warnings
@@ -33,6 +35,7 @@ from xqsa.quip import chain
 from xqsa.quip import metadata as quip_metadata
 from xqsa.quip.access import Access, AccessOpen, coerce_access
 from xqsa.quip.access import from_chain as access_from_chain
+from xqsa.quip.accounts import resolve_accounts
 from xqsa.quip.chain import (  # noqa: F401 -- FEE_HEADROOM_PLANCK and the pallet names stay importable from here.
     FEE_HEADROOM_PLANCK,
     JOB_ORDERS_STORAGE,
@@ -46,6 +49,7 @@ from xqsa.quip.chain import (  # noqa: F401 -- FEE_HEADROOM_PLANCK and the palle
 )
 from xqsa.quip.codec import (
     DEFAULT_ISING_SPEC_ID,
+    ORDER_STATUS_CLOSED,
     QUIP_COEFFICIENTS_DOC_URL,
     Topology,
     _as_hex,
@@ -63,14 +67,17 @@ from xqsa.quip.errors import (  # noqa: F401 -- the Quip* errors stay importable
     QuipMetadataError,
     QuipOrderOptionError,
     QuipReclaimRefusedError,
+    QuipSigningError,
     QuipSubmissionError,
+    QuipSubmitIncompleteError,
     QuipTimeoutError,
     QuipTopologyError,
     QuipUnconfirmedError,
 )
-from xqsa.quip.faucet import DEFAULT_DRIP_PLANCK, fund_from_faucet
+from xqsa.quip.faucet import DEFAULT_DRIP_PLANCK, _check_ssl_context, fund_from_faucet
 from xqsa.quip.networks import NETWORKS
 from xqsa.quip.order import (
+    DEFAULT_INCLUSION_WINDOW_BLOCKS,
     JobOrder,
     _chain_floors,
     _check_access,
@@ -79,10 +86,11 @@ from xqsa.quip.order import (
     _Sent,
     _SignedCall,
     check_client_defaults,
+    check_inclusion_window,
     merge_options,
 )
 from xqsa.quip.quote import JobQuote, _format_planck
-from xqsa.quip.receipt import JobOrderReceipt
+from xqsa.quip.receipt import JobOrderReceipt, _solution_count
 from xqsa.quip.resolution import Resolution, coerce_resolution
 from xqsa.quip.solution import no_answer_note, pick_best
 from xqsa.solver import Solver, SolverResult
@@ -102,6 +110,15 @@ DEFAULT_DEADLINE_BLOCKS = 100
 DEFAULT_BLOCK_WAIT = 10
 DEFAULT_POLL_INTERVAL = 6.0
 DEFAULT_TIMEOUT = 600.0
+# How far past the window's end block submit() keeps settling a sent proposal
+# by the clock, when the chain cannot be read or finality lags; GRANDPA
+# finalizes a few blocks behind the best one.
+SETTLE_GRACE_BLOCKS = 10
+# The block time assumed when the chain does not say, and the longest pause between reconnects.
+DEFAULT_BLOCK_TIME_MS = 6000
+MAX_BACKOFF_SECONDS = 60.0
+# The shortest pause between settle rounds, so a poll_interval of 0 cannot spin on reads and resends.
+MIN_SETTLE_POLL_SECONDS = 1.0
 # How long solve() waits for a faucet drip to show up in the free balance. The
 # faucet answers only once the drip is on chain, so this covers a lagging RPC
 # node, not block time.
@@ -111,7 +128,7 @@ FUND_WAIT_SECONDS = 30.0
 # see the warning it raises past it.
 LIST_ORDERS_LIMIT = 32
 
-# Keystore used when no seed or keystore is configured; created on first use.
+# Keystore used when no seed, keystore or account preference is configured; created on first use.
 DEFAULT_KEYSTORE = "~/.quip/keystore.json"
 
 
@@ -123,6 +140,38 @@ NATIVE_TOPOLOGY = "native"
 def _is_native(topology: str | None) -> bool:
     """Return whether a ``topology`` value selects native mode (case and whitespace ignored)."""
     return (topology or "").strip().lower() == NATIVE_TOPOLOGY
+
+
+def _open(url: str, ssl_context: ssl.SSLContext | None = None) -> Any:
+    """Connect to ``url`` and load its runtime; the connection is closed on any failure.
+
+    A given ``ssl_context`` goes to ``connect`` as ``ws_options["sslopt"]["context"]``:
+    it applies to ``wss://`` only and replaces the certifi CA default there.
+    """
+    # Not substrateinterface.SubstrateInterface directly: Quip runtimes serve
+    # metadata V16, which scalecodec cannot decode. The subclass pulls V14
+    # through the versioned runtime API instead, and confines that to instances
+    # we build. See xqsa.quip.metadata.
+    if ssl_context is None:
+        iface = quip_metadata.connect(url)
+    else:
+        iface = quip_metadata.connect(url, ws_options={"sslopt": {"context": ssl_context}})
+    try:
+        # Resolve metadata here rather than letting the first storage read
+        # trigger it: a node whose metadata this client cannot decode must fail
+        # as QuipMetadataError, and every later read wraps its faults as "could
+        # not read <pallet constant>", which names the wrong cause.
+        iface.init_runtime()
+    except BaseException:
+        _close(iface)
+        raise
+    return iface
+
+
+def _close(iface: Any) -> None:
+    """Close ``iface``, ignoring a failure: the connection is being given up."""
+    with contextlib.suppress(Exception):
+        iface.close()
 
 
 class SolverQuip(Solver):
@@ -139,25 +188,65 @@ class SolverQuip(Solver):
     (for example QPU-backed ones). See the module docstring for configuration
     and installation.
 
+    Every ``propose_job`` is signed mortal: it can be included only within
+    ``inclusion_window_blocks`` of the finalized head it was signed at, 64 to
+    2048 blocks, rounded up to a power of two (64 blocks is about 6.4
+    minutes). Once that window has passed unspent, the proposal can never
+    land. A longer window rides out more congestion and outage, but can make
+    a submit take longer to settle. It is a client setting, not an order
+    option.
+
+    Settling a sent ``propose_job`` reads past blocks' state, so the node at
+    ``url`` must keep full state history (``--state-pruning=archive``); the
+    :mod:`~xqsa.quip.networks` presets do. A pruning node stops a submit with
+    :class:`QuipSubmitIncompleteError`, the order left ``sending``.
+
+    ``read_only=True`` connects and reads without resolving a signer, so it
+    ignores ``QUIP_SIGNER_SEED`` and ``QUIP_KEYSTORE`` and never creates a
+    keystore. :meth:`get_receipt` works, as do :meth:`list_orders` and
+    :meth:`balance` given ``account=``; everything that signs, and those two
+    without ``account=``, raise :class:`QuipSigningError`.
+
+    ``ssl_context=`` takes an ``ssl.SSLContext`` used as-is for both the
+    ``wss://`` RPC connection (reconnects included) and the ``autofund``
+    faucet request, in place of the default CA-bundle context; it is ignored
+    for ``ws://`` and ``http://`` URLs, and refused with an ``https://`` RPC
+    URL, whose transport cannot use it. It adds no revocation checking of its
+    own: a stdlib context checks only CRLs the caller loads, with
+    ``VERIFY_CRL_CHECK_LEAF`` or ``VERIFY_CRL_CHECK_CHAIN`` set, and cannot
+    check OCSP.
+
     Raises:
         ImportError: if the ``[quip]`` extra is not installed
             (``pip install xqsa[quip]`` -- provides ``substrate-interface`` and
             the ``quip_signer`` signing extension).
-        ValueError: if no RPC URL is configured, or ``access``, ``resolution``
+        ValueError: if no RPC URL is configured, ``read_only=True`` comes with
+            ``seed=`` or ``keystore=``, ``ssl_context`` comes with an
+            ``https://`` RPC URL, or ``access``, ``resolution``
             or ``delivery`` names a value no order can use yet (checked before
             connecting).
-        TypeError: if both ``access`` and the deprecated ``mode`` are given.
-        QuipOrderOptionError: if an ``access`` allowlist is outside the
-            chain's limits, or a raw ``access`` dict cannot be read as an
-            access rule. Each listed account that is not a registered
+        TypeError: if both ``access`` and the deprecated ``mode`` are given,
+            ``inclusion_window_blocks`` is not an int, or ``ssl_context`` is
+            neither ``None`` nor an ``ssl.SSLContext`` (checked before
+            connecting).
+        QuipOrderOptionError: if ``inclusion_window_blocks`` is below 64 or
+            above 2048 (checked before connecting), an ``access`` allowlist
+            is outside the chain's limits, or a raw ``access`` dict cannot be
+            read as an access rule. Each listed account that is not a registered
             solver warns once, here rather than on every order.
         QuipConnectionError: if the node is unreachable or the configured Ising
             spec is not registered on-chain.
-        QuipMetadataError: if the node's runtime metadata cannot be decoded by
-            the installed substrate-interface/scalecodec, even through the V14
-            shim. Raised in its own right rather than folded into
-            QuipConnectionError, because the remedy is a runtime that still
-            serves V14, not a retry.
+        GenesisMismatch: a :class:`QuipConnectionError`, if the network
+            preset pins a genesis hash and the node serves another chain.
+        QuipMetadataError: if this client cannot read or sign for the node's
+            runtime: its metadata does not decode even through the V14 shim,
+            or its extrinsic envelope or signed extensions differ from what
+            this client encodes. Raised in its own right rather than folded
+            into QuipConnectionError, because the remedy is upgrading xquad,
+            not a retry.
+        QuipSigningError: if the signer cannot be built: the seed is not 32
+            bytes, a keystore is unusable, or an account preference is broken
+            or names a missing or unusable keystore.
     """
 
     def __init__(
@@ -177,9 +266,13 @@ class SolverQuip(Solver):
         block_wait: int = DEFAULT_BLOCK_WAIT,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         timeout: float = DEFAULT_TIMEOUT,
+        inclusion_window_blocks: int = DEFAULT_INCLUSION_WINDOW_BLOCKS,
         faucet: str | None = None,
         autoconfirm: bool | Callable[[JobQuote], bool] | None = None,
         autofund: bool | Callable[[JobQuote], bool] | None = None,
+        read_only: bool = False,
+        ssl_context: ssl.SSLContext | None = None,
+        _network: str | None = None,
     ) -> None:
         # Two distinct guards, one per piece of the [quip] extra: client + signer.
         try:
@@ -196,18 +289,30 @@ class SolverQuip(Solver):
             ) from exc
         from xqsa.quip import signing as quip_signing
 
+        if read_only and (seed is not None or keystore is not None):
+            raise ValueError("read_only=True takes no seed= or keystore=")
+        _check_ssl_context(ssl_context)
         resolved_url = url or os.environ.get("QUIP_RPC_URL")
         if not resolved_url:
             raise ValueError("A Quip RPC URL is required. Pass url= or set QUIP_RPC_URL.")
+        # substrate-interface sends an https:// URL over requests, which never sees
+        # the context; going ahead would drop the caller's TLS policy silently.
+        if ssl_context is not None and resolved_url.strip().lower().startswith("https://"):
+            raise ValueError("ssl_context needs a wss:// RPC URL; an https:// RPC connection cannot use it")
         access = _take_mode(access, mode, stacklevel=2)
         if access is None:
             access = AccessOpen()
         # All before any network I/O.
         check_client_defaults(delivery)
+        if _network is not None and _network not in NETWORKS:
+            raise ValueError(f"unknown Quip network {_network!r}; known networks: {', '.join(sorted(NETWORKS))}")
+        pin = NETWORKS[_network].genesis if _network is not None else None
+        self._inclusion_window_blocks = check_inclusion_window(inclusion_window_blocks)
         self._access = coerce_access(access)
         self._resolution = coerce_resolution(resolution)
 
-        self._signer = self._build_signer(quip_signing, seed=seed, keystore=keystore)
+        # A read-only client resolves no signer, so it never generates a keystore.
+        self._signer_or_none = None if read_only else self._build_signer(quip_signing, seed=seed, keystore=keystore)
 
         self._delivery = delivery
         self._deadline_blocks = deadline_blocks
@@ -222,36 +327,30 @@ class SolverQuip(Solver):
         # chain, so it never draws from whatever faucet happens to be exported.
         self._faucet = faucet or (None if url else os.environ.get("QUIP_FAUCET_URL"))
         # Set by for_network; a solver built from a raw url= names no network.
-        self._network: str | None = None
+        self._network = _network
+        self._ssl_context = ssl_context
         self._autoconfirm = _resolve_gate(autoconfirm, "autoconfirm", "QUIP_AUTOCONFIRM")
         self._autofund = _resolve_gate(autofund, "autofund", "QUIP_AUTOFUND")
 
         try:
-            # Not substrateinterface.SubstrateInterface directly: Quip runtimes
-            # serve metadata V16, which scalecodec cannot decode. The subclass
-            # pulls V14 through the versioned runtime API instead, and confines
-            # that to instances we build. See xqsa.quip.metadata.
-            self._iface = quip_metadata.connect(resolved_url)
-            # Resolve metadata here rather than letting the first storage read
-            # trigger it: a node whose metadata this client cannot decode must
-            # fail as QuipMetadataError, and every read below wraps its faults
-            # as "could not read <pallet constant>", which names the wrong
-            # cause. Doing it once, in the open, also makes the failure
-            # independent of which resolve step happens to run first.
-            self._iface.init_runtime()
+            self._iface = _open(resolved_url, self._ssl_context)
         except QuipMetadataError:
             raise  # a client/runtime metadata mismatch is not a connection fault.
         except Exception as exc:  # noqa: BLE001 -- any connect failure is a connection error.
             raise QuipConnectionError(f"could not connect to the Quip node at {resolved_url}: {exc}") from exc
         self._url = resolved_url
-        self._genesis_hash = chain.genesis_hash(self._iface)
+        try:
+            self._genesis_hash = self._check_connection(self._iface, expected_genesis=pin)
 
-        self._spec_id = self._resolve_spec_id(spec_id)
-        self._limits = chain.read_limits(self._iface)
-        # Checked once here; an order that keeps the default does not look it up again.
-        _check_access(self._access, self._limits, self._iface, stacklevel=3)
-        self._reward = self._resolve_reward(reward)
-        self._topology_hash = self._resolve_topology_hash(topology)
+            self._spec_id = self._resolve_spec_id(spec_id)
+            self._limits = chain.read_limits(self._iface)
+            # Checked once here; an order that keeps the default does not look it up again.
+            _check_access(self._access, self._limits, self._iface, stacklevel=3)
+            self._reward = self._resolve_reward(reward)
+            self._topology_hash = self._resolve_topology_hash(topology)
+        except BaseException:
+            _close(self._iface)  # no solver comes back to close it.
+            raise
 
     @classmethod
     def for_network(cls, name: str, /, **kwargs: Any) -> Self:
@@ -283,9 +382,7 @@ class SolverQuip(Solver):
         if not kwargs.get("faucet"):  # an unset faucet must not let QUIP_FAUCET_URL beat the preset.
             kwargs["faucet"] = preset.faucet
         _pop_mode(kwargs, stacklevel=2)  # here, so the deprecation names the caller's line.
-        solver = cls(url=preset.rpc, **kwargs)
-        solver._network = name
-        return solver
+        return cls(url=preset.rpc, _network=name, **kwargs)
 
     # ------------------------------------------------------------------
     # Identity / configuration resolution
@@ -293,19 +390,43 @@ class SolverQuip(Solver):
 
     @staticmethod
     def _build_signer(quip_signing: Any, *, seed: str | None, keystore: str | None) -> Any:
-        """Build the hybrid signer from a seed or keystore (env fallbacks applied).
+        """Build the hybrid signer from the step :func:`~xqsa.quip.accounts.resolve_accounts` puts in effect.
 
-        Resolution: ``seed``, ``QUIP_SIGNER_SEED``, ``keystore``, ``QUIP_KEYSTORE``,
-        then :data:`DEFAULT_KEYSTORE`. Falling back to the default warns when the
-        file is new, since that is a fresh, empty account a caller may not have
-        meant to use, and logs its path at INFO when an existing file is loaded.
+        Resolution: ``seed``, ``keystore``, ``QUIP_SIGNER_SEED``, ``QUIP_KEYSTORE``,
+        the project account preference, the user one, then :data:`DEFAULT_KEYSTORE`.
+        An explicit or environment keystore path is created when missing, as is
+        the default; falling back to the default warns when the file is new,
+        since that is a fresh, empty account a caller may not have meant to use,
+        and logs its path at INFO when an existing file is loaded. This is the
+        one place a seed is loaded.
+
+        Raises:
+            QuipSigningError: if a preferred account is missing or unusable,
+                or the keystore or seed in effect cannot be loaded.
         """
-        resolved_seed = seed or os.environ.get("QUIP_SIGNER_SEED")
-        if resolved_seed:
-            return quip_signing.signer_from_seed(resolved_seed)
-        resolved_keystore = keystore or os.environ.get("QUIP_KEYSTORE")
-        if resolved_keystore:
-            return quip_signing.load_or_generate_keystore(resolved_keystore).signer
+        source = resolve_accounts(seed=seed, keystore=keystore).in_effect
+        if source is None or source.step == "default":
+            return SolverQuip._load_default_keystore(quip_signing)
+        if source.step in ("seed=", "QUIP_SIGNER_SEED"):
+            return quip_signing.signer_from_seed(seed or os.environ["QUIP_SIGNER_SEED"])
+        if source.step in ("keystore=", "QUIP_KEYSTORE"):
+            # The raw value, so a path the resolver could not expand fails here as it always has.
+            return quip_signing.load_or_generate_keystore(source.value).signer
+        if source.problem is not None:
+            unset = "--unset --global" if source.step == "user" else "--unset"
+            raise QuipSigningError(
+                f"the {source.step} account preference cannot sign: {source.problem}. "
+                f"Fix it, or clear it with `xquad quip account use {unset}`"
+            )
+        logger.info("using the %s account preference %r, keystore %s", source.step, source.value, source.path)
+        try:
+            return quip_signing.load_keystore(source.path).signer
+        except QuipSigningError as exc:
+            raise QuipSigningError(f"the {source.step} account preference cannot sign: {exc}") from exc
+
+    @staticmethod
+    def _load_default_keystore(quip_signing: Any) -> Any:
+        """Load or generate :data:`DEFAULT_KEYSTORE`, warning when it is new."""
         default_path = Path(DEFAULT_KEYSTORE).expanduser()
         existed = default_path.exists()
         ks = quip_signing.load_or_generate_keystore(default_path)
@@ -487,13 +608,86 @@ class SolverQuip(Solver):
         return chain.mineable_topologies(self._iface)
 
     @property
-    def _account_ss58(self) -> str:
-        """The signer's account in SS58, as every message names it."""
+    def _signer(self) -> Any:
+        """The hybrid signer; every signing path reaches it, so a read-only client refuses here.
+
+        Raises:
+            QuipSigningError: if this client was built with ``read_only=True``.
+        """
+        if self._signer_or_none is None:
+            raise QuipSigningError("this client has no signer; see `xquad quip account show`")
+        return self._signer_or_none
+
+    def balance(self, account: Any = None) -> int:
+        """Return an account's free balance in planck.
+
+        ``account`` reads another account instead of this client's signer, as
+        SS58 text, ``0x`` hex or bytes, so a read-only client can read any
+        account. The free balance is what an order's reward and fee are paid
+        from; reserved funds are not included.
+
+        Raises:
+            QuipSigningError: if ``account`` is omitted on a read-only client.
+            ValueError: if ``account`` cannot be read as an account.
+            QuipConnectionError: if the balance cannot be read.
+        """
+        return chain.free_balance(self._iface, self._owner(account))
+
+    def reserved(self, account: Any = None) -> int:
+        """Return an account's reserved balance in planck.
+
+        The chain reserves an order's reward when it is proposed and releases
+        it when a claim or a reclaim closes the order, so this is the reward
+        still held by orders not yet closed, along with anything else the
+        runtime reserves. ``account`` reads another account, as for
+        :meth:`balance`.
+
+        Raises:
+            QuipSigningError: if ``account`` is omitted on a read-only client.
+            ValueError: if ``account`` cannot be read as an account.
+            QuipConnectionError: if the balance cannot be read.
+        """
+        return chain.reserved_balance(self._iface, self._owner(account))
+
+    def order_slots(self, account: Any = None) -> tuple[int, int | None]:
+        """Return how many order slots an account uses, and the chain's cap.
+
+        ``(used, limit)``: ``used`` counts the account's orders not yet
+        closed, each of which holds a slot until a claim or a reclaim closes
+        it; ``limit`` is the runtime's ``MaxOrdersPerProposer``, ``None`` when
+        the runtime sets none. ``account`` reads another account, as for
+        :meth:`balance`.
+
+        Raises:
+            QuipSigningError: if ``account`` is omitted on a read-only client.
+            ValueError: if ``account`` cannot be read as an account.
+            QuipConnectionError: if the order list or the cap cannot be read.
+        """
+        used = len(chain.proposer_orders(self._iface, self._owner(account)))
+        limit = chain.read_constant(self._iface, "MaxOrdersPerProposer")
+        return used, None if limit is None else int(limit)
+
+    def _owner(self, account: Any) -> bytes:
+        """The account ``account`` names, or this client's signer when it is ``None``."""
+        return self._signer.account_id if account is None else chain.account_bytes(account)
+
+    @property
+    def account(self) -> str:
+        """The signer's account in SS58.
+
+        Raises:
+            QuipSigningError: if this client was built with ``read_only=True``.
+        """
         return chain.ss58_address(self._iface, self._signer.account_id)
 
+    @property
+    def _account_ss58(self) -> str:
+        """The signer's account in SS58, as every message names it."""
+        return self.account
+
     def _free_balance(self) -> int:
-        """See :func:`xqsa.quip.chain.free_balance`."""
-        return chain.free_balance(self._iface, self._signer.account_id)
+        """The signer's free balance; see :meth:`balance`."""
+        return self.balance()
 
     def _query_fee(self, wire: bytes) -> tuple[int, bool]:
         """See :func:`xqsa.quip.chain.query_fee`."""
@@ -508,16 +702,28 @@ class SolverQuip(Solver):
     ) -> QuipSubmissionError:
         """Build the error for an account that cannot cover ``quote``, naming where to fund it.
 
-        ``beyond_drip`` marks a shortfall larger than one faucet drip, which
-        ``autofund`` never requests: that is more often a mistyped reward than
-        a real need. ``above_ceiling`` marks an account already holding more
-        than one drip, which the faucet refuses to top up.
+        With no faucet, a named network says it has none and a raw ``url=``
+        says how to name one; either adds a ``reward=`` nudge when the
+        shortfall exceeds one faucet drip. With a faucet, ``beyond_drip``
+        marks a shortfall larger than one drip, which ``autofund`` never
+        requests: that is more often a mistyped reward than a real need.
+        ``above_ceiling`` marks an account already holding more than one drip,
+        which the faucet refuses to top up.
         """
 
         def amount(planck: int) -> str:
             return f"{_format_planck(planck, quote.token_decimals)} {quote.token_symbol}"
 
-        if beyond_drip:
+        if not self._faucet:
+            if self._network:
+                remedy = f"{self._network} has no faucet; fund the account another way."
+            else:
+                remedy = (
+                    "Pass faucet=, set QUIP_FAUCET_URL, or build with SolverQuip.for_network(...) to name a faucet."
+                )
+            if quote.shortfall_planck > DEFAULT_DRIP_PLANCK:
+                remedy += " Check reward= if that is more than you meant."
+        elif beyond_drip:
             remedy = (
                 f"That is more than one faucet drip ({amount(DEFAULT_DRIP_PLANCK)}), which is all autofund "
                 "requests; check reward=, or fund the account another way."
@@ -527,10 +733,8 @@ class SolverQuip(Solver):
                 f"The faucet only tops up an account holding at most one drip ({amount(DEFAULT_DRIP_PLANCK)}); "
                 "fund the account another way."
             )
-        elif self._faucet:
-            remedy = f"Fund it from the faucet at {self._faucet}."
         else:
-            remedy = "Pass faucet=, set QUIP_FAUCET_URL, or build with SolverQuip.for_network(...) to name a faucet."
+            remedy = f"Fund it from the faucet at {self._faucet}."
         return QuipSubmissionError(
             f"insufficient balance: account {self._account_ss58} holds "
             f"{amount(quote.balance_planck)} but the job needs {amount(quote.total_planck)} "
@@ -599,10 +803,6 @@ class SolverQuip(Solver):
             "edges": self._wrap_bounded([list(edge) for edge in job.edges]),
             "h_values": self._wrap_bounded(list(job.h_values)),
             "j_values": self._wrap_bounded(list(job.j_values)),
-            # The ceiling goes under both names: the struct encoder takes only
-            # the field the runtime lists, so this proposes before and after
-            # QUI-1612 renames min_energy_milli to max_energy_milli (QUI-1674).
-            "min_energy_milli": floors.max_energy_milli,
             "max_energy_milli": floors.max_energy_milli,
             "min_diversity_milli": floors.min_diversity_milli,
             "min_solutions": floors.min_solutions,
@@ -627,96 +827,359 @@ class SolverQuip(Solver):
         return call_params
 
     def _sign(self, call_params: dict, nonce: int | None = None) -> _SignedCall:
-        """Sign ``call_params`` as a ``propose_job`` extrinsic with ``nonce``, else the current one.
+        """Sign ``call_params`` as a mortal ``propose_job`` extrinsic with ``nonce``, else the current one.
+
+        The era starts at the finalized head, so its checkpoint can never be
+        retracted, and lasts the client's ``inclusion_window_blocks``.
 
         Raises:
-            QuipSubmissionError: if assembly or signing fails.
-            QuipConnectionError: if the nonce cannot be read.
+            QuipSubmissionError: if assembly or signing fails, or finality lags
+                the best block by half the inclusion window or more: bytes
+                signed then could expire before their block is final.
+                Nothing was signed or sent.
+            QuipConnectionError: if the nonce, the finalized head or the best
+                block cannot be read.
         """
         if nonce is None:
             nonce = self._account_nonce()
-        wire, ext_hash = self._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, call_params, nonce=nonce)
-        return _SignedCall(wire=wire, ext_hash=ext_hash, nonce=nonce)
+        number, head = chain.finalized_head(self._iface)
+        window = self._inclusion_window_blocks
+        if (lag := self._best_block() - number) >= window // 2:
+            raise QuipSubmissionError(
+                f"finality lags {lag} blocks behind the best block, at least half the {window}-block inclusion "
+                "window; nothing was sent, try again once it catches up"
+            )
+        era = self._quip_signing.MortalEra(self._inclusion_window_blocks, number, head)
+        wire, ext_hash = self._build_extrinsic(MEMPOOL_PALLET, PROPOSE_JOB_CALL, call_params, nonce=nonce, era=era)
+        return _SignedCall(wire=wire, ext_hash=ext_hash, nonce=nonce, checkpoint=number, window_end=era.last_block)
 
-    def _propose(self, signed: _SignedCall, call_params: dict, reward: int) -> _Sent:
-        """Send ``signed`` if its nonce is still current, else re-sign once, and report the outcome.
+    def _window_lapsing(self, signed: _SignedCall) -> bool:
+        """Whether less than half of ``signed``'s inclusion window is left after the best block.
+
+        A quote can sit for a while before its submit; bytes that might
+        expire before they land are signed afresh instead.
+
+        Raises:
+            QuipConnectionError: if the best block cannot be read.
+        """
+        return signed.window_end - self._best_block() < self._inclusion_window_blocks // 2
+
+    def _best_block(self) -> int:
+        """Read the best block's number.
+
+        Raises:
+            QuipConnectionError: if it cannot be read.
+        """
+        try:
+            return self._current_block()
+        except QuipMetadataError:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
+            raise QuipConnectionError(f"could not read the best block: {exc}") from exc
+
+    def _send_ready(self, signed: _SignedCall, call_params: dict) -> _SignedCall:
+        """Return ``signed`` if it can still be sent as is, else ``call_params`` signed afresh, once.
 
         The nonce is read just before sending. If it moved since ``signed``
         was signed, another transaction from this account used it, so the
         call is signed once more with the new nonce and checked again; if it
-        moves a second time nothing is sent. This narrows the race to the gap
+        moves a second time nothing is sent. Bytes whose inclusion window is
+        more than half spent are signed afresh too. This narrows the race to the gap
         between the last read and the send, but cannot close it: a node
         rejects a transaction that reuses a nonce before charging a fee, and
         that surfaces as a :class:`QuipSubmissionError` from the send.
 
         Raises:
-            QuipSubmissionError: if the nonce moves twice, signing fails, or the
-                extrinsic certainly did not land. Nothing was placed.
-            QuipUnconfirmedError: if it was sent but its outcome or order id is
-                unknown (see :meth:`_propose_job`).
-            QuipConnectionError: if the nonce cannot be read.
+            QuipSubmissionError: if the nonce moves twice or signing fails.
+                Nothing was sent.
+            QuipConnectionError: if the nonce or the best block cannot be read.
         """
         current = self._account_nonce()
-        if current != signed.nonce:
-            logger.info("account nonce moved from %d to %d since signing; signing again", signed.nonce, current)
+        moved = current != signed.nonce
+        if moved or self._window_lapsing(signed):
+            if moved:
+                logger.info("account nonce moved from %d to %d since signing; signing again", signed.nonce, current)
+            else:
+                logger.info("the quoted proposal's window ends at block %d; signing again", signed.window_end)
             signed = self._sign(call_params, nonce=current)
             if self._account_nonce() != signed.nonce:
                 raise QuipSubmissionError(
                     "account nonce moved twice while submitting; another client is sending from this account. "
                     "Nothing was sent."
                 )
-        return self._propose_job(signed.wire, signed.ext_hash, reward)
+        return signed
 
-    def _propose_job(self, wire: bytes, ext_hash: str, reward: int) -> _Sent:
-        """Send a built ``propose_job`` extrinsic and report what it placed.
+    def _propose_job(self, signed: _SignedCall, reward: int) -> _Sent:
+        """Send a signed ``propose_job`` and report what it placed, read from finalized state.
 
-        Returns a :class:`_Sent` with the order id when the dispatch succeeded,
-        or with the chain's error when it failed (the fee was paid and no
-        order exists). The id is read from the ``JobProposed`` event in the
-        inclusion block (the call has no return value).
+        A node's outright refusal means nothing was sent. Any other outcome of
+        the send, a transport fault or a refusal that the pool already holds
+        it included, is settled by :meth:`_settle`. Returns a :class:`_Sent`
+        with the order id when the dispatch succeeded, or with the chain's
+        error when it failed (the fee was paid and no order exists).
 
         Raises:
-            QuipSubmissionError: if the extrinsic certainly did not land.
-            QuipUnconfirmedError: if it was sent but may or may not have landed,
-                its dispatch result could not be read, or its order id could
-                not be read from a successful dispatch.
+            QuipSubmissionError: if the extrinsic certainly did not land: the
+                node refused it, or its window ended with it never on chain.
+            QuipSubmitIncompleteError: if it could not be settled by its
+                window's end (see :meth:`_settle`).
         """
-        receipt = chain.send_extrinsic(
-            self._iface, self._quip_signing, MEMPOOL_PALLET, PROPOSE_JOB_CALL, wire, ext_hash
-        )
-        block_hash = receipt.block_hash
-        if receipt.is_unverified:
-            raise chain.unconfirmed_error(ext_hash, block_hash, receipt.error)
-        included_block = self._included_block(block_hash)
-        if receipt.error is not None:
-            logger.warning("propose_job %s failed on chain in block %s: %s", ext_hash, block_hash, receipt.error)
-            return _Sent(ext_hash=ext_hash, block_hash=block_hash, included_block=included_block, error=receipt.error)
+        signing = self._quip_signing
         try:
-            order_id = self._read_proposed_order_id(block_hash)
-        except Exception as exc:  # noqa: BLE001 -- the order is on chain; never let it read as unsent.
-            raise chain.unconfirmed_error(ext_hash, block_hash, f"the order id could not be read: {exc}") from exc
+            signing.submit_and_watch(self._iface, signed.wire, signed.ext_hash, wait_for="sent")
+        except signing.SendOutcomeUnknown as exc:
+            logger.info("propose_job %s may already be in the pool (%s); settling it", signed.ext_hash, exc)
+        except signing.QuipSigningError as exc:
+            raise QuipSubmissionError(f"{MEMPOOL_PALLET}.{PROPOSE_JOB_CALL} could not be submitted: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 -- the bytes may have reached the node; settle them.
+            logger.warning("the connection failed while sending propose_job %s (%s); settling it", signed.ext_hash, exc)
+        sent = self._settle(signed)
+        if sent is None:
+            raise QuipSubmissionError(
+                f"propose_job {signed.ext_hash} never reached the chain: its nonce {signed.nonce} was used by another "
+                f"transaction, or its window ended at block {signed.window_end}. Nothing was placed."
+            )
+        if sent.error is not None:
+            logger.warning("propose_job %s failed on chain in block %s: %s", sent.ext_hash, sent.block_hash, sent.error)
+        else:
+            logger.info(
+                "proposed Quip job: order_id=%d spec_id=%s reward=%d planck (block %s)",
+                sent.order_id,
+                self._spec_id,
+                reward,
+                sent.block_hash,
+            )
+        return sent
+
+    def _settle(self, signed: _SignedCall) -> _Sent | None:
+        """Wait until finalized state says what became of the sent ``signed``: ``None`` if it never landed.
+
+        Each round reads the account nonce at the finalized head (see
+        :func:`xqsa.quip.chain.settle_proposal`). While the proposal may still
+        land, the same bytes are sent again, so a node that lost them
+        relearns them; the hash is the same, so they can land once at most.
+        A read that fails reconnects with backoff and retries; a node that
+        cannot decode the blocks, has discarded the state, or serves another
+        chain or a runtime this client cannot sign for stops it at once.
+        The rounds stop once the finalized head passes the window's end
+        block, or when finality made no progress over a wall-clock estimate
+        of that block plus :data:`SETTLE_GRACE_BLOCKS`; while finality
+        advances, the estimate is made again from the finalized head. Rounds
+        are ``poll_interval`` apart, and at least :data:`MIN_SETTLE_POLL_SECONDS`.
+
+        Raises:
+            QuipSubmitIncompleteError: if it cannot be settled by then, the
+                specific error chained as its cause.
+        """
+        seconds = self._block_seconds()
+        deadline = self._settle_deadline(signed, seconds)
+        last_final = self._finalized_number()
+        poll = max(self._poll_interval, MIN_SETTLE_POLL_SECONDS)
+        failures = 0
+        while True:
+            try:
+                outcome = self._settle_round(signed)
+            except (QuipMetadataError, chain.StatePruned, chain.GenesisMismatch) as exc:
+                raise self._unsettled(signed, exc) from exc
+            except Exception as exc:  # noqa: BLE001 -- a fault while reading; reconnect and read again.
+                failures += 1
+                logger.warning("could not settle propose_job %s (%s); reconnecting", signed.ext_hash, exc)
+                if not self._pause(deadline, min(poll * 2 ** (failures - 1), MAX_BACKOFF_SECONDS)):
+                    raise self._unsettled(signed, exc) from exc
+                try:
+                    self._reconnect()
+                except (chain.GenesisMismatch, QuipMetadataError) as fatal:
+                    raise self._unsettled(signed, fatal) from fatal
+                continue
+            failures = 0
+            if outcome != "pending":
+                return outcome
+            if not self._pause(deadline, poll):
+                final = self._finalized_number()
+                if final is None or (last_final is not None and final <= last_final):
+                    stall = QuipConnectionError(
+                        f"finality did not reach the window's end block {signed.window_end} in time"
+                    )
+                    raise self._unsettled(signed, stall) from stall
+                # Finality is moving, only slower than the estimate: wait for it from where it is now.
+                last_final = final
+                deadline = time.monotonic() + (max(signed.window_end - final, 0) + SETTLE_GRACE_BLOCKS) * seconds
+                continue
+            with contextlib.suppress(Exception):  # a refusal changes nothing: the nonce decides.
+                self._quip_signing.submit_and_watch(self._iface, signed.wire, signed.ext_hash, wait_for="sent")
+
+    def _settle_once(self, signed: _SignedCall) -> _Sent | None:
+        """Make one attempt to settle the sent ``signed``, reconnecting once if a read fails.
+
+        Returns what :meth:`_settle` returns, without waiting or sending.
+
+        Raises:
+            QuipSubmitIncompleteError: if it may still land, or cannot be
+                read; the reason chained as its cause.
+        """
+        try:
+            try:
+                outcome = self._settle_round(signed)
+            except QuipMetadataError:
+                raise
+            except Exception:  # noqa: BLE001 -- the connection may be stale; reopen it and read once more.
+                self._reconnect()
+                outcome = self._settle_round(signed)
+        except Exception as exc:  # noqa: BLE001 -- the order stays sending; the cause says why.
+            raise self._unsettled(signed, exc) from exc
+        if outcome == "pending":
+            pending = QuipSubmissionError(f"it may still land up to block {signed.window_end}")
+            raise self._unsettled(signed, pending) from pending
+        return outcome
+
+    def _settle_round(self, signed: _SignedCall) -> _Sent | None | Literal["pending"]:
+        """Read once what finalized state says of ``signed``; see :func:`xqsa.quip.chain.settle_proposal`.
+
+        Raises:
+            QuipConnectionError: if a chain read fails.
+            QuipMetadataError: if the inclusion block's events cannot be decoded.
+        """
+        outcome = chain.settle_proposal(
+            self._iface, self._signer.account_id, signed.ext_hash, signed.nonce, signed.checkpoint, signed.window_end
+        )
+        if outcome == "never":
+            return None
+        if outcome == "pending":
+            return outcome
+        return _Sent(
+            ext_hash=signed.ext_hash,
+            block_hash=outcome.block_hash,
+            included_block=outcome.block_number,
+            order_id=outcome.order_id,
+            error=outcome.error,
+        )
+
+    def _settle_deadline(self, signed: _SignedCall, seconds: float) -> float:
+        """The wall-clock time by which ``signed``'s window should be over and finalized, at ``seconds`` a block.
+
+        Counted from the best block when it can be read, else from the
+        checkpoint.
+        """
+        try:
+            best = self._current_block()
+        except Exception:  # noqa: BLE001 -- the estimate falls back to the whole window.
+            best = signed.checkpoint
+        return time.monotonic() + (max(signed.window_end - best, 0) + SETTLE_GRACE_BLOCKS) * seconds
+
+    def _block_seconds(self) -> float:
+        """The chain's block time in seconds, 6 s if unknown."""
+        return (chain.block_time_ms(self._iface) or DEFAULT_BLOCK_TIME_MS) / 1000
+
+    def _finalized_number(self) -> int | None:
+        """The finalized head's number, or ``None`` if it cannot be read."""
+        try:
+            return chain.finalized_head(self._iface)[0]
+        except Exception:  # noqa: BLE001 -- a failed read counts as no progress.
+            return None
+
+    @staticmethod
+    def _pause(deadline: float, seconds: float) -> bool:
+        """Sleep ``seconds``, or until ``deadline``; ``False`` if the deadline has already passed."""
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(seconds, remaining))
+        return True
+
+    def _reconnect(self) -> None:
+        """Replace the chain connection with a fresh one; a failure keeps the old one for the next attempt.
+
+        The new connection must serve the session's genesis, else it is closed
+        and the old one kept. Its signed extensions are not checked: settling
+        only reads and resends bytes already signed, and the next signing
+        checks the runtime it signs for.
+
+        Raises:
+            GenesisMismatch: if the node now serves another chain.
+            QuipMetadataError: if this client cannot read the node's metadata.
+        """
+        try:
+            iface = _open(self._url, self._ssl_context)
+        except QuipMetadataError:
+            raise  # the same node gives the same answer; retrying cannot help.
+        except Exception as exc:  # noqa: BLE001 -- the caller retries until its deadline.
+            logger.warning("could not reconnect to the Quip node at %s: %s", self._url, exc)
+            return
+        try:
+            self._check_connection(iface, expected_genesis=self._genesis_hash, reconnect=True)
+        except chain.GenesisMismatch:
+            _close(iface)
+            raise  # the same node gives the same answer; retrying cannot help.
+        except Exception as exc:  # noqa: BLE001 -- the caller retries until its deadline.
+            _close(iface)
+            logger.warning("could not reconnect to the Quip node at %s: %s", self._url, exc)
+            return
+        except BaseException:
+            _close(iface)
+            raise
+        old, self._iface = self._iface, iface
+        if old is not iface:
+            _close(old)
+
+    def _check_connection(self, iface: Any, *, expected_genesis: str | None, reconnect: bool = False) -> str:
+        """Check that ``iface`` serves the expected chain on a runtime this client can sign for; return its genesis.
+
+        Logs the network, runtime and genesis at ``INFO``. A ``reconnect``
+        checks the genesis only; see :meth:`_reconnect`.
+
+        Raises:
+            GenesisMismatch: if ``expected_genesis`` is set and the node's differs.
+            QuipMetadataError: if this client cannot sign for the node's runtime
+                (first connect only).
+            QuipConnectionError: if the genesis hash cannot be read.
+        """
+        genesis = chain.genesis_hash(iface).lower()
+        network = self._network or "custom endpoint"
+        if expected_genesis is not None and genesis != expected_genesis:
+            raise chain.GenesisMismatch(
+                f"the Quip node at {self._url} ({network}) serves genesis {genesis}, "
+                f"not the expected {expected_genesis}"
+            )
+        if not reconnect:
+            self._quip_signing.check_runtime(iface)
         logger.info(
-            "proposed Quip job: order_id=%d spec_id=%s reward=%d planck (block %s)",
-            order_id,
-            self._spec_id,
-            reward,
-            block_hash,
+            "%s Quip %s at %s: specVersion %s, transactionVersion %s, genesis %s",
+            "reconnected to" if reconnect else "connected to",
+            network,
+            self._url,
+            iface.runtime_version,
+            iface.transaction_version,
+            genesis,
         )
-        return _Sent(ext_hash=ext_hash, block_hash=block_hash, included_block=included_block, order_id=order_id)
+        return genesis
 
-    def _included_block(self, block_hash: str | None) -> int | None:
-        """Return the height of the inclusion block, or ``None`` if it cannot be read.
-
-        Display only: the order is already proposed, so a failed read must not
-        lose its id.
-        """
-        if not block_hash:
-            return None
-        try:
-            return chain.block_number(self._iface, block_hash)
-        except Exception as exc:  # noqa: BLE001 -- the order is on chain; never lose its id over a height.
-            logger.warning("could not read the height of inclusion block %s: %s", block_hash, exc)
-            return None
+    @staticmethod
+    def _unsettled(signed: _SignedCall, cause: Exception) -> QuipSubmitIncompleteError:
+        """The error for a sent ``propose_job`` that is not settled yet; :class:`JobOrder` attaches itself."""
+        if isinstance(cause, QuipMetadataError):
+            then = (
+                "this client cannot read or sign for the node's runtime; upgrade xquad, then call submit() again. "
+                "The order keeps its signed bytes and nonce."
+            )
+        elif isinstance(cause, chain.GenesisMismatch):
+            then = (
+                "the endpoint now serves a different chain; point the client at the network this order was sent on, "
+                "then call submit() again."
+            )
+        elif isinstance(cause, chain.StatePruned):
+            then = (
+                "the node has discarded the state this needs; settling needs a node that keeps full state history "
+                "(--state-pruning=archive), then call submit() again."
+            )
+        else:
+            then = "calling submit() again resumes it; it never places a second order."
+        return QuipSubmitIncompleteError(
+            signed.ext_hash,
+            signed.nonce,
+            signed.window_end,
+            f"propose_job {signed.ext_hash} (nonce {signed.nonce}) was sent but is not settled ({cause}). Its window "
+            f"ends at block {signed.window_end}. The order is sending: {then}",
+        )
 
     def _account_nonce(self) -> int:
         """See :func:`xqsa.quip.chain.account_nonce`."""
@@ -753,11 +1216,11 @@ class SolverQuip(Solver):
         return chain.send_extrinsic(self._iface, self._quip_signing, call_module, call_function, wire, ext_hash)
 
     def _build_extrinsic(
-        self, call_module: str, call_function: str, call_params: dict, nonce: int | None = None
+        self, call_module: str, call_function: str, call_params: dict, nonce: int | None = None, era: Any = None
     ) -> tuple[bytes, str]:
         """See :func:`xqsa.quip.chain.build_extrinsic`."""
         return chain.build_extrinsic(
-            self._iface, self._quip_signing, self._signer, call_module, call_function, call_params, nonce=nonce
+            self._iface, self._quip_signing, self._signer, call_module, call_function, call_params, nonce=nonce, era=era
         )
 
     def _submit_built(
@@ -772,10 +1235,6 @@ class SolverQuip(Solver):
         return chain.submit_built(
             self._iface, self._quip_signing, call_module, call_function, wire, ext_hash, wait_for=wait_for
         )
-
-    def _read_proposed_order_id(self, block_hash: str | None) -> int:
-        """See :func:`xqsa.quip.chain.read_proposed_order_id`."""
-        return chain.read_proposed_order_id(self._iface, block_hash)
 
     # ------------------------------------------------------------------
     # Monitor / retrieve / decode
@@ -996,6 +1455,7 @@ class SolverQuip(Solver):
             num_spins=job.topology.num_nodes,
             num_couplings=job.topology.num_edges,
             placement=options.topology,
+            inclusion_window_blocks=self._inclusion_window_blocks,
         )
 
     def create_order(self, model: XqmxModel, **options: Any) -> JobOrder:
@@ -1115,10 +1575,14 @@ class SolverQuip(Solver):
         """
         # No amount: the faucet's default drip. solve() only gets here when the
         # shortfall fits in one, so a mistyped reward is never funded.
+        # The context only when set, as _open does, so a stand-in for
+        # fund_from_faucet written before ssl_context existed still fits.
+        tls = {} if self._ssl_context is None else {"ssl_context": self._ssl_context}
         fund_from_faucet(
             "0x" + bytes(self._signer.account_id).hex(),
             url=self._faucet,
             dest_label=self._account_ss58,
+            **tls,
         )
         deadline = time.monotonic() + FUND_WAIT_SECONDS
         while (balance := self._free_balance()) < quote.total_planck:
@@ -1127,7 +1591,7 @@ class SolverQuip(Solver):
             time.sleep(self._poll_interval)
 
     def _clear_gates(self, quote: JobQuote) -> None:
-        """Show ``quote``, refuse what no drip can cover, then ask the gates and fund if short.
+        """Show ``quote``, refuse what cannot be funded, then ask the gates and fund if short.
 
         The ``autoconfirm`` gate comes first, so the price is accepted before
         funding is considered. Only if the account is short does the
@@ -1135,22 +1599,23 @@ class SolverQuip(Solver):
 
         Raises:
             QuipSubmissionError: if the account cannot cover the quote and no
-                faucet is configured, the shortfall exceeds one faucet drip, the
-                balance already exceeds the faucet's one-drip ceiling, or the
-                drip does not land. The first three are raised before either
-                gate is asked.
+                faucet is configured, or, with a faucet, the shortfall exceeds
+                one drip, the balance already exceeds the faucet's one-drip
+                ceiling, or the drip does not land. All but the last are raised
+                before either gate is asked; the drip limits apply only with a
+                faucet.
             QuipCancelledError: if a gate declines.
             QuipFaucetError: if the faucet refuses or cannot be reached.
         """
         self._display(quote)
         # A shortfall no drip can cover fails whatever the gates say, so raise
         # it before asking anyone to confirm a job that cannot go out.
+        if quote.shortfall_planck and not self._faucet:
+            raise self._insufficient_error(quote)
         if quote.shortfall_planck > DEFAULT_DRIP_PLANCK:
             raise self._insufficient_error(quote, beyond_drip=True)
         if quote.shortfall_planck and quote.balance_planck > DEFAULT_DRIP_PLANCK:
             raise self._insufficient_error(quote, above_ceiling=True)
-        if quote.shortfall_planck and not self._faucet:
-            raise self._insufficient_error(quote)
         total = f"{_format_planck(quote.total_planck, quote.token_decimals)} {quote.token_symbol}"
         self._pass_gate(self._autoconfirm, quote, name="autoconfirm", question=f"Submit this job for {total}?")
         if quote.shortfall_planck:
@@ -1227,9 +1692,11 @@ class SolverQuip(Solver):
             QuipTimeoutError: if the order does not finalize within ``timeout``
                 (it carries the order's receipt; :meth:`get_receipt` rebuilds
                 it from the order id).
-            QuipUnconfirmedError: if the job was sent but its outcome or order
-                id is unknown. It may be on chain, so do not solve the same
-                model again on that account without checking.
+            QuipSubmitIncompleteError: if the job was sent but could not be
+                settled by the end of its inclusion window (see
+                :meth:`JobOrder.submit <xqsa.quip.JobOrder.submit>`). It
+                carries the ``sending`` order: call ``submit()`` on it to
+                resume, never ``solve()`` again, which would sign a second job.
             QuipJobFailedError: if the order finalizes with no usable solution.
         """
         _pop_mode(kwargs, stacklevel=2)
@@ -1291,14 +1758,18 @@ class SolverQuip(Solver):
         self._fetch_order(order_id)
         return JobOrderReceipt(self, order_id, self._genesis_hash)
 
-    def list_orders(self, state: Literal["submitted", "finalized"] | None = None, account: Any = None) -> list[int]:
+    def list_orders(
+        self, state: Literal["submitted", "finalized", "unanswered"] | None = None, account: Any = None
+    ) -> list[int]:
         """Return the ids of an account's orders, newest first.
 
         Reads the chain's per-account order list, so it includes orders
         placed from any session. The chain drops an order from that list once
         a claim or a reclaim closes it, so closed orders are not listed.
-        ``state`` keeps only the orders still open (``"submitted"``) or final
-        (``"finalized"``), at one more read per order. ``account`` lists
+        ``state`` keeps only the orders still open (``"submitted"``), final
+        (``"finalized"``), or final with no answers (``"unanswered"``, the
+        ones :meth:`JobOrderReceipt.reclaim <xqsa.quip.JobOrderReceipt.reclaim>`
+        refunds), at one more read per order. ``account`` lists
         another account's orders instead of this client's signer, as SS58
         text, ``0x`` hex or bytes.
 
@@ -1306,22 +1777,17 @@ class SolverQuip(Solver):
         warns and returns the newest 32.
 
         Raises:
-            ValueError: if ``state`` is not ``"submitted"`` or ``"finalized"``,
-                or ``account`` cannot be read as an account.
+            ValueError: if ``state`` is not ``"submitted"``, ``"finalized"``
+                or ``"unanswered"``, or ``account`` cannot be read as an account.
+            QuipSigningError: if ``account`` is omitted on a read-only client.
             QuipConnectionError: if an order or the head block cannot be read.
         """
-        if state not in (None, "submitted", "finalized"):
-            raise ValueError(f"state={state!r}; expected 'submitted', 'finalized' or None")
-        owner = self._signer.account_id if account is None else chain.account_bytes(account)
-        order_ids = chain.proposer_orders(self._iface, owner)[::-1]
+        if state not in (None, "submitted", "finalized", "unanswered"):
+            raise ValueError(f"state={state!r}; expected 'submitted', 'finalized', 'unanswered' or None")
+        order_ids = chain.proposer_orders(self._iface, self._owner(account))[::-1]
         if state is not None:
             current_block = self._current_block()
-            order_ids = [
-                order_id
-                for order_id in order_ids
-                if self._order_lifecycle(self._fetch_order(order_id), current_block)["is_final"]
-                == (state == "finalized")
-            ]
+            order_ids = [order_id for order_id in order_ids if self._order_in_state(order_id, current_block, state)]
         if len(order_ids) > LIST_ORDERS_LIMIT:
             warnings.warn(
                 f"showing {LIST_ORDERS_LIMIT} of {len(order_ids)} orders on this account. This "
@@ -1331,6 +1797,16 @@ class SolverQuip(Solver):
                 stacklevel=2,
             )
         return order_ids[:LIST_ORDERS_LIMIT]
+
+    def _order_in_state(self, order_id: int, current_block: int, state: str) -> bool:
+        """Whether the order is in the :meth:`list_orders` ``state`` at ``current_block``."""
+        order = self._fetch_order(order_id)
+        lifecycle = self._order_lifecycle(order, current_block)
+        if state == "submitted":
+            return not lifecycle["is_final"]
+        if state == "finalized":
+            return lifecycle["is_final"]
+        return lifecycle["is_final"] and lifecycle["status"] != ORDER_STATUS_CLOSED and _solution_count(order) == 0
 
     def status(self, order_id: int) -> dict[str, Any]:
         """Return a lightweight lifecycle snapshot of an order (no solution decode). Deprecated.

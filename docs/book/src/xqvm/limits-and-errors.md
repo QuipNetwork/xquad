@@ -1,8 +1,8 @@
 # Limits and Errors
 
 XQVM has two separate error surfaces. The [verifier](verifier.md) is static
-analysis that runs before a program executes; `xquad verify` runs it without
-running the program. The VM is runtime: `xquad run` does not verify
+analysis that runs before a program executes; `xquad vm check` runs it without
+running the program. The VM is runtime: `xquad vm run` does not verify
 automatically, so a program that was never checked can reach the VM and
 fault there instead. Several conditions -- an out-of-range jump label, in
 particular -- have both a verifier error and a distinct VM runtime error for
@@ -31,9 +31,9 @@ this reason.
 | Calldata slots | 0 | `Vm::set_calldata(vec)` | `CallDataIndex` |
 | Output slots | 0 | `Vm::set_output_slots(n)` | `OutputIndex` |
 
-The library defaults above apply to `Vm::new()` directly; the `xquad run`
+The library defaults above apply to `Vm::new()` directly; the `xquad vm run`
 CLI sets its own defaults before handing control to the VM -- 16 output
-slots unless `--outputs` overrides it. See [xquad run](cli/run.md) for the
+slots unless `--outputs` overrides it. See [`xquad vm run`](../cli/vm/run.md) for the
 CLI's own default table.
 
 The step limit is exact: `set_step_limit(0)` permits no instructions at

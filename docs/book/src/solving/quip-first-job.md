@@ -20,6 +20,68 @@ extension that signs extrinsics. `quip-signer` ships a prebuilt wheel on
 Linux and builds from source with a local Rust toolchain on macOS and
 Windows.
 
+## Set Up an Account
+
+`xquad quip account show` is the setup check: it prints the account in
+effect, where it comes from, and its balance. On a first run there is
+none. At a terminal it prints the guidance, then offers to create an
+account; the answer defaults to `skip`, and nothing is written until the
+last answer:
+
+```sh
+xquad quip --network aglais account show
+```
+
+```text
+No Quip account is set up.
+
+No keystores found. Create one with `xquad quip account new`, or bring a seed with `xquad quip account import`.
+
+Resolution order (the first match signs):
+
+  1  QUIP_SIGNER_SEED     unset
+  2  QUIP_KEYSTORE        unset
+  3  project preference   unset
+  4  user preference      unset
+* 5  default              ~/.quip/keystore.json
+
+Setting the account:
+
+  xquad quip account use <name>             prefer <name> in this project, else for your user
+  xquad quip account use <name> --global    prefer <name> for your user
+  xquad quip account use --unset [--global] clear the preference at that level
+  --keystore PATH, QUIP_KEYSTORE, QUIP_SIGNER_SEED override the preferences
+Create one now? (new, import, skip) [skip]: skip
+```
+
+Answering `new` creates the account there and then. Off a terminal, or
+with `--json`, the command prints the same guidance as an error and exits
+1 without asking or creating anything.
+
+Create the account, then check it again:
+
+```sh
+xquad quip account new
+xquad quip --network aglais account show
+```
+
+```text
+created default at the user level: ~/.quip/keystore.json
+  5GGt9yK5EbpdQNv3fCnpZLo93DgL663VsT7VeS5ueJqNoaBD
+it is the user default, which signs when nothing else is set
+Account   5GGt9yK5EbpdQNv3fCnpZLo93DgL663VsT7VeS5ueJqNoaBD
+Source    default keystore ~/.quip/keystore.json
+Balance   0.000000000000 AGLS
+Reserved  0.000000000000 AGLS
+Orders    0 of 32 slots used
+```
+
+The keystore holds the account's signing key. Keep the file: it is the
+account. It starts empty; [Submit](#submit) funds it from the faucet.
+These two blocks were captured on 2026-10-24, with a fresh account.
+The receipts further down came from a different, funded account, so
+their `Account` line is not the one shown here.
+
 ## Build the Model
 
 The model is the [TSP example](../examples/tsp.md) at `n = 4`, with a
@@ -28,20 +90,20 @@ reproducible. The encoder runs on your machine; nothing touches the
 network yet.
 
 ```python
-from xquad.cp import Domain, Problem, Types, xq_triu
+from xquad import cp
 from xquad.vm import VM
 
 n = 4
 distances = [12, 30, 25, 18, 40, 22]  # xq_triu order: 0-1, 0-2, 1-2, 0-3, 1-3, 2-3
 
-problem = Problem("TSP")
-num_cities = problem.input("num_cities", type=Types.Int)
-distance_matrix = problem.input("distance_matrix", type=Types.Vec)
-problem.define_model(size=num_cities * num_cities, domain=Domain.BINARY, rows=num_cities, cols=num_cities)
+problem = cp.Problem("TSP")
+num_cities = problem.input("num_cities", type=cp.Types.Int)
+distance_matrix = problem.input("distance_matrix", type=cp.Types.Vec)
+problem.define_model(size=num_cities * num_cities, domain=cp.Domain.BINARY, rows=num_cities, cols=num_cities)
 
 with problem.range(0, num_cities - 1) as city_i:
     with problem.range(city_i + 1, num_cities) as city_j:
-        dist = problem.stow("dist", distance_matrix.get(xq_triu(city_i, city_j)))
+        dist = problem.stow("dist", distance_matrix.get(cp.xq_triu(city_i, city_j)))
         with problem.range(0, num_cities) as position:
             next_position = (position + 1) % num_cities
             problem.model.quadratic[(city_i, position), (city_j, next_position)].add(dist)
@@ -52,7 +114,7 @@ with problem.range(0, num_cities) as city:
 with problem.range(0, num_cities) as position:
     problem.model.apply_onehot_col(position, penalty=100)
 
-tour = problem.output("tour", type=Types.Vec)
+tour = problem.output("tour", type=cp.Types.Vec)
 with problem.range(0, num_cities) as position:
     tour.append(problem.sample.colfind(col=position, value=1))
 
@@ -71,9 +133,9 @@ position.
 ## Connect and Quote
 
 ```python
-from xquad.sa.quip import SolverQuip
+from xquad import sa
 
-solver = SolverQuip.for_network("aglais", topology="native")
+solver = sa.quip.SolverQuip.for_network("aglais", topology="native")
 order = solver.create_order(model)
 print(order)
 print(order.quote())
@@ -130,14 +192,12 @@ quality floors, a 100-block deadline and a 10-block wait after the first
 answer. Nothing has been signed or sent. [Job Orders](quip-orders.md)
 covers every option a draft takes.
 
-No signer is passed, so `SolverQuip` uses the keystore at
-`~/.quip/keystore.json`. On a first run the file does not exist yet:
-`SolverQuip` creates it with a new signing key and warns with its path,
-so the account starts empty. Keep the file: it is the account, and the
-`Account` row shows its address. To use a different one, pass it:
+No signer is passed, so `SolverQuip` signs with the account
+`xquad quip account show` reported. To use a different keystore, pass
+it:
 
 ```python
-solver = SolverQuip.for_network("aglais", keystore="~/.quip/work.json", topology="native")
+solver = sa.quip.SolverQuip.for_network("aglais", keystore="~/.quip/work.json", topology="native")
 ```
 
 `quote()` signs the order's `propose_job` extrinsic and asks the chain
@@ -191,7 +251,8 @@ terminal, as here. It then runs two gates with their defaults.
 `autoconfirm=True` accepts the price. The account is short, so
 `autofund=True` draws one drip of 10 AGLS from the faucet. Finally it
 sends the signed `propose_job`, which reserves the reward, and returns
-the order, now `submitted`. The order is read-only from here: `set()`,
+the order, now `submitted`, once the block holding it is finalized, a
+few blocks after it is included. The order is read-only from here: `set()`,
 `quote()` and `submit()` refuse it.
 
 ## Read the Result
@@ -301,12 +362,12 @@ Answering anything but `y` raises `QuipCancelledError`, which carries
 the quote:
 
 ```python
-from xquad.sa.quip import QuipCancelledError
+from xquad import sa
 
-solver = SolverQuip.for_network("aglais", topology="native", autoconfirm=False)
+solver = sa.quip.SolverQuip.for_network("aglais", topology="native", autoconfirm=False)
 try:
     result = solver.solve(model)
-except QuipCancelledError as exc:
+except sa.quip.QuipCancelledError as exc:
     print("cancelled:", exc)
     print(exc.quote.total_planck)
 ```
@@ -343,7 +404,7 @@ and returns whether to submit. This one accepts any job up to 2 AGLS (a
 token here has 12 decimals):
 
 ```python
-solver = SolverQuip.for_network(
+solver = sa.quip.SolverQuip.for_network(
     "aglais",
     topology="native",
     autoconfirm=lambda quote: quote.total_planck <= 2 * 10**12,
@@ -402,11 +463,11 @@ instead, carrying `order_id` and the order's receipt. The job is still
 live on chain, so wait on the receipt again:
 
 ```python
-from xquad.sa.quip import QuipTimeoutError
+from xquad import sa
 
 try:
     order.wait()
-except QuipTimeoutError as exc:
+except sa.quip.QuipTimeoutError as exc:
     exc.receipt.wait()
 ```
 
@@ -416,7 +477,7 @@ The order lives on chain, not in your session. A new process lists the
 account's orders and rebuilds any one's receipt from its id:
 
 ```python
-solver = SolverQuip.for_network("aglais")
+solver = sa.quip.SolverQuip.for_network("aglais")
 print(solver.list_orders())
 receipt = solver.get_receipt(20)
 print(receipt.status())
@@ -438,13 +499,17 @@ receipt also lists the solvers that answered and their raw spin vectors,
 shows the settlement, and reclaims an unanswered order with
 `receipt.reclaim()`.
 
+From a shell, `xquad quip --network aglais orders` lists the same
+orders, one line each, and `xquad quip --network aglais status 20`
+prints the receipt box; see [Orders](../cli/quip/orders.md).
+
 A receipt does not hold your model, so it cannot decode an answer into a
 tour. Decoding needs the `JobOrder` from the session that submitted it.
 From a new session, the deprecated
 `solver.query(order_id, model, topology="native")` still returns a
 decoded `SolverResult`, with the same `topology` the order was proposed
-with; it warns and is removed in v0.5.0 (see [Deprecated in
-v0.4.3](quip-network.md#deprecated-in-v043)).
+with; it warns and is removed in v0.5.0 (see [Deprecated
+APIs](quip-network.md#deprecated-apis)).
 
 ## What Native Mode Gives Up
 

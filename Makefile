@@ -203,8 +203,8 @@ set-version:
 # resolving xqasm's path+version dependency on xqvm. It replaces
 # scripts/validate-crate-publish.sh, deleted in this change.
 #
-# --workspace covers exactly xqvm, xqasm and xqcli. The workspace has
-# five members (Cargo.toml `members`); the other two carry
+# --workspace covers exactly xqvm and xqasm. The workspace has
+# four members (Cargo.toml `members`); the other two carry
 # publish = false and are skipped: xqffi (pyo3 cdylib, shipped as a
 # PyPI wheel) and fixtures/xqvm-wasm (no_std build fixture). Enumerated in full because
 # this comment is the justification for using --workspace here at all,
@@ -224,7 +224,7 @@ set-version:
 # step fails on a method the tree plainly has.
 #
 # Both halves of that state have to go, because the dry-run writes to
-# both. Verifying xqcli resolves xqvm and xqasm through the temporary
+# both. Verifying xqasm resolves xqvm through the temporary
 # local registry rather than by path, and cargo extracts those .crate
 # files into $CARGO_HOME/registry/src/ -- the shared, cached one. Scoping
 # only CARGO_TARGET_DIR left that extraction pointed at the cache and the
@@ -346,14 +346,14 @@ preflight: preflight-rs preflight-py preflight-docs preflight-policy
 #     with the maturin-built xqffi wheel; the xqcp, xqsa and xquad
 #     editable installs put the repo root on sys.path, so any script in
 #     the repo can `import xqcp` etc.
-#   - Rust CLI installed as the `xquad` binary under ~/.cargo/bin/ so
-#     `xquad run …`, `xquad dism …`, etc. work from any shell.
+#   - the `xquad` command, installed into .venv/bin/ by the same sync
+#     from the umbrella package's console script, so `uv run xquad vm
+#     run …` (or `xquad` with the venv active) works.
 #
 # Run once per environment; re-run after a pull that touches Rust
 # sources or workspace deps. Publishing / wheel distribution is out
 # of scope (see QUI-442).
 xquad: deps-py
-	cargo install --path xqcli --locked --force
 
 # -- Dependencies -----------------------------------------------------------
 
@@ -691,8 +691,8 @@ test-quip-sign:
 #
 # QUIP_RPC_URL gates the whole module (unset -> every test skips), so the
 # target hard-errors when it is missing rather than reporting a hollow, all-
-# skipped pass. QUIP_FAUCET_URL is optional but needed for the funded submit
-# and end-to-end tiers; without it only the read-only connectivity tests run.
+# skipped pass. QUIP_FAUCET_URL is optional but needed for the funded tier;
+# without it only the read-only connectivity tests run.
 #
 # Same two-step shape as test-quip-sign above, for the same reason. See
 # its comment; not repeated here.
@@ -703,7 +703,7 @@ test-quip-e2e:
 	fi
 	uv sync --extra quip
 	QUIP_RPC_URL="$(QUIP_RPC_URL)" QUIP_FAUCET_URL="$(QUIP_FAUCET_URL)" \
-		uv run --no-sync pytest xqsa/tests/quip/test_live.py -m quip -v
+		uv run --no-sync pytest xqsa/tests/quip/test_live.py -m quip -v -rs
 
 # Real-hardware xqsa solver tests -- CUDA, D-Wave QPU, Apple Metal -- each
 # exercising the encode -> solve -> verify -> decode pipeline against an

@@ -329,16 +329,16 @@ rebuilding the order from the problem definition.
 Python strings -- printing one is the fastest way to see what a problem
 definition actually compiled to, which is how every listing on this page
 was produced. From there, the `xquad` CLI static-inspects a single program
-without needing a Python host at all: `xquad asm` and `xquad dism`
+without needing a Python host at all: `xquad vm asm` and `xquad vm dis`
 round-trip a `.xqasm` file to bytecode and back to a readable listing, and
-`xquad verify` runs the same structural, jump-target, loop-nesting,
+`xquad vm check` runs the same structural, jump-target, loop-nesting,
 register type-state and stack-depth checks `problem.compile()` already runs
 automatically through `xqffi` when that package is installed. See
-[CLI](../xqvm/cli/) for the full command reference; nothing about
+[CLI](../cli/) for the full command reference; nothing about
 compiling changes it.
 
-`xquad verify` and `xquad dism` work on any of the three programs as they
-stand, but `xquad run` does not, because none of the three programs' inputs
+`xquad vm check` and `xquad vm dis` work on any of the three programs as they
+stand, but `xquad vm run` does not, because none of the three programs' inputs
 are all plain integers -- the encoder above needs two vectors on calldata
 positions `1` and `2`, and the CLI's `--calldata` flag only accepts a
 comma-separated list of `i64`s. Handing it integers where a program expects
@@ -346,10 +346,8 @@ a vector does not fail to parse; it fails at run time, once the program
 tries to use the value:
 
 ```
-$ xquad run --text knapsack.encoder.xqasm --calldata 2,10,20,5
-Error: xqvm::runtime_error
-
-  × register r2 holds int, expected vec<int>
+$ xquad vm run --text knapsack.encoder.xqasm --calldata 2,10,20,5
+Error: run failed: RegisterType { reg: 2, expected: "vec<int>", got: "int" }
 ```
 
 Running any of these three programs against real calldata needs a host that

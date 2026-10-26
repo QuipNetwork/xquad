@@ -63,8 +63,9 @@ logger = logging.getLogger("xqsa.quip")
 class _Facts:
     """What the chain recorded when the order was placed; none of it changes afterwards.
 
-    ``submitted_ms`` and ``fee`` are ``None`` when their read faulted. The
-    floors are ``None`` when the order was placed without them.
+    ``submitted_ms`` and ``fee`` are ``None`` when their read faulted or the
+    node has pruned the state they live in. The floors are ``None`` when the
+    order was placed without them.
     """
 
     proposer: str
@@ -84,12 +85,16 @@ class _Facts:
 
 @dataclass(frozen=True)
 class _Outcome:
-    """The order's outcome now: ``status`` is ``open``, ``final`` or ``closed``."""
+    """The order's outcome now: ``status`` is ``open``, ``final`` or ``closed``.
+
+    ``open_until`` is the order's ``effective_expiry`` while it is open, else ``None``.
+    """
 
     status: str
     answers: int
     leader: str | None
     energy_milli: int | None
+    open_until: int | None
 
 
 class JobOrderReceipt:
@@ -119,7 +124,7 @@ class JobOrderReceipt:
         self._genesis_hash = genesis_hash
         # Set once a read shows the order final; a later read from a lagging node must not reopen it.
         self._final_seen = False
-        # Filled only once every placement read succeeded, so a faulted read is retried.
+        # Filled once every placement read succeeded or found its state pruned, so a faulted read is retried.
         self._facts_cache: _Facts | None = None
 
     @property
@@ -153,6 +158,30 @@ class JobOrderReceipt:
             "effective_expiry": lifecycle["effective_expiry"],
             "current_block": current_block,
             "solution_count": _solution_count(order),
+        }
+
+    def summary(self) -> dict[str, Any]:
+        """Return the order's outcome in one flat dict, the fields the receipt box shows under Status.
+
+        Keys: ``order_id``; ``state``, one of ``open``, ``final`` (answered,
+        its reward awaiting a claim), ``reclaimable`` (final with no answers,
+        so :meth:`reclaim` refunds it) or ``closed`` (claimed or reclaimed:
+        the chain records both alike); ``open_until``, the block the order
+        stays open until, ``None`` unless ``open``; ``answers``, the number of
+        solvers that answered; and ``leader``, the SS58 of the solver ranked
+        first, ``None`` with no answers.
+
+        Raises:
+            QuipConnectionError: if the order or the head block cannot be read.
+        """
+        outcome = self._outcome()
+        state = "reclaimable" if outcome.status == "final" and outcome.answers == 0 else outcome.status
+        return {
+            "order_id": self._order_id,
+            "state": state,
+            "open_until": outcome.open_until,
+            "answers": outcome.answers,
+            "leader": outcome.leader,
         }
 
     def wait(self) -> Self:
@@ -281,6 +310,8 @@ class JobOrderReceipt:
         Nothing reclaims on its own.
 
         Raises:
+            QuipSigningError: if the receipt's client is read-only, after the
+                order is read and before anything is signed.
             QuipReclaimRefusedError: if this account did not propose the order,
                 the order is already closed, it is still open, or it was
                 answered; or if the chain refuses the reclaim at dispatch, which
@@ -348,18 +379,26 @@ class JobOrderReceipt:
     def _facts(self, order: Mapping[str, Any] | None = None) -> _Facts:
         """Read the order's placement facts: the order, its block's time, and the fee it paid.
 
-        Cached once every read succeeded; a faulted read is retried on the next call.
+        A non-archive node discards a block's state after about 256 blocks, so
+        the time and fee of an older order cannot be read there at all; that
+        is cached as unknown, silently. A read that faulted any other way
+        warns and is retried on the next call.
         """
         if self._facts_cache is not None:
             return self._facts_cache
         iface = self._client._iface
         order = self._fetch_order() if order is None else order
         created_at = _coerce_block_number(order["created_at"])
-        block_hash = self._best_effort("the submission block", lambda: chain.block_hash(iface, created_at))
+        block_hash, settled = self._placement_fact("the submission block", lambda: chain.block_hash(iface, created_at))
         submitted_ms = fee = None
         if block_hash is not None:
-            submitted_ms = self._best_effort("the submission time", lambda: chain.block_timestamp(iface, block_hash))
-            fee = self._best_effort("the fee", lambda: chain.proposal_fee(iface, block_hash, self._order_id))
+            submitted_ms, time_settled = self._placement_fact(
+                "the submission time", lambda: chain.block_timestamp(iface, block_hash)
+            )
+            fee, fee_settled = self._placement_fact(
+                "the fee", lambda: chain.proposal_fee(iface, block_hash, self._order_id)
+            )
+            settled = time_settled and fee_settled
         params, timing = order["ising_params"], order["timing"]
         facts = _Facts(
             proposer=self._ss58(order["proposer"]),
@@ -376,9 +415,24 @@ class JobOrderReceipt:
             submitted_ms=submitted_ms,
             fee=fee,
         )
-        if submitted_ms is not None and fee is not None:
+        if settled:
             self._facts_cache = facts
         return facts
+
+    def _placement_fact(self, what: str, read: Any) -> tuple[Any, bool]:
+        """Return ``(read(), settled)``: ``settled`` is False only for a fault worth retrying.
+
+        State the node has pruned reads as ``None`` and settled, logged at
+        debug level, since no retry against that node can read it.
+        """
+        try:
+            return read(), True
+        except Exception as exc:  # noqa: BLE001 -- display only; the receipt stays usable.
+            if chain._is_state_pruned(exc):
+                logger.debug("%s of order %d is pruned on this node: %s", what, self._order_id, exc)
+                return None, True
+            logger.warning("could not read %s of order %d: %s", what, self._order_id, exc)
+            return None, False
 
     def _floors_text(self) -> str | None:
         """The order's quality floors in chain units, or ``None`` if the order cannot be read; see below."""
@@ -425,6 +479,7 @@ class JobOrderReceipt:
             answers=_solution_count(order),
             leader=None if leader is None else self._ss58(leader["solver"]),
             energy_milli=None if leader is None else int(leader["energy_milli"]),
+            open_until=lifecycle["effective_expiry"] if status == "open" else None,
         )
 
     def _ss58(self, account: Any) -> str:
@@ -545,8 +600,7 @@ def _minutes_until(blocks: int, block_time_ms: int | None) -> str:
 def _floors_of(params: Mapping[str, Any]) -> Floors:
     """Read the quality floors from an order's ``ising_params``."""
     return Floors(
-        # The ceiling's field is min_energy_milli until QUI-1612 renames it max_energy_milli.
-        max_energy_milli=_optional_int(params.get("max_energy_milli", params.get("min_energy_milli"))),
+        max_energy_milli=_optional_int(params.get("max_energy_milli")),
         min_solutions=_optional_int(params.get("min_solutions")),
         min_diversity_milli=_optional_int(params.get("min_diversity_milli")),
     )

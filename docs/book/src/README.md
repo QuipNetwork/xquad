@@ -22,19 +22,18 @@ solvers XQuad targets.
 
 ## The real components
 
-The toolchain is dual-language: a Rust core (VM, assembler, bytecode, CLI)
+The toolchain is dual-language: a Rust core (VM, assembler, bytecode)
 with Python interfaces (constraint-programming DSL, solver adapters, FFI
-bindings).
+bindings, and the `xquad` CLI).
 
-Three Rust crates, published to crates.io:
+Two Rust crates, published to crates.io:
 
-| Crate | Binary | Role |
-|---|---|---|
-| [`xqvm`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm) | -- | Bytecode definitions, opcode table, instruction builder, binary codec, an incremental instruction-stream reader, the VM interpreter, and a disassembler |
-| [`xqasm`](https://gitlab.com/quip.network/xquad/-/tree/main/xqasm) | -- | Text assembler: `.xqasm` source to bytecode |
-| [`xqcli`](https://gitlab.com/quip.network/xquad/-/tree/main/xqcli) | `xquad` | The unified CLI -- `xquad asm`, `xquad dism`, `xquad run`, `xquad verify` |
+| Crate | Role |
+|---|---|
+| [`xqvm`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm) | Bytecode definitions, opcode table, instruction builder, binary codec, an incremental instruction-stream reader, the VM interpreter, and a disassembler |
+| [`xqasm`](https://gitlab.com/quip.network/xquad/-/tree/main/xqasm) | Text assembler: `.xqasm` source to bytecode |
 
-A fourth crate, [`xqffi`](https://gitlab.com/quip.network/xquad/-/tree/main/xqffi),
+A third crate, [`xqffi`](https://gitlab.com/quip.network/xquad/-/tree/main/xqffi),
 is a PyO3 bridge that exposes `xqvm` and `xqasm` to Python. It ships as a
 Python wheel rather than a crates.io library.
 

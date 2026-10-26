@@ -3,7 +3,6 @@ resolver = "3"
 members = [
     "xqvm",
     "xqasm",
-    "xqcli",
     "xqffi",
     "fixtures/xqvm-wasm",
 ]
@@ -24,16 +23,11 @@ xqvm  = { path = "./xqvm", version = "0.5.0-dev" }
 xqasm = { path = "./xqasm", version = "0.5.0-dev" }
 
 ### Common dependencies ###
-clap      = { version = "4", features = [ "derive" ] }
 miette    = { version = "7", features = [ "fancy", "derive" ] }
 pastey    = "0.2.1"
 thiserror = { version = "2", default-features = false }
 
 serde_json = "1"
-
-### Testing ###
-assert_cmd = "2.2"
-predicates = "3"
 
 [workspace.lints.rust]
 missing_docs          = "warn"

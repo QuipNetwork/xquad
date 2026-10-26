@@ -29,12 +29,13 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from xqsa.quip.codec import (
     _as_hex,
     _as_int_or_none,
     _canonical_hex,
+    _dispatch_error_text,
     _event_ids,
     _extrinsic_index,
     _phase_extrinsic_index,
@@ -298,19 +299,33 @@ def free_balance(iface: Any, account_id: Any) -> int:
             cannot be read/decoded -- an anomalous read must not be reported
             as a zero balance.
     """
+    return _account_balance(iface, account_id, "free")
+
+
+def reserved_balance(iface: Any, account_id: Any) -> int:
+    """Return the account's reserved balance in planck: the rewards of its orders not yet closed, among others.
+
+    Raises:
+        QuipConnectionError: if the account entry or its ``data.reserved``
+            field cannot be read/decoded.
+    """
+    return _account_balance(iface, account_id, "reserved")
+
+
+def _account_balance(iface: Any, account_id: Any, field: Literal["free", "reserved"]) -> int:
+    """Read one ``System.Account`` ``data`` balance field, raising rather than reporting a fault as zero."""
     entry = iface.query("System", "Account", [account_id])
     value = getattr(entry, "value", None)
     try:
-        free = int(value["data"]["free"])
+        return int(value["data"][field])
     except (TypeError, KeyError, ValueError) as exc:
-        # A non-None entry with a missing/undecodable data.free is a read
-        # or decode fault, not a funded-to-zero account -- surface it rather
-        # than defaulting free=0 and blaming the user for "insufficient balance".
+        # A non-None entry with a missing/undecodable field is a read or decode
+        # fault, not a funded-to-zero account -- surface it rather than
+        # defaulting to 0 and blaming the user for "insufficient balance".
         raise QuipConnectionError(
-            f"could not read the free balance of {ss58_address(iface, account_id)} from "
+            f"could not read the {field} balance of {ss58_address(iface, account_id)} from "
             f"System.Account (got {value!r}); cannot verify funding"
         ) from exc
-    return free
 
 
 def query_fee(iface: Any, quip_signing: Any, wire: bytes) -> tuple[int, bool]:
@@ -428,6 +443,24 @@ def account_nonce(iface: Any, account_id: Any) -> int:
         raise QuipConnectionError(f"could not read the account nonce of {address}: {exc}") from exc
 
 
+def finalized_head(iface: Any) -> tuple[int, str]:
+    """Return the finalized head block as ``(number, hash)``.
+
+    Raises:
+        QuipConnectionError: if the head cannot be read.
+    """
+    try:
+        raw = iface.get_chain_finalised_head()
+        number = block_number(iface, raw) if raw else None
+    except QuipMetadataError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
+        raise QuipConnectionError(f"could not read the finalized head: {exc}") from exc
+    if number is None:
+        raise QuipConnectionError("the node returned no finalized head")
+    return number, _as_hex(raw)
+
+
 def block_number(iface: Any, block_hash: str) -> int:
     """Return the height of the block ``block_hash``.
 
@@ -445,17 +478,23 @@ def build_extrinsic(
     call_function: str,
     call_params: dict,
     nonce: int | None = None,
+    era: Any = None,
 ) -> tuple[bytes, str]:
     """Sign an extrinsic via :func:`xqsa.quip.signing.build_signed_extrinsic`: ``(wire, hash)``.
 
     ``nonce`` signs with that account nonce; ``None`` lets the signing layer
-    read the current one.
+    read the current one. ``era``, a :class:`~xqsa.quip.signing.MortalEra`,
+    signs it mortal; ``None`` signs it immortal.
 
     Raises:
         QuipSubmissionError: if assembly or signing fails.
+        QuipMetadataError: propagated unchanged; a runtime this client cannot
+            sign for is not a submission failure.
     """
     try:
-        return quip_signing.build_signed_extrinsic(iface, signer, call_module, call_function, call_params, nonce=nonce)
+        return quip_signing.build_signed_extrinsic(
+            iface, signer, call_module, call_function, call_params, nonce=nonce, era=era
+        )
     except quip_signing.QuipSigningError as exc:
         raise QuipSubmissionError(f"{call_module}.{call_function} could not be submitted: {exc}") from exc
 
@@ -534,28 +573,140 @@ def _unconfirmed(
     )
 
 
-def unconfirmed_error(ext_hash: str, block_hash: str | None, why: str) -> QuipUnconfirmedError:
-    """Build the :class:`QuipUnconfirmedError` for a sent ``propose_job`` whose outcome is unknown."""
-    return _unconfirmed(MEMPOOL_PALLET, PROPOSE_JOB_CALL, ext_hash, block_hash, why)
+def _proposed_order_id(events: list[tuple[int | None, object, object, object]], phase: int) -> int | None:
+    """Return the ``order_id`` of the ``JobProposed`` event in ``phase``, or ``None`` if there is none."""
+    for event_phase, module_id, event_id, attrs in events:
+        if (event_phase, module_id, event_id) == (phase, MEMPOOL_PALLET, JOB_PROPOSED_EVENT):
+            order_id = _order_id_from_attributes(attrs)
+            if order_id is not None:
+                return order_id
+    return None
 
 
-def read_proposed_order_id(iface: Any, block_hash: str | None) -> int:
-    """Extract the order id from the ``JobProposed`` event at ``block_hash``.
+class StatePruned(QuipConnectionError):
+    """The node has discarded the state of a past block; a node that keeps full state history can read it."""
+
+
+class GenesisMismatch(QuipConnectionError):
+    """The node serves a different chain from the one expected; another node at a correct endpoint can serve it."""
+
+
+def account_nonce_at(iface: Any, account_id: Any, block_hash: str) -> int:
+    """Return the account's nonce in the state of block ``block_hash``.
+
+    Unlike :func:`account_nonce`, this counts only transactions included up
+    to that block, never the node's pool.
 
     Raises:
-        QuipSubmissionError: if the block hash is missing or the block holds
-            no ``JobProposed`` event with a readable ``order_id``.
+        StatePruned: if the node has discarded that block's state.
+        QuipConnectionError: if the nonce cannot be read.
     """
-    if not block_hash:
-        raise QuipSubmissionError("propose_job was included but returned no block hash; cannot read the order id")
-    for _phase, module_id, event_id, attrs in _events(iface, block_hash):
-        if module_id != MEMPOOL_PALLET or event_id != JOB_PROPOSED_EVENT:
+    try:
+        value = getattr(iface.query("System", "Account", [account_id], block_hash=block_hash), "value", None)
+        return int(value["nonce"])
+    except QuipMetadataError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
+        error = StatePruned if _is_state_pruned(exc) else QuipConnectionError
+        raise error(f"could not read the account nonce at block {block_hash}: {exc}") from exc
+
+
+def first_block_past_nonce(iface: Any, account_id: Any, nonce: int, low: int, high: int) -> int:
+    """Return the first block from ``low`` to ``high`` whose state has the account's nonce past ``nonce``.
+
+    The nonce never decreases, so a binary search over historical state
+    finds it in about log2(high - low) reads. ``high`` must be such a block.
+
+    Raises:
+        QuipConnectionError: if a block hash or nonce cannot be read.
+    """
+    while low < high:
+        middle = (low + high) // 2
+        if account_nonce_at(iface, account_id, block_hash(iface, middle)) > nonce:
+            high = middle
+        else:
+            low = middle + 1
+    return low
+
+
+@dataclass(frozen=True)
+class Landed:
+    """A ``propose_job`` in a finalized block: its order id, or the chain's error when its dispatch failed."""
+
+    block_hash: str
+    block_number: int
+    order_id: int | None = None
+    error: str | None = None
+
+
+def settle_proposal(
+    iface: Any, account_id: Any, ext_hash: str, nonce: int, checkpoint: int, window_end: int
+) -> Landed | Literal["never", "pending"]:
+    """Say from finalized state what became of a sent ``propose_job``, signed mortal with ``nonce``.
+
+    Reads the account nonce at the finalized head. Past ``nonce``, the block
+    that spent it is found; if it holds ``ext_hash`` the result is read from
+    its events, and otherwise another transaction used the nonce, so the
+    proposal can never land: ``"never"``. Not past ``nonce`` with the
+    finalized head at ``window_end`` or later, the era has expired unspent:
+    ``"never"`` too. Otherwise it may still land: ``"pending"``.
+
+    Raises:
+        StatePruned: if the node has discarded a past block's state this
+            reads; retrying the same node cannot settle it.
+        QuipConnectionError: if a chain read fails; retrying may settle it.
+        QuipMetadataError: if the block that spent ``nonce`` has extrinsics
+            that do not decode, so ``ext_hash`` may be among them; or if it
+            holds ``ext_hash`` but its events cannot be read as a dispatch
+            result, or a successful dispatch emitted no ``JobProposed`` in
+            its phase: this client cannot read the runtime's blocks or events.
+    """
+    head_number, head_hash = finalized_head(iface)
+    if account_nonce_at(iface, account_id, head_hash) <= nonce:
+        return "never" if head_number >= window_end else "pending"
+    number = first_block_past_nonce(iface, account_id, nonce, checkpoint, head_number)
+    spent_in = block_hash(iface, number)
+    try:
+        block = iface.get_block(block_hash=spent_in, include_author=False, ignore_decoding_errors=True)
+    except QuipMetadataError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
+        raise QuipConnectionError(f"could not read block {spent_in}: {exc}") from exc
+    if block is None:
+        raise QuipConnectionError(f"the node did not return block {spent_in}")
+    index = _extrinsic_index(block, ext_hash)
+    if index is None:
+        # The block spent our nonce, so it holds a signed extrinsic; one that did not decode may be ours.
+        extrinsics = block.get("extrinsics") or []
+        if not extrinsics or any(ext is None for ext in extrinsics):
+            raise QuipMetadataError(
+                f"block {spent_in} spent nonce {nonce}, but not all of its extrinsics could be decoded, so "
+                f"whether it holds propose_job {ext_hash} is unknown"
+            )
+        return "never"
+    try:
+        events = list(_events(iface, spent_in))
+    except QuipMetadataError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
+        error = StatePruned if _is_state_pruned(exc) else QuipConnectionError
+        raise error(f"could not read the events of block {spent_in}: {exc}") from exc
+    for phase, module_id, event_id, attrs in events:
+        if (phase, module_id) != (index, "System"):
             continue
-        order_id = _order_id_from_attributes(attrs)
-        if order_id is not None:
-            return order_id
-    raise QuipSubmissionError(
-        f"propose_job was included in block {block_hash} but no {JOB_PROPOSED_EVENT} event with an order id was found"
+        if event_id == "ExtrinsicFailed":
+            return Landed(spent_in, number, error=f"System.ExtrinsicFailed: {_dispatch_error_text(iface, attrs)}")
+        if event_id == "ExtrinsicSuccess":
+            order_id = _proposed_order_id(events, index)
+            if order_id is None:
+                raise QuipMetadataError(
+                    f"propose_job {ext_hash} succeeded in block {spent_in} but no {JOB_PROPOSED_EVENT} event with "
+                    f"an order id was found in its phase {index}"
+                )
+            return Landed(spent_in, number, order_id=order_id)
+    raise QuipMetadataError(
+        f"block {spent_in} holds propose_job {ext_hash} at index {index}, but no System.ExtrinsicSuccess or "
+        "ExtrinsicFailed event in its phase could be read"
     )
 
 
@@ -807,6 +958,11 @@ def _is_storage_absent(exc: BaseException) -> bool:
     except Exception:  # noqa: BLE001 -- extra not installed / stubbed in tests.
         return False
     return isinstance(exc, StorageFunctionNotFound)
+
+
+def _is_state_pruned(exc: BaseException) -> bool:
+    """Whether ``exc`` is the node refusing a read of state it has pruned (Substrate's "State already discarded")."""
+    return "State already discarded" in str(exc)
 
 
 def _status_str(value: object) -> str:

@@ -47,7 +47,7 @@ problem.model.apply_implies((0, 1), (1, 0), penalty=50)
 `rows` and `cols` on `define_model` are what make the two one-hot forms
 legal. Omit them and every `apply_onehot_row`/`apply_onehot_col` call
 raises `InvalidGridDimensions` at run time --
-`xquad verify` cannot catch it, because grid extents are runtime values.
+`xquad vm check` cannot catch it, because grid extents are runtime values.
 The product `rows * cols` must also fit inside `size`; a grid cannot
 describe cells the model never declared. `atleast`, `atleastw` and
 `inequality` append slack variables past the grid and only ever grow

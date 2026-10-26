@@ -41,10 +41,12 @@ applies it before calling ``sign``.
 The extrinsic layout is adapted from ``quip.network/faucet`` and the
 ``quip-protocol`` miner's ``shared/substrate_client.py``; it carries the H4
 suite (sr25519 + FN-DSA-512) as published by ``quip-signer`` 0.3.x, and is
-validated by ``test_signing.py`` plus live submission. The
-signed-extension order in :data:`SIGNED_EXTENSIONS` is the one
-item only a live metadata check can confirm, so ``test_live.py`` asserts it
-against the chain's own metadata.
+validated by ``test_signing.py`` plus live submission. The signed-extension
+order is read from the node's runtime metadata at every signing, and
+:func:`check_runtime` holds the envelope and each extension's encoding to the
+chain's types, so a runtime this client cannot sign for fails as
+:class:`~xqsa.quip.errors.QuipMetadataError` rather than as a rejected
+signature.
 """
 
 from __future__ import annotations
@@ -54,14 +56,22 @@ import json
 import os
 import stat
 import tempfile
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import quip_signer
 
-from xqsa.quip.codec import _as_int_or_none, _event_ids, _extrinsic_index, _phase_extrinsic_index, _strip_0x
-from xqsa.quip.errors import QuipSigningError
+from xqsa.quip.codec import (
+    _as_int_or_none,
+    _dispatch_error_text,
+    _event_ids,
+    _extrinsic_index,
+    _phase_extrinsic_index,
+    _strip_0x,
+)
+from xqsa.quip.errors import QuipMetadataError, QuipSigningError
 
 if TYPE_CHECKING:
     from quip_signer import HybridSigner
@@ -74,18 +84,16 @@ MULTI_ADDRESS_ID = 0x00  # ``MultiAddress::Id`` discriminator (32-byte account i
 # encoded ``SignedPayload`` exceeds this many bytes (``using_encoded`` rule).
 SIGNED_PAYLOAD_HASH_THRESHOLD = 256
 
-# The runtime's signed extensions, in metadata order. Confirmed live against
-# aglais (``specVersion`` 117) and the outgoing testnet (116) on 2026-09-09.
-# ``EthSetOrigin`` (``pallet_revive::evm::tx_extension::SetOrigin``) is empty in
-# both the ``extra`` and ``additional`` halves, so it costs no wire bytes today,
-# but its position matters the moment a runtime gives it a payload.
-#
-# ``_extension_fields`` carries both halves per extension and
-# ``_signed_extensions`` concatenates each of them in this order, and
-# ``test_live.py::TestConnectivity::test_signed_extensions_match_chain``
-# asserts it against live metadata -- so the next insertion fails a test rather
-# than a submission.
-SIGNED_EXTENSIONS: tuple[str, ...] = (
+# The extrinsic envelope this client writes, as the runtime metadata names its
+# ``Address`` and ``Signature`` types; :func:`check_runtime` compares them.
+ADDRESS_TYPE_PATH = "sp_runtime::multiaddress::MultiAddress"
+SIGNATURE_TYPE_PATH = "quip_transaction_crypto::HybridTxSignature"
+
+# The signed extensions of the 0.4 runtimes, in their metadata order, served
+# only as the deprecated ``SIGNED_EXTENSIONS``. Nothing here reads it: the
+# order comes from the node's runtime metadata, and ``_extension_fields`` is
+# the table of how each extension encodes.
+_SIGNED_EXTENSIONS_0_4: tuple[str, ...] = (
     "AuthorizeCall",
     "CheckNonZeroSender",
     "CheckSpecVersion",
@@ -240,6 +248,46 @@ def load_or_generate_keystore(path: Path | str) -> Keystore:
 
 
 @dataclass(frozen=True)
+class MortalEra:
+    """A mortal transaction era: valid from block ``checkpoint`` for ``period`` blocks.
+
+    ``period`` is a power of two, at least 4; ``checkpoint_hash`` is the hash
+    of block ``checkpoint``, which the signature commits to, so a checkpoint
+    the chain does not hold fails as ``BadProof``. The extrinsic can be
+    included in blocks ``checkpoint`` to :attr:`last_block`; after that it can
+    never land.
+
+    Raises:
+        QuipSigningError: if ``period`` is not a power of two from 4 to 65536.
+    """
+
+    period: int
+    checkpoint: int
+    checkpoint_hash: str
+
+    def __post_init__(self) -> None:
+        if not 4 <= self.period <= 1 << 16 or self.period & (self.period - 1):
+            raise QuipSigningError(f"era period must be a power of two from 4 to 65536, got {self.period}")
+
+    @property
+    def last_block(self) -> int:
+        """The last block that can include the extrinsic."""
+        return self.checkpoint + self.period - 1
+
+    def encode(self) -> bytes:
+        """The SCALE ``Era::Mortal`` bytes: period and phase packed into a little-endian ``u16``."""
+        quantize = max(self.period >> 12, 1)
+        phase = self.checkpoint % self.period
+        trailing_zeros = (self.period & -self.period).bit_length() - 1
+        encoded = min(15, max(1, trailing_zeros - 1)) | ((phase // quantize) << 4)
+        return encoded.to_bytes(2, "little")
+
+
+# The mortal era :func:`check_runtime` encodes as a sample.
+_SAMPLE_ERA = MortalEra(64, 0, "0x" + "00" * 32)
+
+
+@dataclass(frozen=True)
 class ExtrinsicReceipt:
     """Outcome of submitting a hybrid-signed extrinsic.
 
@@ -265,6 +313,57 @@ class ExtrinsicReceipt:
         return self.error is not None and self.error.startswith(UNCLASSIFIED_PREFIX)
 
 
+def check_runtime(iface: Any) -> None:
+    """Check that this client can sign for the node's runtime, raising on the first difference.
+
+    Reads ``iface.metadata`` and ``iface.runtime_config``, so it checks the
+    runtime ``iface`` last loaded. The envelope must be extrinsic version 4
+    with a ``MultiAddress`` address whose ``Id`` variant is index 0 and a
+    ``HybridTxSignature`` signature. Every signed extension the metadata
+    lists must be one this client encodes, and each half it encodes must
+    decode exactly, every byte consumed, with the chain's type: sample values
+    are checked with an immortal and with a mortal era.
+
+    Raises:
+        QuipMetadataError: if the envelope or a signed extension differs from
+            what this client encodes. Upgrading xquad is the remedy; retrying
+            is not.
+    """
+    _check_envelope(iface)
+    for era in (None, _SAMPLE_ERA):
+        _signed_extensions(iface, nonce=0, spec_version=1, tx_version=1, genesis_bytes=bytes(32), era=era)
+
+
+def _check_envelope(iface: Any) -> None:
+    """Check the extrinsic envelope half of :func:`check_runtime`; raises :class:`QuipMetadataError`."""
+    try:
+        v14 = iface.metadata.value[1]["V14"]
+        extrinsic = v14["extrinsic"]
+        types = {entry["id"]: entry["type"] for entry in v14["types"]["types"]}
+        params = {param["name"]: types.get(param["type"]) or {} for param in types[extrinsic["ty"]]["params"]}
+        address, signature = params.get("Address", {}), params.get("Signature", {})
+        variants = address.get("def", {}).get("variant", {}).get("variants", [])
+        envelope = {
+            "extrinsic version": (extrinsic["version"], EXTRINSIC_VERSION_SIGNED & 0x7F),
+            "Address type": ("::".join(address.get("path", [])), ADDRESS_TYPE_PATH),
+            "MultiAddress::Id index": (
+                next((v["index"] for v in variants if v["name"] == "Id"), None),
+                MULTI_ADDRESS_ID,
+            ),
+            "Signature type": ("::".join(signature.get("path", [])), SIGNATURE_TYPE_PATH),
+        }
+    except (AttributeError, KeyError, IndexError, TypeError) as exc:
+        raise QuipMetadataError(
+            f"cannot read the extrinsic envelope from the node's runtime metadata: {exc!r}"
+        ) from exc
+    for what, (found, expected) in envelope.items():
+        if found != expected:
+            raise QuipMetadataError(
+                f"the node's runtime has {what} {found!r} where this client encodes {expected!r}; "
+                "upgrade xquad to sign for this runtime"
+            )
+
+
 def build_signed_extrinsic(
     iface: Any,
     signer: HybridSigner,
@@ -272,10 +371,12 @@ def build_signed_extrinsic(
     call_function: str,
     call_params: dict,
     nonce: int | None = None,
+    era: MortalEra | None = None,
 ) -> tuple[bytes, str]:
     """Assemble a hybrid-signed v4 extrinsic, returning ``(wire_bytes, ext_hash)``.
 
     ``nonce`` signs with that account nonce; ``None`` reads the current one.
+    ``era`` signs it mortal; ``None`` signs it immortal.
 
     ``iface`` is a connected ``substrate-interface`` ``SubstrateInterface`` used
     only for ``compose_call`` and read-only chain state (nonce, genesis hash,
@@ -291,7 +392,13 @@ def build_signed_extrinsic(
     ``quip_signer.verify_envelope`` before returning, so a wrong payload or
     identity is caught locally rather than as an opaque on-chain rejection.
 
+    Right after ``compose_call``, which loads the metadata at the head, the
+    envelope is checked as :func:`check_runtime` checks it, and the real
+    extension bytes are decoded against the chain's types, so the metadata,
+    the call and the runtime version all describe one runtime.
+
     Raises:
+        QuipMetadataError: if this client cannot sign for the node's runtime.
         QuipSigningError: if the envelope fails its local verification.
     """
     # Imported here rather than at module scope to keep this module free of a
@@ -301,6 +408,8 @@ def build_signed_extrinsic(
     from substrateinterface.utils.hasher import blake2_256
 
     call_bytes = _compose_call_bytes(iface, call_module, call_function, call_params)
+    # The extensions are checked below on the real values, so only the envelope here.
+    _check_envelope(iface)
 
     account = signer.account_id
     # Enforce the documented wire invariants before splicing identity material
@@ -318,10 +427,12 @@ def build_signed_extrinsic(
     tx_version = int(runtime_version["transactionVersion"])
 
     extra, additional = _signed_extensions(
+        iface,
         nonce=nonce,
         spec_version=spec_version,
         tx_version=tx_version,
         genesis_bytes=genesis_bytes,
+        era=era,
     )
 
     payload = call_bytes + extra + additional
@@ -592,19 +703,22 @@ def _extension_fields(
     tx_version: int,
     genesis_bytes: bytes,
     tip: int = 0,
+    era: MortalEra | None = None,
 ) -> dict[str, tuple[bytes, bytes]]:
     """Return each signed extension's ``(extra, additional)`` contribution.
 
-    One entry per extension, keyed by the identifier the runtime metadata uses,
-    in :data:`SIGNED_EXTENSIONS` order. Most extensions contribute nothing to
-    either half (``AuthorizeCall``, ``CheckNonZeroSender``, ``CheckWeight``,
+    ``CheckMortality`` is ``Era::Immortal`` against the genesis hash, or with
+    ``era`` the mortal era against its checkpoint's hash.
+
+    One entry per extension this client can encode, keyed by the identifier
+    the runtime metadata uses. Most extensions contribute nothing to either
+    half (``AuthorizeCall``, ``CheckNonZeroSender``, ``CheckWeight``,
     ``EthSetOrigin``, ``WeightReclaim``).
 
     One table rather than two parallel ones: the halves are what the runtime
     defines together, and splitting them let a name be added to one and missed
-    in the other. ``test_signing.py`` asserts this table's keys against
-    :data:`SIGNED_EXTENSIONS`, and ``test_live.py`` asserts the empty
-    entries really encode nothing on-chain.
+    in the other. :func:`check_runtime` holds every entry the runtime lists to
+    the chain's type for it.
     """
     return {
         "AuthorizeCall": (b"", b""),
@@ -612,7 +726,11 @@ def _extension_fields(
         "CheckSpecVersion": (b"", spec_version.to_bytes(4, "little")),
         "CheckTxVersion": (b"", tx_version.to_bytes(4, "little")),
         "CheckGenesis": (b"", genesis_bytes),
-        "CheckMortality": (b"\x00", genesis_bytes),  # Era::Immortal -> genesis hash
+        "CheckMortality": (
+            (b"\x00", genesis_bytes)  # Era::Immortal -> genesis hash
+            if era is None
+            else (era.encode(), bytes.fromhex(_strip_0x(era.checkpoint_hash)))
+        ),
         "CheckNonce": (encode_compact_u32(nonce), b""),
         "CheckWeight": (b"", b""),
         "ChargeTransactionPayment": (encode_compact_u128(tip), b""),
@@ -623,30 +741,57 @@ def _extension_fields(
 
 
 def _signed_extensions(
+    iface: Any,
     *,
     nonce: int,
     spec_version: int,
     tx_version: int,
     genesis_bytes: bytes,
     tip: int = 0,
+    era: MortalEra | None = None,
 ) -> tuple[bytes, bytes]:
-    """Return the ``(extra, additional)`` signed-extension blobs in metadata order.
+    """Return the ``(extra, additional)`` signed-extension blobs in the runtime's metadata order.
 
-    Both halves are concatenated from :func:`_extension_fields` in
-    :data:`SIGNED_EXTENSIONS` order, so the declared order, the two encoded
-    orders, and the set of extensions cannot drift apart.
+    Both halves are concatenated from :func:`_extension_fields` in the order
+    ``iface.metadata`` lists the extensions, and each half is decoded with the
+    chain's type for it first, so a blob the runtime would read differently is
+    never signed.
+
+    Raises:
+        QuipMetadataError: if the runtime lists an extension this client
+            cannot encode, or a half does not decode exactly with its type.
     """
+    # Imported here for the reason given in build_signed_extrinsic.
+    from scalecodec.base import ScaleBytes
+
     fields = _extension_fields(
         nonce=nonce,
         spec_version=spec_version,
         tx_version=tx_version,
         genesis_bytes=genesis_bytes,
         tip=tip,
+        era=era,
     )
-    return (
-        b"".join(fields[name][0] for name in SIGNED_EXTENSIONS),
-        b"".join(fields[name][1] for name in SIGNED_EXTENSIONS),
-    )
+    extra, additional = [], []
+    for name, chain_types in iface.metadata.get_signed_extensions().items():
+        if name not in fields:
+            raise QuipMetadataError(
+                f"this client cannot encode signed extension {name}, which the node's runtime lists; "
+                "upgrade xquad to sign for this runtime"
+            )
+        for half, type_key, blob, out in zip(
+            ("extra", "additional"), ("extrinsic", "additional_signed"), fields[name], (extra, additional), strict=True
+        ):
+            type_string = chain_types[type_key]
+            try:
+                iface.runtime_config.create_scale_object(type_string, data=ScaleBytes(blob)).decode()
+            except Exception as exc:  # noqa: BLE001 -- any decode failure means the chain's type moved.
+                raise QuipMetadataError(
+                    f"signed extension {name}.{half} no longer has the shape this client encodes "
+                    f"(the chain's type is {type_string}): {exc}; upgrade xquad to sign for this runtime"
+                ) from exc
+            out.append(blob)
+    return b"".join(extra), b"".join(additional)
 
 
 def _compose_call_bytes(iface: Any, call_module: str, call_function: str, call_params: dict) -> bytes:
@@ -661,40 +806,6 @@ def _compose_call_bytes(iface: Any, call_module: str, call_function: str, call_p
     if isinstance(raw, str):
         return bytes.fromhex(_strip_0x(raw))
     return bytes(raw)
-
-
-def _dispatch_error_text(iface: Any, attrs: Any) -> str:
-    """Name the ``DispatchError`` in ``ExtrinsicFailed`` attributes, or return them as ``repr`` if it cannot be named.
-
-    A module error arrives as pallet and error indices (``{'index': 9,
-    'error': '0x06000000'}``, the error index in the first byte), so it is
-    looked up in the runtime metadata: ``QuantumComputeMempool.NotEligibleSolver``
-    with its doc line. Any other variant (``BadOrigin``, ``Token``, ...) is
-    rendered as its name and value. The attributes arrive as a dict, or, on
-    builds that decode them positionally, as ``[dispatch_error, dispatch_info]``.
-    """
-    if isinstance(attrs, dict):
-        error = attrs.get("dispatch_error")
-    else:
-        error = attrs[0] if isinstance(attrs, (list, tuple)) and attrs else None
-    if isinstance(error, str):
-        return error
-    if not isinstance(error, dict) or len(error) != 1:
-        return repr(attrs)
-    [(variant, value)] = error.items()
-    if variant != "Module":
-        return f"{variant}: {value}" if value is not None else variant
-    try:
-        # Older builds decode the indices as a tuple.
-        module_index, error_index = value[:2] if isinstance(value, tuple) else (value["index"], value["error"])
-        if isinstance(error_index, str):
-            error_index = bytes.fromhex(_strip_0x(error_index))[0]
-        pallet = iface.metadata.get_pallet_by_index(int(module_index)).name
-        entry = iface.metadata.get_module_error(module_index=int(module_index), error_index=int(error_index))
-        name, docs = entry.name, " ".join(entry.docs).strip()
-    except Exception:  # noqa: BLE001 -- an unnamed error still reads as the raw value, never hides it.
-        return repr(attrs)
-    return f"{pallet}.{name}" + (f" ({docs})" if docs else "")
 
 
 def _fetch_dispatch_error(iface: Any, *, block_hash: str, ext_hash: str) -> str | None:
@@ -836,8 +947,6 @@ def _warn_if_world_readable(path: Path) -> None:
     """Emit a warning if ``path`` is group/world accessible (seed exposure)."""
     mode = path.stat().st_mode
     if mode & (stat.S_IRWXG | stat.S_IRWXO):
-        import warnings
-
         warnings.warn(
             f"keystore {path} has group/world-accessible permissions "
             f"({stat.S_IMODE(mode):o}); tighten to {KEYSTORE_FILE_MODE:o}",
@@ -845,11 +954,29 @@ def _warn_if_world_readable(path: Path) -> None:
         )
 
 
+def __getattr__(name: str) -> object:
+    """Serve the deprecated ``SIGNED_EXTENSIONS`` (PEP 562), warning at the caller's line.
+
+    QUI-1608 removes it in v0.5.0.
+    """
+    if name != "SIGNED_EXTENSIONS":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    warnings.warn(
+        "xqsa.quip.signing.SIGNED_EXTENSIONS is deprecated since v0.4.5 and removed in v0.5.0; "
+        "the order comes from the runtime metadata",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _SIGNED_EXTENSIONS_0_4
+
+
 __all__ = [
     "ExtrinsicReceipt",
     "Keystore",
+    "MortalEra",
     "QuipSigningError",
     "build_signed_extrinsic",
+    "check_runtime",
     "encode_compact_u128",
     "encode_compact_u32",
     "generate_keystore",

@@ -20,8 +20,9 @@
 //! Exposes:
 //!
 //! - `Vm` -- the interpreter. Construct, `set_calldata(list)`,
-//!   `set_output_slots(n)`, `run(bytecode)`, then read `outputs()` /
-//!   `stack()`. A fault raises the `XqvmError` subclass named for it.
+//!   `set_output_slots(n)`, `run(bytecode, trace=None, trace_file=None)`,
+//!   then read `outputs()` / `stack()`. A fault raises the `XqvmError`
+//!   subclass named for it.
 //! - `Domain` -- a variable domain: `Domain.BINARY`, `Domain.SPIN`, or
 //!   `Domain.integer(k)`.
 //! - `XqmxModel` -- a quadratic (QUBO/Ising/integer) optimisation model,
@@ -36,15 +37,27 @@
 //! (mapped to `RegVal::VecInt`), an `XqmxModel`, an `XqmxSample`, or
 //! `None`. `outputs()` mirrors the inverse dispatch.
 
+use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::{BufWriter, Write};
+use std::path::PathBuf;
 
-use pyo3::exceptions::{PyMemoryError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyMemoryError, PyOSError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 
-use xqvm::{Domain, Program, RegVal, Vm, XqmxModel, XqmxSample};
+use xqvm::{Domain, JsonTracer, Program, RegVal, TextTracer, Vm, XqmxModel, XqmxSample};
 
 use crate::fault;
+
+/// Trace output format accepted by `Vm.run(trace=...)`.
+#[derive(Clone, Copy)]
+enum TraceFormat {
+    /// Human-readable aligned columns.
+    Text,
+    /// One JSON object per line (JSONL).
+    Json,
+}
 
 /// Python wrapper around [`xqvm::Domain`].
 ///
@@ -597,15 +610,59 @@ impl PyVm {
 
     /// Execute `bytecode` (raw wire-format bytes) on this VM.
     ///
+    /// `trace` is `None` (no trace), `"text"` (aligned columns) or `"json"`
+    /// (one JSON object per step). The trace goes to `trace_file` when given,
+    /// otherwise to the process's stderr (fd 2, not `sys.stderr`). The Rust
+    /// tracers write it directly, so a long run never buffers its trace in
+    /// Python. The GIL is released while the program runs.
+    ///
     /// # Errors
     ///
+    /// Raises `ValueError` for an unknown `trace` format or a `trace_file`
+    /// without `trace`, and `OSError` when `trace_file` cannot be created.
     /// Raises the `XqvmError` subclass named for the fault on any execution
     /// failure (`StackUnderflow`, `ArithmeticOverflow`, `TypeMismatch`,
     /// `StepLimitExceeded`, ...), with the fault's description as its
     /// message. Raises `RuntimeError` when `bytecode` does not decode.
-    fn run(&mut self, bytecode: &[u8]) -> PyResult<()> {
+    #[pyo3(signature = (bytecode, trace = None, trace_file = None))]
+    fn run(
+        &mut self,
+        py: Python<'_>,
+        bytecode: &[u8],
+        trace: Option<&str>,
+        trace_file: Option<PathBuf>,
+    ) -> PyResult<()> {
+        let format = match (trace, &trace_file) {
+            (None, None) => None,
+            (None, Some(_)) => {
+                return Err(PyValueError::new_err("trace_file requires trace"));
+            }
+            (Some("text"), _) => Some(TraceFormat::Text),
+            (Some("json"), _) => Some(TraceFormat::Json),
+            (Some(other), _) => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown trace format {other:?}; expected \"text\" or \"json\""
+                )));
+            }
+        };
         let program = Program::decode(bytecode).map_err(|e| fault::decode_error(&e))?;
-        self.inner.run(&program).map_err(|e| fault::vm_error(&e))
+        let vm = &mut self.inner;
+        let result = match format {
+            None => py.detach(|| vm.run(&program)),
+            Some(format) => {
+                let writer: Box<dyn Write + Send> = match trace_file {
+                    Some(path) => Box::new(BufWriter::new(File::create(&path).map_err(|e| {
+                        PyOSError::new_err(format!("failed to create '{}': {e}", path.display()))
+                    })?)),
+                    None => Box::new(BufWriter::new(std::io::stderr())),
+                };
+                py.detach(|| match format {
+                    TraceFormat::Text => vm.run_trace(&mut TextTracer::new(writer), &program),
+                    TraceFormat::Json => vm.run_trace(&mut JsonTracer::new(writer), &program),
+                })
+            }
+        };
+        result.map_err(|e| fault::vm_error(&e))
     }
 
     /// Return the current output slots as a `list` of typed Python
@@ -617,6 +674,16 @@ impl PyVm {
             list.append(regval_to_py(py, rv)?)?;
         }
         Ok(list)
+    }
+
+    /// Return the current output slots as Rust's `{:?}` form of each
+    /// `RegVal` (`Int(42)`, `VecXqmx([])`, ...), or `None` for unset slots.
+    fn outputs_debug(&self) -> Vec<Option<String>> {
+        self.inner
+            .outputs()
+            .iter()
+            .map(|rv| (!matches!(rv, RegVal::Unset)).then(|| format!("{rv:?}")))
+            .collect()
     }
 
     /// Return the residual stack as `list[int]` (bottom to top).

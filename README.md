@@ -10,7 +10,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 XQuad is a hardware-agnostic toolchain for expressing and running quadratic
 optimization problems (QUBO / Ising / integer) across quantum annealers and
-classical solvers. It ships as three Rust crates plus four Python distributions
+classical solvers. It ships as two Rust crates plus four Python distributions
 built around a single virtual-machine specification.
 
 Think of it as **LLVM for quadratic models** -- a common intermediate
@@ -30,21 +30,27 @@ supported backend.
 
 ## Install
 
-### Rust (from crates.io)
-
-```sh
-cargo install xqcli           # gives you the `xquad` binary
-```
-
 ### Python (from PyPI)
 
+Install XQuad into a project environment first: a virtual environment, or a `uv` project.
+
 ```sh
-pip install xquad             # umbrella -- full pipeline
-# or pick individual pieces:
-pip install xqffi xqcp xqsa   # FFI bindings + DSL + solvers
+python -m venv .venv && source .venv/bin/activate
+pip install xquad
+# or, in a uv project:
+uv add xquad
 ```
 
-Prebuilt wheels are available for Linux x86_64 and aarch64 (CPython >= 3.13). On macOS and Windows, pip builds the `xqffi` Rust extension from source -- this requires a [Rust toolchain](https://rustup.rs/) (>= 1.85).
+For the `xquad` command alone, outside any project, install it as a `uv` tool, with the `quip` extra for the `xquad quip` commands:
+
+```sh
+uv tool install xquad            # the xquad command
+uv tool install 'xquad[quip]'    # with the xquad quip commands
+```
+
+On macOS, a user install (`pip install --user`, or pip falling back to one) puts the `xquad` command in `~/Library/Python/3.x/bin`, which is not on `PATH`; `python -m xquad` runs the same command without it.
+
+The `xquad` package is the umbrella: the full pipeline and the `xquad` command. To pick individual pieces instead, install `xqffi`, `xqcp` and `xqsa` (FFI bindings, DSL, solvers). Prebuilt wheels are available for Linux x86_64 and aarch64 (CPython >= 3.13). On macOS and Windows, pip builds the `xqffi` Rust extension from source -- this requires a [Rust toolchain](https://rustup.rs/) (>= 1.85).
 
 ### GPU/QPU support
 
@@ -52,12 +58,12 @@ The base install includes CPU simulated annealing only. To use GPU or quantum ha
 
 | Solver | Install | Prerequisite |
 |--------|---------|-------------|
-| NVIDIA CUDA GPU (`cuda`) | `pip install xquad[cuda]` | CUDA 12.x driver + NVIDIA GPU |
-| Apple Metal GPU (`metal`) | `pip install xquad[metal]` | Apple Silicon Mac with a Metal device |
-| D-Wave Advantage QPU (`dwave`) | `pip install xquad[dwave]` | D-Wave Leap account + API token |
-| Quip Network solver (`quip`) | `pip install xquad[quip]` | `QUIP_RPC_URL` + a configured signer |
+| NVIDIA CUDA GPU (`cuda`) | `pip install 'xquad[cuda]'` | CUDA 12.x driver + NVIDIA GPU |
+| Apple Metal GPU (`metal`) | `pip install 'xquad[metal]'` | Apple Silicon Mac with a Metal device |
+| D-Wave Advantage QPU (`dwave`) | `pip install 'xquad[dwave]'` | D-Wave Leap account + API token |
+| Quip Network solver (`quip`) | `pip install 'xquad[quip]'` | `QUIP_RPC_URL` + a configured signer |
 
-Extras are composable: `pip install xquad[cuda,dwave]`. See [`xqsa/README.md`](xqsa/README.md#install) for driver prerequisites and per-solver quick-starts.
+Extras are composable: `pip install 'xquad[cuda,dwave]'`. See [`xqsa/README.md`](xqsa/README.md#install) for driver prerequisites and per-solver quick-starts.
 
 For a guided walkthrough that installs XQuad, verifies it, and runs a
 complete problem end to end, see
@@ -65,13 +71,12 @@ complete problem end to end, see
 
 ## Package map
 
-Three Rust crates on **crates.io**:
+Two Rust crates on **crates.io**:
 
-| Crate | Binary | Description |
-|---|---|---|
-| [`xqvm`](xqvm/) | none | X-Quadratic Virtual Machine interpreter, bytecode codec, opcode table (`no_std + alloc`) |
-| [`xqasm`](xqasm/) | none | `.xqasm` text-format assembler |
-| [`xqcli`](xqcli/) | `xquad` | Unified CLI -- `xquad asm` / `dism` / `run` / `verify` |
+| Crate | Description |
+|---|---|
+| [`xqvm`](xqvm/) | X-Quadratic Virtual Machine interpreter, bytecode codec, opcode table (`no_std + alloc`) |
+| [`xqasm`](xqasm/) | `.xqasm` text-format assembler |
 
 Four Python distributions on **PyPI**:
 
@@ -80,7 +85,7 @@ Four Python distributions on **PyPI**:
 | [`xqffi`](xqffi/) | PyO3 FFI bindings for `xqvm` + `xqasm` (`xqffi.vm`, `xqffi.asm`, `xqffi.verifier`) |
 | [`xqcp`](xqcp/) | Constraint-programming DSL that compiles to `.xqasm` |
 | [`xqsa`](xqsa/) | Solver adapters -- CPU/GPU annealers, D-Wave QPU, Quip network |
-| [`xquad`](xquad/) | Umbrella meta-package with interactive `Program` / `Session` / `RunResult` API |
+| [`xquad`](xquad/) | Umbrella meta-package with interactive `Program` / `Session` / `RunResult` API, and the `xquad` CLI (`xquad vm asm` / `dis` / `run` / `check`) |
 
 The one Rust package without a crates.io artefact is the `xqffi` pyo3
 crate itself -- it ships as the `xqffi` PyPI wheel rather than a reusable
@@ -99,7 +104,7 @@ HALT
 ```
 
 ```sh
-xquad asm add.xqasm -o add.xqb && xquad run add.xqb
+xquad vm asm add.xqasm -o add.xqb && xquad vm run add.xqb
 ```
 
 ### End-to-end (Python, via the umbrella)
@@ -210,7 +215,7 @@ This syncs the Python workspace (`xqcp`, `xqsa`, `xqffi`, `xquad`) into
 `.venv/`, builds the `xqffi` pyo3 extension via maturin,
 puts the repo root on `sys.path` so scripts anywhere in the repo can
 `import xqcp` / `xqsa` / `xqffi` / `xquad` naturally, and
-installs the `xquad` CLI binary under `~/.cargo/bin/`.
+installs the `xquad` command into `.venv/bin/`, run with `uv run xquad`.
 
 Open a REPL with everything ready:
 

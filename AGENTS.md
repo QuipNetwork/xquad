@@ -14,8 +14,8 @@ for anyone who does not have one.
 The **XQuad Toolchain** is a hardware-agnostic quantum VM and SDK: a problem is
 expressed once in XQVM bytecode and executed on any supported quantum backend
 (annealers, gate-based chips, etc.). Think LLVM for quantum computing. The codebase
-is dual-language: a Rust core (VM, assembler, bytecode, CLI) with Python interfaces
-(constraint programming DSL, solver adapters, FFI bindings).
+is dual-language: a Rust core (VM, assembler, bytecode) with Python interfaces
+(constraint programming DSL, solver adapters, FFI bindings, the `xquad` CLI).
 
 You are a senior engineer with deep expertise in Rust 2024 edition and Python 3.13+,
 specializing in compiler engineering, systems programming, and high-performance
@@ -27,7 +27,7 @@ cross-language correctness.
 ```sh
 # Full suite (what CI runs)
 make all              # fmt + lint + test (Rust + Python)
-make xquad            # bootstrap local dev: Python venv + install xquad CLI
+make xquad            # bootstrap local dev: Python venv, including the xquad CLI
 make install-hooks    # point git at .githooks/ pre-commit hook
 
 # Preflight (run locally exactly what CI enforces; N/A a language you didn't touch)
@@ -276,7 +276,6 @@ After modifying files, run `make fmt` to format everything, or the per-file equi
 | --- | --- | --- |
 | `xqvm` | `xqvm/` | Bytecode definitions, opcode table, instruction types, builder, codec, stream reader, VM interpreter, disassembler |
 | `xqasm` | `xqasm/` | Text assembler: pest parser -> AST -> bytecode |
-| `xqcli` | `xqcli/` | CLI binary (`xquad`): asm, dism, run, verify subcommands |
 | `xqffi` | `xqffi/` | PyO3 bindings exposing xqasm + xqvm to Python |
 
 #### Key Patterns
@@ -310,7 +309,7 @@ Control flow, stack/register I/O, arithmetic (including `SQR`, `ABS`, `INC`, `DE
 | `xqcp` | `xqcp/` | High-level constraint programming DSL compiling to XQVM assembly |
 | `xqsa` | `xqsa/` | Solver adapters for XQMX models (dwave-samplers; pluggable solver interface) |
 | `xqffi` | `xqffi/` | PyO3 FFI bindings (maturin-built); also a Rust crate |
-| `xquad` | `xquad/` | Umbrella meta-package re-exporting xqffi, xqcp, xqsa under unified namespace |
+| `xquad` | `xquad/` | Umbrella meta-package aliasing xqffi, xqcp, xqsa under one namespace; the `xquad` CLI (`xquad vm` asm, dis, run, check) |
 
 ### Testing
 

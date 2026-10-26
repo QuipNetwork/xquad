@@ -67,7 +67,7 @@ linked below for the full field layout.
 - [Normative VM spec](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/SPEC.md)
 - [Bytecode encoding spec](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/ENCODING.md)
 - [`xqasm`](https://gitlab.com/quip.network/xquad/-/tree/main/xqasm) -- text assembler that emits `xqvm::Program`
-- [`xqcli`](https://gitlab.com/quip.network/xquad/-/tree/main/xqcli) -- the `xquad` CLI, built on this crate
+- [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) -- the Python umbrella and the `xquad` CLI (`xquad vm asm|dis|run|check`), built on this crate through `xqffi`
 - [Repository](https://gitlab.com/quip.network/xquad)
 
 ## License

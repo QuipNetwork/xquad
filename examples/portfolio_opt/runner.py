@@ -40,8 +40,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Domain, Problem, Types
-from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
+from xquad import cp, sa
 from xquad.types import XqmxModel
 from xquad.vm import VM
 
@@ -54,7 +53,7 @@ def build_problem(
     returns: list[int],
     budget: int,
     risk_terms: list[tuple[int, int, int, int]],
-) -> Problem:
+) -> cp.Problem:
     """Construct a Portfolio Optimization QUBO via REDUCE + EQUALITY.
 
     Decision variables x_i in {0,1}: x_i=1 if asset i is selected.
@@ -66,15 +65,15 @@ def build_problem(
     Budget constraint uses EQUALITY with uniform-coefficient index/coeff vecs.
     Risk terms are passed as a flat vec of stride 4: [i, j, k, sigma, ...].
     """
-    problem = Problem("PortfolioOpt")
+    problem = cp.Problem("PortfolioOpt")
 
-    num_assets = problem.input("num_assets", type=Types.Int)
-    returns_in = problem.input("returns", type=Types.Vec)
-    budget_in = problem.input("budget", type=Types.Int)
-    num_risk = problem.input("num_risk", type=Types.Int)
-    risk_in = problem.input("risk", type=Types.Vec)
+    num_assets = problem.input("num_assets", type=cp.Types.Int)
+    returns_in = problem.input("returns", type=cp.Types.Vec)
+    budget_in = problem.input("budget", type=cp.Types.Int)
+    num_risk = problem.input("num_risk", type=cp.Types.Int)
+    risk_in = problem.input("risk", type=cp.Types.Vec)
 
-    problem.define_model(size=num_assets, domain=Domain.BINARY)
+    problem.define_model(size=num_assets, domain=cp.Domain.BINARY)
 
     # Return objective: minimise -sum(r_i * x_i)
     with problem.range(0, num_assets) as i:
@@ -101,7 +100,7 @@ def build_problem(
     problem.model.apply_equality(indices, coeffs, budget_in, 200)
 
     # Output: portfolio selection
-    portfolio = problem.output("portfolio", type=Types.Vec)
+    portfolio = problem.output("portfolio", type=cp.Types.Vec)
     with problem.range(0, num_assets) as i:
         portfolio.append(problem.sample.getline(i))
 
@@ -133,7 +132,7 @@ def run(
     assert isinstance(model, XqmxModel)
 
     try:
-        solver = build_solver(solver_name, seed=seed)
+        solver = sa.build_solver(solver_name, seed=seed)
         sample = solver.solve(model).sample
     except (ImportError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -163,8 +162,8 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     parser.add_argument(
         "--solver",
-        choices=sorted(SOLVERS),
-        default=DEFAULT_SOLVER,
+        choices=sorted(sa.SOLVERS),
+        default=sa.DEFAULT_SOLVER,
         help="XQSA solver backend to sample the model with",
     )
     parser.add_argument(

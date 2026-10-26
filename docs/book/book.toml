@@ -47,3 +47,13 @@ preferred-dark-theme = "coal"
 # since QUI-1272. docs.quip.network now only redirects here (QUI-1331).
 site-url = "/docs/xquad/"
 theme    = "theme"
+
+# The CLI left XQVM Reference for its own part in v0.4.5. Each old page
+# redirects to its new home so published links keep working. Targets are
+# relative to the old page, because the site is served under `/docs/xquad/`.
+[output.html.redirect]
+"/xqvm/cli/index.html" = "../../cli/vm/index.html"
+"/xqvm/cli/asm.html"   = "../../cli/vm/asm.html"
+"/xqvm/cli/dis.html"   = "../../cli/vm/dis.html"
+"/xqvm/cli/run.html"   = "../../cli/vm/run.html"
+"/xqvm/cli/check.html" = "../../cli/vm/check.html"

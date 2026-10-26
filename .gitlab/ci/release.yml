@@ -6,7 +6,7 @@
 #   release:validate  runs on every pipeline (no `rules:` at all), and
 #                      validates crate packaging plus the four Python
 #                      distributions before anything is published.
-#   release:crates     tag only -- publishes xqvm, xqasm, xqcli to
+#   release:crates     tag only -- publishes xqvm and xqasm to
 #                      crates.io in dependency order.
 #   release:pypi       tag only -- publishes the four PyPI
 #                      distributions, umbrella package last.
@@ -34,7 +34,7 @@
 # CI/CD -> Variables; masked + protected):
 #
 #   CARGO_REGISTRY_TOKEN  crates.io API token for ops@postquant.xyz
-#                         scoped to xqvm + xqasm + xqcli (publish-new
+#                         scoped to xqvm + xqasm (publish-new
 #                         + publish-update).
 #
 # PyPI publishing uses Trusted Publishing (OIDC) -- no long-lived
@@ -198,10 +198,10 @@ release:validate:
     # as cold-cache room for exactly ONE of the two legs (crate publish
     # dry-run, Python dist build). This job runs both legs serially, and
     # the crate leg grew from a single-crate `cargo publish --dry-run -p
-    # xqvm` to `--workspace` (three crates, all at full verify strength,
-    # in target/package/, sharing no compilation with the maturin build
-    # in the same job). 20m + 20m of pre-existing per-leg cold-cache
-    # budget does not cover a tripled crate leg, and this runner fleet
+    # xqvm` to `--workspace` (three crates when this was sized, two now,
+    # all at full verify strength, in target/package/, sharing no
+    # compilation with the maturin build in the same job). 20m + 20m of pre-existing per-leg cold-cache
+    # budget did not cover a tripled crate leg, and this runner fleet
     # has no shared cache server, so cold is a normal outcome. Per
     # setup.yml's "Job timeouts" section, a timeout exists to kill a job
     # that will never finish, not to police one that is merely slow, so
@@ -243,14 +243,13 @@ release:validate:
         # only place a dead GLAB_URL can surface before it costs a tag.
         - curl -fsSL --retry 3 --retry-all-errors -r 0-0 -o /dev/null "${GLAB_URL}"
 
-# Publish the three Rust crates to crates.io in topological dependency
-# order: xqvm (no deps) -> xqasm (depends on xqvm) -> xqcli (depends on
-# both). The `xqffi` crate keeps `publish = false` -- it's a pyo3
+# Publish the two Rust crates to crates.io in topological dependency
+# order: xqvm (no deps) -> xqasm (depends on xqvm). The `xqffi` crate keeps `publish = false` -- it's a pyo3
 # cdylib consumed via the PyPI wheel, not a crates.io dependency.
 #
-# Three sequential `cargo publish -p` calls, not one `cargo publish
+# Sequential `cargo publish -p` calls, not one `cargo publish
 # --workspace`: cargo hard-fails on an already-published version and
-# has no `--skip-existing`, so a merged job publishing all three crates
+# has no `--skip-existing`, so a merged job publishing both crates
 # and then dying during the wheel upload could not be safely re-run --
 # the retry would fail at the first `cargo publish` and never reach the
 # wheels. Keeping release:crates and release:pypi as separate jobs is
@@ -268,7 +267,6 @@ release:crates:
         - cargo --version
         - cargo publish --locked -p xqvm --token "${CARGO_REGISTRY_TOKEN}"
         - cargo publish --locked -p xqasm --token "${CARGO_REGISTRY_TOKEN}"
-        - cargo publish --locked -p xqcli --token "${CARGO_REGISTRY_TOKEN}"
 
 # Publish the Python distributions to PyPI. Order matters: xquad is
 # the umbrella meta-package and depends on the peers, so it must land

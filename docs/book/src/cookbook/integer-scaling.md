@@ -69,7 +69,7 @@ selection=[1, 1, 1, 0] total_weight=7.5 total_value=34.35 capacity_ok=True energ
 
 `7.5` and `34.35` are exact -- not rounded back, computed by an integer
 sum divided by `20` with no remainder, since `20` was chosen to be exact
-for every input. `xquad verify` accepts the compiled encoder (43
+for every input. `xquad vm check` accepts the compiled encoder (43
 instructions), and the same selection, `{0, 1, 2}`, comes back
 identically across five different solver seeds.
 

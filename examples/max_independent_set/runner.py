@@ -36,13 +36,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Domain, Problem, Types
-from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
+from xquad import cp, sa
 from xquad.types import XqmxModel
 from xquad.vm import VM
 
 
-def build_problem(n: int, edges: list[tuple[int, int]]) -> Problem:
+def build_problem(n: int, edges: list[tuple[int, int]]) -> cp.Problem:
     """Construct a Max Independent Set QUBO via SLACK + EQUALITY per edge.
 
     Decision variables x_i in {0,1}: x_i=1 means node i is in the set.
@@ -54,13 +53,13 @@ def build_problem(n: int, edges: list[tuple[int, int]]) -> Problem:
     x_i + x_j + s = 1 becomes the equality.  EQUALITY adds penalty
     P*(x_i + x_j + s - 1)^2.
     """
-    problem = Problem("MaxIndependentSet")
+    problem = cp.Problem("MaxIndependentSet")
 
-    num_nodes = problem.input("num_nodes", type=Types.Int)
-    num_edges = problem.input("num_edges", type=Types.Int)
-    edges_in = problem.input("edges", type=Types.Vec)
+    num_nodes = problem.input("num_nodes", type=cp.Types.Int)
+    num_edges = problem.input("num_edges", type=cp.Types.Int)
+    edges_in = problem.input("edges", type=cp.Types.Vec)
 
-    problem.define_model(size=num_nodes, domain=Domain.BINARY)
+    problem.define_model(size=num_nodes, domain=cp.Domain.BINARY)
 
     # Objective: minimise -sum(x_i)
     with problem.range(0, num_nodes) as i:
@@ -86,7 +85,7 @@ def build_problem(n: int, edges: list[tuple[int, int]]) -> Problem:
         problem.model.apply_equality(edge_indices, edge_coeffs, 1, 200)
 
     # Output: independent set membership
-    in_set = problem.output("in_set", type=Types.Vec)
+    in_set = problem.output("in_set", type=cp.Types.Vec)
     with problem.range(0, num_nodes) as i:
         in_set.append(problem.sample.getline(i))
 
@@ -124,7 +123,7 @@ def run(
     assert isinstance(model, XqmxModel)
 
     try:
-        solver = build_solver(solver_name, seed=seed)
+        solver = sa.build_solver(solver_name, seed=seed)
         sample = solver.solve(model).sample
     except (ImportError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -153,8 +152,8 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     parser.add_argument(
         "--solver",
-        choices=sorted(SOLVERS),
-        default=DEFAULT_SOLVER,
+        choices=sorted(sa.SOLVERS),
+        default=sa.DEFAULT_SOLVER,
         help="XQSA solver backend to sample the model with",
     )
     parser.add_argument(

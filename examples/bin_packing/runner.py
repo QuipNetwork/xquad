@@ -36,8 +36,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Domain, Problem, Types, xq_bitlen
-from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
+from xquad import cp, sa
 from xquad.types import XqmxModel
 from xquad.vm import VM
 
@@ -46,7 +45,7 @@ from xquad.vm import VM
 BIN_COST = 10
 
 
-def build_problem(n: int, num_bins: int, sizes: list[int], capacity: int) -> Problem:
+def build_problem(n: int, num_bins: int, sizes: list[int], capacity: int) -> cp.Problem:
     """Construct a Bin Packing QUBO via ONEHOTR, IMPLIES and SLACK + EQUALITY.
 
     Decision variables x[i,b] = x[i*B + b] in {0,1}: item i in bin b.
@@ -63,17 +62,17 @@ def build_problem(n: int, num_bins: int, sizes: list[int], capacity: int) -> Pro
     bias over the assignment cells would be identically N on every feasible
     packing, because each item lands in exactly one bin.
     """
-    problem = Problem("BinPacking")
+    problem = cp.Problem("BinPacking")
 
-    num_items = problem.input("num_items", type=Types.Int)
-    num_bins_in = problem.input("num_bins", type=Types.Int)
-    sizes_in = problem.input("sizes", type=Types.Vec)
-    capacity_in = problem.input("capacity", type=Types.Int)
+    num_items = problem.input("num_items", type=cp.Types.Int)
+    num_bins_in = problem.input("num_bins", type=cp.Types.Int)
+    sizes_in = problem.input("sizes", type=cp.Types.Vec)
+    capacity_in = problem.input("capacity", type=cp.Types.Int)
 
     # Model size = (N + 1) * B  (2D: N item rows plus one indicator row, B columns)
     problem.define_model(
         size=(num_items + 1) * num_bins_in,
-        domain=Domain.BINARY,
+        domain=cp.Domain.BINARY,
         rows=num_items + 1,
         cols=num_bins_in,
     )
@@ -92,7 +91,7 @@ def build_problem(n: int, num_bins: int, sizes: list[int], capacity: int) -> Pro
             problem.model.apply_implies((i, b), (num_items, b), 200)
 
     # Capacity constraint: sum_i s_i * x[i,b] <= C  for each bin b
-    slack_width = problem.stow("slack_width", xq_bitlen(capacity_in))
+    slack_width = problem.stow("slack_width", cp.xq_bitlen(capacity_in))
     model_vars = problem.stow("model_vars", (num_items + 1) * num_bins_in)
     with problem.range(0, num_bins_in) as b:
         col_indices = problem.vec()
@@ -108,7 +107,7 @@ def build_problem(n: int, num_bins: int, sizes: list[int], capacity: int) -> Pro
     total_vars = problem.stow("total_vars", num_items * num_bins_in)
 
     # Output: assignment matrix as flat vec [x[0,0], x[0,1], ..., x[N-1,B-1]]
-    assignment = problem.output("assignment", type=Types.Vec)
+    assignment = problem.output("assignment", type=cp.Types.Vec)
     with problem.range(0, total_vars) as k:
         assignment.append(problem.sample.getline(k))
 
@@ -146,7 +145,7 @@ def run(
     assert isinstance(model, XqmxModel)
 
     try:
-        solver = build_solver(solver_name, seed=seed)
+        solver = sa.build_solver(solver_name, seed=seed)
         sample = solver.solve(model).sample
     except (ImportError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -176,8 +175,8 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     parser.add_argument(
         "--solver",
-        choices=sorted(SOLVERS),
-        default=DEFAULT_SOLVER,
+        choices=sorted(sa.SOLVERS),
+        default=sa.DEFAULT_SOLVER,
         help="XQSA solver backend to sample the model with",
     )
     parser.add_argument(

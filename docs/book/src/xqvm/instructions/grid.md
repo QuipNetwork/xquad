@@ -86,9 +86,7 @@ HALT
 ```
 
 ```
-Error: xqvm::runtime_error
-
-  × index 99 out of bounds (len 2) at byte 0x000c
+Error: run failed: IndexOutOfBounds { pos: 12, index: 99, len: 2 }
 ```
 
 A register with no grid at all is a separate fault: `rows = cols = 0`

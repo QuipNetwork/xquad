@@ -40,8 +40,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from xquad.cp import Domain, Problem, Types
-from xquad.sa import DEFAULT_SOLVER, SOLVERS, build_solver
+from xquad import cp, sa
 from xquad.types import XqmxModel
 from xquad.vm import VM
 
@@ -53,7 +52,7 @@ def build_problem(
     caps: list[int],
     demands: list[int],
     costs: list[int],
-) -> Problem:
+) -> cp.Problem:
     """Construct a Weighted Set Cover QUBO via ATLEASTW per element.
 
     Decision variables x_s in {0,1}: x_s=1 if set s is selected.
@@ -65,16 +64,16 @@ def build_problem(
     A branch conditionally pushes (index s, capacity cap[s]) pairs into
     per-element index/coefficient vectors, building the ATLEASTW operands.
     """
-    problem = Problem("WeightedSetCover")
+    problem = cp.Problem("WeightedSetCover")
 
-    num_elements_in = problem.input("num_elements", type=Types.Int)
-    num_sets_in = problem.input("num_sets", type=Types.Int)
-    covers_in = problem.input("covers", type=Types.Vec)
-    caps_in = problem.input("caps", type=Types.Vec)
-    demands_in = problem.input("demands", type=Types.Vec)
-    costs_in = problem.input("costs", type=Types.Vec)
+    num_elements_in = problem.input("num_elements", type=cp.Types.Int)
+    num_sets_in = problem.input("num_sets", type=cp.Types.Int)
+    covers_in = problem.input("covers", type=cp.Types.Vec)
+    caps_in = problem.input("caps", type=cp.Types.Vec)
+    demands_in = problem.input("demands", type=cp.Types.Vec)
+    costs_in = problem.input("costs", type=cp.Types.Vec)
 
-    problem.define_model(size=num_sets_in, domain=Domain.BINARY)
+    problem.define_model(size=num_sets_in, domain=cp.Domain.BINARY)
 
     # Objective: minimise total cost
     with problem.range(0, num_sets_in) as s:
@@ -97,7 +96,7 @@ def build_problem(
         problem.model.apply_atleastw(elem_indices, elem_coeffs, demand_e, 200)
 
     # Output: set selection
-    selected = problem.output("selected", type=Types.Vec)
+    selected = problem.output("selected", type=cp.Types.Vec)
     with problem.range(0, num_sets_in) as s:
         selected.append(problem.sample.getline(s))
 
@@ -143,7 +142,7 @@ def run(
     assert isinstance(model, XqmxModel)
 
     try:
-        solver = build_solver(solver_name, seed=seed)
+        solver = sa.build_solver(solver_name, seed=seed)
         sample = solver.solve(model).sample
     except (ImportError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -173,8 +172,8 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     parser.add_argument(
         "--solver",
-        choices=sorted(SOLVERS),
-        default=DEFAULT_SOLVER,
+        choices=sorted(sa.SOLVERS),
+        default=sa.DEFAULT_SOLVER,
         help="XQSA solver backend to sample the model with",
     )
     parser.add_argument(

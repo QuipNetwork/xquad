@@ -25,7 +25,7 @@ Each vector directory holds three files:
   run is given, for example `{"calldata": [6, 7], "output_slots": 16}`.
   Every key but `calldata` is optional: `output_slots` defaults to 16,
   `step_limit` to 10000000 and `memory_limit` to 1073741824, each matching
-  `xquad run`. The runner resolves the defaults itself, so a budget is a
+  `xquad vm run`. The runner resolves the defaults itself, so a budget is a
   property of the vector rather than of whichever default the runner
   carries. Set one only for a vector that is about that budget.
 - **`expected.json`** -- the recorded result, for example

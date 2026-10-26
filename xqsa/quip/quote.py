@@ -39,8 +39,9 @@ class JobQuote:
     The fields after ``token_decimals`` describe who pays and what is priced:
     the SS58 ``account``, the block the quote was taken at, the model's
     variables and the spins and couplings it was placed onto, and the
-    ``placement`` (``"native"`` or the topology hash). Each defaults to
-    ``None`` and its display row is left out while unknown.
+    ``placement`` (``"native"`` or the topology hash), and the
+    ``inclusion_window_blocks`` the signed proposal stays valid for. Each
+    defaults to ``None`` and its display row is left out while unknown.
     """
 
     network: str | None
@@ -56,6 +57,7 @@ class JobQuote:
     num_spins: int | None = None
     num_couplings: int | None = None
     placement: str | None = None
+    inclusion_window_blocks: int | None = None
 
     @property
     def total_planck(self) -> int:
@@ -90,6 +92,8 @@ class JobQuote:
             network.append(("Account", self.account))
         if self.quoted_at_block is not None:
             network.append(("Quoted at", f"block {self.quoted_at_block}"))
+        if self.inclusion_window_blocks is not None:
+            network.append(("Window", f"included within {count(self.inclusion_window_blocks, 'block')}"))
         problem = []
         if None not in (self.num_variables, self.num_spins, self.num_couplings):
             problem.append(

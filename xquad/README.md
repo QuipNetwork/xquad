@@ -77,10 +77,10 @@ So `isinstance` works whether the caller imported directly from the peer or via 
 | `xquad.program` | first-party | Interactive API -- `Program`, `Session`, `RunResult` |
 | `xquad.vm` | first-party | `VM` wrapper over the Rust interpreter: assembles source, keeps calldata and limits across runs |
 | `xquad.types` | re-exports `xqffi.vm` | `Domain`, `XqmxModel`, `XqmxSample`, `triu`, `XqvmError` and its faults, VM limits |
-| `xquad.asm` | re-exports `xqffi.asm` | `parse_xqasm`, `assemble_source`, `disassemble` |
-| `xquad.verifier` | re-exports `xqffi.verifier` | `verify`, `verify_source` |
-| `xquad.cp` | re-exports `xqcp` | DSL -- `Problem`, `Types`, expression builders |
-| `xquad.sa` | re-exports `xqsa` | Solvers -- `SolverCPU`, `Solver` |
+| `xquad.asm` | is `xqffi.asm` | `parse_xqasm`, `assemble_source`, `disassemble` |
+| `xquad.verifier` | is `xqffi.verifier` | `verify`, `verify_source` |
+| `xquad.cp` | is `xqcp` | DSL -- `Problem`, `Types`, expression builders |
+| `xquad.sa` | is `xqsa` | Solvers -- `SolverCPU`, `Solver` |
 
 The raw FFI surface stays available as `xqffi.vm.Vm`.
 

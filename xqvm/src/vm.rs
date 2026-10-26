@@ -274,7 +274,7 @@ const fn bit_length(value: i64) -> u32 {
 /// Default step limit to guard against infinite loops.
 ///
 /// Public because it is the number every host that does not choose its own
-/// has to agree on, and there are four such hosts: `xqcli run`'s
+/// has to agree on, and there are four such hosts: `xquad vm run`'s
 /// `--step-limit` default, `xquad.vm.VM`, the specification vectors'
 /// per-vector default, and this crate. Each used to restate the
 /// literal with a comment claiming to match this constant, and nothing
@@ -289,7 +289,7 @@ pub const DEFAULT_STEP_LIMIT: u64 = 10_000_000;
 /// untrusted bytecode -- the Substrate pallet above all -- should set a much
 /// smaller budget with [`Vm::set_memory_limit`].
 ///
-/// Public for the same reason [`DEFAULT_STEP_LIMIT`] is: `xqcli run`, the
+/// Public for the same reason [`DEFAULT_STEP_LIMIT`] is: `xquad vm run`, the
 /// bindings and the vector runner all carry this budget's default, and each
 /// restating the literal is how two halves of a limit drift apart.
 pub const DEFAULT_MEMORY_LIMIT: u64 = 1 << 30;
