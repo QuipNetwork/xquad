@@ -1575,7 +1575,7 @@ wheels = [
 
 [[package]]
 name = "xqcp"
-version = "0.4.5"
+version = "0.4.6.dev0"
 source = { editable = "xqcp" }
 dependencies = [
     { name = "xqvm-py" },
@@ -1590,7 +1590,7 @@ source = { editable = "xqffi" }
 
 [[package]]
 name = "xqsa"
-version = "0.4.5"
+version = "0.4.6.dev0"
 source = { editable = "xqsa" }
 dependencies = [
     { name = "dwave-samplers" },
@@ -1632,7 +1632,7 @@ provides-extras = ["cuda", "dwave", "metal", "quip"]
 
 [[package]]
 name = "xquad"
-version = "0.4.5"
+version = "0.4.6.dev0"
 source = { editable = "xquad" }
 dependencies = [
     { name = "click" },

@@ -1198,7 +1198,7 @@ dependencies = [
 
 [[package]]
 name = "xqasm"
-version = "0.4.5"
+version = "0.4.6-dev"
 dependencies = [
  "miette",
  "pest",
@@ -1210,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "xqffi"
-version = "0.4.5"
+version = "0.4.6-dev"
 dependencies = [
  "pyo3",
  "xqasm",
@@ -1219,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "xquad-conformance"
-version = "0.4.5"
+version = "0.4.6-dev"
 dependencies = [
  "serde",
  "serde_json",
@@ -1231,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "xqvm"
-version = "0.4.5"
+version = "0.4.6-dev"
 dependencies = [
  "crc32fast",
  "hashbrown 0.15.5",
