@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import importlib
 import json
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -120,6 +122,11 @@ class TestAccountList:
         assert [line for line in result.stdout.splitlines() if line.startswith("*")] == [
             "* work  user     ~/.quip/keystores/work.json  (override)"
         ]
+
+    def test_unexpandable_keystore_override_shows_as_given(self, chain) -> None:
+        result = quip("--keystore", "~nosuchuser-xq/key.json", "account", "list")
+        assert result.exception is None or isinstance(result.exception, SystemExit), result.output
+        assert "~nosuchuser-xq/key.json  (override)" in result.stdout
 
     def test_json(self, chain) -> None:
         work = create_account("work", level="user", seed=SEED_A)
@@ -297,6 +304,14 @@ class TestAccountNewImportUse:
             "path": str(Path.home() / ".quip" / "keystores" / "w.json"),
         }
 
+    def test_import_prompts_for_the_seed_on_stderr(self, chain, monkeypatch) -> None:
+        tty = types.SimpleNamespace(isatty=lambda: True)
+        monkeypatch.setattr(quip_cli, "sys", types.SimpleNamespace(stdin=tty, exit=sys.exit))
+        result = quip("--json", "account", "import", "--name", "w", "--global", stdin=SEED_B + "\n")
+        assert result.exit_code == 0, result.output
+        assert "Seed (hex)" in result.stderr
+        assert json.loads(result.stdout)["name"] == "w"
+
     def test_import_bad_seed(self, chain) -> None:
         result = quip("account", "import", "--global", stdin="0xnothex\n")
         assert result.exit_code == 1
@@ -460,8 +475,10 @@ class TestReclaim:
         }
         assert "order 3 not reclaimed: order 3 was answered" in result.stderr
 
-    def test_all_reports_what_landed_when_one_fails(self, chain, monkeypatch) -> None:
-        done = self._reclaims(monkeypatch, refuse={3}, error=QuipConnectionError)
+    # A raw transport error stands for the chain reads that do not wrap theirs in QuipConnectionError.
+    @pytest.mark.parametrize("error", [QuipConnectionError, ConnectionResetError])
+    def test_all_reports_what_landed_when_one_fails(self, chain, monkeypatch, error) -> None:
+        done = self._reclaims(monkeypatch, refuse={3}, error=error)
         self._unanswered(monkeypatch, [7, 3])
         result = quip("--json", "reclaim", "--all", "--yes")
         assert result.exit_code == 1

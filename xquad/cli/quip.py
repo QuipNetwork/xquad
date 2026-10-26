@@ -299,7 +299,7 @@ def reclaim(opts: _Options, order_id: int | None, reclaim_all: bool, yes: bool) 
     reclaimable orders and their total, then asks before signing, since each
     reclaim pays its own fee.
     """
-    from xqsa.quip import QuipError, resolve_accounts
+    from xqsa.quip import resolve_accounts
 
     if reclaim_all == (order_id is not None):
         raise click.UsageError("pass an order id or --all")
@@ -339,7 +339,9 @@ def reclaim(opts: _Options, order_id: int | None, reclaim_all: bool, yes: bool) 
         for i in ids:
             try:
                 refunded = solver.get_receipt(i).reclaim()
-            except QuipError as exc:  # refused, failed, or sent with its outcome unknown: report and go on.
+            # Refused, failed, or sent with its outcome unknown: report and go on. Some chain reads raise the
+            # transport's own errors, and a lost connection must not hide the refunds already made.
+            except Exception as exc:  # noqa: BLE001
                 refused.append({"order_id": i, "reason": str(exc)})
                 click.echo(f"order {i} not reclaimed: {exc}", err=True)
                 continue
@@ -454,7 +456,7 @@ def _offer_account() -> bool:
 def _read_seed() -> str:
     """The seed for `account import`: a hidden prompt at a terminal, else the first line of stdin."""
     if sys.stdin.isatty():
-        return click.prompt("Seed (hex)", hide_input=True)
+        return click.prompt("Seed (hex)", hide_input=True, err=True)
     seed = sys.stdin.readline().strip()
     if not seed:
         raise click.ClickException("no seed on stdin")
@@ -522,7 +524,8 @@ def _listing(resolution: Any) -> str:
             marked = in_effect is not None and in_effect.path == path and in_effect.step != "QUIP_SIGNER_SEED"
             is_override = override is not None and override.value is not None and override.path == path
             suffix = "  (override)" if is_override else ""
-            lines.append(f"{'*' if marked else ' '} {name:<{width}}  {level:<7}  {_display_path(path)}{suffix}")
+            shown = _display_path(path) if path is not None else override.value  # an override that cannot expand.
+            lines.append(f"{'*' if marked else ' '} {name:<{width}}  {level:<7}  {shown}{suffix}")
             detail = _ss58(account_id) if account_id is not None else f"! {problem or 'does not exist'}"
             lines.append(f"{'':<{width + 4}}{detail}")
         keystores = "\n".join(lines)
