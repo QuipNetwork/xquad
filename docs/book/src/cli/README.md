@@ -24,9 +24,9 @@ uv tool install xquad            # the xquad command
 uv tool install 'xquad[quip]'    # with the xquad quip commands
 ```
 
-On macOS, `pip install` outside a virtual environment puts the `xquad`
-command in a folder that is not on `PATH`; `python -m xquad` runs the
-same command without it.
+On macOS, a user install (`pip install --user`, or pip falling back to
+one) puts the `xquad` command in `~/Library/Python/3.x/bin`, which is
+not on `PATH`; `python -m xquad` runs the same command without it.
 
 More generally, if your shell reports `xquad: command not found`, the
 script directory of that Python environment is not on `PATH`, and

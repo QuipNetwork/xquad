@@ -65,15 +65,15 @@ title.
 
 | State | Meaning |
 |---|---|
-| `draft` | Built by `create_order()`; nothing is on chain. Only a draft accepts `set()`, `quote()` and `submit()` |
+| `draft` | Built by `create_order()`; nothing is on chain. Only a draft accepts `set()`, `quote()` and a fresh `submit()`; a `sending` order is settled first, and `submit()` resumes it |
 | `sending` | `submit()` sent the signed `propose_job` but has not settled it: the proposal may still land. The order keeps its signed bytes and nonce, pickling included, and is never signed again while they can land; see [Settling a send](#settling-a-send) |
 | `submitted` | Proposed, and the block holding it is finalized; the order has an id and a receipt |
 | `finalized` | The chain head reached the order's effective expiry (see [Job Lifecycle](quip-network.md#job-lifecycle)); `wait()` and `status()` move a submitted order here |
 | `failed` | `propose_job` was included in a finalized block but its dispatch failed: the fee was paid and no order was placed |
 | `unconfirmed` | Deprecated, and no longer produced since v0.4.5. An order pickled in this state by xquad 0.4.3 or 0.4.4 loads with a `DeprecationWarning` and is never sent again; see [Deprecated APIs](quip-network.md#deprecated-apis) |
 
-Calling `set()`, `quote()` or `submit()` on anything but a draft raises
-`QuipSubmissionError`:
+Calling `set()`, `quote()` or `submit()` on any order other than a draft
+or a `sending` one raises `QuipSubmissionError`:
 
 ```text
 QuipSubmissionError: order 20 is finalized; set() works only on a draft order
@@ -149,13 +149,13 @@ never after. The window is a client setting, not an order option.
 `SolverQuip` and `for_network()` take 64 to 2048 blocks, rounded up to
 the next power of two, so `inclusion_window_blocks=100` gives 128; a
 value outside that range raises `QuipOrderOptionError`
-(`inclusion_window_blocks=4096 must be from 64 to 2048`) before
-connecting. The default, `DEFAULT_INCLUSION_WINDOW_BLOCKS`, is 64
-blocks, about 6.4 minutes. A longer window rides out more congestion
-or a longer outage, but a send that never lands takes longer to be
-proven dead. The quote box shows the window in its `Window` row
-(`included within 64 blocks`), and a draft's
-`status()["inclusion_window_blocks"]` reports it.
+(`inclusion_window_blocks=4096 must be from 64 to 2048`), and one that
+is not an integer raises `TypeError`, both before connecting. The
+default, `DEFAULT_INCLUSION_WINDOW_BLOCKS`, is 64 blocks, about 6.4
+minutes. A longer window rides out more congestion or a longer outage,
+but a send that never lands takes longer to be proven dead. The quote
+box shows the window in its `Window` row (`included within 64 blocks`),
+and a draft's `status()["inclusion_window_blocks"]` reports it.
 
 `quote()` signs once, but `submit()` signs again when the account nonce
 has moved or half of the cached bytes' window has passed, so a quote
@@ -176,18 +176,19 @@ reopened with backoff. Settling reads past blocks' state, so the node
 must keep full state history (`--state-pruning=archive`); the named
 network presets do.
 
-When `submit()` cannot settle the send by the end of its window,
-because no node could be reached, finality stalled, or the block's
-events could not be decoded, it raises `QuipSubmitIncompleteError` and
-leaves the order `sending`. It stops at once, with the same error, when
-a reconnect reaches another chain, a runtime this client cannot sign
-for, or a node that has discarded the state it needs. The error is a
-`QuipSubmissionError`, so existing handlers still catch it. It carries
-`order` (`None` after pickling, since the order holds a live
-connection), `extrinsic_hash`, `nonce` and `window_end`, the last block
-that can include the proposal; the specific cause is its `__cause__`.
-The message ends with what to do. This example is illustrative, built
-from the message in `xqsa/quip/client.py`, not captured:
+When `submit()` cannot settle the send by the end of its window, because
+no node could be reached or finality stalled, it raises
+`QuipSubmitIncompleteError` and leaves the order `sending`. It stops at
+once, with the same error, when the block that spent the nonce or its
+events cannot be decoded, when a reconnect reaches another chain or a
+node whose runtime metadata this client cannot read, or when the node
+has discarded the state it needs. The error is a `QuipSubmissionError`,
+so existing handlers still catch it. It carries `order` (`None` after
+pickling, since the order holds a live connection), `extrinsic_hash`,
+`nonce` and `window_end`, the last block that can include the proposal;
+the specific cause is its `__cause__`. The message ends with what to do.
+This example is illustrative, built from the message in
+`xqsa/quip/client.py`, not captured:
 
 ```text
 QuipSubmitIncompleteError: propose_job 0x5e0c...81d4 (nonce 3) was sent but is not settled (<the last error>). Its window ends at block 4160. The order is sending: calling submit() again resumes it; it never places a second order.
@@ -231,11 +232,14 @@ Each send spends one account nonce, and the chain includes an account's
 transactions in nonce order. A send signed while an earlier one from the
 same account is still waiting in the node's pool takes the next nonce,
 so it cannot land before the earlier one. If the earlier send's window
-ends with it never on chain, its nonce stays unspent: it settles back
-to a draft, and the later send cannot land either. That one settles
-back to a draft when its own window ends, and its `submit()` raises
-`QuipSubmissionError: propose_job 0x... never reached the chain`.
-Submitting either again signs with the current nonce.
+ends with it never on chain, its nonce stays unspent: the order settles
+back to a draft, and its `submit()` raises
+`QuipSubmissionError: propose_job 0x... never reached the chain`. The
+later send cannot land while that nonce is unspent. Submitting the
+earlier draft again signs with that nonce, and once it lands, the later
+send can still land within its own window. If nothing spends the nonce
+before the later window ends, the later order settles back to a draft
+the same way.
 
 ### Checks before signing
 
@@ -518,7 +522,8 @@ and warns when there are more:
 
 `receipt.summary()` returns the order's outcome as one flat dict, the
 fields the receipt box shows under its status rows; `xquad quip orders`
-and `status --short` print it as one line (see [Orders](../cli/quip/orders.md)):
+and `status --short` print its order id, state and leader as one line
+(see [Orders](../cli/quip/orders.md)):
 
 ```python
 print(solver.get_receipt(20).summary())

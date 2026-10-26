@@ -116,10 +116,12 @@ $ xquad quip --network aglais status 20 --short
 20	final	5GqG8c8zWHX33ruGJX4FDokxCTFrASVi268einKJY1XnHNYn
 ```
 
-`--json --short` prints that line's fields as one object. `--json`
-alone prints `summary` (those fields), `status` (the receipt's
-`status()` dict), `solvers` and `settlement`, as [Receipts](../../solving/quip-orders.md#receipts)
-describes them. An id that names no order exits 1:
+`xquad quip --network aglais --json status 20 --short` prints that
+line's fields as one object; `--json` belongs to the group, so it goes
+before the command. `--json` alone prints `summary` (those fields),
+`status` (the receipt's `status()` dict), `solvers` and `settlement`,
+as [Receipts](../../solving/quip-orders.md#receipts) describes them.
+An id that names no order exits 1:
 
 ```text
 Error: order 999999 not found on-chain (QuantumComputeMempool.JobOrders)
@@ -167,8 +169,9 @@ required:
 Error: pass --yes to reclaim without a prompt
 ```
 
-With nothing to reclaim it prints `nothing to reclaim on <account>`. An
-order that is refused or fails part way is reported on stderr as
+With nothing to reclaim it prints `nothing to reclaim on <account>`, or
+with `--json` `{"reclaimed": [], "refused": [], "total": 0}`, and exits
+0. An order that is refused or fails part way is reported on stderr as
 `order N not reclaimed: <reason>`, and the rest still go ahead; the
 command then exits 1. With `--json`, `reclaim ORDER_ID` prints
 `order_id` and `refunded`, and `reclaim --all --yes` prints the

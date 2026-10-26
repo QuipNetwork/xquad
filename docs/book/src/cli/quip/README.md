@@ -26,8 +26,9 @@ the signing extension:
 pip install 'xquad[quip]'
 ```
 
-Without it, every `xquad quip` command prints this on stderr and exits
-1, while `xquad --help` and `xquad vm` keep working:
+Without it, every `xquad quip` command, and `--help` below the group
+level, prints this on stderr and exits 1, while `xquad quip --help`,
+`xquad --help` and `xquad vm` keep working:
 
 ```text
 `xquad quip` needs the Quip extra: `pip install 'xquad[quip]'`
@@ -69,8 +70,13 @@ under `.quip/` or `~/.quip/` and touch no chain.
 
 With `--json`, a command prints exactly one JSON object on stdout.
 Accounts are SS58 text and amounts are integers in planck; the text
-output formats amounts in the network's token instead. Errors go to
-stderr as one line starting `Error:`, in both modes.
+output formats amounts in the network's token instead. `--json` is an
+option of the group, so it goes before the command:
+`xquad quip --network aglais --json account show`. Errors go to stderr
+prefixed `Error:`, in both modes. The no-account error carries the
+`account list` guidance under it, and a usage error prints a `Usage:`
+line above it; the per-order lines of `reclaim --all` and the
+missing-extra hint have no prefix.
 
 | Exit code | Meaning |
 |-----------|---------|

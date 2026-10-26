@@ -198,11 +198,12 @@ print(solver.balance(), solver.reserved(), solver.order_slots())
 balance in planck, which an order's reward and fee are paid from.
 `reserved()` is the reserved balance: the chain reserves an order's
 reward when it is proposed and releases it when a claim or a reclaim
-closes the order. `order_slots()` returns `(used, limit)`: the orders
-not yet closed, each holding a slot until a claim or a reclaim closes
-it, and the runtime's `MaxOrdersPerProposer`, `None` when the runtime
-sets no cap. Each takes `account=` to read another account. `xquad
-quip account show` prints all four; see [Accounts](../cli/quip/accounts.md).
+closes the order, and it includes anything else the runtime reserves.
+`order_slots()` returns `(used, limit)`: the orders not yet closed, each
+holding a slot until a claim or a reclaim closes it, and the runtime's
+`MaxOrdersPerProposer`, `None` when the runtime sets no cap. Each takes
+`account=` to read another account. `xquad quip account show` prints
+all four; see [Accounts](../cli/quip/accounts.md).
 (Captured on 2026-10-26 with a fresh, unfunded account.)
 
 ### Named networks
@@ -267,8 +268,9 @@ upgrading xquad; retrying the same node gives the same answer.
 Every reconnect must reach the chain the first connection reached: a
 node that serves another genesis is refused with a
 `QuipConnectionError` naming both hashes. A reconnect checks the genesis
-only. A `submit()` that is settling a send stops at once on either
-fault and leaves the order `sending` (see [Settling a
+only, and fails with `QuipMetadataError` only for a node whose metadata
+this client cannot read. A `submit()` that is settling a send stops at
+once on either fault and leaves the order `sending` (see [Settling a
 send](quip-orders.md#settling-a-send)).
 
 Each connection logs the network, runtime and genesis at `INFO` on the
@@ -482,13 +484,15 @@ signs the `propose_job` extrinsic the order would submit, asks the chain
 for its fee through `payment_queryInfo`, and reads the account balance.
 Nothing is submitted and no nonce is consumed. `submit()` later sends
 the same signed extrinsic, re-signing only if the account's nonce moved
-in between. `quote()` returns a `JobQuote`:
+in between or half its inclusion window has passed (see [Settling a
+send](quip-orders.md#settling-a-send)). `quote()` returns a `JobQuote`:
 
 | Field | Meaning |
 |---|---|
 | `network` | The preset name, or `None` for an explicit `url` |
 | `account` | The paying account, in SS58 form |
 | `quoted_at_block` | The block the quote was read at |
+| `inclusion_window_blocks` | Blocks the signed proposal stays valid for; see [Settling a send](quip-orders.md#settling-a-send) |
 | `num_variables` | The model's variables |
 | `num_spins`, `num_couplings` | The spins and couplings the model was placed onto |
 | `placement` | `"native"`, or the topology hash the model was placed on |
@@ -571,10 +575,12 @@ fallbacks.
 
 ## Failure Taxonomy
 
-Sixteen exception classes cover this backend, all exported from
-`xqsa.quip` and `xquad.sa.quip` -- one base class and fifteen concrete
-failures, one of them deprecated, spanning local encoding checks, order checks, the consent and
-funding gates, and network-dependent lifecycle failures:
+Sixteen exception classes cover this backend -- one base class and
+fifteen concrete failures, spanning local encoding checks, order checks,
+the consent and funding gates, and network-dependent lifecycle failures.
+Fifteen are exported from `xqsa.quip` and `xquad.sa.quip`; the
+deprecated `QuipUnconfirmedError` still imports from both, with a
+warning, but `import *` does not bring it in:
 
 | Exception | Raised when |
 |---|---|
@@ -582,12 +588,12 @@ funding gates, and network-dependent lifecycle failures:
 | `EncodingError` | The model is not `MODEL`-mode, its domain is unsupported, or both its `linear` and `quadratic` dicts are empty. Also covers a NaN coefficient, a model whose coefficients all round to zero at milli scale, a coefficient whose rounded milli value overflows `i32` (see [Coefficient Encoding](#coefficient-encoding)), and a native order over the mempool's `MaxNodes` or `MaxEdges` |
 | `PlacementError` | The model's coupling graph is not a subgraph of the target topology. Raised in default mode only; see [Native topology mode](#native-topology-mode) |
 | `QuipSigningError` | Extrinsic assembly, keystore handling, or submission fails |
-| `QuipConnectionError` | The node is unreachable; a configured Ising spec or topology is not registered on-chain; a mempool constant cannot be read (`MinReward`, `MaxDeadlineBlocks`, `MaxBlockWait`, `MaxSolutions` and `MaxBidMiners` at construction, `MaxNodes` and `MaxEdges` per native order); the chain defines no `MinReward` and no reward was given; an order id names no order; a balance, nonce or block read fails; or the node serves another chain than the preset pins or the first connection reached, named by both genesis hashes. Most come from the constructor or `for_network()`, which read the limits once |
-| `QuipMetadataError` | This client cannot read or sign for the node's runtime: its metadata, an extrinsic envelope or signed extension it cannot encode, or blocks or events it cannot decode while settling a send. Raised at connect and at signing; the remedy is upgrading xquad, not retrying |
+| `QuipConnectionError` | The node is unreachable; a configured Ising spec or topology is not registered on-chain; a mempool constant cannot be read (`MinReward`, `MaxDeadlineBlocks`, `MaxBlockWait`, `MaxSolutions` and `MaxBidMiners` at construction, `MaxNodes` and `MaxEdges` per native order); the chain defines no `MinReward` and no reward was given; an order id names no order; a balance, nonce or block read fails; or the node serves another chain than the preset pins, named by both genesis hashes. A reconnect to another chain than the first connection reached raises it too, but that happens only while a send is settling, so it reaches the caller as the `__cause__` of `QuipSubmitIncompleteError`. Most come from the constructor or `for_network()`, which read the limits once |
+| `QuipMetadataError` | This client cannot read or sign for the node's runtime: its metadata, an extrinsic envelope or signed extension it cannot encode, or blocks or events it cannot decode while settling a send. Raised at connect, on a reconnect whose metadata it cannot read, and when `quote()` or `submit()` signs; while a send is settling it is the `__cause__` of `QuipSubmitIncompleteError` instead. The remedy is upgrading xquad, not retrying |
 | `QuipSubmissionError` | An extrinsic cannot be submitted or the chain rejects it. Raised when `propose_job` fails on chain (the fee was paid, no order was placed, and the order moves to `failed`), and when the account's nonce moves twice while submitting because another client is sending from the account. Also raised before proposing when the account cannot cover the quote and `autofund` cannot help, with a hint for each case: a named network with no faucet says to fund the account another way, a raw `url=` with none says how to name one, a shortfall larger than one drip suggests checking `reward=`, and a balance already above one drip is one the faucet will not top up. Also raised when a sent proposal certainly never reached the chain: the order stays a draft |
 | `QuipOrderOptionError` | A `QuipSubmissionError`: an order option fails a check before signing, such as a reward below `MinReward`, a deadline or block wait out of range, a bad payout or access rule, or a quality floor out of range. Carries the option's name as `option`. Nothing is spent |
 | `QuipReclaimRefusedError` | A `QuipSubmissionError`: `reclaim()` refuses before signing because another account proposed the order, it is already closed, it is still open, or it was answered; or the chain refuses the reclaim and charges the fee |
-| `QuipSubmitIncompleteError` | A `QuipSubmissionError`: a sent `propose_job` could not be settled by the end of its window, or a reconnect reached another chain or a runtime this client cannot sign for. The order is `sending`; calling `submit()` again resumes it and never places a second order. Carries `order`, `extrinsic_hash`, `nonce` and `window_end`, with the cause as `__cause__`; see [Settling a send](quip-orders.md#settling-a-send) |
+| `QuipSubmitIncompleteError` | A `QuipSubmissionError`: a sent `propose_job` could not be settled by the end of its window; or settling stopped at once, because its block or events could not be decoded, a reconnect reached another chain or a node whose metadata this client cannot read, or the node discarded the state it needs. The order is `sending`; calling `submit()` again resumes it and never places a second order. Carries `order`, `extrinsic_hash`, `nonce` and `window_end`, with the cause as `__cause__`; see [Settling a send](quip-orders.md#settling-a-send) |
 | `QuipUnconfirmedError` | Deprecated, and no longer raised since v0.4.5; importing it from `xqsa.quip` warns. A `QuipSubmissionError` that carried `extrinsic_hash` and `block_hash` for a send whose outcome was unknown; `QuipSubmitIncompleteError` replaces it |
 | `QuipCancelledError` | The `autoconfirm` or `autofund` gate declines the job, at the prompt, by callable, or for want of a terminal; carries the declined `JobQuote` as `quote`. Nothing has been proposed or funded |
 | `QuipFaucetError` | The faucet refuses a drip or cannot be reached; carries the HTTP `status` (`None` for a transport failure) and the parsed JSON `body` |

@@ -59,7 +59,9 @@ Setting the account:
 `*` marks the keystore that signs and the step that chose it. A keystore
 that cannot be read, or a preference naming one that does not exist, is
 listed with a `!` line saying why, rather than failing the listing.
-`--keystore PATH` is shown as an override above the five steps.
+With `--keystore PATH`, the keystore list marks that file `*` with an
+`(override)` suffix, as a `-` row when it is not one of the listed
+keystores, and no step of the resolution order is marked.
 
 ## account show
 
@@ -79,8 +81,9 @@ Orders    0 of 32 slots used
 ```
 
 `Balance` is the free balance an order's reward and fee are paid from.
-`Reserved` is the reward still held by orders not yet closed. `Orders`
-counts the account's open slots against the runtime's
+`Reserved` is the reward still held by orders not yet closed, plus
+anything else the runtime reserves. `Orders` counts the slots the
+account's unclosed orders hold against the runtime's
 `MaxOrdersPerProposer`; each order holds a slot until a claim or a
 reclaim closes it, and the line reads `unlimited` when the runtime sets
 no cap.
@@ -114,9 +117,11 @@ When nothing at all is set up (no seed, no override, no preference and
 no default keystore) and the command runs at a terminal without
 `--json`, it first offers to create one: `new`, `import` or `skip` (the
 default), then the level and the name. After creating it, it shows the
-new account. Skipping exits 1. A broken step, such as a preference
-naming a missing keystore, gets an error naming the fix instead of the
-offer.
+new account when a network is named; without `--network`, `--url` or
+`QUIP_RPC_URL`, the keystore is still created and the command then
+exits 1 with the missing-network error. Skipping exits 1. A broken
+step, such as a preference naming a missing keystore, gets an error
+naming the fix instead of the offer.
 
 ## account new and account import
 
@@ -176,6 +181,7 @@ cleared the project account preference
 ```
 
 `account new`, `account import` and `account use` take `--json` too,
+before the command (`xquad quip --json account use work --global`),
 printing the account, its name, the level and the keystore path (here
 with the home directory shortened):
 
@@ -188,5 +194,6 @@ with the home directory shortened):
 }
 ```
 
-`account list --json` prints the keystores, the resolution steps and the
-step in effect.
+`account use --unset` prints `null` for the account and name, and the
+cleared `config.toml` as the path. `account list --json` prints the
+keystores, the resolution steps and the step in effect.

@@ -31,9 +31,9 @@ uv tool install xquad            # the xquad command
 uv tool install 'xquad[quip]'    # with the xquad quip commands
 ```
 
-On macOS, `pip install` outside a virtual environment puts the `xquad`
-command in a folder that is not on `PATH`; `python -m xquad` runs the
-same command without it.
+On macOS, a user install (`pip install --user`, or pip falling back to
+one) puts the `xquad` command in `~/Library/Python/3.x/bin`, which is
+not on `PATH`; `python -m xquad` runs the same command without it.
 
 ## Verify the Install
 
@@ -98,7 +98,7 @@ local GPU (`[cuda]` or `[metal]`) is another option; see [Local
 Solvers](../solving/local.md#driver-prerequisites) for those two extras
 and their driver checks.
 
-`pip install xquad[cuda]`, `xquad[metal]`, `xquad[dwave]`, and
+`pip install "xquad[cuda]"`, `xquad[metal]`, `xquad[dwave]`, and
 `xquad[quip]` each forward to the matching `xqsa` extra, and extras are
 composable: `pip install "xquad[cuda,dwave]"`.
 

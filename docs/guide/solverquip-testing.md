@@ -197,9 +197,11 @@ Bootstrap completes ~60-90s after the miner container starts.
 **macOS (Apple Silicon):** set `PUID=1000` and `PGID=1000` in `.env`. Do NOT
 use `PGID=$(id -g)` -- on macOS that is `20` (`staff`), which collides with the
 miner image's GID `20` (`dialout`) and crash-loops the entrypoint's group
-remap. Do not use `0` either: the dashboard refuses it, and the RPC and faucet
-on `:20049` go down with it. The miner and faucet images are amd64-only and run under emulation, so
-the first pull is slow and CPU is higher than native -- expected, not a hang.
+remap. Do not use `0` either: the dashboard refuses it
+(`PUID must be a positive decimal integer`) and exits, and since it carries the
+Caddy front door on `:20049`, the RPC and faucet go down with it. The miner and
+faucet images are amd64-only and run under emulation, so the first pull is slow
+and CPU is higher than native -- expected, not a hang.
 
 ### Verify the stack
 
@@ -247,8 +249,11 @@ on-chain solution under emulation).
 
 From `nodes.quip.network`: `make down` (stop), `make clean-chain` (wipe chain
 only), `make clean` (full reset). Re-run `make localdev` after any wipe -- state
-is non-persistent and order ids reset, so never hard-code one. After a network
-reset, also clear `dashboard-data-localdev/` before running `make localdev`.
+is non-persistent and order ids reset, so never hard-code one. `make clean`
+also clears the dashboard's `dashboard-data-localdev/`; `make clean-chain` and
+`make localdev` do not. After a network reset without `make clean`, such as the
+move to runtime 119, remove `dashboard-data-localdev/` (`trash` or `rm -rf`)
+before `make localdev`, or the dashboard serves data from the old chain.
 
 ### Troubleshooting
 
