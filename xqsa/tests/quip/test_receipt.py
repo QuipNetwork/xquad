@@ -852,6 +852,17 @@ class TestListOrders:
     def test_state_filter(self, monkeypatch, state, expected) -> None:
         assert self._solver(monkeypatch, [3, 7, 9], final={7}).list_orders(state=state) == expected
 
+    def test_unanswered_keeps_final_orders_with_no_answers(self, monkeypatch) -> None:
+        orders = {
+            3: _receipt_order(status="Opened", solution_count=0),  # final by height, unanswered.
+            5: _receipt_order(status="Opened", solution_count=1),  # final, answered.
+            7: _receipt_order(status="Closed", solution_count=0),  # closed: no longer reclaimable.
+            9: _receipt_order(status="Opened", solution_count=0, deadline_blocks=1_000),  # still open.
+        }
+        solver = self._solver(monkeypatch, list(orders), head=200)
+        monkeypatch.setattr(solver, "_fetch_order", orders.__getitem__)
+        assert solver.list_orders(state="unanswered") == [3]
+
     def test_unknown_state_refused(self, monkeypatch) -> None:
         with pytest.raises(ValueError, match="state='open'"):
             self._solver(monkeypatch, [1]).list_orders(state="open")
@@ -935,6 +946,28 @@ class TestReadOnlyClient:
         solver = _make_solver(monkeypatch, iface=_default_iface(balance=6 * UNIT))
         assert solver.balance() == solver._free_balance() == 6 * UNIT
 
+    def test_reserved_and_order_slots_given_an_account(self, monkeypatch) -> None:
+        solver = self._solver(monkeypatch)
+        solver._iface.storage[("System", "Account")] = {"nonce": 0, "data": {"free": UNIT, "reserved": 3 * UNIT}}
+        solver._iface.constants[(MEMPOOL, "MaxOrdersPerProposer")] = 32
+        assert solver.reserved(account=self.OTHER) == 3 * UNIT
+        assert solver.order_slots(account=self.OTHER) == (2, 32)
+
+    def test_order_slots_without_a_cap(self, monkeypatch) -> None:
+        assert self._solver(monkeypatch).order_slots(account=self.OTHER) == (2, None)
+
+    def test_reserved_unreadable_raises(self, monkeypatch) -> None:
+        solver = self._solver(monkeypatch, balance=UNIT)  # data carries no reserved field.
+        with pytest.raises(QuipConnectionError, match="could not read the reserved balance"):
+            solver.reserved(account=self.OTHER)
+
+    def test_account_names_the_signer_and_is_refused_read_only(self, monkeypatch) -> None:
+        pytest.importorskip("scalecodec.utils.ss58")
+        signing = _make_solver(monkeypatch, iface=_default_iface())
+        assert signing.account == chain.ss58_address(signing._iface, signing._signer.account_id)
+        with pytest.raises(QuipSigningError, match="this client has no signer"):
+            _ = self._solver(monkeypatch).account
+
 
 PROPOSER = "0x" + "11" * 32
 SOLVER = "0x" + "cd" * 32
@@ -958,8 +991,44 @@ def _display_for(monkeypatch, *, head: int = 200, fee: int | None = FEE, ms: int
     return receipt
 
 
+def _raising(exc: Exception):
+    """A chain reader that always raises ``exc``."""
+
+    def read(*args, **kwargs):
+        raise exc
+
+    return read
+
+
 def _rows(text: str) -> list[str]:
     return [line[2:-2].rstrip() for line in text.splitlines() if line.startswith("│")]
+
+
+class TestSummary:
+    @pytest.mark.parametrize(
+        ("order", "head", "front", "expected"),
+        [
+            pytest.param(_receipt_order(status="Opened"), 50, LEADING, ("open", 100, 1), id="open"),
+            pytest.param(_receipt_order(status="Opened"), 200, LEADING, ("final", None, 1), id="final"),
+            pytest.param(
+                _receipt_order(status="Opened", solution_count=0), 200, None, ("reclaimable", None, 0), id="reclaimable"
+            ),
+            pytest.param(
+                _receipt_order(status="Closed", solution_count=0), 200, None, ("closed", None, 0), id="closed"
+            ),
+        ],
+    )
+    def test_states(self, monkeypatch, order, head, front, expected) -> None:
+        receipt = _receipt_for(monkeypatch, order=order, head=head, front=front)
+        summary = receipt.summary()
+        assert summary.keys() == {"order_id", "state", "open_until", "answers", "leader"}
+        assert (summary["order_id"], summary["state"], summary["open_until"], summary["answers"]) == (1, *expected)
+        assert (summary["leader"] is None) == (front is None)
+
+    def test_leader_matches_the_box(self, monkeypatch) -> None:
+        pytest.importorskip("scalecodec.utils.ss58")
+        receipt = _display_for(monkeypatch, answers=[_answer(SOLVER, -1500, 9)], front=LEADING)
+        assert f"Leader      {receipt.summary()['leader']}" in str(receipt)
 
 
 class TestJobOrderReceiptDisplay:
@@ -1124,6 +1193,39 @@ class TestJobOrderReceiptDisplay:
         assert "│ Submitted   block 0, time unknown " in text
         assert any("the submission time of order 1" in record.getMessage() for record in caplog.records)
         assert f"{FEE / 10**12:.12f} AGLS" in text  # the fee still reads.
+
+    def test_pruned_block_renders_once_unknown_without_a_warning(self, monkeypatch, caplog) -> None:
+        receipt = _display_for(monkeypatch)
+        iface = receipt._client._iface
+        pruned = Exception("{'code': 4003, 'message': 'Client error: State already discarded for 0xblock'}")
+        reads: list[str] = []
+
+        def discarded(*args, **kwargs):
+            reads.append("read")
+            raise pruned
+
+        monkeypatch.setattr(iface, "get_events", discarded)
+        monkeypatch.setattr(chain, "block_timestamp", discarded)
+        with caplog.at_level(logging.DEBUG, logger="xqsa.quip"):
+            text = str(receipt)
+            assert str(receipt) == text
+        assert "│ Submitted   block 0, time unknown " in text
+        assert "│ Fee         unknown " in text
+        assert len(reads) == 2  # the time and the fee, read once each.
+        assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+
+    def test_transport_fault_is_retried_beside_a_pruned_read(self, monkeypatch) -> None:
+        receipt = _display_for(monkeypatch)
+        monkeypatch.setattr(chain, "block_timestamp", _raising(Exception("State already discarded")))
+        real_fee = chain.proposal_fee
+        monkeypatch.setattr(chain, "proposal_fee", _raising(QuipConnectionError("connection reset")))
+        assert "│ Fee         unknown " in str(receipt)
+        assert receipt._facts_cache is None
+        monkeypatch.setattr(chain, "proposal_fee", real_fee)  # the node recovers.
+        text = str(receipt)
+        assert f"│ Fee         {FEE / 10**12:.12f} AGLS " in text
+        assert "time unknown" in text
+        assert receipt._facts_cache is not None
 
     def test_time_renders_in_utc(self, monkeypatch) -> None:
         assert f"│ Submitted   block 0, {SUBMITTED_TEXT} " in str(_display_for(monkeypatch))

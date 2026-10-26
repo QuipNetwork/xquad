@@ -97,13 +97,16 @@ class SignerSource:
     unset; for ``seed=`` and ``QUIP_SIGNER_SEED`` it is the marker ``"set"``.
     ``path`` is the keystore the step points at, which for ``keystore=``,
     ``QUIP_KEYSTORE`` and ``default`` may not exist yet (it is created on first
-    use). ``problem`` says why the step cannot sign.
+    use). ``problem`` says why the step cannot sign. ``account_id`` is the
+    cached account of the keystore at ``path``; it is ``None`` for the seed
+    steps and for a keystore that is missing or unusable.
     """
 
     step: Literal["seed=", "keystore=", "QUIP_SIGNER_SEED", "QUIP_KEYSTORE", "project", "user", "default"]
     value: str | None
     path: Path | None
     problem: str | None
+    account_id: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -152,7 +155,13 @@ def resolve_accounts(*, seed: bytes | str | None = None, keystore: str | Path | 
         _keystore_source("QUIP_KEYSTORE", env_keystore),
         _preference_source("project", project, (by_level["project"], by_level["user"])),
         _preference_source("user", user, (by_level["user"],)),
-        SignerSource("default", "default", default_path, default.problem if default else None),
+        SignerSource(
+            "default",
+            "default",
+            default_path,
+            default.problem if default else None,
+            default.account_id if default else None,
+        ),
     )
     in_effect = next((source for source in sources if source.value is not None), None)
     return AccountResolution(accounts=accounts, sources=sources, in_effect=in_effect)
@@ -413,10 +422,10 @@ def _keystore_source(step: Literal["keystore=", "QUIP_KEYSTORE"], keystore: str 
         return SignerSource(step, str(keystore), None, f"cannot expand {keystore}: {exc}")
     # A missing path is created on first use; anything already there must be a usable keystore.
     try:
-        problem = _cached_account_id(path)[1] if path.exists() else None
+        account_id, problem = _cached_account_id(path) if path.exists() else (None, None)
     except OSError as exc:  # e.g. under a directory this process cannot enter.
-        problem = f"cannot read {path}: {exc}"
-    return SignerSource(step, str(keystore), path, problem)
+        account_id, problem = None, f"cannot read {path}: {exc}"
+    return SignerSource(step, str(keystore), path, problem, account_id)
 
 
 def _preference_source(
@@ -435,7 +444,7 @@ def _preference_source(
     if account is None:
         problem = f"no keystore named {name!r}; create it with `xquad quip account new --name {name}`"
         return SignerSource(step, name, None, problem)
-    return SignerSource(step, name, account.path, account.problem)
+    return SignerSource(step, name, account.path, account.problem, account.account_id)
 
 
 def _read_preference(config: Path) -> tuple[str | None, str | None]:

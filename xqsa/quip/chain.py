@@ -299,19 +299,33 @@ def free_balance(iface: Any, account_id: Any) -> int:
             cannot be read/decoded -- an anomalous read must not be reported
             as a zero balance.
     """
+    return _account_balance(iface, account_id, "free")
+
+
+def reserved_balance(iface: Any, account_id: Any) -> int:
+    """Return the account's reserved balance in planck: the rewards of its orders not yet closed, among others.
+
+    Raises:
+        QuipConnectionError: if the account entry or its ``data.reserved``
+            field cannot be read/decoded.
+    """
+    return _account_balance(iface, account_id, "reserved")
+
+
+def _account_balance(iface: Any, account_id: Any, field: Literal["free", "reserved"]) -> int:
+    """Read one ``System.Account`` ``data`` balance field, raising rather than reporting a fault as zero."""
     entry = iface.query("System", "Account", [account_id])
     value = getattr(entry, "value", None)
     try:
-        free = int(value["data"]["free"])
+        return int(value["data"][field])
     except (TypeError, KeyError, ValueError) as exc:
-        # A non-None entry with a missing/undecodable data.free is a read
-        # or decode fault, not a funded-to-zero account -- surface it rather
-        # than defaulting free=0 and blaming the user for "insufficient balance".
+        # A non-None entry with a missing/undecodable field is a read or decode
+        # fault, not a funded-to-zero account -- surface it rather than
+        # defaulting to 0 and blaming the user for "insufficient balance".
         raise QuipConnectionError(
-            f"could not read the free balance of {ss58_address(iface, account_id)} from "
+            f"could not read the {field} balance of {ss58_address(iface, account_id)} from "
             f"System.Account (got {value!r}); cannot verify funding"
         ) from exc
-    return free
 
 
 def query_fee(iface: Any, quip_signing: Any, wire: bytes) -> tuple[int, bool]:

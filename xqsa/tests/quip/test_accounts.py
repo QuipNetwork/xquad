@@ -300,6 +300,26 @@ class TestResolve:
         assert source.step == "user"
         assert problem in source.problem
 
+    def test_account_id_of_each_keystore_step(self, quip_home, tmp_path, monkeypatch) -> None:
+        default = create_account(level="user", seed=SEED_A)
+        assert resolve_accounts().in_effect.account_id == default.account_id
+        preferred = create_account("a", level="user", seed=SEED_B)
+        use_account("a", level="project")
+        assert resolve_accounts().in_effect.account_id == preferred.account_id
+        _keystore(tmp_path / "env.json")
+        monkeypatch.setenv("QUIP_KEYSTORE", str(tmp_path / "env.json"))
+        assert resolve_accounts().in_effect.account_id == bytes.fromhex("cd" * 32)
+
+    @pytest.mark.parametrize("env", ["QUIP_SIGNER_SEED", "missing", "unusable"])
+    def test_no_account_id_without_a_usable_keystore(self, quip_home, tmp_path, monkeypatch, env) -> None:
+        if env == "QUIP_SIGNER_SEED":
+            monkeypatch.setenv(env, SEED_A)
+        else:
+            if env == "unusable":
+                _keystore(tmp_path / "env.json", account_id_hex=None)
+            monkeypatch.setenv("QUIP_KEYSTORE", str(tmp_path / "env.json"))
+        assert resolve_accounts().in_effect.account_id is None
+
     def test_config_without_account_key_is_no_preference(self, quip_home) -> None:
         home, _ = quip_home
         (home / ".quip").mkdir()
