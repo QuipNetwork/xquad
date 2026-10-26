@@ -33,7 +33,7 @@ this reason.
 
 The library defaults above apply to `Vm::new()` directly; the `xquad vm run`
 CLI sets its own defaults before handing control to the VM -- 16 output
-slots unless `--outputs` overrides it. See [`xquad vm run`](cli/run.md) for the
+slots unless `--outputs` overrides it. See [`xquad vm run`](../cli/vm/run.md) for the
 CLI's own default table.
 
 The step limit is exact: `set_step_limit(0)` permits no instructions at

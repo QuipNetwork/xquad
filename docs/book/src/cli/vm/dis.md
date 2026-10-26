@@ -97,6 +97,6 @@ source labels against, so a disassembly's labels read back as valid
 `.xqasm` jump targets -- provided the listing contains no `.byte` lines.
 `.byte` is not a recognised mnemonic, so a listing that hit an
 undecodable byte is not itself valid `.xqasm` input, even though its
-labels are correctly numbered. See [Bytecode Format](../bytecode-format.md) for
+labels are correctly numbered. See [Bytecode Format](../../xqvm/bytecode-format.md) for
 how that scan works and why a `JUMP` operand cannot be validated in
 isolation from it.

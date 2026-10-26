@@ -92,7 +92,7 @@ disassembles, and verifies the four-instruction `add.xqasm` from
 
 Stop here if you are working from a shell or from CI. Keep reading if you
 need to drive many runs programmatically rather than one at a time. Full
-coverage: [CLI](../xqvm/cli/).
+coverage: [CLI](../cli/).
 
 ## Rust Embedding
 
