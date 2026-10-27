@@ -33,7 +33,7 @@ from typing import Any
 
 from xqvm_py import XQMXDomain
 
-from .expression import Expr, Literal, RegLoad, Types, coerce
+from .expression import Expr, Literal, RegLoad, Types, VecGetExpr, coerce
 from .symbols import InputRef, LoopVar, ModelRef, OutputRef, SampleRef, VecRef
 
 # ---------------------------------------------------------------------------
@@ -241,6 +241,7 @@ class Problem:
         self._model: ModelRef | None = None
         self._sample: SampleRef | None = None
         self._indent = 0
+        self._arm_depth = 0
         self._rows_expr: Expr | None = None
         self._cols_expr: Expr | None = None
 
@@ -504,22 +505,76 @@ class Problem:
             return []
         saved = self._actions
         self._actions = []
-        fn()
-        captured = self._actions
-        self._actions = saved
+        self._arm_depth += 1
+        try:
+            fn()
+        finally:
+            self._arm_depth -= 1
+            captured = self._actions
+            self._actions = saved
         return captured
 
-    def output(self, name: str, type: Types = Types.Vec) -> OutputRef:
-        """Declare a pipeline output. Returns a symbolic OutputRef."""
+    def output(self, name: str, type: Types = Types.Vec, length: Expr | int | None = None) -> OutputRef:
+        """Declare a pipeline output. Returns a symbolic OutputRef.
+
+        Without ``length=`` the output is append-only.  With it, the decoder
+        starts the output as ``length`` zeros, and it is written and read by
+        index.  ``length`` is any expression the decoder can evaluate before
+        its first loop: a literal, the scalar input, or a sample read.
+
+        # Errors
+
+        Raises ``RuntimeError`` when called inside a loop or a ``branch()``
+        arm: an output is declared once, at the top level, and the programs
+        are split at that declaration.  Raises ``ValueError`` for a literal
+        ``length`` of zero or less, and for a ``length`` that reads another
+        output, which still holds its starting zeros when ``length`` is
+        evaluated.
+        """
+        if self._indent > 0:
+            raise RuntimeError(
+                f"problem.output('{name}') is called inside a range() or iter() block; "
+                "declare every output at the top level, outside every loop and branch() arm"
+            )
+        if self._arm_depth > 0:
+            raise RuntimeError(
+                f"problem.output('{name}') is called inside a branch() arm; "
+                "declare every output at the top level, outside every loop and branch() arm"
+            )
         if type != Types.Vec:
             raise TypeError(f"Output '{name}' must be Types.Vec; every pipeline output is a vector")
+        length_expr = None if length is None else coerce(length)
+        if isinstance(length_expr, Literal) and length_expr.value <= 0:
+            raise ValueError(f"Output '{name}' needs a length= of at least 1; got {length_expr.value}")
+        if length_expr is not None:
+            self._reject_output_read_in_length(name, length_expr)
         reg = self._alloc.alloc()
         slot = self._output_slot
         self._output_slot += 1
-        ref = OutputRef(self, slot, reg, name, type)
+        ref = OutputRef(self, slot, reg, name, type, length_expr)
         self._outputs.append(ref)
         self._actions.append(Action("output_decl", {"ref": ref}))
         return ref
+
+    def _reject_output_read_in_length(self, name: str, length: Expr) -> None:
+        """Raise ``ValueError`` if ``length`` reads an output declared earlier.
+
+        Every output's ``length`` is evaluated before the decoder walks any
+        action, so another output still holds only its starting zeros there.
+        """
+        from .compiler import _map_expr
+
+        outputs = {o.reg: o.name for o in self._outputs}
+
+        def leaf(expr: Expr, rw: Callable[[Expr], Expr]) -> Expr | None:
+            if isinstance(expr, VecGetExpr) and expr.vec_reg in outputs:
+                raise ValueError(
+                    f"Output '{name}' has a length= that reads output '{outputs[expr.vec_reg]}'; "
+                    "every length= is evaluated before any output is filled, so it would read 0"
+                )
+            return None
+
+        _map_expr(length, leaf)
 
     # -- Internal recording methods called by ModelRef / OutputRef ----------
 
@@ -810,6 +865,18 @@ class Problem:
                 "output_append",
                 {
                     "output": output,
+                    "value_expr": coerce(value_expr),
+                },
+            )
+        )
+
+    def _record_output_setitem(self, output: OutputRef, index_expr: Expr, value_expr: Expr | int) -> None:
+        self._actions.append(
+            Action(
+                "output_setitem",
+                {
+                    "output": output,
+                    "index_expr": index_expr,
                     "value_expr": coerce(value_expr),
                 },
             )
