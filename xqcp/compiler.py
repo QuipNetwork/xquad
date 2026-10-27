@@ -1339,10 +1339,10 @@ class _DecoderRegisters:
     SAMPLE = 0
     SCALAR = 1
 
-    def __init__(self, prob: Problem, output_blocks: list[tuple[OutputRef, list[Action]]]) -> None:
+    def __init__(self, prob: Problem) -> None:
         self._outputs: dict[int, int] = {}
         next_reg = self.SCALAR + 1
-        for ref, _ in output_blocks:
+        for ref in prob._outputs:
             self._outputs[ref.reg] = next_reg
             next_reg += 1
 
@@ -1519,25 +1519,32 @@ def _rewrite_decoder_expr(expr: Expr, regs: _DecoderRegisters) -> Expr:
 
 
 def compile_decoder(prob: Problem) -> str:
-    """Generate the decoder .xqasm program."""
-    output_blocks = _collect_output_blocks(prob._actions)
-    regs = _DecoderRegisters(prob, output_blocks)
+    """Generate the decoder .xqasm program.
+
+    Every output's vector is allocated up front, every action recorded after
+    the first ``output()`` is walked once in recording order, and every
+    output ships to its slot at the end.  An output can therefore be filled
+    from any point after its declaration, interleaved with the others.
+    """
+    regs = _DecoderRegisters(prob)
+    walk = _decoder_actions(prob._actions)
 
     # The body is emitted first because it is what resolves the scalar on
     # slot 1; the header names that scalar so the caller can see what to pass.
     body: list[str] = []
-    for output_ref, block in output_blocks:
-        out_reg = regs.output_reg(output_ref)
-
+    if prob._outputs:
         body.append("")
-        body.append(f"; === Decode {output_ref.name} ===")
-        body.append(f"VECI r{out_reg}")
-        _emit_decoder_block(block, body, 0, output_ref, regs)
+        body.append("; === Decode ===")
+        for output_ref in prob._outputs:
+            body.append(f"VECI r{regs.output_reg(output_ref)}  ; {output_ref.name}")
+
+        _emit_decoder_block(walk, body, 0, regs)
 
         body.append("")
         body.append("; === Output ===")
-        body.append(f"PUSH {output_ref.slot}")
-        body.append(f"OUTPUT r{out_reg}")
+        for output_ref in prob._outputs:
+            body.append(f"PUSH {output_ref.slot}")
+            body.append(f"OUTPUT r{regs.output_reg(output_ref)}")
 
     body.append("HALT")
 
@@ -1554,44 +1561,30 @@ def compile_decoder(prob: Problem) -> str:
     return "\n".join(header + body) + "\n"
 
 
-def _collect_output_blocks(actions: list[Action]) -> list[tuple[OutputRef, list[Action]]]:
-    """Group actions into (output_ref, computation_block) pairs."""
-    blocks: list[tuple[OutputRef, list[Action]]] = []
-    current_output: OutputRef | None = None
-    current_block: list[Action] = []
-    in_output_section = False
-
-    for action in actions:
+def _decoder_actions(actions: list[Action]) -> list[Action]:
+    """The actions the decoder walks: everything from the first ``output()`` on."""
+    for index, action in enumerate(actions):
         if action.kind == "output_decl":
-            if current_output is not None:
-                blocks.append((current_output, current_block))
-            current_output = action.data["ref"]
-            current_block = []
-            in_output_section = True
-        elif in_output_section:
-            current_block.append(action)
-
-    if current_output is not None:
-        blocks.append((current_output, current_block))
-
-    return blocks
+            return actions[index:]
+    return []
 
 
 def _emit_decoder_block(
     actions: list[Action],
     lines: list[str],
     indent: int,
-    output_ref: OutputRef,
     regs: _DecoderRegisters,
 ) -> None:
-    """Emit one output's decoder computation block.
+    """Emit the decoder's walk over the actions recorded after the first output.
+
+    ``output_decl`` actions are skipped: every output's ``VECI`` is hoisted
+    above the walk.
 
     # Errors
 
     Raises ``RuntimeError`` for any action the decoder cannot emit, and for
     any expression naming a register the decoder is not handed.
     """
-    out_reg = regs.output_reg(output_ref)
 
     def emit(expr: Expr) -> None:
         _rewrite_decoder_expr(expr, regs).emit(lines, indent)
@@ -1599,6 +1592,9 @@ def _emit_decoder_block(
     for action in actions:
         kind = action.kind
         d = action.data
+
+        if kind == "output_decl":
+            continue
 
         if kind == "range_start":
             start_expr: Expr = d["start_expr"]
@@ -1634,17 +1630,8 @@ def _emit_decoder_block(
             )
 
         elif kind == "output_append":
-            target: OutputRef = d["output"]
-            if target is not output_ref:
-                raise RuntimeError(
-                    f"xqcp: '{target.name}.append()' is recorded after output "
-                    f"'{output_ref.name}' was declared, but the decoder writes each "
-                    f"output to its slot as soon as its block ends, so '{target.name}' "
-                    "has already shipped and the appended value would be lost; finish "
-                    f"filling '{target.name}' before calling output('{output_ref.name}')"
-                )
             emit(d["value_expr"])
-            lines.append(line(f"VECPUSH r{out_reg}", indent))
+            lines.append(line(f"VECPUSH r{regs.output_reg(d['output'])}", indent))
 
         elif kind == "branch":
             raise RuntimeError(

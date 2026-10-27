@@ -182,7 +182,6 @@ For every well-formed XQCP program:
 | `RuntimeError` | Any other action recorded after the first `output()` | `compile()` |
 | `RuntimeError` | `problem.output()` called inside a `range()` or `iter()` block | `Problem.output()` |
 | `RuntimeError` | `problem.output()` called inside a `branch()` arm | `Problem.output()` |
-| `RuntimeError` | `.append()` to an output declared before the current one | `compile()` |
 | `RuntimeError` | A second, distinct scalar referenced in a decoder block, such as a runtime `lo=` meeting an output loop bound | `compile()` |
 | `RuntimeError` | A vector or model coefficient read in a decoder block | `compile()` |
 | `RuntimeError` | A loop variable read outside its own loop, in a decoder block | `compile()` |

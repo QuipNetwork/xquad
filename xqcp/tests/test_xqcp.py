@@ -701,6 +701,24 @@ def _run_program(source: str, inputs: dict[int, object]) -> object:
     return executor.state
 
 
+def _run_decoder(
+    programs: CompiledPrograms,
+    *,
+    size: int,
+    values: dict[int, int],
+    scalar: int,
+    slots: int,
+) -> list[list[int]]:
+    """Run the decoder over a binary sample and return its output vectors."""
+    from xqvm_py import XQMX
+
+    sample = XQMX.binary_sample(size)
+    for index, value in values.items():
+        sample.linear[index] = value
+    output = _run_program(programs.decoder, {0: sample, 1: scalar}).output
+    return [list(output[slot]) for slot in range(slots)]
+
+
 def _encode(programs: CompiledPrograms, calldata: list[object]) -> object:
     """Run the encoder and return the model it built."""
     return _run_program(programs.encoder, dict(enumerate(calldata))).output[0]
@@ -1666,20 +1684,34 @@ class TestDecoderRegisterFileIsTotal:
         ):
             problem.compile()
 
-    # -- appends across output blocks -------------------------------------
+    # -- filling outputs in any order -------------------------------------
 
-    def test_append_to_an_earlier_output_rejected(self) -> None:
-        problem, n = self._flat("DecCrossBlock")
+    def test_two_outputs_filled_in_one_loop(self) -> None:
+        problem, n = self._flat("DecInterleaved")
         a = problem.output("a", type=Types.Vec)
-        _b = problem.output("b", type=Types.Vec)
+        b = problem.output("b", type=Types.Vec)
+        with problem.range(0, n) as i:
+            a.append(problem.sample.getline(i))
+            b.append(problem.sample.getline(i) + 1)
+
+        programs = problem.compile()
+
+        assert "; === Decode ===\nVECI r2  ; a\nVECI r3  ; b\n" in programs.decoder
+        decoded = _run_decoder(programs, size=3, values=_ones(0, 2), scalar=3, slots=2)
+        assert decoded == [[1, 0, 1], [2, 1, 2]]
+
+    def test_an_earlier_output_filled_after_a_later_one_is_declared(self) -> None:
+        problem, n = self._flat("DecLateFill")
+        a = problem.output("a", type=Types.Vec)
+        b = problem.output("b", type=Types.Vec)
+        with problem.range(0, n) as i:
+            b.append(i)
         with problem.range(0, n) as i:
             a.append(problem.sample.getline(i))
 
-        with pytest.raises(
-            RuntimeError,
-            match=r"'a\.append\(\)' is recorded after output 'b' was declared",
-        ):
-            problem.compile()
+        decoded = _run_decoder(problem.compile(), size=3, values=_ones(1), scalar=3, slots=2)
+
+        assert decoded == [[0, 1, 0], [0, 1, 2]]
 
     def test_two_outputs_each_filled_in_its_own_block(self) -> None:
         problem, n = self._flat("DecTwoOutputs")
@@ -1698,6 +1730,8 @@ class TestDecoderRegisterFileIsTotal:
         assert "VECI r3" in decoder
         assert "VECPUSH r3" in decoder
         assert "PUSH 1\nOUTPUT r3" in decoder
+        decoded = _run_decoder(problem.compile(), size=2, values=_ones(1), scalar=2, slots=2)
+        assert decoded == [[0, 1], [1, 2]]
 
 
 # ---------------------------------------------------------------------------

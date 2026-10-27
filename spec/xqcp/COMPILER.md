@@ -276,34 +276,39 @@ The decoder uses its own register layout:
 
 Loop registers sit above the outputs and no lower than `r10`, so the common single-loop program emits the `r10` the hand-written decoder fixtures document. A program with more than eight outputs pushes the loop base up rather than colliding with them.
 
-### Output Block Collection
+### The Decoder Walk
 
-The decoder compiler collects output blocks defined by `output_decl` markers. Between one `output_decl` and the next (or end of actions), all actions belong to that output's decoder block.
+The decoder walks every action from the first `output_decl` to the end of the list once, in recording order. An `output_decl` met during the walk emits nothing: every output's vector is allocated before the walk starts, and every output ships to its slot after it ends. An output can therefore be filled from any point after its declaration, and several outputs can be filled in the same loop.
 
 ### Supported Action Kinds
 
-The decoder emits three action kinds: `range_start`, `range_end` and `output_append`. Every other kind is rejected with a `RuntimeError` at `compile()`.
+The decoder emits three action kinds: `range_start`, `range_end` and `output_append`, and skips `output_decl`. Every other kind is rejected with a `RuntimeError` at `compile()`.
 
 The rejection is load-bearing rather than defensive. Program partitioning drops everything after the first `output_decl` from the encoder and the verifier, so an action recorded after `problem.output()` reaches the decoder alone. A kind the decoder cannot emit would therefore be dropped by all three programs, and the failure would surface as an empty output vector rather than as an error -- `branch()` inside an output block silently lost its arms' `.append()` calls this way. Conditional append is not supported; declare every other operation before the first `output()` call.
 
 `iter_start` and `iter_end` are rejected with the rest. `ITER` reads a vector register, and the decoder's calldata is the sample and one scalar, so there is no vector for it to iterate -- remapping its index and value variables would still leave the loop reading a register the decoder never wrote. Walk the indices with `range()` and read each one from `problem.sample`.
 
-An `output_append` whose recorded target is not the block's own output is rejected too. The decoder writes each output to its slot as soon as that output's block ends, so an append recorded after a later `output()` would land after its target had already shipped. Finish filling one output before declaring the next.
-
 An `output()` declared inside a `range()` or `iter()` block, or inside a `branch()` arm, is rejected by `problem.output()` itself, at record time. Every program is split at the first top-level `output_decl`; a declaration nested inside a loop or an arm would leave the encoder with an unclosed loop, or the decoder with nothing to walk.
 
 ### Assembly Structure
 
-For each output, in order: `VECI`, the decode block, then `PUSH slot` / `OUTPUT r{reg}` -- there is no non-`Vec` branch, since `Types.Vec` is the only output type `problem.output()` accepts.
+One `; === Decode ===` section allocates every output in declaration order, the walk follows, and one `; === Output ===` section ships every output to its slot -- there is no non-`Vec` branch, since `Types.Vec` is the only output type `problem.output()` accepts.
 
 ```
-VECI r{out}                 ; allocate output vector
-{output block actions}      ; loops, VECPUSH, GETLINE, COLFIND, etc.
-PUSH {slot}
-OUTPUT r{out}
+; === Decode ===
+VECI r{out_0}  ; {name_0}   ; allocate every output vector, hoisted
+VECI r{out_1}  ; {name_1}
+{walked actions}            ; loops, VECPUSH, GETLINE, COLFIND, etc.
+
+; === Output ===
+PUSH {slot_0}
+OUTPUT r{out_0}
+PUSH {slot_1}
+OUTPUT r{out_1}
+HALT
 ```
 
-Final `HALT` after all outputs.
+A problem with no outputs emits the inputs header and `HALT` only.
 
 ### Register Remapping
 
