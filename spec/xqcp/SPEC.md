@@ -182,7 +182,6 @@ For every well-formed XQCP program:
 | `ValueError` | `quadratic[i, j] = w` on a ranged integer model | `QuadraticProxy.__setitem__()` |
 | `ValueError` | `linear[i] = w` on a ranged integer model | `LinearProxy.__setitem__()` |
 | `RuntimeError` | Any constraint applied to a spin or integer model | `compile()` |
-| `RuntimeError` | `branch()` inside a decoder output block | `compile()` |
 | `RuntimeError` | `iter()` inside a decoder output block | `compile()` |
 | `RuntimeError` | Any other action recorded after the first `output()` | `compile()` |
 | `RuntimeError` | `problem.output()` called inside a `range()` or `iter()` block | `Problem.output()` |

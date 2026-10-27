@@ -283,9 +283,11 @@ The decoder walks every action from the first `output_decl` to the end of the li
 
 ### Supported Action Kinds
 
-The decoder emits four action kinds: `range_start`, `range_end`, `output_append` and `output_setitem`, and skips `output_decl`. Every other kind is rejected with a `RuntimeError` at `compile()`.
+The decoder emits five action kinds: `range_start`, `range_end`, `output_append`, `output_setitem` and `branch`, and skips `output_decl`. Every other kind is rejected with a `RuntimeError` at `compile()`.
 
-The rejection is load-bearing rather than defensive. Program partitioning drops everything after the first `output_decl` from the encoder and the verifier, so an action recorded after `problem.output()` reaches the decoder alone. A kind the decoder cannot emit would therefore be dropped by all three programs, and the failure would surface as an empty output vector rather than as an error -- `branch()` inside an output block silently lost its arms' `.append()` calls this way. Conditional append is not supported; declare every other operation before the first `output()` call.
+The rejection is load-bearing rather than defensive. Program partitioning drops everything after the first `output_decl` from the encoder and the verifier, so an action recorded after `problem.output()` reaches the decoder alone. A kind the decoder cannot emit would therefore be dropped by all three programs, and the failure would surface as an empty output vector rather than as an error -- `branch()` after the first `output()` silently lost its arms' `.append()` calls this way before the decoder learned to emit it. Declare every other operation before the first `output()` call.
+
+A `branch` is emitted as the same `NOT` / `JUMPI` / `JUMP` / `TARGET` chain the encoder uses, with conditions rewritten onto the decoder's register file and labels from the decoder's own allocator. Each arm is walked by the decoder's walker, not the encoder's, so an arm takes the decoder's whole vocabulary -- `.append()`, `out[i] = value`, `range()` and a nested `branch()` -- and refuses the rest the same way.
 
 `iter_start` and `iter_end` are rejected with the rest. `ITER` reads a vector register, and the decoder's calldata is the sample and one scalar, so there is no vector for it to iterate -- remapping its index and value variables would still leave the loop reading a register the decoder never wrote. Walk the indices with `range()` and read each one from `problem.sample`.
 

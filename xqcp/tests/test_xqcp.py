@@ -1438,9 +1438,9 @@ class TestBranchArmPartitioning:
 class TestDecoderBlockRejections:
     """_partition_program drops every action recorded after the first
     output() from the encoder and verifier, so the decoder is the only
-    program that sees them.  The decoder emits loops and .append() only;
-    anything else it cannot emit must be refused rather than dropped,
-    which used to leave a silently empty output vector."""
+    program that sees them.  The decoder emits loops, branches and output
+    writes only; anything else it cannot emit must be refused rather than
+    dropped, which used to leave a silently empty output vector."""
 
     @staticmethod
     def _problem_with_output(name: str) -> tuple[Problem, OutputRef]:
@@ -1448,17 +1448,6 @@ class TestDecoderBlockRejections:
         n = problem.input("n", type=Types.Int)
         problem.define_model(size=n, domain=Domain.BINARY)
         return problem, problem.output("out", type=Types.Vec)
-
-    def test_branch_inside_output_block_rejected(self) -> None:
-        problem, out = self._problem_with_output("DecoderBranch")
-        with problem.range(0, 4) as k:
-            problem.branch(k > 1, lambda: out.append(1), lambda: out.append(0))
-
-        with pytest.raises(
-            RuntimeError,
-            match=r"branch\(\) is not supported inside a decoder output block",
-        ):
-            problem.compile()
 
     def test_action_after_output_rejected(self) -> None:
         problem, _out = self._problem_with_output("DecoderStow")
@@ -1844,6 +1833,101 @@ class TestIndexedOutputs:
         assert "LOAD r10\n  VECGET r2" in programs.decoder
         decoded = _run_decoder(programs, size=3, values=_ones(0, 2), scalar=3, slots=2)
         assert decoded == [[1, 0, 1], [10, 1, 12]]
+
+
+# ---------------------------------------------------------------------------
+# Conditional decoder outputs
+# ---------------------------------------------------------------------------
+
+
+class TestDecoderBranch:
+    """branch() after the first output() is emitted by the decoder alone:
+    each arm recurses into the decoder's own walker, so an arm takes
+    .append(), out[i] = v, range() and a nested branch().  It used to be
+    refused, and before that its appends were silently dropped."""
+
+    @staticmethod
+    def _flat(name: str) -> tuple[Problem, InputRef]:
+        problem = Problem(name)
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=Domain.BINARY)
+        return problem, n
+
+    def test_conditional_append_over_the_sample(self) -> None:
+        problem, n = self._flat("BrSelected")
+        out = problem.output("selected", type=Types.Vec)
+        with problem.range(0, n) as i:
+            problem.branch(problem.sample.getline(i) == 1, lambda: out.append(i), None)
+
+        programs = problem.compile()
+
+        assert "NOT\n  JUMPI .1" in programs.decoder
+        decoded = _run_decoder(programs, size=5, values=_ones(0, 3, 4), scalar=5, slots=1)
+        assert decoded == [[0, 3, 4]]
+
+    def test_condition_over_a_loop_variable_with_a_default_arm(self) -> None:
+        problem, n = self._flat("BrLoopVar")
+        out = problem.output("o", type=Types.Vec)
+        with problem.range(0, n) as k:
+            problem.branch(k > 1, lambda: out.append(1), lambda: out.append(0))
+
+        decoded = _run_decoder(problem.compile(), size=4, values={}, scalar=4, slots=1)
+
+        assert decoded == [[0, 0, 1, 1]]
+
+    def test_loop_inside_an_arm(self) -> None:
+        problem, n = self._flat("BrLoopInArm")
+        out = problem.output("o", type=Types.Vec)
+
+        def fill() -> None:
+            with problem.range(0, n) as j:
+                out.append(problem.sample.getline(j))
+
+        problem.branch(problem.sample.getline(0) == 1, fill, lambda: out.append(-1))
+
+        programs = problem.compile()
+
+        assert _run_decoder(programs, size=3, values=_ones(0, 2), scalar=3, slots=1) == [[1, 0, 1]]
+        assert _run_decoder(programs, size=3, values=_ones(2), scalar=3, slots=1) == [[-1]]
+
+    def test_nested_branch(self) -> None:
+        problem, n = self._flat("BrNested")
+        out = problem.output("o", type=Types.Vec)
+        with problem.range(0, n) as i:
+            problem.branch(
+                problem.sample.getline(i) == 1,
+                lambda: problem.branch(i > 0, lambda: out.append(i), lambda: out.append(100)),
+                None,
+            )
+
+        decoded = _run_decoder(problem.compile(), size=4, values=_ones(0, 2, 3), scalar=4, slots=1)
+
+        assert decoded == [[100, 2, 3]]
+
+    def test_indexed_write_inside_an_arm(self) -> None:
+        problem, n = self._flat("BrIndexed")
+        out = problem.output("o", type=Types.Vec, length=n)
+
+        def mark(i: Any) -> None:
+            out[i] = i + 1
+
+        with problem.range(0, n) as i:
+            problem.branch(problem.sample.getline(i) == 1, lambda: mark(i), None)
+
+        decoded = _run_decoder(problem.compile(), size=4, values=_ones(1, 3), scalar=4, slots=1)
+
+        assert decoded == [[0, 2, 0, 4]]
+
+    def test_two_branches_get_distinct_targets(self) -> None:
+        problem, n = self._flat("BrTwo")
+        a = problem.output("a", type=Types.Vec)
+        b = problem.output("b", type=Types.Vec)
+        with problem.range(0, n) as i:
+            problem.branch(problem.sample.getline(i) == 1, lambda: a.append(i), lambda: b.append(i))
+
+        decoded = _run_decoder(problem.compile(), size=4, values=_ones(1, 2), scalar=4, slots=2)
+
+        assert decoded == [[1, 2], [0, 3]]
 
 
 # ---------------------------------------------------------------------------

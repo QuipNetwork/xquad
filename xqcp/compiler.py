@@ -1534,6 +1534,7 @@ def compile_decoder(prob: Problem) -> str:
     from any point after its declaration, interleaved with the others.
     """
     regs = _DecoderRegisters(prob)
+    targets = _TargetAllocator()
     walk = _decoder_actions(prob._actions)
 
     # The body is emitted first because it is what resolves the scalar on
@@ -1548,7 +1549,7 @@ def compile_decoder(prob: Problem) -> str:
             if output_ref.length is not None:
                 _emit_output_prefill(output_ref.length, out_reg, body, regs)
 
-        _emit_decoder_block(walk, body, 0, regs)
+        _emit_decoder_block(walk, body, 0, regs, targets)
 
         body.append("")
         body.append("; === Output ===")
@@ -1597,11 +1598,14 @@ def _emit_decoder_block(
     lines: list[str],
     indent: int,
     regs: _DecoderRegisters,
+    targets: _TargetAllocator,
 ) -> None:
     """Emit the decoder's walk over the actions recorded after the first output.
 
     ``output_decl`` actions are skipped: every output's ``VECI`` is hoisted
-    above the walk.
+    above the walk.  A ``branch`` recurses into each arm with this same
+    walker, so an arm takes the decoder's whole vocabulary; it mirrors
+    ``_emit_branch``, which stays the encoder's and the verifier's.
 
     # Errors
 
@@ -1662,10 +1666,20 @@ def _emit_decoder_block(
             lines.append(line(f"VECSET r{regs.output_reg(d['output'])}", indent))
 
         elif kind == "branch":
-            raise RuntimeError(
-                "branch() is not supported inside a decoder output block; its "
-                "appends would be silently dropped, leaving an empty output vector"
-            )
+            end_target = targets.alloc()
+            for arm in d["arms"]:
+                cond = arm["condition"]
+                if cond is None:
+                    _emit_decoder_block(arm["actions"], lines, indent, regs, targets)
+                    continue
+                skip_target = targets.alloc()
+                emit(cond)
+                lines.append(line("NOT", indent))
+                lines.append(line(f"JUMPI .{skip_target}", indent))
+                _emit_decoder_block(arm["actions"], lines, indent + 1, regs, targets)
+                lines.append(line(f"JUMP .{end_target}", indent + 1))
+                lines.append(line(f"TARGET .{skip_target}", indent))
+            lines.append(line(f"TARGET .{end_target}", indent))
 
         else:
             raise RuntimeError(
