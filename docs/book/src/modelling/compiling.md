@@ -256,10 +256,11 @@ instead of `0` and `1`; the binary-only constraint kinds -- `onehot_row`,
 `onehot_col`, `exclude`, `implies` -- raise at compile time on a spin model
 rather than emit a check that does not mean anything there.
 
-The decoder puts the sample on `r0` and `N` on `r1`, then emits one block
-per `problem.output()` call, each starting with `VECI` to allocate the
-output vector and ending with `PUSH {slot} / OUTPUT r{out}`. Inside a
-decoder block, every scalar reference -- an input the encoder read, or a
+The decoder puts the sample on `r0` and `N` on `r1`, allocates every
+output vector with `VECI` under one `; === Decode ===` header, walks
+everything recorded after the first `problem.output()` call, then ships
+every output with `PUSH {slot} / OUTPUT r{out}` under one
+`; === Output ===` header. Inside the decoder, every scalar reference -- an input the encoder read, or a
 value `problem.stow()` put in a register -- resolves to `LOAD r1`, because
 one scalar is all the decoder is handed:
 
@@ -270,8 +271,8 @@ INPUT r0
 PUSH 1
 INPUT r1  ; num_items
 
-; === Decode selected ===
-VECI r2
+; === Decode ===
+VECI r2  ; selected
 PUSH 0
 LOAD r1
 RANGE

@@ -8,11 +8,15 @@ sense.
 
 ## Declaring an Output
 
-`problem.output(name, type=Types.Vec)` declares one decoder output and
-returns an `OutputRef`. `type` must be `Types.Vec` -- every pipeline
-output is a vector, and `problem.output()` raises `TypeError` for
-anything else. `.append(value)` grows the output by one element, and the
-emitted decoder allocates it with `VECI` before the block that fills it:
+`problem.output(name, type=Types.Vec, length=None)` declares one decoder
+output and returns an `OutputRef`. `type` must be `Types.Vec` -- every
+pipeline output is a vector, and `problem.output()` raises `TypeError` for
+anything else. An output is filled one of two ways, chosen by `length=`.
+
+### Appending
+
+Without `length=`, an output starts empty and `.append(value)` grows it by
+one element:
 
 ```python
 selected = problem.output("selected", type=Types.Vec)
@@ -25,30 +29,69 @@ This is `examples/knapsack/runner.py`'s decoder in full: one output,
 `problem.sample.getline(i)` reads `sample[i]`: `1` if the solver selected
 item `i`, `0` otherwise. `selected` ends up the same shape as the input
 item list, a `0`/`1` flag per item rather than a list of chosen indices.
-Compiled, this is `; === Decode selected ===` in the decoder assembly
-[Compiling](compiling.md) shows in full: `VECI r2`, a `RANGE` loop reading
-`GETLINE r0` and pushing with `VECPUSH r2`, then `PUSH 0 / OUTPUT r2`.
+Compiled, this is the decoder assembly [Compiling](compiling.md) shows in
+full: `VECI r2  ; selected`, a `RANGE` loop reading `GETLINE r0` and
+pushing with `VECPUSH r2`, then `PUSH 0 / OUTPUT r2`.
 
-`OutputRef` does not support random-access write or read. Both raise
-immediately, at problem-definition time -- `out[i] = value` with
+### Writing and Reading by Index
 
-```text
-TypeError: Random-access write to output 'selected' is not supported; use selected.append(value) instead
+With `length=`, the decoder starts the output as `length` zeros, and you
+write and read it by index: `out[i] = value` compiles to `VECSET`, and
+`out[i]` to `VECGET`. Use it when a value's position is computed rather
+than reached in order -- a tour written stop by stop, say, where the
+sample tells you which stop sits at which position:
+
+```python
+tour = problem.output("tour", type=Types.Vec, length=n)
+with problem.range(0, n) as city:
+    tour[problem.sample.colfind(col=city, value=1)] = city
 ```
 
-and `value = out[i]` with
+`length` is anything the decoder can evaluate before its first loop: a
+literal, the scalar on calldata slot 1, arithmetic over those, or a sample
+read. Slots you never write stay `0`. An `out[i]` read returns an
+expression, so one output can feed another:
 
-```text
-TypeError: Reading from output 'selected' is not supported; outputs are write-only via .append(value)
+```python
+flags = problem.output("flags", type=Types.Vec, length=n)
+scores = problem.output("scores", type=Types.Vec)
+with problem.range(0, n) as i:
+    flags[i] = problem.sample.getline(i)
+with problem.range(0, n) as i:
+    scores.append(flags[i] * 10 + i)
 ```
 
-`.append(value)` is the only way to fill an output, and every output is
-write-only: the decoder builds each output vector by appending, in the
-order the decoder program executes, and nothing reads a value back out
-of one. Knapsack's decoder above is
-already the general shape -- an `.append()` per iteration inside a
-`problem.range` loop, compiling to `VECPUSH` against the register the
-output was allocated with `VECI` in.
+### Record-Time Checks
+
+The two modes do not mix, and both are checked when you write the
+problem, not when the decoder runs. `out[i] = value` or `out[i]` on an
+output without `length=` raises
+
+```text
+TypeError: Writing to output 'selected' by index needs a declared length; declare it with problem.output('selected', length=n), or fill it with selected.append(value)
+```
+
+(`Reading from` for a read), and `.append()` on an output with `length=`
+raises
+
+```text
+TypeError: Output 'tour' was declared with length= and is filled by index; write tour[i] = value instead of tour.append(value)
+```
+
+A literal `length=` below `1` raises `ValueError`, and so does a literal
+index outside `[0, length)` when `length=` is a literal too. Any other
+index is bounds-checked by the VM when the decoder runs, which faults with
+`IndexOutOfBounds`. A `length` that evaluates to `0` or less at decode
+time leaves the output empty, so the first index write faults the same
+way.
+
+`problem.output()` must be called at the top level. Inside a
+`problem.range()` or `problem.iter()` block, or inside a `branch()` arm,
+it raises `RuntimeError` at once:
+
+```text
+RuntimeError: problem.output('o') is called inside a range() or iter() block; declare every output at the top level, outside every loop and branch() arm
+```
 
 ## Reading a Sample
 
@@ -116,11 +159,43 @@ for the same reason: `ITER` walks a vector register, and no vector reaches
 the decoder. Walk the indices with `problem.range()` and read each one from
 `problem.sample`.
 
-One more ordering rule follows from how outputs are emitted. Each output is
-written to its slot as soon as its own block ends, so appending to an
-earlier output after a later `problem.output()` has been declared would
-land after its target had already shipped. Finish filling one output before
-declaring the next.
+## Filling Outputs in Any Order
+
+The decoder allocates every output before it runs anything else and ships
+every output to its slot after everything else has run. Between those, it
+walks every action recorded after the first `problem.output()` once, in
+the order you recorded them. An output can therefore be filled from any
+point after its declaration: two outputs from one loop, or an earlier
+output after a later one has been declared.
+
+```python
+chosen = problem.output("chosen", type=Types.Vec)
+weights = problem.output("weights", type=Types.Vec)
+with problem.range(0, num_items) as i:
+    chosen.append(problem.sample.getline(i))
+    weights.append(problem.sample.getline(i) * 2)
+```
+
+## Conditional Outputs
+
+`problem.branch()` works after the first `problem.output()`, with the same
+first-match arms it has in the encoder. Conditions read the sample, loop
+variables and the scalar, like any other decoder expression. This keeps
+only the indices of the selected items instead of a flag per item:
+
+```python
+picked = problem.output("picked", type=Types.Vec)
+with problem.range(0, num_items) as i:
+    problem.branch(
+        problem.sample.getline(i) == 1, lambda: picked.append(i),
+        None,
+    )
+```
+
+With items `0`, `3` and `4` selected out of five, `picked` decodes to
+`[0, 3, 4]`. An arm takes everything else a decoder block takes:
+`.append()`, `out[i] = value`, a `problem.range()` loop, and a nested
+`problem.branch()`.
 
 ## The Decoder Program vs. Decoding in the Host
 
