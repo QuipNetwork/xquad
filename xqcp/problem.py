@@ -514,14 +514,20 @@ class Problem:
             self._actions = saved
         return captured
 
-    def output(self, name: str, type: Types = Types.Vec) -> OutputRef:
+    def output(self, name: str, type: Types = Types.Vec, length: Expr | int | None = None) -> OutputRef:
         """Declare a pipeline output. Returns a symbolic OutputRef.
+
+        Without ``length=`` the output is append-only.  With it, the decoder
+        starts the output as ``length`` zeros, and it is written and read by
+        index.  ``length`` is any expression the decoder can evaluate before
+        its first loop: a literal, the scalar input, or a sample read.
 
         # Errors
 
         Raises ``RuntimeError`` when called inside a loop or a ``branch()``
         arm: an output is declared once, at the top level, and the programs
-        are split at that declaration.
+        are split at that declaration.  Raises ``ValueError`` for a literal
+        ``length`` of zero or less.
         """
         if self._indent > 0:
             raise RuntimeError(
@@ -535,10 +541,13 @@ class Problem:
             )
         if type != Types.Vec:
             raise TypeError(f"Output '{name}' must be Types.Vec; every pipeline output is a vector")
+        length_expr = None if length is None else coerce(length)
+        if isinstance(length_expr, Literal) and length_expr.value <= 0:
+            raise ValueError(f"Output '{name}' needs a length= of at least 1; got {length_expr.value}")
         reg = self._alloc.alloc()
         slot = self._output_slot
         self._output_slot += 1
-        ref = OutputRef(self, slot, reg, name, type)
+        ref = OutputRef(self, slot, reg, name, type, length_expr)
         self._outputs.append(ref)
         self._actions.append(Action("output_decl", {"ref": ref}))
         return ref
@@ -832,6 +841,18 @@ class Problem:
                 "output_append",
                 {
                     "output": output,
+                    "value_expr": coerce(value_expr),
+                },
+            )
+        )
+
+    def _record_output_setitem(self, output: OutputRef, index_expr: Expr, value_expr: Expr | int) -> None:
+        self._actions.append(
+            Action(
+                "output_setitem",
+                {
+                    "output": output,
+                    "index_expr": index_expr,
                     "value_expr": coerce(value_expr),
                 },
             )

@@ -50,6 +50,7 @@ Every DSL call appends an `Action(kind, data)` to `Problem._actions`. The comple
 | `branch` | `{arms: [{condition, actions}]}` | `problem.branch()` |
 | `output_decl` | `{ref: OutputRef}` | `problem.output()` |
 | `output_append` | `{output, value_expr}` | `output.append()` |
+| `output_setitem` | `{output, index_expr, value_expr}` | `output[i] = value` |
 | `vec_init` | `{reg}` | `problem.vec()` |
 | `vec_push` | `{vec_ref, value_expr}` | `vec.push(value)` |
 
@@ -282,7 +283,7 @@ The decoder walks every action from the first `output_decl` to the end of the li
 
 ### Supported Action Kinds
 
-The decoder emits three action kinds: `range_start`, `range_end` and `output_append`, and skips `output_decl`. Every other kind is rejected with a `RuntimeError` at `compile()`.
+The decoder emits four action kinds: `range_start`, `range_end`, `output_append` and `output_setitem`, and skips `output_decl`. Every other kind is rejected with a `RuntimeError` at `compile()`.
 
 The rejection is load-bearing rather than defensive. Program partitioning drops everything after the first `output_decl` from the encoder and the verifier, so an action recorded after `problem.output()` reaches the decoder alone. A kind the decoder cannot emit would therefore be dropped by all three programs, and the failure would surface as an empty output vector rather than as an error -- `branch()` inside an output block silently lost its arms' `.append()` calls this way. Conditional append is not supported; declare every other operation before the first `output()` call.
 
@@ -298,7 +299,13 @@ One `; === Decode ===` section allocates every output in declaration order, the 
 ; === Decode ===
 VECI r{out_0}  ; {name_0}   ; allocate every output vector, hoisted
 VECI r{out_1}  ; {name_1}
-{walked actions}            ; loops, VECPUSH, GETLINE, COLFIND, etc.
+PUSH 0                      ; prefill, only for an output with length=
+{length}
+RANGE
+  PUSH 0
+  VECPUSH r{out_1}
+NEXT
+{walked actions}            ; loops, VECPUSH, VECSET, GETLINE, COLFIND, etc.
 
 ; === Output ===
 PUSH {slot_0}
@@ -307,6 +314,8 @@ PUSH {slot_1}
 OUTPUT r{out_1}
 HALT
 ```
+
+An output declared with `length=` is prefilled with `length` zeros right after its `VECI`, so an `output_setitem` (index, then value, then `VECSET`) lands in bounds. The prefill loop reads no loop variable, so it takes no `LVAL` and no loop register. A `length` that evaluates to zero or less leaves the vector empty (`RANGE` skips its body), and the first index write faults with `IndexOutOfBounds`.
 
 A problem with no outputs emits the inputs header and `HALT` only.
 
@@ -321,8 +330,9 @@ The mapping is total. Every node either resolves onto a decoder register or rais
 | Sample read (`GETLINE`, `ROWSUM`, `COLSUM`, `ROWFIND`, `COLFIND`) | The decoder's sample register, `r0` |
 | Loop variable | The register of its own open loop |
 | `InputRef` (Int), `RegLoad` | The scalar register, `r1` |
+| `out[i]` on an output declared with `length=` (`VECGET`) | That output's register |
 
-Everything else is refused with a message naming the construct: a model coefficient (`CoefficientRef`, `GETQUAD`), a vector (a `Types.Vec` input, `.get()`, `.veclen()`, a `problem.vec()` allocation), and a loop variable read outside its own loop.
+Everything else is refused with a message naming the construct: a model coefficient (`CoefficientRef`, `GETQUAD`), any other vector (a `Types.Vec` input, `.get()`, `.veclen()`, a `problem.vec()` allocation), and a loop variable read outside its own loop.
 
 The rebuild shares its traversal with the verifier's sentinel rewrite. Both supply a per-node mapping to one structural walker.
 

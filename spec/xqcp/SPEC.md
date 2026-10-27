@@ -123,9 +123,11 @@ Allocate an empty untyped `Vec` register. Returns a `VecRef`.
 
 Multi-arm conditional with first-match semantics. Variadic `(condition, callable)` pairs followed by a mandatory default (callable or `None`). Minimum 3 arguments.
 
-### `problem.output(name, type=Types.Vec)`
+### `problem.output(name, type=Types.Vec, length=None)`
 
-Declare a decoder output. `type` must be `Types.Vec` -- every pipeline output is a vector. Returns an `OutputRef` whose only fill operation is `.append(val)`. Outputs are write-only: indexed read (`out[i]`) and indexed write (`out[i] = value`) are both rejected.
+Declare a decoder output, at the top level: not inside a `range()`, an `iter()` or a `branch()` arm. `type` must be `Types.Vec` -- every pipeline output is a vector. Returns an `OutputRef`.
+
+Without `length=`, the output is append-only: it is filled with `.append(val)`, and indexed read and write are rejected. With `length=`, the decoder starts the output as `length` zeros, and it is written with `out[i] = value` and read with `out[i]`; `.append()` is rejected. `length` is any expression the decoder can evaluate before its first loop: a literal, the scalar input, arithmetic over those, or a sample read. A literal `length` must be at least 1. A literal index against a literal `length` is bounds-checked at record time; any other index is bounds-checked by the VM at decode time (`IndexOutOfBounds`).
 
 ### `problem.compile()`
 
@@ -163,8 +165,11 @@ For every well-formed XQCP program:
 | `TypeError` | `.veclen()` on non-Vec `InputRef` | `InputRef.veclen()` |
 | `TypeError` | `a != b` on an XQCP expression | `_ExprOps.__ne__()` |
 | `TypeError` | XQCP expression in a boolean context (`and`, `or`, `not`, `if`) | `_ExprOps.__bool__()` |
-| `TypeError` | Indexed read `out[i]` on an `OutputRef` | `OutputRef.__getitem__()` |
-| `TypeError` | Indexed write `out[i] = value` on an `OutputRef` | `OutputRef.__setitem__()` |
+| `TypeError` | Indexed read `out[i]` on an output declared without `length=` | `OutputRef.__getitem__()` |
+| `TypeError` | Indexed write `out[i] = value` on an output declared without `length=` | `OutputRef.__setitem__()` |
+| `TypeError` | `.append()` on an output declared with `length=` | `OutputRef.append()` |
+| `ValueError` | A literal `length=` below 1 | `Problem.output()` |
+| `ValueError` | A literal index outside `[0, length)` of a literal `length=`, on read or write | `OutputRef.__getitem__()`, `OutputRef.__setitem__()` |
 | `TypeError` | `problem.output()` with a `type` other than `Types.Vec` | `Problem.output()` |
 | `ValueError` | `k=`, `lo=`, `hi=` or `penalty=` with `Domain.BINARY` or `Domain.SPIN` | `Problem.define_model()` |
 | `ValueError` | `penalty=` with `Domain.INTEGER` | `Problem.define_model()` |
@@ -183,7 +188,7 @@ For every well-formed XQCP program:
 | `RuntimeError` | `problem.output()` called inside a `range()` or `iter()` block | `Problem.output()` |
 | `RuntimeError` | `problem.output()` called inside a `branch()` arm | `Problem.output()` |
 | `RuntimeError` | A second, distinct scalar referenced in a decoder block, such as a runtime `lo=` meeting an output loop bound | `compile()` |
-| `RuntimeError` | A vector or model coefficient read in a decoder block | `compile()` |
+| `RuntimeError` | A vector other than an output, or a model coefficient, read in a decoder block | `compile()` |
 | `RuntimeError` | A loop variable read outside its own loop, in a decoder block | `compile()` |
 
 ## Cross-References

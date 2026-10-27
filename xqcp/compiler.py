@@ -1395,6 +1395,10 @@ class _DecoderRegisters:
             )
         return reg
 
+    def output_vec_reg(self, reg: int) -> int | None:
+        """The decoder register for an output's recording register, if it is one."""
+        return self._outputs.get(reg)
+
     # -- loop variables --------------------------------------------------
 
     def open_loop(self, var: LoopVar) -> int:
@@ -1510,7 +1514,10 @@ def _rewrite_decoder_expr(expr: Expr, regs: _DecoderRegisters) -> Expr:
         if isinstance(node, (CoefficientRef, GetQuadExpr)):
             raise RuntimeError(_DECODER_MODEL_READ_ERROR)
         if isinstance(node, VecGetExpr):
-            raise RuntimeError(_decoder_vector_error(regs.known_name(node.vec_reg)))
+            out_reg = regs.output_vec_reg(node.vec_reg)
+            if out_reg is None:
+                raise RuntimeError(_decoder_vector_error(regs.known_name(node.vec_reg)))
+            return VecGetExpr(out_reg, rw(node.index_expr))
         if isinstance(node, VecLenExpr):
             raise RuntimeError(_decoder_vector_error(regs.known_name(node.vec_reg)))
         return None
@@ -1536,7 +1543,10 @@ def compile_decoder(prob: Problem) -> str:
         body.append("")
         body.append("; === Decode ===")
         for output_ref in prob._outputs:
-            body.append(f"VECI r{regs.output_reg(output_ref)}  ; {output_ref.name}")
+            out_reg = regs.output_reg(output_ref)
+            body.append(f"VECI r{out_reg}  ; {output_ref.name}")
+            if output_ref.length is not None:
+                _emit_output_prefill(output_ref.length, out_reg, body, regs)
 
         _emit_decoder_block(walk, body, 0, regs)
 
@@ -1559,6 +1569,19 @@ def compile_decoder(prob: Problem) -> str:
     ]
 
     return "\n".join(header + body) + "\n"
+
+
+def _emit_output_prefill(length: Expr, out_reg: int, lines: list[str], regs: _DecoderRegisters) -> None:
+    """Fill a ``length=`` output with that many zeros, so index writes land in bounds.
+
+    No loop variable is read, so the loop takes no ``LVAL`` and no register.
+    """
+    lines.append("PUSH 0")
+    _rewrite_decoder_expr(length, regs).emit(lines, 0)
+    lines.append("RANGE")
+    lines.append(line("PUSH 0", 1))
+    lines.append(line(f"VECPUSH r{out_reg}", 1))
+    lines.append("NEXT")
 
 
 def _decoder_actions(actions: list[Action]) -> list[Action]:
@@ -1632,6 +1655,11 @@ def _emit_decoder_block(
         elif kind == "output_append":
             emit(d["value_expr"])
             lines.append(line(f"VECPUSH r{regs.output_reg(d['output'])}", indent))
+
+        elif kind == "output_setitem":
+            emit(d["index_expr"])
+            emit(d["value_expr"])
+            lines.append(line(f"VECSET r{regs.output_reg(d['output'])}", indent))
 
         elif kind == "branch":
             raise RuntimeError(

@@ -1226,26 +1226,71 @@ class TestCoercionRejections:
 
 
 class TestOutputAccessRejections:
-    """Outputs are write-only, append-only vectors: random-access read and
-    write have no assembly encoding."""
+    """An output is append-only without length= and index-only with it; each
+    access the other mode needs is refused at record time."""
 
-    def test_indexed_output_write_rejected(self) -> None:
+    def test_indexed_output_write_without_length_rejected(self) -> None:
         problem = Problem("OutputWrite")
         out = problem.output("tour", type=Types.Vec)
         with pytest.raises(
             TypeError,
-            match=r"Random-access write to output 'tour' is not supported; use tour\.append\(value\) instead",
+            match=r"Writing to output 'tour' by index needs a declared length; "
+            r"declare it with problem\.output\('tour', length=n\)",
         ):
             out[0] = 1
 
-    def test_indexed_output_read_rejected(self) -> None:
+    def test_indexed_output_read_without_length_rejected(self) -> None:
         problem = Problem("OutputRead")
         out = problem.output("tour", type=Types.Vec)
         with pytest.raises(
             TypeError,
-            match=r"Reading from output 'tour' is not supported; outputs are write-only via \.append\(value\)",
+            match=r"Reading from output 'tour' by index needs a declared length",
         ):
             _ = out[0]
+
+    def test_append_to_an_output_with_length_rejected(self) -> None:
+        problem = Problem("OutputAppendLength")
+        out = problem.output("tour", type=Types.Vec, length=3)
+        with pytest.raises(
+            TypeError,
+            match=r"Output 'tour' was declared with length= and is filled by index; "
+            r"write tour\[i\] = value instead of tour\.append\(value\)",
+        ):
+            out.append(1)
+
+    @pytest.mark.parametrize("length", [0, -2])
+    def test_literal_length_below_one_rejected(self, length: int) -> None:
+        problem = Problem("OutputZeroLength")
+        with pytest.raises(
+            ValueError,
+            match=rf"Output 'tour' needs a length= of at least 1; got {length}",
+        ):
+            problem.output("tour", type=Types.Vec, length=length)
+
+    @pytest.mark.parametrize("index", [3, -1])
+    def test_literal_write_outside_a_literal_length_rejected(self, index: int) -> None:
+        problem = Problem("OutputWriteBounds")
+        out = problem.output("tour", type=Types.Vec, length=3)
+        with pytest.raises(
+            ValueError,
+            match=rf"Index {index} is outside output 'tour', which has length 3",
+        ):
+            out[index] = 1
+
+    def test_literal_read_outside_a_literal_length_rejected(self) -> None:
+        problem = Problem("OutputReadBounds")
+        out = problem.output("tour", type=Types.Vec, length=3)
+        with pytest.raises(
+            ValueError,
+            match=r"Index 3 is outside output 'tour', which has length 3",
+        ):
+            _ = out[3]
+
+    def test_literal_index_against_a_symbolic_length_is_left_to_the_vm(self) -> None:
+        problem = Problem("OutputSymbolicLength")
+        n = problem.input("n", type=Types.Int)
+        out = problem.output("tour", type=Types.Vec, length=n)
+        out[7] = 1
 
     def test_non_vec_output_rejected(self) -> None:
         problem = Problem("NonVecOutput")
@@ -1732,6 +1777,73 @@ class TestDecoderRegisterFileIsTotal:
         assert "PUSH 1\nOUTPUT r3" in decoder
         decoded = _run_decoder(problem.compile(), size=2, values=_ones(1), scalar=2, slots=2)
         assert decoded == [[0, 1], [1, 2]]
+
+
+# ---------------------------------------------------------------------------
+# Indexed outputs
+# ---------------------------------------------------------------------------
+
+
+class TestIndexedOutputs:
+    """An output declared with length= starts as that many zeros in the
+    decoder, so index writes (VECSET) and reads (VECGET) land in bounds.
+    Every test runs the decoder: earlier output bugs compiled cleanly and
+    shipped empty vectors."""
+
+    @staticmethod
+    def _flat(name: str) -> tuple[Problem, InputRef]:
+        problem = Problem(name)
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=Domain.BINARY)
+        return problem, n
+
+    def test_reversed_fill_with_length_from_the_scalar(self) -> None:
+        problem, n = self._flat("IdxReversed")
+        out = problem.output("rev", type=Types.Vec, length=n)
+        with problem.range(0, n) as i:
+            out[n - 1 - i] = problem.sample.getline(i) + i
+
+        programs = problem.compile()
+
+        assert "VECI r2  ; rev\nPUSH 0\nLOAD r1\nRANGE\n  PUSH 0\n  VECPUSH r2\nNEXT" in programs.decoder
+        assert "VECSET r2" in programs.decoder
+        decoded = _run_decoder(programs, size=3, values=_ones(0), scalar=3, slots=1)
+        assert decoded == [[2, 1, 1]]
+
+    def test_literal_length_with_some_slots_left_zero(self) -> None:
+        problem, _n = self._flat("IdxLiteral")
+        out = problem.output("o", type=Types.Vec, length=4)
+        out[2] = problem.sample.getline(1) + 5
+
+        decoded = _run_decoder(problem.compile(), size=3, values=_ones(1), scalar=3, slots=1)
+
+        assert decoded == [[0, 0, 6, 0]]
+
+    def test_length_from_a_sample_read(self) -> None:
+        problem, n = self._flat("IdxSampleLength")
+        out = problem.output("o", type=Types.Vec, length=problem.sample.getline(0) + 2)
+        out[0] = n
+
+        programs = problem.compile()
+
+        assert "PUSH 0\nPUSH 0\nGETLINE r0\nPUSH 2\nADD\nRANGE" in programs.decoder
+        decoded = _run_decoder(programs, size=3, values=_ones(0), scalar=3, slots=1)
+        assert decoded == [[3, 0, 0]]
+
+    def test_read_in_an_appended_value(self) -> None:
+        problem, n = self._flat("IdxRead")
+        a = problem.output("a", type=Types.Vec, length=n)
+        b = problem.output("b", type=Types.Vec)
+        with problem.range(0, n) as i:
+            a[i] = problem.sample.getline(i)
+        with problem.range(0, n) as i:
+            b.append(a[i] * 10 + i)
+
+        programs = problem.compile()
+
+        assert "LOAD r10\n  VECGET r2" in programs.decoder
+        decoded = _run_decoder(programs, size=3, values=_ones(0, 2), scalar=3, slots=2)
+        assert decoded == [[1, 0, 1], [10, 1, 12]]
 
 
 # ---------------------------------------------------------------------------

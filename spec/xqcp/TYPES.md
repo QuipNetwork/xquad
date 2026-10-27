@@ -75,13 +75,13 @@ Proxy for a single model coefficient. Not a register -- emits operations on the 
 
 ### OutputRef
 
-Provides append-only write access in the decoder context. Outputs are write-only: there is no indexed read or write.
+Provides write access, and read access by index, in the decoder context. An output declared without `length=` is append-only; one declared with `length=` starts as that many zeros and is written and read by index. The two modes do not mix.
 
 | Method | Opcode | Description |
 |--------|--------|-------------|
-| `.append(value)` | `VECPUSH` | Append value to output vector |
-| `[idx] = value` | -- | Raises `TypeError`; use `.append(value)` instead |
-| `[idx]` | -- | Raises `TypeError`; outputs are write-only |
+| `.append(value)` | `VECPUSH` | Append value to an output declared without `length=`; raises `TypeError` on one declared with it |
+| `[idx] = value` | `VECSET` | Set an element of an output declared with `length=`; raises `TypeError` on one declared without it |
+| `[idx]` | `VECGET` | Read an element of an output declared with `length=` (returns expression); raises `TypeError` on one declared without it |
 
 ### VecRef
 
