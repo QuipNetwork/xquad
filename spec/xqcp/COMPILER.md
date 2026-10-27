@@ -290,7 +290,7 @@ The rejection is load-bearing rather than defensive. Program partitioning drops 
 
 An `output_append` whose recorded target is not the block's own output is rejected too. The decoder writes each output to its slot as soon as that output's block ends, so an append recorded after a later `output()` would land after its target had already shipped. Finish filling one output before declaring the next.
 
-An `output()` declared inside a `range()` block is rejected: its decoder block opens with the loop's `range_end`, closing a loop the block never opened.
+An `output()` declared inside a `range()` or `iter()` block, or inside a `branch()` arm, is rejected by `problem.output()` itself, at record time. Every program is split at the first top-level `output_decl`; a declaration nested inside a loop or an arm would leave the encoder with an unclosed loop, or the decoder with nothing to walk.
 
 ### Assembly Structure
 

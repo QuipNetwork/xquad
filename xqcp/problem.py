@@ -241,6 +241,7 @@ class Problem:
         self._model: ModelRef | None = None
         self._sample: SampleRef | None = None
         self._indent = 0
+        self._arm_depth = 0
         self._rows_expr: Expr | None = None
         self._cols_expr: Expr | None = None
 
@@ -504,13 +505,34 @@ class Problem:
             return []
         saved = self._actions
         self._actions = []
-        fn()
-        captured = self._actions
-        self._actions = saved
+        self._arm_depth += 1
+        try:
+            fn()
+        finally:
+            self._arm_depth -= 1
+            captured = self._actions
+            self._actions = saved
         return captured
 
     def output(self, name: str, type: Types = Types.Vec) -> OutputRef:
-        """Declare a pipeline output. Returns a symbolic OutputRef."""
+        """Declare a pipeline output. Returns a symbolic OutputRef.
+
+        # Errors
+
+        Raises ``RuntimeError`` when called inside a loop or a ``branch()``
+        arm: an output is declared once, at the top level, and the programs
+        are split at that declaration.
+        """
+        if self._indent > 0:
+            raise RuntimeError(
+                f"problem.output('{name}') is called inside a range() or iter() block; "
+                "declare every output at the top level, outside every loop and branch() arm"
+            )
+        if self._arm_depth > 0:
+            raise RuntimeError(
+                f"problem.output('{name}') is called inside a branch() arm; "
+                "declare every output at the top level, outside every loop and branch() arm"
+            )
         if type != Types.Vec:
             raise TypeError(f"Output '{name}' must be Types.Vec; every pipeline output is a vector")
         reg = self._alloc.alloc()

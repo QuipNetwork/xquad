@@ -1533,13 +1533,19 @@ class TestDecoderRegisterFileIsTotal:
     def test_output_declared_inside_a_loop_rejected(self) -> None:
         problem, n = self._flat("DecOutputInLoop")
         with problem.range(0, n) as _i:
-            _out = problem.output("o", type=Types.Vec)
+            with pytest.raises(
+                RuntimeError,
+                match=r"problem\.output\('o'\) is called inside a range\(\) or iter\(\) block",
+            ):
+                problem.output("o", type=Types.Vec)
 
+    def test_output_declared_inside_a_branch_arm_rejected(self) -> None:
+        problem, n = self._flat("DecOutputInArm")
         with pytest.raises(
             RuntimeError,
-            match=r"closes a loop it never opened",
+            match=r"problem\.output\('o'\) is called inside a branch\(\) arm",
         ):
-            problem.compile()
+            problem.branch(n > 1, lambda: problem.output("o", type=Types.Vec), None)
 
     # -- the single scalar -----------------------------------------------
 
