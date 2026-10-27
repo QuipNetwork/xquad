@@ -38,13 +38,14 @@ pushing with `VECPUSH r2`, then `PUSH 0 / OUTPUT r2`.
 With `length=`, the decoder starts the output as `length` zeros, and you
 write and read it by index: `out[i] = value` compiles to `VECSET`, and
 `out[i]` to `VECGET`. Use it when a value's position is computed rather
-than reached in order -- a tour written stop by stop, say, where the
-sample tells you which stop sits at which position:
+than reached in order. On the grid `examples/tsp/runner.py` builds, one
+row per city and one column per position, `rowfind` gives the position a
+city was placed at, so the tour can be written city by city:
 
 ```python
 tour = problem.output("tour", type=Types.Vec, length=n)
 with problem.range(0, n) as city:
-    tour[problem.sample.colfind(col=city, value=1)] = city
+    tour[problem.sample.rowfind(row=city, value=1)] = city
 ```
 
 `length` is anything the decoder can evaluate before its first loop: a
@@ -79,7 +80,10 @@ TypeError: Output 'tour' was declared with length= and is filled by index; write
 ```
 
 A literal `length=` below `1` raises `ValueError`, and so does a literal
-index outside `[0, length)` when `length=` is a literal too. Any other
+index outside `[0, length)` when `length=` is a literal too. A `length=`
+that reads another output, such as `length=counts[0]`, raises `ValueError`
+as well: every `length` is evaluated before any output is filled, so it
+would read `0`. Any other
 index is bounds-checked by the VM when the decoder runs, which faults with
 `IndexOutOfBounds`. A `length` that evaluates to `0` or less at decode
 time leaves the output empty, so the first index write faults the same
@@ -139,8 +143,9 @@ slot 0, and one scalar on slot 1. Anything a decoder block names that is
 not reachable from those two is refused at `compile()` rather than
 compiled into a read of whatever register happens to hold something.
 
-A block may reference the sample through the five read methods above, its
-own loop variables, and one scalar. That scalar does not have to be `N`:
+A block may reference the sample through the read methods above, its own
+loop variables, one scalar, and `out[i]` on an output declared with
+`length=`. That scalar does not have to be `N`:
 `examples/graph_coloring/runner.py` stows a total variable count before
 declaring its output and passes that on slot 1. The emitted decoder names
 which one it resolved, so `INPUT r1  ; total_vars` tells you what the
@@ -155,8 +160,8 @@ What a block may not reference is anything the decoder was never given: a
 vector input or a `problem.vec()` allocation, a model coefficient
 (`problem.model.linear[i]` -- the decoder holds the sample, not the model),
 or a loop variable from a loop that has closed. `problem.iter()` is refused
-for the same reason: `ITER` walks a vector register, and no vector reaches
-the decoder. Walk the indices with `problem.range()` and read each one from
+for the same reason: `ITER` walks a vector register, and no input vector
+reaches the decoder. Walk the indices with `problem.range()` and read each one from
 `problem.sample`.
 
 ## Filling Outputs in Any Order

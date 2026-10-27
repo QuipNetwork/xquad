@@ -82,6 +82,7 @@ Provides write access, and read access by index, in the decoder context. An outp
 | `.append(value)` | `VECPUSH` | Append value to an output declared without `length=`; raises `TypeError` on one declared with it |
 | `[idx] = value` | `VECSET` | Set an element of an output declared with `length=`; raises `TypeError` on one declared without it |
 | `[idx]` | `VECGET` | Read an element of an output declared with `length=` (returns expression); raises `TypeError` on one declared without it |
+| `iter(out)` | -- | Raises `TypeError`; on an output declared with `length=`, walk the indices with `range()` and read `out[i]`; an append-only output is not read back |
 
 ### VecRef
 

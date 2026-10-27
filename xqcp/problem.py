@@ -33,7 +33,7 @@ from typing import Any
 
 from xqvm_py import XQMXDomain
 
-from .expression import Expr, Literal, RegLoad, Types, coerce
+from .expression import Expr, Literal, RegLoad, Types, VecGetExpr, coerce
 from .symbols import InputRef, LoopVar, ModelRef, OutputRef, SampleRef, VecRef
 
 # ---------------------------------------------------------------------------
@@ -527,7 +527,9 @@ class Problem:
         Raises ``RuntimeError`` when called inside a loop or a ``branch()``
         arm: an output is declared once, at the top level, and the programs
         are split at that declaration.  Raises ``ValueError`` for a literal
-        ``length`` of zero or less.
+        ``length`` of zero or less, and for a ``length`` that reads another
+        output, which still holds its starting zeros when ``length`` is
+        evaluated.
         """
         if self._indent > 0:
             raise RuntimeError(
@@ -544,6 +546,8 @@ class Problem:
         length_expr = None if length is None else coerce(length)
         if isinstance(length_expr, Literal) and length_expr.value <= 0:
             raise ValueError(f"Output '{name}' needs a length= of at least 1; got {length_expr.value}")
+        if length_expr is not None:
+            self._reject_output_read_in_length(name, length_expr)
         reg = self._alloc.alloc()
         slot = self._output_slot
         self._output_slot += 1
@@ -551,6 +555,26 @@ class Problem:
         self._outputs.append(ref)
         self._actions.append(Action("output_decl", {"ref": ref}))
         return ref
+
+    def _reject_output_read_in_length(self, name: str, length: Expr) -> None:
+        """Raise ``ValueError`` if ``length`` reads an output declared earlier.
+
+        Every output's ``length`` is evaluated before the decoder walks any
+        action, so another output still holds only its starting zeros there.
+        """
+        from .compiler import _map_expr
+
+        outputs = {o.reg: o.name for o in self._outputs}
+
+        def leaf(expr: Expr, rw: Callable[[Expr], Expr]) -> Expr | None:
+            if isinstance(expr, VecGetExpr) and expr.vec_reg in outputs:
+                raise ValueError(
+                    f"Output '{name}' has a length= that reads output '{outputs[expr.vec_reg]}'; "
+                    "every length= is evaluated before any output is filled, so it would read 0"
+                )
+            return None
+
+        _map_expr(length, leaf)
 
     # -- Internal recording methods called by ModelRef / OutputRef ----------
 

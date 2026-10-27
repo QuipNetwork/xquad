@@ -289,7 +289,7 @@ The rejection is load-bearing rather than defensive. Program partitioning drops 
 
 A `branch` is emitted as the same `NOT` / `JUMPI` / `JUMP` / `TARGET` chain the encoder uses, with conditions rewritten onto the decoder's register file and labels from the decoder's own allocator. Each arm is walked by the decoder's walker, not the encoder's, so an arm takes the decoder's whole vocabulary -- `.append()`, `out[i] = value`, `range()` and a nested `branch()` -- and refuses the rest the same way.
 
-`iter_start` and `iter_end` are rejected with the rest. `ITER` reads a vector register, and the decoder's calldata is the sample and one scalar, so there is no vector for it to iterate -- remapping its index and value variables would still leave the loop reading a register the decoder never wrote. Walk the indices with `range()` and read each one from `problem.sample`.
+`iter_start` and `iter_end` are rejected with the rest. `ITER` reads a vector register, and the decoder's calldata is the sample and one scalar, so there is no input vector for it to iterate -- remapping its index and value variables would still leave the loop reading a register the decoder never wrote. Walk the indices with `range()` and read each one from `problem.sample`.
 
 An `output()` declared inside a `range()` or `iter()` block, or inside a `branch()` arm, is rejected by `problem.output()` itself, at record time. Every program is split at the first top-level `output_decl`; a declaration nested inside a loop or an arm would leave the encoder with an unclosed loop, or the decoder with nothing to walk.
 

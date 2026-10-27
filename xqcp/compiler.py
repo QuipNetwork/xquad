@@ -1317,7 +1317,7 @@ def _decoder_vector_error(name: str | None) -> str:
     subject = "a vector" if name is None else f"the vector '{name}'"
     return (
         f"xqcp: a decoder block reads {subject}, but the decoder is handed the sample "
-        "and one scalar on calldata and holds no other vector; read the solved values "
+        "and one scalar on calldata and holds no vector but its own outputs; read the solved values "
         "through problem.sample instead"
     )
 
@@ -1412,13 +1412,14 @@ class _DecoderRegisters:
 
         # Errors
 
-        Raises ``RuntimeError`` when the block closes a loop it never opened.
+        Raises ``RuntimeError`` when the walk closes a loop it never opened,
+        which ``problem.output()`` rules out by refusing a declaration inside a
+        loop, so reaching it is a compiler bug.
         """
         if not self._open_loops:
             raise RuntimeError(
-                "xqcp: a decoder output block closes a loop it never opened; "
-                "problem.output() must be called outside every range() block, "
-                "not inside one"
+                "xqcp: internal error: the decoder walk closes a loop it never opened; "
+                "please report this with the problem that produced it"
             )
         _ = self._open_loops.pop()
 
@@ -1650,9 +1651,9 @@ def _emit_decoder_block(
 
         elif kind in ("iter_start", "iter_end"):
             raise RuntimeError(
-                "xqcp: iter() is not supported inside a decoder output block; ITER "
+                "xqcp: iter() is not supported after the first problem.output(); ITER "
                 "reads a vector register, and the decoder is handed the sample and "
-                "one scalar on calldata and holds no vector to iterate -- walk the "
+                "one scalar on calldata and holds no input vector to iterate -- walk the "
                 "indices with range() and read each one from problem.sample"
             )
 

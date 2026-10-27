@@ -25,7 +25,7 @@ compilation into assembly.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from xqvm_py import XQMXDomain
 
@@ -439,6 +439,26 @@ class OutputRef:
         """
         index_expr = self._indexed(index, "Writing to")
         self._problem._record_output_setitem(self, index_expr, value)
+
+    def __iter__(self) -> NoReturn:
+        """Iterating an output is not supported; walk its indices instead.
+
+        Without this, Python would fall back to calling ``__getitem__`` with
+        0, 1, 2, ... and, for a symbolic ``length=``, never stop.
+
+        # Errors
+
+        Always raises ``TypeError``.
+        """
+        if self.length is None:
+            raise TypeError(
+                f"Output '{self.name}' is not iterable; it is append-only, so nothing "
+                "reads it back -- declare it with length= to read it by index"
+            )
+        raise TypeError(
+            f"Output '{self.name}' is not iterable; walk its indices with "
+            f"problem.range(0, length) and read {self.name}[i]"
+        )
 
     def _indexed(self, index: Expr | int, access: str) -> Expr:
         """Check an indexed access against the output's declared length.
