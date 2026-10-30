@@ -33,6 +33,7 @@ from .expression import (
     Expr,
     GetLineExpr,
     GetQuadExpr,
+    Literal,
     RegLoad,
     RowFindExpr,
     RowSumExpr,
@@ -374,34 +375,108 @@ class ModelRef:
 
 
 class OutputRef:
-    """Symbolic reference to a declared output."""
+    """Symbolic reference to a declared output.
 
-    def __init__(self, problem: Problem, slot: int, reg: int, name: str, type_: Types) -> None:
+    An output declared without ``length=`` is append-only: it is filled with
+    ``.append(value)``.  One declared with ``length=`` starts as that many
+    zeros and is filled and read by index: ``out[i] = value`` and ``out[i]``.
+    The two modes do not mix.
+    """
+
+    def __init__(
+        self,
+        problem: Problem,
+        slot: int,
+        reg: int,
+        name: str,
+        type_: Types,
+        length: Expr | None = None,
+    ) -> None:
         self._problem = problem
         self.slot = slot
         self.reg = reg
         self.name = name
         self.type_ = type_
+        self.length = length
 
     def append(self, value_expr: Expr | int) -> None:
         """Append a value to the output vector.
 
         Problem.output() rejects any type other than Types.Vec, so every
         OutputRef is a vector by construction and no type check is needed here.
+
+        # Errors
+
+        Raises ``TypeError`` when the output was declared with ``length=``.
         """
+        if self.length is not None:
+            raise TypeError(
+                f"Output '{self.name}' was declared with length= and is filled by index; "
+                f"write {self.name}[i] = value instead of {self.name}.append(value)"
+            )
         self._problem._record_output_append(self, value_expr)
 
-    def __getitem__(self, index: Expr | int) -> NoReturn:
-        """Reading from an output is not supported; outputs are write-only."""
+    def __getitem__(self, index: Expr | int) -> VecGetExpr:
+        """Read an element of an output declared with ``length=`` (emits VECGET).
+
+        # Errors
+
+        Raises ``TypeError`` when the output has no ``length=``, and
+        ``ValueError`` when a literal index falls outside a literal length.
+        """
+        index_expr = self._indexed(index, "Reading from")
+        return VecGetExpr(self.reg, index_expr)
+
+    def __setitem__(self, index: Expr | int, value: Expr | int) -> None:
+        """Write an element of an output declared with ``length=`` (emits VECSET).
+
+        # Errors
+
+        Raises ``TypeError`` when the output has no ``length=``, and
+        ``ValueError`` when a literal index falls outside a literal length.
+        """
+        index_expr = self._indexed(index, "Writing to")
+        self._problem._record_output_setitem(self, index_expr, value)
+
+    def __iter__(self) -> NoReturn:
+        """Iterating an output is not supported; walk its indices instead.
+
+        Without this, Python would fall back to calling ``__getitem__`` with
+        0, 1, 2, ... and, for a symbolic ``length=``, never stop.
+
+        # Errors
+
+        Always raises ``TypeError``.
+        """
+        if self.length is None:
+            raise TypeError(
+                f"Output '{self.name}' is not iterable; it is append-only, so nothing "
+                "reads it back -- declare it with length= to read it by index"
+            )
         raise TypeError(
-            f"Reading from output '{self.name}' is not supported; outputs are write-only via .append(value)"
+            f"Output '{self.name}' is not iterable; walk its indices with "
+            f"problem.range(0, length) and read {self.name}[i]"
         )
 
-    def __setitem__(self, index: Expr | int, value: Expr | int) -> NoReturn:
-        """Random-access writes to an output are not supported; use .append(value)."""
-        raise TypeError(
-            f"Random-access write to output '{self.name}' is not supported; use {self.name}.append(value) instead"
-        )
+    def _indexed(self, index: Expr | int, access: str) -> Expr:
+        """Check an indexed access against the output's declared length.
+
+        A symbolic index, or a literal one against a symbolic length, is left
+        to the VM's bounds check at decode time.
+        """
+        if self.length is None:
+            raise TypeError(
+                f"{access} output '{self.name}' by index needs a declared length; "
+                f"declare it with problem.output('{self.name}', length=n), or fill it "
+                f"with {self.name}.append(value)"
+            )
+        index_expr = coerce(index)
+        if isinstance(index_expr, Literal) and isinstance(self.length, Literal):
+            if not 0 <= index_expr.value < self.length.value:
+                raise ValueError(
+                    f"Index {index_expr.value} is outside output '{self.name}', which has length {self.length.value}"
+                )
+        return index_expr
 
 
 # ---------------------------------------------------------------------------

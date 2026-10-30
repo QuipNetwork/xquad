@@ -176,7 +176,9 @@
 test:rust:
     stage: test
     extends: .rust
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     # 25m: cold-cache room for a full `ci-test` profile build of the
     # workspace before any of the three test tiers start. See setup.yml's
     # "Job timeouts" section.
@@ -187,7 +189,9 @@ test:rust:
 test:python:
     stage: test
     extends: .python
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     # 25m: cold-cache room for the uv resolve and the maturin build of
     # xqffi's cdylib that `uv sync` performs before pytest starts, then
     # the example smoke run on top. See setup.yml's "Job timeouts" section.
@@ -210,7 +214,9 @@ test:python:
 test:quip:
     stage: test
     extends: .python
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     # 20m: the same cold-cache shape as test:python -- uv resolve plus the
     # maturin xqffi build -- with the `[quip]` extra synced on top. See
     # setup.yml's "Job timeouts" section.
@@ -233,7 +239,9 @@ test:quip:
 test:wasm:
     stage: test
     extends: .rust
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     # Path-gated -- see the "Path gating" section at the top of this file
     # for the clause-by-clause reasoning and the list's per-entry
     # justification. Every `needs:` edge into this job is `optional: true`.
@@ -268,7 +276,9 @@ test:wasm:
 # what actually governs when those downloads need to change.
 test:substrate:
     stage: test
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     # Path-gated -- see the "Path gating" section at the top of this file,
     # including the note on why gating this job in particular makes its
     # runner-local cache colder. Every `needs:` edge into this job is

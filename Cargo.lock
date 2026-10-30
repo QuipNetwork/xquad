@@ -1104,7 +1104,7 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 
 [[package]]
 name = "xqasm"
-version = "0.5.0-dev"
+version = "0.6.0-dev"
 dependencies = [
  "miette",
  "pest",
@@ -1116,7 +1116,7 @@ dependencies = [
 
 [[package]]
 name = "xqffi"
-version = "0.5.0-dev"
+version = "0.6.0-dev"
 dependencies = [
  "pyo3",
  "xqasm",
@@ -1125,7 +1125,7 @@ dependencies = [
 
 [[package]]
 name = "xqvm"
-version = "0.5.0-dev"
+version = "0.6.0-dev"
 dependencies = [
  "crc32fast",
  "hashbrown 0.15.5",

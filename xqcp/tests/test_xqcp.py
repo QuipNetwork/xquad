@@ -620,6 +620,20 @@ def _run_program(source: str, inputs: dict[int, object]) -> _Run:
     return _Run(vm.outputs())
 
 
+def _run_decoder(
+    programs: CompiledPrograms,
+    *,
+    size: int,
+    values: dict[int, int],
+    scalar: int,
+    slots: int,
+) -> list[list[int]]:
+    """Run the decoder over a binary sample and return its output vectors."""
+    sample = XqmxSample.binary([values.get(index, 0) for index in range(size)])
+    output = _run_program(programs.decoder, {0: sample, 1: scalar}).output
+    return [list(output[slot]) for slot in range(slots)]
+
+
 def _encode(programs: CompiledPrograms, calldata: list[object]) -> object:
     """Run the encoder and return the model it built."""
     return _run_program(programs.encoder, dict(enumerate(calldata))).output[0]
@@ -1129,26 +1143,104 @@ class TestCoercionRejections:
 
 
 class TestOutputAccessRejections:
-    """Outputs are write-only, append-only vectors: random-access read and
-    write have no assembly encoding."""
+    """An output is append-only without length= and index-only with it; each
+    access the other mode needs is refused at record time."""
 
-    def test_indexed_output_write_rejected(self) -> None:
+    def test_indexed_output_write_without_length_rejected(self) -> None:
         problem = Problem("OutputWrite")
         out = problem.output("tour", type=Types.Vec)
         with pytest.raises(
             TypeError,
-            match=r"Random-access write to output 'tour' is not supported; use tour\.append\(value\) instead",
+            match=r"Writing to output 'tour' by index needs a declared length; "
+            r"declare it with problem\.output\('tour', length=n\)",
         ):
             out[0] = 1
 
-    def test_indexed_output_read_rejected(self) -> None:
+    def test_indexed_output_read_without_length_rejected(self) -> None:
         problem = Problem("OutputRead")
         out = problem.output("tour", type=Types.Vec)
         with pytest.raises(
             TypeError,
-            match=r"Reading from output 'tour' is not supported; outputs are write-only via \.append\(value\)",
+            match=r"Reading from output 'tour' by index needs a declared length",
         ):
             _ = out[0]
+
+    def test_append_to_an_output_with_length_rejected(self) -> None:
+        problem = Problem("OutputAppendLength")
+        out = problem.output("tour", type=Types.Vec, length=3)
+        with pytest.raises(
+            TypeError,
+            match=r"Output 'tour' was declared with length= and is filled by index; "
+            r"write tour\[i\] = value instead of tour\.append\(value\)",
+        ):
+            out.append(1)
+
+    @pytest.mark.parametrize("length", [0, -2])
+    def test_literal_length_below_one_rejected(self, length: int) -> None:
+        problem = Problem("OutputZeroLength")
+        with pytest.raises(
+            ValueError,
+            match=rf"Output 'tour' needs a length= of at least 1; got {length}",
+        ):
+            problem.output("tour", type=Types.Vec, length=length)
+
+    @pytest.mark.parametrize("extra", [0, 2])
+    def test_length_reading_another_output_rejected(self, extra: int) -> None:
+        problem = Problem("OutputLengthFromOutput")
+        counts = problem.output("counts", type=Types.Vec, length=1)
+        with pytest.raises(
+            ValueError,
+            match=r"Output 'tour' has a length= that reads output 'counts'; "
+            r"every length= is evaluated before any output is filled",
+        ):
+            problem.output("tour", type=Types.Vec, length=counts[0] + extra)
+
+    @pytest.mark.parametrize("index", [3, -1])
+    def test_literal_write_outside_a_literal_length_rejected(self, index: int) -> None:
+        problem = Problem("OutputWriteBounds")
+        out = problem.output("tour", type=Types.Vec, length=3)
+        with pytest.raises(
+            ValueError,
+            match=rf"Index {index} is outside output 'tour', which has length 3",
+        ):
+            out[index] = 1
+
+    def test_literal_read_outside_a_literal_length_rejected(self) -> None:
+        problem = Problem("OutputReadBounds")
+        out = problem.output("tour", type=Types.Vec, length=3)
+        with pytest.raises(
+            ValueError,
+            match=r"Index 3 is outside output 'tour', which has length 3",
+        ):
+            _ = out[3]
+
+    @pytest.mark.parametrize("symbolic", [False, True])
+    def test_iterating_an_output_with_length_rejected(self, symbolic: bool) -> None:
+        problem = Problem("OutputIter")
+        n = problem.input("n", type=Types.Int)
+        out = problem.output("tour", type=Types.Vec, length=n if symbolic else 3)
+        with pytest.raises(
+            TypeError,
+            match=r"Output 'tour' is not iterable; walk its indices with problem\.range\(0, length\)",
+        ):
+            list(out)
+        with pytest.raises(TypeError, match=r"not iterable"):
+            _ = 1 in out
+
+    def test_iterating_an_append_only_output_rejected(self) -> None:
+        problem = Problem("OutputIterAppend")
+        out = problem.output("tour", type=Types.Vec)
+        with pytest.raises(
+            TypeError,
+            match=r"Output 'tour' is not iterable; it is append-only, so nothing reads it back",
+        ):
+            list(out)
+
+    def test_literal_index_against_a_symbolic_length_is_left_to_the_vm(self) -> None:
+        problem = Problem("OutputSymbolicLength")
+        n = problem.input("n", type=Types.Int)
+        out = problem.output("tour", type=Types.Vec, length=n)
+        out[7] = 1
 
     def test_non_vec_output_rejected(self) -> None:
         problem = Problem("NonVecOutput")
@@ -1296,9 +1388,9 @@ class TestBranchArmPartitioning:
 class TestDecoderBlockRejections:
     """_partition_program drops every action recorded after the first
     output() from the encoder and verifier, so the decoder is the only
-    program that sees them.  The decoder emits loops and .append() only;
-    anything else it cannot emit must be refused rather than dropped,
-    which used to leave a silently empty output vector."""
+    program that sees them.  The decoder emits loops, branches and output
+    writes only; anything else it cannot emit must be refused rather than
+    dropped, which used to leave a silently empty output vector."""
 
     @staticmethod
     def _problem_with_output(name: str) -> tuple[Problem, OutputRef]:
@@ -1306,17 +1398,6 @@ class TestDecoderBlockRejections:
         n = problem.input("n", type=Types.Int)
         problem.define_model(size=n, domain=Domain.BINARY)
         return problem, problem.output("out", type=Types.Vec)
-
-    def test_branch_inside_output_block_rejected(self) -> None:
-        problem, out = self._problem_with_output("DecoderBranch")
-        with problem.range(0, 4) as k:
-            problem.branch(k > 1, lambda: out.append(1), lambda: out.append(0))
-
-        with pytest.raises(
-            RuntimeError,
-            match=r"branch\(\) is not supported inside a decoder output block",
-        ):
-            problem.compile()
 
     def test_action_after_output_rejected(self) -> None:
         problem, _out = self._problem_with_output("DecoderStow")
@@ -1454,13 +1535,31 @@ class TestDecoderRegisterFileIsTotal:
     def test_output_declared_inside_a_loop_rejected(self) -> None:
         problem, n = self._flat("DecOutputInLoop")
         with problem.range(0, n) as _i:
-            _out = problem.output("o", type=Types.Vec)
+            with pytest.raises(
+                RuntimeError,
+                match=r"problem\.output\('o'\) is called inside a range\(\) or iter\(\) block",
+            ):
+                problem.output("o", type=Types.Vec)
 
+    def test_output_declared_inside_an_iter_block_rejected(self) -> None:
+        problem = Problem("DecOutputInIter")
+        n = problem.input("n", type=Types.Int)
+        w = problem.input("w", type=Types.Vec)
+        problem.define_model(size=n, domain=Domain.BINARY)
+        with problem.iter(w, 0, n) as (_idx, _val):
+            with pytest.raises(
+                RuntimeError,
+                match=r"problem\.output\('o'\) is called inside a range\(\) or iter\(\) block",
+            ):
+                problem.output("o", type=Types.Vec)
+
+    def test_output_declared_inside_a_branch_arm_rejected(self) -> None:
+        problem, n = self._flat("DecOutputInArm")
         with pytest.raises(
             RuntimeError,
-            match=r"closes a loop it never opened",
+            match=r"problem\.output\('o'\) is called inside a branch\(\) arm",
         ):
-            problem.compile()
+            problem.branch(n > 1, lambda: problem.output("o", type=Types.Vec), None)
 
     # -- the single scalar -----------------------------------------------
 
@@ -1577,24 +1676,38 @@ class TestDecoderRegisterFileIsTotal:
 
         with pytest.raises(
             RuntimeError,
-            match=r"iter\(\) is not supported inside a decoder output block",
+            match=r"iter\(\) is not supported after the first problem\.output\(\)",
         ):
             problem.compile()
 
-    # -- appends across output blocks -------------------------------------
+    # -- filling outputs in any order -------------------------------------
 
-    def test_append_to_an_earlier_output_rejected(self) -> None:
-        problem, n = self._flat("DecCrossBlock")
+    def test_two_outputs_filled_in_one_loop(self) -> None:
+        problem, n = self._flat("DecInterleaved")
         a = problem.output("a", type=Types.Vec)
-        _b = problem.output("b", type=Types.Vec)
+        b = problem.output("b", type=Types.Vec)
+        with problem.range(0, n) as i:
+            a.append(problem.sample.getline(i))
+            b.append(problem.sample.getline(i) + 1)
+
+        programs = problem.compile()
+
+        assert "; === Decode ===\nVECI r2  ; a\nVECI r3  ; b\n" in programs.decoder
+        decoded = _run_decoder(programs, size=3, values=_ones(0, 2), scalar=3, slots=2)
+        assert decoded == [[1, 0, 1], [2, 1, 2]]
+
+    def test_an_earlier_output_filled_after_a_later_one_is_declared(self) -> None:
+        problem, n = self._flat("DecLateFill")
+        a = problem.output("a", type=Types.Vec)
+        b = problem.output("b", type=Types.Vec)
+        with problem.range(0, n) as i:
+            b.append(i)
         with problem.range(0, n) as i:
             a.append(problem.sample.getline(i))
 
-        with pytest.raises(
-            RuntimeError,
-            match=r"'a\.append\(\)' is recorded after output 'b' was declared",
-        ):
-            problem.compile()
+        decoded = _run_decoder(problem.compile(), size=3, values=_ones(1), scalar=3, slots=2)
+
+        assert decoded == [[0, 1, 0], [0, 1, 2]]
 
     def test_two_outputs_each_filled_in_its_own_block(self) -> None:
         problem, n = self._flat("DecTwoOutputs")
@@ -1613,6 +1726,185 @@ class TestDecoderRegisterFileIsTotal:
         assert "VECI r3" in decoder
         assert "VECPUSH r3" in decoder
         assert "PUSH 1\nOUTPUT r3" in decoder
+        decoded = _run_decoder(problem.compile(), size=2, values=_ones(1), scalar=2, slots=2)
+        assert decoded == [[0, 1], [1, 2]]
+
+
+# ---------------------------------------------------------------------------
+# Indexed outputs
+# ---------------------------------------------------------------------------
+
+
+class TestIndexedOutputs:
+    """An output declared with length= starts as that many zeros in the
+    decoder, so index writes (VECSET) and reads (VECGET) land in bounds.
+    Every test runs the decoder: earlier output bugs compiled cleanly and
+    shipped empty vectors."""
+
+    @staticmethod
+    def _flat(name: str) -> tuple[Problem, InputRef]:
+        problem = Problem(name)
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=Domain.BINARY)
+        return problem, n
+
+    def test_reversed_fill_with_length_from_the_scalar(self) -> None:
+        problem, n = self._flat("IdxReversed")
+        out = problem.output("rev", type=Types.Vec, length=n)
+        with problem.range(0, n) as i:
+            out[n - 1 - i] = problem.sample.getline(i) + i
+
+        programs = problem.compile()
+
+        assert "VECI r2  ; rev\nPUSH 0\nLOAD r1\nRANGE\n  PUSH 0\n  VECPUSH r2\nNEXT" in programs.decoder
+        assert "VECSET r2" in programs.decoder
+        decoded = _run_decoder(programs, size=3, values=_ones(0), scalar=3, slots=1)
+        assert decoded == [[2, 1, 1]]
+
+    def test_literal_length_with_some_slots_left_zero(self) -> None:
+        problem, _n = self._flat("IdxLiteral")
+        out = problem.output("o", type=Types.Vec, length=4)
+        out[2] = problem.sample.getline(1) + 5
+
+        decoded = _run_decoder(problem.compile(), size=3, values=_ones(1), scalar=3, slots=1)
+
+        assert decoded == [[0, 0, 6, 0]]
+
+    def test_length_from_a_sample_read(self) -> None:
+        problem, n = self._flat("IdxSampleLength")
+        out = problem.output("o", type=Types.Vec, length=problem.sample.getline(0) + 2)
+        out[0] = n
+
+        programs = problem.compile()
+
+        assert "PUSH 0\nPUSH 0\nGETLINE r0\nPUSH 2\nADD\nRANGE" in programs.decoder
+        decoded = _run_decoder(programs, size=3, values=_ones(0), scalar=3, slots=1)
+        assert decoded == [[3, 0, 0]]
+
+    def test_read_in_an_appended_value(self) -> None:
+        problem, n = self._flat("IdxRead")
+        a = problem.output("a", type=Types.Vec, length=n)
+        b = problem.output("b", type=Types.Vec)
+        with problem.range(0, n) as i:
+            a[i] = problem.sample.getline(i)
+        with problem.range(0, n) as i:
+            b.append(a[i] * 10 + i)
+
+        programs = problem.compile()
+
+        assert "LOAD r10\n  VECGET r2" in programs.decoder
+        decoded = _run_decoder(programs, size=3, values=_ones(0, 2), scalar=3, slots=2)
+        assert decoded == [[1, 0, 1], [10, 1, 12]]
+
+
+# ---------------------------------------------------------------------------
+# Conditional decoder outputs
+# ---------------------------------------------------------------------------
+
+
+class TestDecoderBranch:
+    """branch() after the first output() is emitted by the decoder alone:
+    each arm recurses into the decoder's own walker, so an arm takes
+    .append(), out[i] = v, range() and a nested branch().  It used to be
+    refused, and before that its appends were silently dropped."""
+
+    @staticmethod
+    def _flat(name: str) -> tuple[Problem, InputRef]:
+        problem = Problem(name)
+        n = problem.input("n", type=Types.Int)
+        problem.define_model(size=n, domain=Domain.BINARY)
+        return problem, n
+
+    def test_conditional_append_over_the_sample(self) -> None:
+        problem, n = self._flat("BrSelected")
+        out = problem.output("selected", type=Types.Vec)
+        with problem.range(0, n) as i:
+            problem.branch(problem.sample.getline(i) == 1, lambda: out.append(i), None)
+
+        programs = problem.compile()
+
+        assert "NOT\n  JUMPI .1" in programs.decoder
+        decoded = _run_decoder(programs, size=5, values=_ones(0, 3, 4), scalar=5, slots=1)
+        assert decoded == [[0, 3, 4]]
+
+    def test_condition_over_a_loop_variable_with_a_default_arm(self) -> None:
+        problem, n = self._flat("BrLoopVar")
+        out = problem.output("o", type=Types.Vec)
+        with problem.range(0, n) as k:
+            problem.branch(k > 1, lambda: out.append(1), lambda: out.append(0))
+
+        decoded = _run_decoder(problem.compile(), size=4, values={}, scalar=4, slots=1)
+
+        assert decoded == [[0, 0, 1, 1]]
+
+    def test_loop_inside_an_arm(self) -> None:
+        problem, n = self._flat("BrLoopInArm")
+        out = problem.output("o", type=Types.Vec)
+
+        def fill() -> None:
+            with problem.range(0, n) as j:
+                out.append(problem.sample.getline(j))
+
+        problem.branch(problem.sample.getline(0) == 1, fill, lambda: out.append(-1))
+
+        programs = problem.compile()
+
+        assert _run_decoder(programs, size=3, values=_ones(0, 2), scalar=3, slots=1) == [[1, 0, 1]]
+        assert _run_decoder(programs, size=3, values=_ones(2), scalar=3, slots=1) == [[-1]]
+
+    def test_nested_branch(self) -> None:
+        problem, n = self._flat("BrNested")
+        out = problem.output("o", type=Types.Vec)
+        with problem.range(0, n) as i:
+            problem.branch(
+                problem.sample.getline(i) == 1,
+                lambda: problem.branch(i > 0, lambda: out.append(i), lambda: out.append(100)),
+                None,
+            )
+
+        decoded = _run_decoder(problem.compile(), size=4, values=_ones(0, 2, 3), scalar=4, slots=1)
+
+        assert decoded == [[100, 2, 3]]
+
+    def test_indexed_write_inside_an_arm(self) -> None:
+        problem, n = self._flat("BrIndexed")
+        out = problem.output("o", type=Types.Vec, length=n)
+
+        def mark(i: Any) -> None:
+            out[i] = i + 1
+
+        with problem.range(0, n) as i:
+            problem.branch(problem.sample.getline(i) == 1, lambda: mark(i), None)
+
+        decoded = _run_decoder(problem.compile(), size=4, values=_ones(1, 3), scalar=4, slots=1)
+
+        assert decoded == [[0, 2, 0, 4]]
+
+    def test_two_branches_get_distinct_targets(self) -> None:
+        problem, n = self._flat("BrTwo")
+        a = problem.output("a", type=Types.Vec)
+        b = problem.output("b", type=Types.Vec)
+        with problem.range(0, n) as i:
+            problem.branch(problem.sample.getline(i) == 1, lambda: a.append(i), None)
+        with problem.range(0, n) as i:
+            problem.branch(problem.sample.getline(i) == 0, lambda: b.append(i), None)
+
+        programs = problem.compile()
+
+        assert [programs.decoder.count(f"TARGET .{t}\n") for t in range(4)] == [1, 1, 1, 1]
+        decoded = _run_decoder(programs, size=4, values=_ones(1, 2), scalar=4, slots=2)
+        assert decoded == [[1, 2], [0, 3]]
+
+    def test_unsupported_action_inside_an_arm_rejected(self) -> None:
+        problem, n = self._flat("BrStowInArm")
+        _out = problem.output("o", type=Types.Vec)
+        problem.branch(n > 1, lambda: problem.stow("scratch", 1), None)
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"Action 'stow' recorded after problem\.output\(\) is not emitted by the decoder",
+        ):
+            problem.compile()
 
 
 # ---------------------------------------------------------------------------

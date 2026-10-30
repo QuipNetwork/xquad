@@ -23,6 +23,8 @@ docs:generated:
     stage: docs
     extends: .python-tools
     needs:
+        - job: dependency-gate
+          optional: true
         - !reference [.needs-gates, verify-test-and-hardware]
     # 10m: compiles nothing -- a cold run only fetches uv and PyYAML
     # before diffing the generated pages. See setup.yml's "Job timeouts"
@@ -56,6 +58,8 @@ docs:handwritten:
     stage: docs
     extends: .alpine
     needs:
+        - job: dependency-gate
+          optional: true
         - !reference [.needs-gates, verify-test-and-hardware]
     variables:
         APK_PACKAGES: "bash grep make curl tar gcompat libstdc++ libgcc"
@@ -81,6 +85,8 @@ docs:build:
     stage: docs
     extends: .rust-tools
     needs:
+        - job: dependency-gate
+          optional: true
         - !reference [.needs-gates, verify-test-and-hardware]
     variables:
         CARGO_TOOLS: mdbook,mdbook-mermaid
@@ -137,6 +143,8 @@ docs:publish:
     extends: .alpine
     pages: true
     needs:
+        - job: dependency-gate
+          optional: true
         - !reference [.needs-gates, verify-test-and-hardware]
         - job: docs:build
           artifacts: false

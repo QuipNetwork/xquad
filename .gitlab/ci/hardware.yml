@@ -136,6 +136,8 @@ hardware:cuda:
     tags: [linux, x86_64, cuda]
     extends: .hardware
     needs:
+        - job: dependency-gate
+          optional: true
         - !reference [.needs-gates, verify-and-test]
     # 45m: no run data (never executed -- protected refs only). Deliberate
     # guess with cold-start headroom for first-run driver and kernel warmup
@@ -197,6 +199,8 @@ hardware:qpu:
     tags: [linux, x86_64]
     extends: .hardware
     needs:
+        - job: dependency-gate
+          optional: true
         - !reference [.needs-gates, verify-and-test]
     # 45m: no run data (never executed -- protected refs only). Deliberate
     # guess with cold-start headroom for a real network round-trip to a
@@ -237,6 +241,8 @@ hardware:metal:
     tags: [macos, arm64]
     extends: .hardware
     needs:
+        - job: dependency-gate
+          optional: true
         - !reference [.needs-gates, verify-and-test]
     # 30m: no run data (never executed -- protected refs only). The Metal
     # solve itself has no network queueing, unlike the other two, and this

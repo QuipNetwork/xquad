@@ -138,6 +138,9 @@ stages:
     - release
 
 include:
+    - project: quip.network/ci-templates
+      ref: v1.0.0
+      file: templates/dependency-gate.yml
     - local: .gitlab/ci/setup.yml
     - local: .gitlab/ci/verify.yml
     - local: .gitlab/ci/test.yml
