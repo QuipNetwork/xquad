@@ -1316,7 +1316,7 @@ def _decoder_vector_error(name: str | None) -> str:
     subject = "a vector" if name is None else f"the vector '{name}'"
     return (
         f"xqcp: a decoder block reads {subject}, but the decoder is handed the sample "
-        "and one scalar on calldata and holds no other vector; read the solved values "
+        "and one scalar on calldata and holds no vector but its own outputs; read the solved values "
         "through problem.sample instead"
     )
 
@@ -1338,10 +1338,10 @@ class _DecoderRegisters:
     SAMPLE = 0
     SCALAR = 1
 
-    def __init__(self, prob: Problem, output_blocks: list[tuple[OutputRef, list[Action]]]) -> None:
+    def __init__(self, prob: Problem) -> None:
         self._outputs: dict[int, int] = {}
         next_reg = self.SCALAR + 1
-        for ref, _ in output_blocks:
+        for ref in prob._outputs:
             self._outputs[ref.reg] = next_reg
             next_reg += 1
 
@@ -1394,6 +1394,10 @@ class _DecoderRegisters:
             )
         return reg
 
+    def output_vec_reg(self, reg: int) -> int | None:
+        """The decoder register for an output's recording register, if it is one."""
+        return self._outputs.get(reg)
+
     # -- loop variables --------------------------------------------------
 
     def open_loop(self, var: LoopVar) -> int:
@@ -1407,13 +1411,14 @@ class _DecoderRegisters:
 
         # Errors
 
-        Raises ``RuntimeError`` when the block closes a loop it never opened.
+        Raises ``RuntimeError`` when the walk closes a loop it never opened,
+        which ``problem.output()`` rules out by refusing a declaration inside a
+        loop, so reaching it is a compiler bug.
         """
         if not self._open_loops:
             raise RuntimeError(
-                "xqcp: a decoder output block closes a loop it never opened; "
-                "problem.output() must be called outside every range() block, "
-                "not inside one"
+                "xqcp: internal error: the decoder walk closes a loop it never opened; "
+                "please report this with the problem that produced it"
             )
         _ = self._open_loops.pop()
 
@@ -1509,7 +1514,10 @@ def _rewrite_decoder_expr(expr: Expr, regs: _DecoderRegisters) -> Expr:
         if isinstance(node, (CoefficientRef, GetQuadExpr)):
             raise RuntimeError(_DECODER_MODEL_READ_ERROR)
         if isinstance(node, VecGetExpr):
-            raise RuntimeError(_decoder_vector_error(regs.known_name(node.vec_reg)))
+            out_reg = regs.output_vec_reg(node.vec_reg)
+            if out_reg is None:
+                raise RuntimeError(_decoder_vector_error(regs.known_name(node.vec_reg)))
+            return VecGetExpr(out_reg, rw(node.index_expr))
         if isinstance(node, VecLenExpr):
             raise RuntimeError(_decoder_vector_error(regs.known_name(node.vec_reg)))
         return None
@@ -1518,25 +1526,36 @@ def _rewrite_decoder_expr(expr: Expr, regs: _DecoderRegisters) -> Expr:
 
 
 def compile_decoder(prob: Problem) -> str:
-    """Generate the decoder .xqasm program."""
-    output_blocks = _collect_output_blocks(prob._actions)
-    regs = _DecoderRegisters(prob, output_blocks)
+    """Generate the decoder .xqasm program.
+
+    Every output's vector is allocated up front, every action recorded after
+    the first ``output()`` is walked once in recording order, and every
+    output ships to its slot at the end.  An output can therefore be filled
+    from any point after its declaration, interleaved with the others.
+    """
+    regs = _DecoderRegisters(prob)
+    targets = _TargetAllocator()
+    walk = _decoder_actions(prob._actions)
 
     # The body is emitted first because it is what resolves the scalar on
     # slot 1; the header names that scalar so the caller can see what to pass.
     body: list[str] = []
-    for output_ref, block in output_blocks:
-        out_reg = regs.output_reg(output_ref)
-
+    if prob._outputs:
         body.append("")
-        body.append(f"; === Decode {output_ref.name} ===")
-        body.append(f"VECI r{out_reg}")
-        _emit_decoder_block(block, body, 0, output_ref, regs)
+        body.append("; === Decode ===")
+        for output_ref in prob._outputs:
+            out_reg = regs.output_reg(output_ref)
+            body.append(f"VECI r{out_reg}  ; {output_ref.name}")
+            if output_ref.length is not None:
+                _emit_output_prefill(output_ref.length, out_reg, body, regs)
+
+        _emit_decoder_block(walk, body, 0, regs, targets)
 
         body.append("")
         body.append("; === Output ===")
-        body.append(f"PUSH {output_ref.slot}")
-        body.append(f"OUTPUT r{out_reg}")
+        for output_ref in prob._outputs:
+            body.append(f"PUSH {output_ref.slot}")
+            body.append(f"OUTPUT r{regs.output_reg(output_ref)}")
 
     body.append("HALT")
 
@@ -1553,44 +1572,46 @@ def compile_decoder(prob: Problem) -> str:
     return "\n".join(header + body) + "\n"
 
 
-def _collect_output_blocks(actions: list[Action]) -> list[tuple[OutputRef, list[Action]]]:
-    """Group actions into (output_ref, computation_block) pairs."""
-    blocks: list[tuple[OutputRef, list[Action]]] = []
-    current_output: OutputRef | None = None
-    current_block: list[Action] = []
-    in_output_section = False
+def _emit_output_prefill(length: Expr, out_reg: int, lines: list[str], regs: _DecoderRegisters) -> None:
+    """Fill a ``length=`` output with that many zeros, so index writes land in bounds.
 
-    for action in actions:
+    No loop variable is read, so the loop takes no ``LVAL`` and no register.
+    """
+    lines.append("PUSH 0")
+    _rewrite_decoder_expr(length, regs).emit(lines, 0)
+    lines.append("RANGE")
+    lines.append(line("PUSH 0", 1))
+    lines.append(line(f"VECPUSH r{out_reg}", 1))
+    lines.append("NEXT")
+
+
+def _decoder_actions(actions: list[Action]) -> list[Action]:
+    """The actions the decoder walks: everything from the first ``output()`` on."""
+    for index, action in enumerate(actions):
         if action.kind == "output_decl":
-            if current_output is not None:
-                blocks.append((current_output, current_block))
-            current_output = action.data["ref"]
-            current_block = []
-            in_output_section = True
-        elif in_output_section:
-            current_block.append(action)
-
-    if current_output is not None:
-        blocks.append((current_output, current_block))
-
-    return blocks
+            return actions[index:]
+    return []
 
 
 def _emit_decoder_block(
     actions: list[Action],
     lines: list[str],
     indent: int,
-    output_ref: OutputRef,
     regs: _DecoderRegisters,
+    targets: _TargetAllocator,
 ) -> None:
-    """Emit one output's decoder computation block.
+    """Emit the decoder's walk over the actions recorded after the first output.
+
+    ``output_decl`` actions are skipped: every output's ``VECI`` is hoisted
+    above the walk.  A ``branch`` recurses into each arm with this same
+    walker, so an arm takes the decoder's whole vocabulary; it mirrors
+    ``_emit_branch``, which stays the encoder's and the verifier's.
 
     # Errors
 
     Raises ``RuntimeError`` for any action the decoder cannot emit, and for
     any expression naming a register the decoder is not handed.
     """
-    out_reg = regs.output_reg(output_ref)
 
     def emit(expr: Expr) -> None:
         _rewrite_decoder_expr(expr, regs).emit(lines, indent)
@@ -1598,6 +1619,9 @@ def _emit_decoder_block(
     for action in actions:
         kind = action.kind
         d = action.data
+
+        if kind == "output_decl":
+            continue
 
         if kind == "range_start":
             start_expr: Expr = d["start_expr"]
@@ -1626,30 +1650,36 @@ def _emit_decoder_block(
 
         elif kind in ("iter_start", "iter_end"):
             raise RuntimeError(
-                "xqcp: iter() is not supported inside a decoder output block; ITER "
+                "xqcp: iter() is not supported after the first problem.output(); ITER "
                 "reads a vector register, and the decoder is handed the sample and "
-                "one scalar on calldata and holds no vector to iterate -- walk the "
+                "one scalar on calldata and holds no input vector to iterate -- walk the "
                 "indices with range() and read each one from problem.sample"
             )
 
         elif kind == "output_append":
-            target: OutputRef = d["output"]
-            if target is not output_ref:
-                raise RuntimeError(
-                    f"xqcp: '{target.name}.append()' is recorded after output "
-                    f"'{output_ref.name}' was declared, but the decoder writes each "
-                    f"output to its slot as soon as its block ends, so '{target.name}' "
-                    "has already shipped and the appended value would be lost; finish "
-                    f"filling '{target.name}' before calling output('{output_ref.name}')"
-                )
             emit(d["value_expr"])
-            lines.append(line(f"VECPUSH r{out_reg}", indent))
+            lines.append(line(f"VECPUSH r{regs.output_reg(d['output'])}", indent))
+
+        elif kind == "output_setitem":
+            emit(d["index_expr"])
+            emit(d["value_expr"])
+            lines.append(line(f"VECSET r{regs.output_reg(d['output'])}", indent))
 
         elif kind == "branch":
-            raise RuntimeError(
-                "branch() is not supported inside a decoder output block; its "
-                "appends would be silently dropped, leaving an empty output vector"
-            )
+            end_target = targets.alloc()
+            for arm in d["arms"]:
+                cond = arm["condition"]
+                if cond is None:
+                    _emit_decoder_block(arm["actions"], lines, indent, regs, targets)
+                    continue
+                skip_target = targets.alloc()
+                emit(cond)
+                lines.append(line("NOT", indent))
+                lines.append(line(f"JUMPI .{skip_target}", indent))
+                _emit_decoder_block(arm["actions"], lines, indent + 1, regs, targets)
+                lines.append(line(f"JUMP .{end_target}", indent + 1))
+                lines.append(line(f"TARGET .{skip_target}", indent))
+            lines.append(line(f"TARGET .{end_target}", indent))
 
         else:
             raise RuntimeError(
