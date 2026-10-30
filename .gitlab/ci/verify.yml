@@ -44,7 +44,9 @@
 verify:rust:
     stage: verify
     extends: .rust
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     # 20m: cold-cache room for a full clippy pass plus a full rustdoc
     # build of the workspace. See setup.yml's "Job timeouts" section for
     # the sizing method every `timeout:` in this pipeline follows.
@@ -183,7 +185,9 @@ verify:rust:
 verify:policy:
     stage: verify
     extends: .rust-tools
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     variables:
         CARGO_TOOLS: taplo,cargo-deny,git-cliff
         GIT_DEPTH: 0
@@ -230,7 +234,9 @@ verify:policy:
 verify:python:
     stage: verify
     extends: .python-tools
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     # 10m: no compile anywhere in the job -- a cold run only fetches uv
     # and the pinned ruff. See setup.yml's "Job timeouts" section.
     timeout: 10m
@@ -316,7 +322,9 @@ verify:python:
 # does not carry into the next run.
 verify:xqffi:
     stage: verify
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     before_script:
         - !reference [.fragments, uv]
     cache:
@@ -400,7 +408,9 @@ verify:xqffi:
 verify:substrate-deny:
     stage: verify
     extends: .rust-tools
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     rules:
         - if: $CI_COMMIT_TAG
         - if: $CI_COMMIT_REF_PROTECTED == "true"

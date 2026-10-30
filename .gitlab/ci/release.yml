@@ -147,6 +147,8 @@ variables:
 release:validate:
     stage: release
     needs:
+        - job: dependency-gate
+          optional: true
         - !reference [.needs-gates, verify-test-and-hardware]
     # dependencies: [] on every job in this file whose `needs:` names
     # other jobs; release:auto-tag is the one exception, since its
@@ -259,6 +261,8 @@ release:validate:
 release:crates:
     stage: release
     needs:
+        - job: dependency-gate
+          optional: true
         - release:validate
     <<: *on-release-tag
     dependencies: []
@@ -285,6 +289,8 @@ release:crates:
 release:pypi:
     stage: release
     needs:
+        - job: dependency-gate
+          optional: true
         - release:validate
         - release:crates
     <<: *on-release-tag
@@ -367,6 +373,8 @@ release:notes:
     # Runs after release:pypi so the GitLab Release page goes up only
     # once artefacts are live on crates.io and PyPI (QUI-496).
     needs:
+        - job: dependency-gate
+          optional: true
         - release:pypi
     # Deliberately its own `rules:`, not `<<: *on-release-tag`. That
     # anchor is shared with release:crates and release:pypi (this

@@ -26,15 +26,15 @@ codec = { package = "parity-scale-codec", version = "3", default-features = fals
 scale-info = { version = "2", default-features = false, features = [ "derive" ] }
 xqvm = { path = "../../xqvm", default-features = false }
 
-frame-support = { git = "https://github.com/QuipNetwork/polkadot-sdk", rev = "89495ec6dcd284257bf3789a3e7a5d7a2006686e", default-features = false }
-frame-system  = { git = "https://github.com/QuipNetwork/polkadot-sdk", rev = "89495ec6dcd284257bf3789a3e7a5d7a2006686e", default-features = false }
-sp-runtime    = { git = "https://github.com/QuipNetwork/polkadot-sdk", rev = "89495ec6dcd284257bf3789a3e7a5d7a2006686e", default-features = false }
+frame-support = { git = "https://github.com/QuipNetwork/polkadot-sdk", tag = "v0.3.0", default-features = false }
+frame-system  = { git = "https://github.com/QuipNetwork/polkadot-sdk", tag = "v0.3.0", default-features = false }
+sp-runtime    = { git = "https://github.com/QuipNetwork/polkadot-sdk", tag = "v0.3.0", default-features = false }
 
 [dev-dependencies]
-sp-core = { git = "https://github.com/QuipNetwork/polkadot-sdk", rev = "89495ec6dcd284257bf3789a3e7a5d7a2006686e", default-features = false, features = [
+sp-core = { git = "https://github.com/QuipNetwork/polkadot-sdk", tag = "v0.3.0", default-features = false, features = [
     "std",
 ] }
-sp-io = { git = "https://github.com/QuipNetwork/polkadot-sdk", rev = "89495ec6dcd284257bf3789a3e7a5d7a2006686e", features = [
+sp-io = { git = "https://github.com/QuipNetwork/polkadot-sdk", tag = "v0.3.0", features = [
     "std",
 ] }
 

@@ -3,6 +3,8 @@ revision = 3
 requires-python = ">=3.13"
 
 [options]
+exclude-newer = "2026-10-23T07:43:06.465523055Z"
+exclude-newer-span = "P1W"
 
 [options.exclude-newer-package]
 certifi = false
@@ -1574,7 +1576,7 @@ wheels = [
 
 [[package]]
 name = "xqcp"
-version = "0.5.0.dev0"
+version = "0.5.0"
 source = { editable = "xqcp" }
 dependencies = [
     { name = "xqffi" },
@@ -1589,7 +1591,7 @@ source = { directory = "xqffi" }
 
 [[package]]
 name = "xqsa"
-version = "0.5.0.dev0"
+version = "0.5.0"
 source = { editable = "xqsa" }
 dependencies = [
     { name = "dwave-samplers" },
@@ -1631,7 +1633,7 @@ provides-extras = ["cuda", "dwave", "metal", "quip"]
 
 [[package]]
 name = "xquad"
-version = "0.5.0.dev0"
+version = "0.5.0"
 source = { editable = "xquad" }
 dependencies = [
     { name = "click" },
