@@ -629,11 +629,7 @@ def _run_decoder(
     slots: int,
 ) -> list[list[int]]:
     """Run the decoder over a binary sample and return its output vectors."""
-    from xqvm_py import XQMX
-
-    sample = XQMX.binary_sample(size)
-    for index, value in values.items():
-        sample.linear[index] = value
+    sample = XqmxSample.binary([values.get(index, 0) for index in range(size)])
     output = _run_program(programs.decoder, {0: sample, 1: scalar}).output
     return [list(output[slot]) for slot in range(slots)]
 
