@@ -73,7 +73,7 @@ uses.
 ## GPU and QPU Install Prerequisites
 
 The base install runs CPU simulated annealing only, through `xqsa`'s
-`dwave-cpu` backend. Every other solver -- a local GPU or a real D-Wave
+`cpu` backend. Every other solver -- a local GPU or a real D-Wave
 QPU -- needs an extra on top, and the extra needs hardware or credentials
 this page cannot install for you. `xqsa/pyproject.toml` defines the
 extras, and `xquad/pyproject.toml` forwards to the ones it re-exports:
@@ -90,7 +90,7 @@ extras, and `xquad/pyproject.toml` forwards to the ones it re-exports:
   configured signer; see [Quip Network](../solving/quip-network.md) for
   what that solver does.
 
-`xqcp`, `xqffi`, and `xqvm_py` define no optional dependencies at all.
+`xqcp` and `xqffi` define no optional dependencies at all.
 
 The only extra this page can fully specify is `[dwave]`: it needs a D-Wave
 Leap account and a `DWAVE_API_TOKEN`, and `dwave ping` confirms both. A

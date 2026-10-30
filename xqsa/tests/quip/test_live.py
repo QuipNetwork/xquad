@@ -63,6 +63,7 @@ pytest.importorskip(
     reason="designed: quip_signer extension not installed (run `uv sync --extra quip`)",
 )
 
+from xqffi.vm import XqmxModel, XqmxSample
 from xqsa import SolverResult
 from xqsa.quip import (
     AccessAllow,
@@ -93,7 +94,6 @@ from xqsa.quip.metadata import connect as connect_shimmed
 from xqsa.quip.resolution import MIN_RANK_WEIGHTED_SPEC
 from xqsa.quip.signing import check_runtime, load_or_generate_keystore
 from xqsa.quip.solution import decode_answers, pick_best
-from xqvm_py.xqmx import XQMX
 
 RPC_URL = os.environ.get("QUIP_RPC_URL")
 FAUCET_URL = os.environ.get("QUIP_FAUCET_URL")
@@ -241,31 +241,31 @@ def second_solver(second_funded_keystore):
 # ---------------------------------------------------------------------------
 
 
-def _feasible(sample: XQMX, size: int, domain_values: set[int]) -> bool:
+def _feasible(sample: XqmxSample, size: int, domain_values: set[int]) -> bool:
     """Return whether each sample value belongs to the model's domain."""
     return all(sample.get_linear(index) in domain_values for index in range(size))
 
 
-def _asymmetric_spin_model() -> XQMX:
+def _asymmetric_spin_model() -> XqmxModel:
     """A 3-var SPIN model with asymmetric fields (exercises index ordering)."""
-    model = XQMX.spin_model(3)
+    model = XqmxModel.spin(3)
     model.set_linear(0, 1)
     model.set_linear(1, -2)
     model.set_linear(2, 3)
-    model.set_quadratic(0, 1, 1)
-    model.set_quadratic(1, 2, -1)
+    model.set_quad(0, 1, 1)
+    model.set_quad(1, 2, -1)
     return model
 
 
-def _dense_spin_model() -> XQMX:
+def _dense_spin_model() -> XqmxModel:
     """A K6 SPIN model: every pair of its 6 variables is coupled."""
     size = 6
-    model = XQMX.spin_model(size)
+    model = XqmxModel.spin(size)
     for i in range(size):
         model.set_linear(i, 1 if i % 2 == 0 else -1)
     for i in range(size):
         for j in range(i + 1, size):
-            model.set_quadratic(i, j, 1 if (i + j) % 2 == 0 else -1)
+            model.set_quad(i, j, 1 if (i + j) % 2 == 0 else -1)
     return model
 
 
@@ -290,7 +290,7 @@ def _ranked_vectors(job) -> list[list[int]]:
     return sorted(vectors, key=lambda vector: ising_energy_milli(job, vector))
 
 
-def _place(solver: SolverQuip, model: XQMX, **options) -> JobOrder:
+def _place(solver: SolverQuip, model: XqmxModel, **options) -> JobOrder:
     """Create and submit an order for ``model`` with ``options`` through the real submit; returns the order."""
     return solver.create_order(model, **options).submit()
 
@@ -357,7 +357,7 @@ def _ss58(solver: SolverQuip) -> str:
     return quip_chain.ss58_address(solver._iface, bytes(solver._signer.account_id))
 
 
-def _solve_or_skip(solver: SolverQuip, model: XQMX, **kwargs):
+def _solve_or_skip(solver: SolverQuip, model: XqmxModel, **kwargs):
     """``solver.solve(model, **kwargs)``, skipping the test when the network left the order unanswered."""
     try:
         return solver.solve(model, **kwargs)
@@ -722,11 +722,11 @@ class TestSelfSolved:
 
     def test_order_lifecycle_reads_back(self, make_solver) -> None:
         """One order through its draft lifecycle, answered with four vectors, read back here and on a fresh client."""
-        model = XQMX.binary_model(3)
+        model = XqmxModel.binary(3)
         model.set_linear(0, -1)
         model.set_linear(1, 2)
-        model.set_quadratic(0, 1, -3)
-        model.set_quadratic(1, 2, 1)
+        model.set_quad(0, 1, -3)
+        model.set_quad(1, 2, 1)
         solver = make_solver()
         # A keyless account beside ours keeps the order closed to the fleet with one funded account.
         rule = AccessAllow(accounts=[_account(solver), "0x" + "00" * 32])

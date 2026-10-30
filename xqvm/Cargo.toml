@@ -1,12 +1,18 @@
 [package]
 name                 = "xqvm"
 description          = "X-Quadratic Virtual Machine -- bytecode interpreter for the XQuad Toolchain"
-version              = "0.4.6-dev"
+version              = "0.5.0"
 license.workspace    = true
 repository.workspace = true
 edition              = "2024"
 build                = "build.rs"
 readme               = "README.md"
+# Targets that need `xqasm`, a path-only dev-dependency the published
+# tarball drops (see [dev-dependencies]), or that read `spec/` from the
+# workspace. Leaving them in would make `cargo test` against the packaged
+# crate fail; cargo drops the matching target from the packaged manifest.
+# The vector data itself ships.
+exclude = [ "examples/tsp", "tests/metering_spec.rs", "tests/vector_suite" ]
 
 [lints]
 workspace = true
@@ -37,6 +43,16 @@ miette = { workspace = true, optional = true }
 [dev-dependencies]
 xqasm            = { path = "../xqasm" }
 miette.workspace = true
+# The vector suite: one named test per vector without a build script, and
+# the vector file format.
+libtest-mimic        = "0.8"
+serde                = { version = "1", features = [ "derive" ] }
+serde_json.workspace = true
+
+[[test]]
+name    = "vectors"
+path    = "tests/vector_suite/main.rs"
+harness = false
 
 # Std-only timing harnesses; see the module docs in each file.
 [[bench]]

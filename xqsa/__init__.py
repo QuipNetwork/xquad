@@ -19,25 +19,21 @@
 XQSA -- Solvers for XQMX quadratic models.
 
 Provides pluggable solvers that take XQMX models and return
-optimized samples. The first solver wraps DWave's CPU simulated annealer.
+optimized samples. SolverCPU, SolverGPU and SolverDWave run in-process;
+xqsa.quip.SolverQuip submits to the Quip network.
 """
 
 from . import quip as quip
 from ._deprecated import flat_quip_dir, flat_quip_getattr
-from .cuda_gpu import SolverCudaGPU
-from .dwave_cpu import SolverDWaveCPU
-from .dwave_qpu import SolverDWaveQPU
-from .metal_gpu import SolverMetalGPU
-from .registry import DEFAULT_SOLVER, SOLVERS, build_solver
 from .solver import Solver, SolverResult
+from .solvers import DEFAULT_SOLVER, SOLVERS, SolverCPU, SolverDWave, SolverGPU, build_solver
 
 __all__ = [
     "Solver",
     "SolverResult",
-    "SolverCudaGPU",
-    "SolverDWaveCPU",
-    "SolverDWaveQPU",
-    "SolverMetalGPU",
+    "SolverCPU",
+    "SolverGPU",
+    "SolverDWave",
     "SOLVERS",
     "DEFAULT_SOLVER",
     "build_solver",

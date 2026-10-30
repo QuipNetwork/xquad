@@ -563,8 +563,9 @@ correct result look wrong.
 
 `metadata["solver"]` here names the solver account that answered, not a
 piece of hardware -- [D-Wave QPU](dwave-qpu.md#how-a-qpu-result-differs)
-uses the same key for the physical Advantage system that ran the job, so
-the same key names a different kind of thing depending on the backend.
+records the physical Advantage system that ran the job under
+`metadata["params"]["solver"]`, so the same name refers to a different
+kind of thing depending on the backend.
 
 `solve()` returns the leader's best vector, the answer the chain pays
 for, rather than the best vector any solver stored. `leader`,
@@ -585,7 +586,7 @@ warning, but `import *` does not bring it in:
 | Exception | Raised when |
 |---|---|
 | `QuipError` | Base class for every error below |
-| `EncodingError` | The model is not `MODEL`-mode, its domain is unsupported, or both its `linear` and `quadratic` dicts are empty. Also covers a NaN coefficient, a model whose coefficients all round to zero at milli scale, a coefficient whose rounded milli value overflows `i32` (see [Coefficient Encoding](#coefficient-encoding)), and a native order over the mempool's `MaxNodes` or `MaxEdges` |
+| `EncodingError` | The model is not an `XqmxModel`, its domain is unsupported, or it has no nonzero linear or quadratic term. Also covers a coefficient whose milli value overflows `i32` (see [Coefficient Encoding](#coefficient-encoding)), and a native order over the mempool's `MaxNodes` or `MaxEdges` |
 | `PlacementError` | The model's coupling graph is not a subgraph of the target topology. Raised in default mode only; see [Native topology mode](#native-topology-mode) |
 | `QuipSigningError` | Extrinsic assembly, keystore handling, or submission fails |
 | `QuipConnectionError` | The node is unreachable; a configured Ising spec or topology is not registered on-chain; a mempool constant cannot be read (`MinReward`, `MaxDeadlineBlocks`, `MaxBlockWait`, `MaxSolutions` and `MaxBidMiners` at construction, `MaxNodes` and `MaxEdges` per native order); the chain defines no `MinReward` and no reward was given; an order id names no order; a balance, nonce or block read fails; or the node serves another chain than the preset pins, named by both genesis hashes. A reconnect to another chain than the first connection reached raises it too, but that happens only while a send is settling, so it reaches the caller as the `__cause__` of `QuipSubmitIncompleteError`. Most come from the constructor or `for_network()`, which read the limits once |
@@ -601,15 +602,12 @@ warning, but `import *` does not bring it in:
 | `QuipTimeoutError` | An order does not reach finality before the configured timeout. Carries `order_id` and, when a wait raised it, the order's `receipt`, so the caller can call `exc.receipt.wait()` again; another session rebuilds the receipt with `get_receipt(order_id)` |
 | `QuipJobFailedError` | A final order has no usable solution; carries `order_id`. From `solve()`, the reward of an unanswered order was reclaimed first, and the message says whether the reclaim succeeded; it also names any quality floors or allowlist that may explain why nobody answered. `JobOrder.best()` raises it without reclaiming |
 
-The `EncodingError` emptiness check tests the dicts themselves, not the
-values inside them -- but `XQMX.set_linear()`
-/ `set_quadratic()` pop a key the moment its value reaches `0`
-(`xqvm_py/xqmx.py:175-226`), so for any model built through the normal
-API, "has no terms" and "carries only zero terms" are the same
-condition in practice. A model constructed directly as a dataclass,
-bypassing those setters, can hold explicit zero entries that leave the
-dicts non-empty; that model passes the `EncodingError` check and
-submits all-zero coefficient arrays.
+The `EncodingError` emptiness check tests whether `linear_items()` and
+`quadratic_items()` are both empty. Both list
+nonzero terms only -- an `XqmxModel` drops a term the moment its
+coefficient returns to `0` -- so "has no terms" and "carries only zero
+terms" are the same condition, and an all-zero model never reaches the
+chain.
 
 `EncodingError` and `PlacementError` can be raised entirely locally,
 before anything touches the network -- they come from

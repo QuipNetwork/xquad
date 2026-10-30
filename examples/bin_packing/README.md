@@ -5,7 +5,7 @@ with a fixed capacity C.
 
 ## QUBO formulation
 
-- **Input**: N item sizes (Vec), number of bins B, bin capacity C
+- **Input**: N item sizes (list), number of bins B, bin capacity C
 - **Model**: `(N + 1) * B` binary variables in an `(N + 1) x B` grid. Rows `0..N-1` are the assignment cells: `x[i,b] = 1` if item i is placed in bin b. Row N holds one indicator per bin: `y[b] = 1` if bin b is open.
 - **Objective**: `+BIN_COST` on each indicator `y[b]`, so the energy counts the bins the packing opens. A bias spread over the assignment cells instead would be identically N on every feasible packing, because each item lands in exactly one bin, and could not tell a one-bin packing from a three-bin one.
 - **Constraints**:
@@ -43,15 +43,14 @@ under-constrained.
 
 ```sh
 uv run python examples/bin_packing/runner.py --seed 42
-uv run python examples/bin_packing/runner.py --n 5 --bins 4 --interpreter rust
+uv run python examples/bin_packing/runner.py --n 5 --bins 4
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--n` | `4` | Number of items |
 | `--bins` | `3` | Number of bins |
-| `--solver` | `dwave-cpu` | Solver backend (see Choosing a solver) |
-| `--interpreter` | `python` | XQVM backend: `python` or `rust` |
+| `--solver` | `cpu` | Solver backend (see Choosing a solver) |
 | `--seed` | `42` | Random seed |
 | `-o` | stdout | Write JSON result to file |
 
@@ -59,10 +58,10 @@ uv run python examples/bin_packing/runner.py --n 5 --bins 4 --interpreter rust
 
 | Name | Hardware | Install |
 |------|----------|---------|
-| `dwave-cpu` | CPU (default) | `pip install xquad` |
-| `dwave-qpu` | D-Wave Leap account | `pip install xquad[dwave]` |
-| `cuda-gpu` | NVIDIA CUDA GPU | `pip install xquad[cuda]` |
-| `metal-gpu` | Apple Silicon (macOS) | `pip install xquad[metal]` |
+| `cpu` | CPU (default) | `pip install xquad` |
+| `dwave` | D-Wave Leap account | `pip install xquad[dwave]` |
+| `cuda` | NVIDIA CUDA GPU | `pip install xquad[cuda]` |
+| `metal` | Apple Silicon (macOS) | `pip install xquad[metal]` |
 | `quip` | Quip Network (remote miner, env-configured) | `pip install xqsa[quip]` |
 
 See [GPU/QPU installation](../../README.md#gpuqpu-support) for driver
@@ -70,10 +69,10 @@ prerequisites and [xqsa solver quick-starts](../../xqsa/README.md) for
 per-solver parameter tuning.
 
 Non-default solvers will not reproduce the canonical output (different
-RNG/hardware). `example-smoke` always runs `dwave-cpu`.
+RNG/hardware). `example-smoke` always runs `cpu`.
 
 ## Canonical output
 
-`example-smoke` validates both interpreters produce `valid == 1` with
-`--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
+`example-smoke` validates that the runner produces `valid == 1` with
+`--seed 42 --solver cpu`. The smoke test is invariant-based --
 it checks validity, not exact output.

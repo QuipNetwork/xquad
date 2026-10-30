@@ -17,9 +17,8 @@ Run one from the repository root:
 uv run python examples/maxcut/runner.py --seed 42
 ```
 
-Every runner accepts `--seed`, `--interpreter` (`python` or `rust`),
-`--solver`, and `-o`/`--output`. Problem size flags vary; each directory's
-`README.md` carries the exact table.
+Every runner accepts `--seed`, `--solver`, and `-o`/`--output`. Problem
+size flags vary; each directory's `README.md` carries the exact table.
 
 ## Graph problems
 

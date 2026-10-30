@@ -28,7 +28,7 @@ Guards three invariants:
    umbrella imports alone, which catches regressions where a peer
    package's public surface changes without the umbrella keeping up.
 
-3. Both VM backends (Rust and Python) produce identical results.
+3. `xquad.vm` has no backend switch: it runs on the Rust VM only.
 """
 
 from __future__ import annotations
@@ -40,11 +40,10 @@ import pytest
 
 import xqcp as _xqcp
 import xqffi as _xqffi
+import xqffi.vm as _xqffi_vm
 import xqsa as _xqsa
 import xqsa.quip as _xqsa_quip
 import xquad
-import xqvm_py.vector as _xqvm_py_vector
-import xqvm_py.xqmx as _xqvm_py_xqmx
 from xqsa._deprecated import FLAT_QUIP_NAMES
 from xquad import asm, cp, sa, types, vm
 
@@ -98,7 +97,7 @@ def test_pyo3_alias_has_a_spec():
 
 def test_import_xquad_loads_no_peer():
     """`import xquad` alone leaves the peer packages unimported."""
-    code = "import sys, xquad; print(' '.join(m for m in ('xqcp', 'xqsa', 'xqvm_py') if m in sys.modules))"
+    code = "import sys, xquad; print(' '.join(m for m in ('xqcp', 'xqsa', 'xqffi') if m in sys.modules))"
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
     assert out.strip() == ""
 
@@ -118,16 +117,13 @@ def test_identity_reexports():
     """xquad re-exports the identical symbols from the peer packages."""
     assert cp.Problem is _xqcp.Problem
     assert cp.Types is _xqcp.Types
-    assert sa.SolverDWaveCPU is _xqsa.SolverDWaveCPU
-    assert sa.SolverCudaGPU is _xqsa.SolverCudaGPU
-    assert sa.SolverMetalGPU is _xqsa.SolverMetalGPU
+    assert sa.SolverCPU is _xqsa.SolverCPU
+    assert sa.SolverGPU is _xqsa.SolverGPU
+    assert sa.SolverDWave is _xqsa.SolverDWave
     assert sa.Solver is _xqsa.Solver
     assert sa.SolverResult is _xqsa.SolverResult
-    assert types.XQMX is _xqvm_py_xqmx.XQMX
-    assert types.XQMXDomain is _xqvm_py_xqmx.XQMXDomain
-    assert types.XQMXMode is _xqvm_py_xqmx.XQMXMode
-    assert types.Vec is _xqvm_py_vector.Vec
-    assert types.triu is _xqvm_py_xqmx.triu
+    for name in types.__all__:
+        assert getattr(types, name) is getattr(_xqffi_vm, name), name
 
 
 def test_quip_subpackage_reexports():
@@ -170,20 +166,11 @@ def test_top_level_namespace():
     assert hasattr(xquad, "program")
 
 
-def test_end_to_end_rust():
-    """assemble → run → read outputs through the Rust backend."""
+def test_end_to_end():
+    """assemble → run → read outputs through the umbrella VM."""
     src = "PUSH 7\nPUSH 5\nADD\nSTOW r0\nPUSH 0\nOUTPUT r0\nHALT\n"
-    v = vm.VM(backend=vm.VMBackend.RUST)
+    v = vm.VM()
     v.set_output_slots(1)
     v.run(src)
     assert v.outputs() == [12]
     assert v.stack() == []
-
-
-def test_end_to_end_python():
-    """parse → run → read outputs through the Python backend."""
-    src = "PUSH 7\nPUSH 5\nADD\nSTOW r0\nPUSH 0\nOUTPUT r0\nHALT\n"
-    v = vm.VM(backend=vm.VMBackend.PYTHON)
-    v.set_output_slots(1)
-    v.run(src)
-    assert v.outputs() == [12]

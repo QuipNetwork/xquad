@@ -42,29 +42,18 @@ not exist.
 uv run python examples/<name>/runner.py --seed 42
 ```
 
-Every runner accepts `--seed`, `--interpreter` (`python` or `rust`,
-default `python`), `--solver`, and `-o`/`--output`. Most also take `--n`
-for problem size; a few split size across two flags instead (`--n` plus
-`--bins`, `--colors`, `--budget`, or `--m`), or use `--num-elements`
-and `--num-sets` in place of `--n`. Check the individual page's `Usage`
-table for the exact flags.
+Every runner accepts `--seed`, `--solver`, and `-o`/`--output`. Most
+also take `--n` for problem size; a few split size across two flags
+instead (`--n` plus `--bins`, `--colors`, `--budget`, or `--m`), or use
+`--num-elements` and `--num-sets` in place of `--n`. Check the individual
+page's `Usage` table for the exact flags.
 
-`--interpreter` selects which XQVM runs the compiled programs: the
-pure-Python reference VM (`xqvm_py`) or the Rust interpreter through
-`xqffi`. [Backends](../concepts/backends.md) covers what else differs by
-solver backend; `--interpreter` is a different axis entirely -- it picks
-which VM executes the programs, not which solver samples the model. A
-correct model produces the same `valid` and the same `energy` on both,
-always. The decoded result itself can differ where a model has several
-optima of equal energy: the solver returns one of the tied optima, not
-necessarily the same one on both interpreters, and a different optimum
-decodes to a different answer even though both are equally correct.
-`maxcut`, `tsp`, and `knapsack` happen to have no such tie at their
-default seed and so return identical decoded results either way;
-`graph_coloring`, `bin_packing`, `set_cover`, and `max3sat` do not --
-running `examples/graph_coloring/runner.py --seed 1` gives
-`colors: [2, 1, 2, 2, 1]` on `python` and `colors: [0, 1, 0, 0, 2]` on
-`rust`, both at the same `energy` and both `valid`.
+The compiled programs run on the Rust XQVM through `xqffi`.
+[Backends](../concepts/backends.md) covers what differs by solver
+backend. Where a model has several optima of equal energy, the solver
+returns one of them, and a different optimum decodes to a different
+answer even though both are equally correct: a different solver or seed
+can change the decoded result without changing `valid` or `energy`.
 
 ## Adapting an Example
 
@@ -135,9 +124,8 @@ The variant:
 {"cut_weight": 196, "energy": -9804, "partition": [0, 1, 1, 1, 1], "valid": 1}
 ```
 
-Both interpreters return identical output for both versions. The cut
-drops from `354` to `196`, confirming the variant found a smaller
-crossing weight rather than reusing the maximiser's answer, and
+The cut drops from `354` to `196`, confirming the variant found a
+smaller crossing weight rather than reusing the maximiser's answer, and
 `partition[0] == 0` with `partition[-1] == 1` confirms the two
 terminals landed where they were pinned.
 

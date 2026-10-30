@@ -39,7 +39,7 @@ pub struct DecodeError(pub u8);
 
 macro_rules! impl_opcode {
     (
-        $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal, $_delta:expr, {$($field:tt)*}) ),*
+        $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal, $_stack:expr, {$($field:tt)*}) ),*
         $(,)?
     ) => {
         /// A set of XQVM opcodes, encoded as a single `u8` byte.
@@ -108,7 +108,7 @@ mod tests {
 
     macro_rules! all_opcodes_array {
         (
-            $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal, $_delta:expr, {$($field:tt)*}) ),*
+            $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal, $_stack:expr, {$($field:tt)*}) ),*
             $(,)?
         ) => {
             [ $( (Opcode::$variant, $code, $mnem) ),* ]

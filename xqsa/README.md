@@ -5,10 +5,10 @@ toolchain. One interface, five backends:
 
 | Solver | Class | Where it solves | Install |
 |---|---|---|---|
-| DWave CPU simulated annealing | `SolverDWaveCPU` | Locally, on the CPU | `pip install xqsa` |
-| D-Wave Advantage QPU | `SolverDWaveQPU` | D-Wave Leap cloud | `pip install xqsa[dwave]` |
-| CUDA GPU simulated annealing | `SolverCudaGPU` | Locally, NVIDIA GPU | `pip install xqsa[cuda]` |
-| Metal GPU SA / Gibbs | `SolverMetalGPU` | Locally, Apple GPU (macOS) | `pip install xqsa[metal]` |
+| CPU simulated annealing | `SolverCPU` | Locally, on the CPU | `pip install xqsa` |
+| D-Wave Advantage QPU | `SolverDWave` | D-Wave Leap cloud | `pip install xqsa[dwave]` |
+| CUDA GPU simulated annealing | `SolverGPU(engine="cuda")` | Locally, NVIDIA GPU | `pip install xqsa[cuda]` |
+| Metal GPU SA / Gibbs | `SolverGPU(engine="metal")` | Locally, Apple GPU (macOS) | `pip install xqsa[metal]` |
 | Quip network (on-chain mempool) | `SolverQuip` | Quip network | `pip install xqsa[quip]` |
 
 ## Install
@@ -30,29 +30,30 @@ backend-agnostic across all five:
 
 ```python
 from xqsa import SOLVERS, build_solver
-from xqvm_py import XQMX
+from xqffi.vm import XqmxModel
 
-model = XQMX.binary_model(size=4)
+model = XqmxModel.binary(4)
 model.set_linear(0, -1)
-model.set_quadratic(0, 1, 2)
+model.set_quad(0, 1, 2)
 
 print(sorted(SOLVERS))
-# ['cuda-gpu', 'dwave-cpu', 'dwave-qpu', 'metal-gpu', 'quip']
+# ['cpu', 'cuda', 'dwave', 'metal', 'quip']
 
-solver = build_solver("dwave-cpu", seed=42)
+solver = build_solver("cpu", seed=42)
 result = solver.solve(model)
-print(result.sample)
+print(result.sample.values)
 print(result.energy)
-# XQMX(mode=SAMPLE, domain=BINARY, size=4, linear_terms=1, quadratic_terms=0)
+# [1, 0, 0, 0]
 # -1
 ```
 
 Every backend's `solve()` returns the same `SolverResult(sample, energy,
 timing, metadata)`: `sample` is the best assignment found, `energy` is the
 Hamiltonian recomputed independently in exact integer arithmetic (never
-taken on faith from the backend), and `metadata`'s shape is per-backend.
-`build_solver("dwave-cpu", ...)` is equivalent to constructing
-`SolverDWaveCPU(...)` directly; reach for the class constructor instead of
+taken on faith from the backend), and `metadata` is `{"seed", "reads",
+"params"}` for every backend except `SolverQuip`.
+`build_solver("cpu", ...)` is equivalent to constructing
+`SolverCPU(...)` directly; reach for the class constructor instead of
 `build_solver` when the backend is fixed at write time rather than chosen
 by name at run time.
 
@@ -76,8 +77,7 @@ this package follows it, and any divergence here is a bug.
 
 ## Also see
 
-- [`xqvm_py`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm_py) -- pure-Python reference VM.
-- [`xqffi`](https://gitlab.com/quip.network/xquad/-/tree/main/xqffi) -- pyo3 FFI bindings to the Rust runtime.
+- [`xqffi`](https://gitlab.com/quip.network/xquad/-/tree/main/xqffi) -- pyo3 FFI bindings to the Rust runtime, including the `XqmxModel` and `XqmxSample` types the solvers take and return.
 - [`xqcp`](https://gitlab.com/quip.network/xquad/-/tree/main/xqcp) -- constraint-programming DSL that compiles to models this package can sample.
 - [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) -- umbrella meta-package.
 - [Running Programs](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/running/README.md) -- end-to-end tour.

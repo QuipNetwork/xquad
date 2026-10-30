@@ -1,11 +1,11 @@
 # Spec Index
 
 The book teaches; `spec/` is what XQuad actually is. Every file below is
-the normative source for its topic's intent. The conformance harness does
-not check either implementation against these documents: it checks the
-Rust and Python implementations against each other and against
-`conformance/opcodes.yaml`. The implementation is what ships, and the two
-can diverge; where a divergence is known, the relevant book page says so.
+the normative source for its topic's intent. The specification vectors
+check the Rust VM against these documents one program at a time, and its
+build checks the opcode table against `xqvm/opcodes.yaml`. The
+specification is the authority: where the VM diverges from it, the VM is
+wrong, and where a divergence is known, the relevant book page says so.
 [Conformance](../embedding/conformance.md#coverage-is-per-opcode-and-incomplete)
 explains why a green run is evidence about the programs a vector covers
 rather than a blanket guarantee.
@@ -79,7 +79,7 @@ Normative for the solver-adapter interface between a model and a backend.
   -- normative for the architecture overview, where solving sits in the
   pipeline, and the plugin model new solvers implement.
 - [`spec/xqsa/INTERFACE.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqsa/INTERFACE.md)
-  -- normative for the `Solver` abstract class, the `solve()` contract,
+  -- normative for the `Solver` base class, the `solve()` contract,
   the `SolverResult` type, and parameter-passing conventions.
 - [`spec/xqsa/ENERGY.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqsa/ENERGY.md)
   -- normative for the energy computation formula, its precision contract,

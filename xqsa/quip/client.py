@@ -98,8 +98,8 @@ from xqsa.solver import Solver, SolverResult
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from xqffi.vm import XqmxModel
     from xqsa.quip.codec import IsingJob
-    from xqvm_py.xqmx import XQMX
 
 logger = logging.getLogger("xqsa.quip")
 
@@ -1366,7 +1366,7 @@ class SolverQuip(Solver):
                     f"native order has {count} {noun}, over the mempool's {MEMPOOL_PALLET}.{name} of {int(limit)}"
                 )
 
-    def _job_for(self, model: XQMX, topology: str | None, mapping: Mapping[int, int] | None) -> IsingJob:
+    def _job_for(self, model: XqmxModel, topology: str | None, mapping: Mapping[int, int] | None) -> IsingJob:
         """Encode ``model`` for the effective topology: ``topology``, else the resolved one.
 
         In native mode the topology is the model's own coupling graph, so there
@@ -1410,14 +1410,14 @@ class SolverQuip(Solver):
         self._native_for(topology, options.mapping)
         return replace(options, topology=topology)
 
-    def _place(self, model: XQMX, options: _OrderOptions) -> IsingJob:
+    def _place(self, model: XqmxModel, options: _OrderOptions) -> IsingJob:
         """Place ``model`` for ``options`` and emit the one-time coefficient warnings."""
         job = self._job_for(model, options.topology, options.mapping)
         self._maybe_warn_allowed_values(job)
         self._maybe_warn_quantization(job)
         return job
 
-    def _create_order(self, model: XQMX, options: Mapping[str, Any], *, strict: bool) -> JobOrder:
+    def _create_order(self, model: XqmxModel, options: Mapping[str, Any], *, strict: bool) -> JobOrder:
         """Build a draft from the client defaults and ``options``.
 
         ``strict=False`` is the deprecated ``solve``/``quote`` path: unknown
@@ -1458,7 +1458,7 @@ class SolverQuip(Solver):
             inclusion_window_blocks=self._inclusion_window_blocks,
         )
 
-    def create_order(self, model: XQMX, **options: Any) -> JobOrder:
+    def create_order(self, model: XqmxModel, **options: Any) -> JobOrder:
         """Return a draft :class:`~xqsa.quip.JobOrder` for ``model``.
 
         The order inherits this client's defaults; ``options`` override them
@@ -1627,7 +1627,7 @@ class SolverQuip(Solver):
             )
             self._fund(quote)
 
-    def quote(self, model: XQMX, **kwargs: Any) -> JobQuote:
+    def quote(self, model: XqmxModel, **kwargs: Any) -> JobQuote:
         """Price ``model`` as a job without proposing it. Deprecated.
 
         Use ``create_order(model, **options).quote()``. This shortcut keeps
@@ -1649,7 +1649,7 @@ class SolverQuip(Solver):
         _pop_mode(kwargs, stacklevel=2)
         return self._create_order(model, kwargs, strict=False).quote()
 
-    def solve(self, model: XQMX, **kwargs: Any) -> SolverResult:
+    def solve(self, model: XqmxModel, **kwargs: Any) -> SolverResult:
         """Propose ``model`` as a job, await a solution, and decode the best one.
 
         Builds an order from this client's defaults and ``kwargs`` (see
@@ -1708,7 +1708,7 @@ class SolverQuip(Solver):
     def query(
         self,
         order_id: int,
-        model: XQMX,
+        model: XqmxModel,
         *,
         mapping: Mapping[int, int] | None = None,
         topology: str | None = None,

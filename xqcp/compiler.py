@@ -27,8 +27,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from xqvm_py import XQMXDomain
-
 from .expression import (
     BinOp,
     BitLenExpr,
@@ -56,6 +54,7 @@ from .expression import (
     line,
     resolve_coord,
 )
+from .problem import Domain
 from .symbols import CoefficientRef, InputRef, LoopVar, ModelRef, OutputRef, VecRef
 
 if TYPE_CHECKING:
@@ -215,9 +214,9 @@ def _emit_size_expr(size_expr: Expr, lines: list[str], indent: int) -> None:
 
 # The allocator opcode each domain is built with.
 _ALLOCATOR = {
-    XQMXDomain.BINARY: "BQMX",
-    XQMXDomain.SPIN: "SQMX",
-    XQMXDomain.INTEGER: "XQMX",
+    Domain.BINARY: "BQMX",
+    Domain.SPIN: "SQMX",
+    Domain.INTEGER: "XQMX",
 }
 
 
@@ -225,14 +224,14 @@ def _emit_model_allocation(d: dict[str, Any], lines: list[str], indent: int) -> 
     """Emit model size computation, allocation, and optional grid resize."""
     size_expr: Expr = d["size_expr"]
     model_reg: int = d["model_reg"]
-    domain: XQMXDomain = d["domain"]
+    domain: Domain = d["domain"]
     is_2d: bool = d["is_2d"]
     cols_reg: int | None = d["cols_reg"]
 
     _emit_size_expr(size_expr, lines, indent)
 
     # XQMX pops k, then size, so the width goes on last.
-    if domain == XQMXDomain.INTEGER:
+    if domain == Domain.INTEGER:
         d["k_expr"].emit(lines, indent)
     lines.append(line(f"{_ALLOCATOR[domain]} r{model_reg}", indent))
 
@@ -728,7 +727,7 @@ def compile_verifier(prob: Problem) -> str:
     lines.append("; === Model shape ===")
     _emit_size_expr(model_action.data["size_expr"], lines, 0)
     lines.append(f"STOW r{emitter.size_reg}")
-    if model_action.data["domain"] == XQMXDomain.INTEGER:
+    if model_action.data["domain"] == Domain.INTEGER:
         model_action.data["k_expr"].emit(lines, 0)
         lines.append(f"STOW r{emitter.k_reg}")
     if model_action.data["is_2d"]:
@@ -1040,7 +1039,7 @@ class _VerifierEmitter:
 
     def __init__(self, model_data: dict[str, Any], base: int, slack_equalities: set[int]) -> None:
         self.model_reg: int = model_data["model_reg"]
-        self.domain: XQMXDomain = model_data["domain"]
+        self.domain: Domain = model_data["domain"]
         self.sentinel = self.model_reg + 100
         self.slack_equalities = slack_equalities
 
@@ -1083,7 +1082,7 @@ class _VerifierEmitter:
         Raises ``RuntimeError`` if a binary-only constraint is applied to a
         model whose domain is not ``BINARY``.
         """
-        if self.domain == XQMXDomain.BINARY:
+        if self.domain == Domain.BINARY:
             return
         for action, _ in _walk_scoped(body_actions, (), [0]):
             if action.kind in _BINARY_ONLY_KINDS:
@@ -1270,7 +1269,7 @@ class _VerifierEmitter:
         lines.append(line(f"LOAD r{self.pos_reg}", body))
         lines.append(line(f"GETLINE r{self.sample_reg}", body))
         lines.append(line("COPY", body))
-        if self.domain == XQMXDomain.INTEGER:
+        if self.domain == Domain.INTEGER:
             # 0 <= x < k, against the k the model was declared with rather
             # than the one the sample declares for itself, which is the
             # solver's word and not to be taken.  Comparing against k keeps
@@ -1282,7 +1281,7 @@ class _VerifierEmitter:
             lines.append(line("LT", body))
             lines.append(line("AND", body))
         else:
-            low, high = ("0", "1") if self.domain == XQMXDomain.BINARY else ("-1", "1")
+            low, high = ("0", "1") if self.domain == Domain.BINARY else ("-1", "1")
             lines.append(line(f"PUSH {low}", body))
             lines.append(line("EQ", body))
             lines.append(line("SWAP", body))

@@ -2,10 +2,10 @@
 
 Authoritative specifications for each layer of the XQuad Toolchain. Every
 specification here is the single source of truth for its layer. The
-`conformance/` harness does not check either implementation against this
-prose: it checks the Rust and Python implementations against each other,
-and against `conformance/opcodes.yaml`. Where a divergence between a spec
-and an implementation is known, the relevant book page records it.
+vectors under `../xqvm/tests/vectors/` check the Rust VM against this prose
+one program at a time, and the VM's build checks its opcode table against
+`../xqvm/opcodes.yaml`. Where a divergence between a spec and an
+implementation is known, the relevant book page records it.
 
 ## Layers
 
@@ -24,9 +24,8 @@ and an implementation is known, the relevant book page records it.
 There is no tolerated drift between spec and implementations. Any change
 to the `xqvm/` spec files that affects observable behaviour must land with:
 
-1. A matching update to `../conformance/opcodes.yaml`.
-2. Updated or new conformance vectors under `../conformance/vectors/`.
-3. Both `xqvm` (Rust) and `xqvm_py` (Python) passing the full conformance
-   suite.
+1. A matching update to `../xqvm/opcodes.yaml`.
+2. Updated or new vectors under `../xqvm/tests/vectors/`.
+3. `xqvm` passing the full vector suite.
 
 Builds fail on mismatch -- there is no `DRIFT.md`.

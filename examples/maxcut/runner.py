@@ -20,7 +20,7 @@ Max-Cut end-to-end XQuad pipeline example.
 
 Build a random weighted complete graph, compile it to XQVM assembly
 via xqcp, run the encoder on the chosen VM (Python reference or
-Rust), sample the resulting QUBO with xqsa's SolverDWaveCPU, run the
+Rust), sample the resulting QUBO with xqsa's SolverCPU, run the
 verifier and decoder on the sampled solution, and print the decoded
 partition.
 
@@ -30,7 +30,7 @@ CP in, decoded partition out.
 
 Usage:
     uv run python examples/maxcut/runner.py --seed 42
-    uv run python examples/maxcut/runner.py --n 6 --interpreter rust
+    uv run python examples/maxcut/runner.py --n 6
 """
 
 from __future__ import annotations
@@ -43,15 +43,15 @@ from pathlib import Path
 from typing import Any
 
 from xquad import cp, sa
-from xquad.types import XQMX, Vec
-from xquad.vm import VM, VMBackend
+from xquad.types import XqmxModel
+from xquad.vm import VM
 
 
 def build_problem(n: int, seed: int) -> tuple[cp.Problem, list[tuple[int, int, int]]]:
     """Construct a Max-Cut problem with a random weighted complete graph.
 
     Edges are `(i, j, w)` triples with `i < j`, fed to the VM as a flat
-    Vec of 3*|E| integers.
+    list of 3*|E| integers.
     """
     rng = random.Random(seed)
     edges: list[tuple[int, int, int]] = [(i, j, rng.randint(1, 100)) for i in range(n) for j in range(i + 1, n)]
@@ -88,7 +88,7 @@ def cut_weight(partition: list[int], edges: list[tuple[int, int, int]]) -> int:
 def canonicalize_partition(partition: list[int]) -> list[int]:
     """Flip the partition so node 0 sits on side 0. Max-Cut is
     invariant under global bit-flip, so this normalisation makes
-    output stable across interpreters without changing the cut."""
+    output stable across samplers without changing the cut."""
     if not partition:
         return partition
     return partition if partition[0] == 0 else [1 - b for b in partition]
@@ -102,17 +102,17 @@ def flatten_edges(edges: list[tuple[int, int, int]]) -> list[int]:
 
 
 def run(
-    programs: Any, n: int, edges: list[tuple[int, int, int]], seed: int, backend: VMBackend, solver_name: str
+    programs: Any, n: int, edges: list[tuple[int, int, int]], seed: int, solver_name: str
 ) -> tuple[int, int, list[int]]:
-    """Full pipeline on the selected VM backend."""
+    """Full pipeline on the XQVM."""
     flat = flatten_edges(edges)
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([n, flat])
     vm.set_output_slots(1)
     vm.run(programs.encoder)
     model = vm.outputs()[0]
-    assert isinstance(model, XQMX)
+    assert isinstance(model, XqmxModel)
 
     try:
         solver = sa.build_solver(solver_name, seed=seed)
@@ -121,22 +121,19 @@ def run(
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([n, flat, model, sample])
     vm.set_output_slots(2)
     vm.run(programs.verifier)
     outs = vm.outputs()
     energy, valid = outs[0], outs[1]
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([sample, n])
     vm.set_output_slots(1)
     vm.run(programs.decoder)
     part_out = vm.outputs()[0]
-    if isinstance(part_out, Vec):
-        partition = [part_out.get(i) for i in range(n)]
-    else:
-        partition = list(part_out)
+    partition = list(part_out)
 
     return energy, valid, partition
 
@@ -145,12 +142,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Max-Cut end-to-end XQuad pipeline example")
     parser.add_argument("--n", type=int, default=5, help="Number of nodes (default: 5)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
-    parser.add_argument(
-        "--interpreter",
-        choices=("python", "rust"),
-        default="python",
-        help="XQVM interpreter to run the compiled programs on",
-    )
     parser.add_argument(
         "--solver",
         choices=sorted(sa.SOLVERS),
@@ -169,8 +160,7 @@ def main() -> int:
     problem, edges = build_problem(args.n, args.seed)
     programs = problem.compile()
 
-    backend = VMBackend.PYTHON if args.interpreter == "python" else VMBackend.RUST
-    energy, valid, partition = run(programs, args.n, edges, args.seed, backend, args.solver)
+    energy, valid, partition = run(programs, args.n, edges, args.seed, args.solver)
     partition = canonicalize_partition(partition)
 
     result = {

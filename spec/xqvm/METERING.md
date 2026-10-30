@@ -22,14 +22,37 @@ additional units *before* doing that work, following the same discipline as
 the byte budget described in `spec/xqvm/SPEC.md` (Runtime Limits): a program
 that cannot pay for the work does none of it.
 
+## The Step Counter
+
+The step counter is an unsigned 64-bit integer: it holds every count from
+`0` to `2^64 - 1` and no other. A charge is admitted only if the counter
+plus the charge is representable *and* does not exceed the step limit.
+A charge that would carry the counter past `2^64 - 1` raises
+`StepLimitExceeded` whatever the limit, exactly as one that would carry it
+past the limit does, and the counter keeps the value it had before the
+charge. The counter never wraps and never saturates, so the count a run
+reports is always the count it spent.
+
+The rule is forced rather than chosen. A limit is itself at most
+`2^64 - 1`, so a count past that exceeds every limit a host can set. An
+unbounded budget is a limit of `2^64 - 1` -- the counter's own ceiling.
+The allocation budget refuses a cost past its own integer width for the
+same reason (`spec/xqvm/SPEC.md`, Allocation budget). The alternative,
+clamping the total at `2^64 - 1`, admits the charge at a limit of
+`2^64 - 1`, because the clamped total does not exceed it; the budget would
+stop refusing exactly where the charge is largest.
+
+One consequence is that the saturated charge the [formulas](#the-formulas)
+produce is always refused. Every instruction pays `BASE_STEPS` before its
+additional charge, so the counter is at least `1` when an additional
+charge is tested, and `1 + (2^64 - 1)` is not representable.
+
 ## The Constants
 
-The six constants below are shared, value for value, between the Rust VM
-(`xqvm/src/metering.rs`) and the Python reference VM (`xqvm_py/metering.py`).
-`scripts/check-metering-parity.py` enforces that the three sources -- the
-Rust constants, the Python constants, and this table -- agree. Changing a
-value here is a breaking change to observable behaviour and must be made in
-all three places at once.
+The six constants below live in `xqvm/src/metering.rs`.
+`xqvm/tests/metering_spec.rs` checks them against this table, name for name
+and value for value. Changing a value here is a breaking change to
+observable behaviour and must be made in both places at once.
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
@@ -112,8 +135,8 @@ work it prices.
 | `COLSUM` | One `GRID_CELL_STEPS` per cell of the column it scans | `rows * GRID_CELL_STEPS` |
 | `ROWFIND` | One `GRID_CELL_STEPS` per cell of the row it scans | `cols * GRID_CELL_STEPS` |
 | `COLFIND` | One `GRID_CELL_STEPS` per cell of the column it scans | `rows * GRID_CELL_STEPS` |
-| `ONEHOTR` | Worst-case cost of the equality expansion over the row's indices | [`equality_expansion_steps`](#equality_expansion_steps)`(cols)` |
-| `ONEHOTC` | Worst-case cost of the equality expansion over the column's indices | [`equality_expansion_steps`](#equality_expansion_steps)`(rows)` |
+| `ONEHOTR` | Worst-case cost of the equality expansion over the row's indices; `cols` is read from a model register and is 0 otherwise ([SPEC.md](SPEC.md#allocation-budget)) | [`equality_expansion_steps`](#equality_expansion_steps)`(cols)` |
+| `ONEHOTC` | Worst-case cost of the equality expansion over the column's indices; `rows` is read from a model register and is 0 otherwise ([SPEC.md](SPEC.md#allocation-budget)) | [`equality_expansion_steps`](#equality_expansion_steps)`(rows)` |
 | `EQUALITY` | Worst-case cost of the equality expansion | [`equality_expansion_steps`](#equality_expansion_steps)`(len(indices))` |
 | `ATLEAST` | Worst-case cost of the equality expansion over the original and slack indices | [`equality_expansion_steps`](#equality_expansion_steps)`(n + num_slacks)` |
 | `ATLEASTW` | Worst-case cost of the equality expansion over the original and slack indices | [`equality_expansion_steps`](#equality_expansion_steps)`(n + num_slacks)` |
@@ -190,8 +213,9 @@ Runtime Limits table describes as an implementation-defined allocation
 budget). All arithmetic is integer and saturating: `n * (n - 1)`,
 `/ 2`, `n + pairs(n)`, and the final multiplication by `COEFF_WRITE_STEPS`
 each saturate at `u64::MAX` rather than wrapping, so an `n` large enough to
-overflow the pair count prices out to the maximum charge and is refused by
-the step budget rather than wrapping into an affordable number.
+overflow the pair count prices out to the maximum charge, which no step
+limit admits (see [The Step Counter](#the-step-counter)), rather than
+wrapping into an affordable number.
 
 This is a worst-case bound, not a measurement of the work the expansion
 actually does. Repeated indices in `indices` collide on the same sparse-map
@@ -209,7 +233,10 @@ model_eval_steps(sample_len, terms) = sample_len * SAMPLE_COPY_STEPS
                                      + terms * MODEL_TERM_STEPS
 ```
 
-`terms` is the model's linear-entry count plus its quadratic-entry count.
+`terms` is the model's linear-entry count plus its quadratic-entry count:
+the number of its non-zero coefficients, since a write that leaves a
+coefficient at `0` removes the entry ([SPEC.md](SPEC.md#xqmx)). The
+same two counts are `linear_len` and `quadratic_len` below.
 Both multiplications and the addition saturate. This charges for `ENERGY`
 copying the sample out of its register (`sample_len` elements) and then
 accumulating every model term into the energy (`terms` terms); both halves
@@ -283,15 +310,11 @@ operands before checking the other is not conforming: for `ENERGY r0 r1`
 with a sample-mode XQMX in `r0` and an int in `r1`, the fault belongs to
 `r0`.
 
-The *identity* of that fault is not uniform across the two shipped VMs, and
-this specification does not pin it. `xqvm/src/error.rs` has no mode-error
-variant at all: a `RegVal` is either a model or a sample, so the Rust VM
-reports a sample in a model slot as a register-type error, where `xqvm_py`,
-whose `XQMX` carries a mode flag, reports a mode error. That divergence
-spans every mode check rather than `ENERGY` alone and predates step
-metering; it is tracked separately. Normative here are the operand order
-and the placement of the charge after validation, which the two VMs do
-agree on.
+The *identity* of that fault is `TypeMismatch`, which
+[SPEC.md](SPEC.md#faults) fixes for every model-only opcode handed a sample,
+whether an implementation tells the two apart by type or by a mode flag.
+Normative here in addition are the operand order and the placement of the
+charge after validation.
 
 Step counts bound the work a *conforming* execution does, not the work an
 instrumented one does. An implementation that snapshots register values
@@ -301,7 +324,7 @@ observable step count must not depend on whether a tracer is attached. An
 embedder that meters untrusted programs must therefore run them untraced, or
 account for the tracing overhead outside the step budget.
 
-`xqvm_py/tests` and `xqvm/tests/integration.rs` each carry step-count
-assertions cross-checked against this specification; `scripts/check-metering-parity.py`
-checks that the constants agree across `xqvm/src/metering.rs`,
-`xqvm_py/metering.py`, and the constants table above.
+`xqvm/tests/integration.rs` and the `metering/` vectors under
+`xqvm/tests/vectors/` carry step-count assertions written against this
+specification; `xqvm/tests/metering_spec.rs` checks the constants table
+above against `xqvm/src/metering.rs`.

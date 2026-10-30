@@ -1,0 +1,12 @@
+; rowsum_ungridded: ROWSUM without a grid must raise.
+;
+; No RESIZE ran, so rows = cols = 0 and there is no row to sum. An empty
+; reduction would push 0, so this vector pins InvalidGridDimensions -- the
+; same identity ONEHOTR and ONEHOTC raise without a grid.
+
+PUSH 4
+BQMX r0
+
+PUSH 0           ; row
+ROWSUM r0
+HALT

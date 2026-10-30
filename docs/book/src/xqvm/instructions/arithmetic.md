@@ -32,8 +32,7 @@ though a fixed-width machine reaches it through an overflowing division.
 Values built from several operations -- a constraint expansion's
 coefficients, an `ENERGY` accumulation -- are checked at every step, so a
 computation that leaves the range on its way to an in-range answer raises
-rather than quietly recovering. Both reference interpreters implement the
-same rule, so a program that raises on one raises on the other.
+rather than quietly recovering.
 
 ## Division and Remainder
 

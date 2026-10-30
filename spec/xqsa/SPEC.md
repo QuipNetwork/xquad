@@ -36,28 +36,33 @@ Decoder (.xqasm)
 Output vectors
 ```
 
-The solver receives an XQMX in MODEL mode and returns an XQMX in SAMPLE mode. The verifier independently validates the sample and recomputes energy via the XQVM `ENERGY` opcode. The decoder extracts human-readable output from valid samples.
+The solver receives an `XqmxModel` and returns an `XqmxSample` (both `xqffi.vm` types). The verifier independently validates the sample and recomputes energy via the XQVM `ENERGY` opcode. The decoder extracts human-readable output from valid samples.
 
 ## Plugin Architecture
 
 XQSA uses a class-based plugin model:
 
-- An abstract `Solver` class defines the contract (see [INTERFACE.md](INTERFACE.md))
-- Concrete implementations wrap specific solvers
-- Any class implementing `Solver.solve()` can drop in as a replacement
-- The contract is minimal: validate the model, solve it, return the result
+- A `Solver` base class defines the contract (see [INTERFACE.md](INTERFACE.md)); its `solve()` is a template shared by every solver
+- Each solver composes an `Implementation` that turns a model into a sample; swapping the implementation changes how a solver runs, not its API
+- A new backend drops in as a new implementation behind an existing solver class, or as a new `Solver` subclass that picks one
+- The contract is minimal: validate the model, sample it, return the result with the authoritative energy and `{seed, reads, params}` metadata
 
-v0.3.0 ships `SolverDWaveCPU` in the base package and `SolverDWaveQPU`
-behind the optional `[dwave]` extra. Additional solvers are in progress; see
-[SOLVERS.md](SOLVERS.md) for the planned registry.
+The base package ships `SolverCPU`. `SolverGPU` (CUDA or Metal) and `SolverDWave` need the `[cuda]`, `[metal]` or `[dwave]` extra, and `SolverQuip` the `[quip]` extra. See [SOLVERS.md](SOLVERS.md) for the registry.
 
-## Package Structure (v0.3.0)
+## Package Structure
 
 | Module | Purpose |
 |--------|---------|
-| `solver.py` | Abstract `Solver` class, `SolverResult` dataclass, model validation, BQM conversion helpers |
-| `dwave_cpu.py` | `SolverDWaveCPU` wrapping `dwave-samplers` |
-| `dwave_qpu.py` | `SolverDWaveQPU` wrapping D-Wave Leap QPU access through `dwave-system` |
+| `solver.py` | `Solver` base class and its `solve()` template, `Implementation`, `RunOutput`, `SolverResult`, model validation, BQM conversion helpers |
+| `solvers.py` | The public `SolverCPU`, `SolverGPU` and `SolverDWave` classes, and the registry: `SOLVERS`, `DEFAULT_SOLVER`, `build_solver` |
+| `inprocess/cpu.py` | `InProcessCPU` wrapping `dwave-samplers` |
+| `inprocess/cuda.py` | `InProcessCuda`, custom CUDA kernels through CuPy |
+| `inprocess/metal.py` | `InProcessMetal`, custom Metal kernels through `pyobjc-framework-Metal` |
+| `inprocess/dwave.py` | `InProcessDWave` wrapping D-Wave Leap QPU access through `dwave-system` |
+| `binary.py` | `BinaryImplementation`, which runs a solver-core binary through `--solve` |
+| `ising.py` | Exact conversion of BINARY and SPIN models to Ising in milli units, and of spins back to samples |
+| `errors.py` | The errors `BinaryImplementation` raises: `SolverError` and its subclasses |
+| `quip/` | `SolverQuip`, the Quip Network mempool solver, and its order, receipt and codec types |
 
 ## Thread Safety
 

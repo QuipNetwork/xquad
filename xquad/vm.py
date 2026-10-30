@@ -15,35 +15,23 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""`xquad.vm` — unified VM wrapper with backend selection.
+"""`xquad.vm` -- the XQVM interpreter behind a source-level interface.
 
-Provides a single `VM` class that dispatches to either the Rust FFI VM
-(`xqffi.vm.Vm`) or the pure-Python reference VM (`xqvm_py.Executor`).
-All FFI types are converted at the boundary so callers work exclusively
-with the canonical Python types from `xquad.types`.
+`VM` wraps the Rust VM (`xqffi.vm.Vm`). It keeps calldata, output slots and
+limits across runs, assembles `.xqasm` source on `run`, and hands back the
+`xqffi` types unchanged: calldata and outputs are `int`, `list[int]`,
+`XqmxModel`, `XqmxSample` or `None`. A fault raises the `XqvmError` subclass
+named for it, carrying the failing `.offset`.
 """
 
 from __future__ import annotations
 
-from enum import Enum, auto
-from itertools import chain
-from typing import Any
-
 from xqffi.asm import assemble_source as _assemble_source
+from xqffi.vm import DEFAULT_MEMORY_LIMIT as _DEFAULT_MEMORY_LIMIT
 from xqffi.vm import DEFAULT_STEP_LIMIT as _DEFAULT_STEP_LIMIT
-from xqffi.vm import MAX_ALLOCATION_SIZE as _MAX_ALLOCATION_SIZE
 from xqffi.vm import Vm as _RustVm
-from xqffi.vm import XqmxModel as ModelFFI
-from xqffi.vm import XqmxSample as SampleFFI
-from xqvm_py.errors import SampleOutOfDomain
-from xqvm_py.executor import DEFAULT_MEMORY_LIMIT as _DEFAULT_MEMORY_LIMIT
-from xqvm_py.executor import Executor as _PyExecutor
-from xqvm_py.program import program_from_bytecode as _program_from_bytecode
-from xqvm_py.program import program_from_xqasm as _program_from_xqasm
-from xqvm_py.vector import Vec
-from xqvm_py.xqmx import XQMX, XQMXDomain, domain_description
 
-__all__ = ["DEFAULT_STEP_LIMIT", "VM", "VMBackend"]
+__all__ = ["DEFAULT_STEP_LIMIT", "VM"]
 
 #: Default step budget, read from the Rust VM rather than restated here so
 #: the two cannot drift. Same number as the `xquad vm run --step-limit`
@@ -56,346 +44,81 @@ __all__ = ["DEFAULT_STEP_LIMIT", "VM", "VMBackend"]
 DEFAULT_STEP_LIMIT: int = _DEFAULT_STEP_LIMIT
 
 
-class VMBackend(Enum):
-    """Selects the interpreter used by `VM`."""
-
-    RUST = auto()
-    PYTHON = auto()
-
-
-# ---------------------------------------------------------------------------
-# Domain mapping
-# ---------------------------------------------------------------------------
-
-_DOMAIN_TO_STR: dict[XQMXDomain, str] = {
-    XQMXDomain.BINARY: "binary",
-    XQMXDomain.SPIN: "spin",
-    XQMXDomain.INTEGER: "integer",
-}
-
-_DOMAIN_FROM_STR: dict[str, XQMXDomain] = {v: k for k, v in _DOMAIN_TO_STR.items()}
-
-# ---------------------------------------------------------------------------
-# FFI <-> XQMX conversion
-# ---------------------------------------------------------------------------
-
-
-def _xqmx_to_model_ffi(xqmx: XQMX) -> ModelFFI:
-    domain_str = _DOMAIN_TO_STR[xqmx.domain]
-    k = xqmx.integer_k if xqmx.domain == XQMXDomain.INTEGER else None
-    model = ModelFFI(domain=domain_str, size=xqmx.size, rows=xqmx.rows, cols=xqmx.cols, k=k)
-    for idx, coeff in xqmx.linear.items():
-        model.set_linear(idx, coeff)
-    for (i, j), coeff in xqmx.quadratic.items():
-        model.set_quad(i, j, coeff)
-    return model
-
-
-def _xqmx_to_sample_ffi(xqmx: XQMX) -> SampleFFI:
-    domain_str = _DOMAIN_TO_STR[xqmx.domain]
-    # `get_linear` supplies the domain default for an absent entry, so the
-    # dense vector Rust expects is built without restating that default here.
-    values = [xqmx.get_linear(i) for i in range(xqmx.size)]
-    k = xqmx.integer_k if xqmx.domain == XQMXDomain.INTEGER else None
-    return SampleFFI(domain=domain_str, values=values, rows=xqmx.rows, cols=xqmx.cols, k=k)
-
-
-def _model_ffi_to_xqmx(model: ModelFFI) -> XQMX:
-    domain = _DOMAIN_FROM_STR[model.domain]
-    if domain == XQMXDomain.BINARY:
-        xqmx = XQMX.binary_model(model.size, model.rows, model.cols)
-    elif domain == XQMXDomain.SPIN:
-        xqmx = XQMX.spin_model(model.size, model.rows, model.cols)
-    else:
-        xqmx = XQMX.integer_model(model.size, model.k, model.rows, model.cols)
-    for idx, coeff in model.linear_items():
-        xqmx.linear[idx] = coeff
-    for (i, j), coeff in model.quadratic_items():
-        xqmx.quadratic[(i, j)] = coeff
-    return xqmx
-
-
-def _sample_ffi_to_xqmx(sample: SampleFFI) -> XQMX:
-    domain = _DOMAIN_FROM_STR[sample.domain]
-    size = len(sample)
-    if domain == XQMXDomain.BINARY:
-        xqmx = XQMX.binary_sample(size, sample.rows, sample.cols)
-    elif domain == XQMXDomain.SPIN:
-        xqmx = XQMX.spin_sample(size, sample.rows, sample.cols)
-    else:
-        xqmx = XQMX.integer_sample(size, sample.k, sample.rows, sample.cols)
-    for i, v in enumerate(sample.values):
-        xqmx.set_linear(i, v)
-    return xqmx
-
-
-# ---------------------------------------------------------------------------
-# Calldata preparation
-# ---------------------------------------------------------------------------
-
-
-def _prepare_calldata_rust(data: list) -> list:
-    out: list = []
-    for item in data:
-        if isinstance(item, XQMX):
-            if item.is_model():
-                out.append(_xqmx_to_model_ffi(item))
-            else:
-                out.append(_xqmx_to_sample_ffi(item))
-        elif isinstance(item, Vec):
-            out.append([item.get(i) for i in range(len(item))])
-        elif isinstance(item, (int, list)) or item is None:
-            out.append(item)
-        else:
-            raise TypeError(f"unsupported calldata type: {type(item).__name__}")
-    return out
-
-
-def _check_calldata(data: list) -> None:
-    """Raise unless every `XQMX` in `data` is one bytecode could have built.
-
-    The RUST backend converts each `XQMX` through the `xqffi` constructors
-    and coefficient setters, which refuse a size past the allocators'
-    ceiling, a grid `RESIZE` would refuse, and a coefficient index at or past
-    `size` (QUI-1164). This applies the same rules, with the same errors, so
-    the PYTHON backend refuses the same calldata rather than running it.
-
-    Sample values are checked against their domain as well (QUI-1168).
-    Absent `linear` entries need no check -- `XQMX._absent_linear` reads
-    them as the domain's own default. Only the entries a caller wrote can
-    be out of domain.
-    """
-    for item in data:
-        if not isinstance(item, XQMX):
-            continue
-        size, rows, cols = item.size, item.rows, item.cols
-        if size > _MAX_ALLOCATION_SIZE:
-            raise ValueError(f"size {size} exceeds the largest allocation, {_MAX_ALLOCATION_SIZE}")
-        if (rows, cols) != (0, 0) and not (rows > 0 and cols > 0 and rows * cols <= size):
-            raise ValueError(
-                f"a {rows} x {cols} grid does not fit {size} variables; rows and cols "
-                "must both be 0, or both positive with rows * cols <= size"
-            )
-        for index in chain(item.linear, chain.from_iterable(item.quadratic)):
-            if not 0 <= index < size:
-                raise IndexError(f"variable index {index} is out of range for a model of size {size}")
-        if item.is_sample():
-            for index, value in item.linear.items():
-                if not item.domain_contains(value):
-                    raise SampleOutOfDomain(
-                        index,
-                        value,
-                        domain_description(item.domain, item.integer_k),
-                    )
-
-
-def _prepare_calldata_python(data: list) -> dict[int, Any]:
-    # Re-scanned here, not just in `set_calldata`. `set_calldata` retains the
-    # caller's `XQMX` objects rather than copying them, so a mutation between
-    # the two calls is visible to the run. The RUST path observes that same
-    # late mutation and faults on it in the `xqffi` constructors and setters,
-    # so checking only once would leave Python executing an `XQMX` that Rust
-    # rejects -- the divergence QUI-1164 and QUI-1168 close.
-    _check_calldata(data)
-    result: dict[int, Any] = {}
-    for i, item in enumerate(data):
-        if item is None:
-            # An unset slot is kept at its index rather than dropped, so the
-            # map stays as long as the caller's sequence. `_prepare_calldata_rust`
-            # above passes `None` to `py_to_regval`, which yields `RegVal::Unset`
-            # and leaves `calldata.len()` counting it; dropping it here made the
-            # same `[None, 5]` two slots on one backend and one on the other, so
-            # reading slot 1 succeeded there and raised `CallDataIndex` here.
-            result[i] = None
-            continue
-        if isinstance(item, list):
-            result[i] = Vec.from_list(item)
-        elif isinstance(item, (int, XQMX, Vec)):
-            result[i] = item
-        else:
-            raise TypeError(f"unsupported calldata type: {type(item).__name__}")
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Output conversion
-# ---------------------------------------------------------------------------
-
-
-def _convert_outputs_rust(raw: list) -> list:
-    out: list = []
-    for item in raw:
-        if isinstance(item, ModelFFI):
-            out.append(_model_ffi_to_xqmx(item))
-        elif isinstance(item, SampleFFI):
-            out.append(_sample_ffi_to_xqmx(item))
-        else:
-            out.append(item)
-    return out
-
-
-def _convert_outputs_python(raw: dict[int, Any], output_slots: int) -> list:
-    return [raw.get(i) for i in range(output_slots)]
-
-
-# ---------------------------------------------------------------------------
-# VM
-# ---------------------------------------------------------------------------
-
-
 class VM:
-    """Unified XQVM interpreter with backend selection.
+    """The XQVM interpreter.
 
-    Wraps either the Rust FFI VM or the pure-Python reference VM behind
-    a single interface.  All inputs and outputs use canonical Python
-    types (`XQMX`, `Vec`, `int`, `list[int]`); FFI conversion is
-    handled internally.
+    Configure with `set_calldata`, `set_output_slots` and the limit setters,
+    then `run` source or `run_bytecode`. Settings persist across runs until
+    `reset`; every run starts from a fresh machine state.
     """
 
-    def __init__(self, backend: VMBackend = VMBackend.RUST) -> None:
-        self._backend = backend
+    def __init__(self) -> None:
+        self._vm = _RustVm()
         self._calldata: list = []
         self._output_slots: int = 0
         self._step_limit: int | None = DEFAULT_STEP_LIMIT
         self._memory_limit: int = _DEFAULT_MEMORY_LIMIT
 
-        if backend == VMBackend.RUST:
-            self._rust_vm = _RustVm()
-        else:
-            self._py_outputs: dict[int, Any] = {}
-            self._py_stack: list[int] = []
-            self._py_steps: int = 0
-            self._py_memory_used: int = 0
-
-    @property
-    def backend(self) -> VMBackend:
-        return self._backend
-
     def set_calldata(self, data: list) -> None:
         """Install the calldata slots for the next run.
 
-        `XQMX` entries are checked against what bytecode could build (size,
-        grid, coefficient indices, sample domain) here so a bad one is
-        refused where the caller supplied it rather than several lines later
-        inside `run`. The check is not sufficient on its own: only the outer
-        list is copied, so the caller keeps a live reference to every `XQMX`
-        and can mutate one afterwards. Both backends therefore re-check at
-        run time -- `_prepare_calldata_python` by calling the same scan, the
-        RUST path by rebuilding each `XqmxModel` and `XqmxSample`, whose
-        constructors and setters check.
+        An `XqmxSample` needs no check here: its constructor and its setter
+        both reject an out-of-domain value, so none can exist.
         """
-        _check_calldata(data)
         self._calldata = list(data)
 
     def set_output_slots(self, n: int) -> None:
         self._output_slots = n
 
     def set_step_limit(self, limit: int | None) -> None:
-        """Cap the instructions a run may execute.
+        """Cap the metered steps a run may take.
 
-        The limit is exact: `0` permits none at all. `None` is unlimited and
-        has to be written by the caller; the default is
+        The limit is exact: `0` permits no instructions at all. `None` is
+        unlimited and has to be written by the caller; the default is
         `DEFAULT_STEP_LIMIT`.
         """
         self._step_limit = limit
 
     def set_memory_limit(self, nbytes: int) -> None:
-        """Set the allocation budget in bytes (default 1 GiB).
-
-        Both backends charge the same rates, so both reject the same
-        programs at the same instruction.
-        """
+        """Set the allocation budget in bytes (default 1 GiB)."""
         self._memory_limit = nbytes
 
     # -- execution -----------------------------------------------------------
 
     def run(self, source: str) -> None:
-        """Execute `.xqasm` source on the selected backend."""
-        if self._backend == VMBackend.RUST:
-            bytecode = _assemble_source(source)
-            self._run_rust(bytecode)
-        else:
-            self._run_python(source)
+        """Assemble and execute `.xqasm` source."""
+        self.run_bytecode(_assemble_source(source))
 
     def run_bytecode(self, bytecode: bytes) -> None:
-        """Execute pre-assembled bytecode on the selected backend."""
-        if self._backend == VMBackend.RUST:
-            self._run_rust(bytecode)
+        """Execute pre-assembled bytecode."""
+        self._vm.reset()
+        self._vm.set_calldata(self._calldata)
+        self._vm.set_output_slots(self._output_slots)
+        if self._step_limit is None:
+            self._vm.set_unlimited_steps()
         else:
-            self._run_python_bytecode(bytecode)
+            self._vm.set_step_limit(self._step_limit)
+        self._vm.set_memory_limit(self._memory_limit)
+        self._vm.run(bytecode)
 
     # -- results -------------------------------------------------------------
 
     def outputs(self) -> list:
-        if self._backend == VMBackend.RUST:
-            return _convert_outputs_rust(list(self._rust_vm.outputs()))
-        return _convert_outputs_python(self._py_outputs, self._output_slots)
+        return list(self._vm.outputs())
 
     def stack(self) -> list[int]:
-        if self._backend == VMBackend.RUST:
-            return list(self._rust_vm.stack())
-        return list(self._py_stack)
+        return list(self._vm.stack())
 
     def steps(self) -> int:
-        if self._backend == VMBackend.RUST:
-            return self._rust_vm.steps()
-        return self._py_steps
+        return self._vm.steps()
 
     def memory_used(self) -> int:
-        """Bytes charged against the allocation budget by the last run.
-
-        Both backends charge the same schedule, so this is identical across
-        them for any program that runs on both.
-        """
-        if self._backend == VMBackend.RUST:
-            return self._rust_vm.memory_used()
-        return self._py_memory_used
+        """Bytes charged against the allocation budget by the last run."""
+        return self._vm.memory_used()
 
     def reset(self) -> None:
         self._calldata = []
         self._output_slots = 0
         self._step_limit = DEFAULT_STEP_LIMIT
         self._memory_limit = _DEFAULT_MEMORY_LIMIT
-        if self._backend == VMBackend.RUST:
-            self._rust_vm.reset()
-        else:
-            self._py_outputs = {}
-            self._py_stack = []
-            self._py_steps = 0
-            self._py_memory_used = 0
-
-    # -- private -------------------------------------------------------------
-
-    def _run_rust(self, bytecode: bytes) -> None:
-        self._rust_vm.reset()
-        cd = _prepare_calldata_rust(self._calldata)
-        self._rust_vm.set_calldata(cd)
-        self._rust_vm.set_output_slots(self._output_slots)
-        if self._step_limit is None:
-            self._rust_vm.set_unlimited_steps()
-        else:
-            self._rust_vm.set_step_limit(self._step_limit)
-        self._rust_vm.set_memory_limit(self._memory_limit)
-        self._rust_vm.run(bytecode)
-
-    def _run_python(self, source: str) -> None:
-        program = _program_from_xqasm(source)
-        self._execute_python(program)
-
-    def _run_python_bytecode(self, bytecode: bytes) -> None:
-        program = _program_from_bytecode(bytecode)
-        self._execute_python(program)
-
-    def _execute_python(self, program) -> None:
-        cd = _prepare_calldata_python(self._calldata)
-        executor = _PyExecutor()
-        self._py_outputs = executor.execute(
-            program,
-            cd,
-            step_limit=self._step_limit,
-            memory_limit=self._memory_limit,
-            output_slots=self._output_slots,
-        )
-        self._py_stack = list(executor.state.stack)
-        self._py_steps = executor.steps
-        self._py_memory_used = executor.memory_used
+        self._vm.reset()

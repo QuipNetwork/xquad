@@ -29,6 +29,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from xqffi.vm import XqmxModel
 from xqsa.quip import (
     QuipCancelledError,
     QuipConnectionError,
@@ -45,7 +46,6 @@ from xqsa.quip.errors import QuipUnconfirmedError
 from xqsa.quip.order import JobOrder, _OrderOptions, check_client_defaults, merge_options
 from xqsa.quip.resolution import ResolutionSingleBest, ResolutionTopNEqual, ResolutionTopNWeighted
 from xqsa.solver import SolverResult
-from xqvm_py.xqmx import XQMX
 
 from .test_client import (
     GENESIS_HASH,
@@ -192,26 +192,18 @@ class TestCeilingOption:
         assert info.value.option == "max_energy"
 
 
-def _rounded_model() -> XQMX:
-    """A SPIN model whose 0.0012 field rounds to milli 1."""
-    model = XQMX.spin_model(2)
-    model.set_linear(0, 0.0012)
-    model.set_quadratic(0, 1, 1)
-    return model
-
-
-def _binary_model() -> XQMX:
+def _binary_model() -> XqmxModel:
     """E = -2*x0 + x0*x1: spin h = (-0.75, 0.25), J = 0.25, offset -0.75; energies -2 to 0."""
-    model = XQMX.binary_model(2)
+    model = XqmxModel.binary(2)
     model.set_linear(0, -2)
-    model.set_quadratic(0, 1, 1)
+    model.set_quad(0, 1, 1)
     return model
 
 
-def _wide_model() -> XQMX:
-    """A SPIN model reaching -1234.567 to 1234.567, bounds that 6 significant digits would round."""
-    model = XQMX.spin_model(1)
-    model.set_linear(0, 1234.567)
+def _wide_model() -> XqmxModel:
+    """A SPIN model reaching -1234567 to 1234567, bounds that 6 significant digits would round."""
+    model = XqmxModel.spin(1)
+    model.set_linear(0, 1234567)
     return model
 
 
@@ -247,10 +239,10 @@ class TestCeilingAgainstThePlacedModel:
 
     def test_bounds_are_stated_exactly(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
-        with pytest.raises(QuipOrderOptionError, match=r"below -1234\.567, the lowest"):
-            solver.create_order(_wide_model(), topology="native", max_energy=-1234.568)
-        with pytest.warns(UserWarning, match=r"at or above 1234\.567, the highest"):
-            solver.create_order(_wide_model(), topology="native", max_energy=1234.567)
+        with pytest.raises(QuipOrderOptionError, match=r"below -1234567, the lowest"):
+            solver.create_order(_wide_model(), topology="native", max_energy=-1234568)
+        with pytest.warns(UserWarning, match=r"at or above 1234567, the highest"):
+            solver.create_order(_wide_model(), topology="native", max_energy=1234567)
 
     def test_numpy_ceiling_shows_on_the_order(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
@@ -261,20 +253,6 @@ class TestCeilingAgainstThePlacedModel:
         solver, _ = _ready(monkeypatch)
         with pytest.raises(QuipOrderOptionError, match="outside i64"):
             solver.create_order(_model(), max_energy=-1e19)
-
-    def test_rounded_model_warns(self, monkeypatch) -> None:
-        solver, _ = _ready(monkeypatch)
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            solver.create_order(_rounded_model(), topology="native", max_energy=-1)
-        assert any("chain applies the ceiling to the rounded model" in str(w.message) for w in caught)
-
-    def test_rounded_model_without_ceiling_does_not_warn_about_it(self, monkeypatch) -> None:
-        solver, _ = _ready(monkeypatch)
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            solver.create_order(_rounded_model(), topology="native")
-        assert not any("ceiling" in str(w.message) for w in caught)
 
     def test_set_rechecks_and_a_refusal_keeps_the_order(self, monkeypatch) -> None:
         solver, _ = _ready(monkeypatch)
@@ -366,11 +344,11 @@ class TestSolutionFloorOptions:
                 _merge(current, min_solutions=1)
 
 
-def _path3_model() -> XQMX:
+def _path3_model() -> XqmxModel:
     """A 3-spin SPIN chain, so floor(3/2)/3 caps diversity at 1/3."""
-    model = XQMX.spin_model(3)
-    model.set_quadratic(0, 1, 1)
-    model.set_quadratic(1, 2, 1)
+    model = XqmxModel.spin(3)
+    model.set_quad(0, 1, 1)
+    model.set_quad(1, 2, 1)
     return model
 
 

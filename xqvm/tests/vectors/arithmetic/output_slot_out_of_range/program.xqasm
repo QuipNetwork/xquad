@@ -1,0 +1,12 @@
+; output_slot_out_of_range: OUTPUT to a slot beyond the allocated count
+; must raise OutputIndex.
+;
+; inputs.json allocates 4 slots; this writes slot 8. A VM that stored
+; outputs in an unbounded map would complete silently, so a program that
+; wrote past its allocation would look fine.
+
+PUSH 42
+STOW r0
+PUSH 8
+OUTPUT r0
+HALT

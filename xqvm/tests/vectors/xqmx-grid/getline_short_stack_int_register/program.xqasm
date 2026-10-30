@@ -1,0 +1,19 @@
+; getline_short_stack_int_register: GETLINE pops its index before it reads
+; its register, so an empty stack raises StackUnderflow even though the
+; register would also have been rejected.
+;
+; spec/xqvm/SPEC.md's error-precedence rule makes operand pops first within
+; every instruction. A VM that resolved the register first would raise
+; TYPE_MISMATCH for programs of this shape instead of STACK_UNDERFLOW. The
+; Faults table makes the identity normative, so two names for one program
+; is a violation.
+;
+; GETLINE stands for the whole family here. The register is filled from
+; calldata rather than left unset for the reason
+; iter_short_stack_int_register gives: an unset register would raise
+; UNSET_REGISTER and would not discriminate the order.
+
+PUSH 0
+INPUT r0         ; r0 = 5, an int
+GETLINE r0       ; nothing on the stack for it to pop
+HALT

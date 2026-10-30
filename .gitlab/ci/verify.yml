@@ -1,9 +1,8 @@
 # Verify phase -- does the workspace match what it is required to match?
 # Rust lint/policy checks (formatting, clippy, rustdoc, cargo-deny, the
 # changelog smoke render, the atomic spec-MR guard, the commit-message
-# guard), the Python lint (ruff), cross-implementation parity (opcode
-# table, conformance vectors, example smoke), and the fresh-xqffi-cdylib
-# guarantee all live here -- see setup.yml's verify-vs-test header for
+# guard), the Python lint (ruff) and the fresh-xqffi-cdylib guarantee all
+# live here -- see setup.yml's verify-vs-test header for
 # what makes these `verify` jobs rather than `test` jobs.
 #
 # Reuses the workspace's `make` targets so the CI definition and the
@@ -45,7 +44,9 @@
 verify:rust:
     stage: verify
     extends: .rust
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     # 20m: cold-cache room for a full clippy pass plus a full rustdoc
     # build of the workspace. See setup.yml's "Job timeouts" section for
     # the sizing method every `timeout:` in this pipeline follows.
@@ -184,7 +185,9 @@ verify:rust:
 verify:policy:
     stage: verify
     extends: .rust-tools
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     variables:
         CARGO_TOOLS: taplo,cargo-deny,git-cliff
         GIT_DEPTH: 0
@@ -231,7 +234,9 @@ verify:policy:
 verify:python:
     stage: verify
     extends: .python-tools
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     # 10m: no compile anywhere in the job -- a cold run only fetches uv
     # and the pinned ruff. See setup.yml's "Job timeouts" section.
     timeout: 10m
@@ -243,48 +248,6 @@ verify:python:
         # PATH only, no workspace sync, so it fits this cheap job rather
         # than a synced one like `.python` or the new `verify:xqffi`.
         - make -k check-uv-lock
-
-# Cross-implementation parity -- do the two implementations agree? Opcode
-# table parity, the shared xquad-conformance vector suite (both
-# runtimes), and end-to-end example-smoke, merged into one job running
-# `make -k check-parity` (opcode-parity conformance example-smoke).
-#
-# `.python` (uv sync + the three-entry cargo/tools/uv cache) lives in
-# .gitlab/ci/setup.yml. This job needs both a Rust and a Python
-# toolchain: opcode-parity-rs exercises the compile-time YAML <->
-# opcodes! macro check via `cargo build -p xqvm` (xqvm/build.rs);
-# opcode-parity-py and the Python-side conformance/example runs shell
-# out to `uv run --no-sync python -m xqvm_py …`, so the venv (editable xqvm_py +
-# maturin-built xqffi) has to be active. `.python` gives both: cargo is
-# already on PATH from the pinned default image, and `uv sync`
-# builds xqffi's cdylib through maturin.
-#
-# Before this merge each of the four jobs paid its own `make deps`
-# (full cargo-tools.lock install) and three of the four also paid a
-# full `uv sync` -- three of the heaviest bootstraps in the pipeline,
-# repeated. None of opcode-parity, conformance-rs/py, or example-smoke
-# actually needs a cargo-tools.lock binary (clippy, taplo, cargo-deny,
-# ...), so `.python`'s plain uv-sync before_script is enough; the old
-# `!reference [.fragments, cargo-tools]` step was doing work nothing
-# here consumed.
-#
-# `-k` preserves the property the four separate jobs gave for free: a
-# failure in one runtime cannot mask a failure in the other. Without
-# it, e.g. a failing opcode-parity-rs would stop `make` before
-# opcode-parity-py, conformance-rs, or conformance-py ever ran, and a
-# real Python-side regression could ship unnoticed behind the Rust-side
-# failure.
-verify:parity:
-    stage: verify
-    extends: .python
-    needs: []
-    # 25m: cold-cache room for the uv resolve and maturin xqffi build,
-    # then opcode parity, the conformance vectors on both implementations
-    # and the example smoke run on top. See setup.yml's "Job timeouts"
-    # section.
-    timeout: 25m
-    script:
-        - make -k check-parity
 
 # Fresh-xqffi-cdylib guarantee (QUI-1199). `xquad/__init__.py` eagerly
 # imports `vm`/`asm`/`program`/`verifier`, each doing a top-level `from
@@ -309,8 +272,8 @@ verify:parity:
 # instead of a convention someone has to remember to copy.
 #
 # Does NOT extend `.python`. `.python`'s `.venv/` cache entry is shared,
-# under one uv.lock/pyproject.toml-hashed key, with test:python,
-# verify:parity and test:quip -- syncing the dwave extra into that
+# under one uv.lock/pyproject.toml-hashed key, with test:python and
+# test:quip -- syncing the dwave extra into that
 # shared archive would make every one of those jobs alternately install
 # and uninstall dwave-system depending on run order, and the cache
 # contents would stop being deterministic (see setup.yml's `.python`
@@ -326,11 +289,15 @@ verify:parity:
 # That exclusion is necessary but NOT what makes the job trustworthy.
 # `.uv-cache/` IS cached here, keyed on uv.lock + pyproject.toml, and the
 # GitLab cache key cannot see xqffi/src/. The freshness guarantee comes
-# from uv itself: it reuses a cached xqffi build only when every
-# `cache-keys` file is unchanged by modification time, and a fresh clone
-# gives every file a new one, so the sync rebuilds the cdylib before the
-# import runs. `.uv-cache/` is therefore safe to keep: it is only a
-# download/build cache.
+# from uv itself: it reuses a cached xqffi wheel only when every
+# `cache-keys` file is unchanged by modification time. The runners fetch
+# into a reused build directory, so an unchanged file keeps its old time
+# and a reuse is the expected case; it is safe because xqffi installs as
+# a regular wheel, which carries the extension built from those same
+# inputs. (An editable install left the extension in the source tree,
+# where `git clean` deleted it while uv still reused the install.)
+# `.uv-cache/` is therefore safe to keep: it is only a download/build
+# cache.
 #
 # `dwave` is the extra used to prove freshness, not `cuda`, `metal` or
 # `quip`: dwave-system installs cleanly on a plain Linux runner with no
@@ -338,14 +305,26 @@ verify:parity:
 # wheel for no reason here; `metal`'s dependencies carry a `sys_platform
 # == 'darwin'` marker and would install nothing at all on this runner.
 #
-# `stage: verify` follows `verify:parity`'s precedent: both jobs run the
-# VM (or, here, import the interpreter that wraps it) and are still
-# `verify`, not `test` -- the question is whether the cdylib the venv
+# `stage: verify`, not `test`, although the job imports the bindings that
+# wrap the VM -- the question is whether the cdylib the venv
 # resolves against matches the source tree it was built from, not
 # whether the VM behaves correctly once loaded.
+#
+# `check-stubs` (QUI-1506) rides the same job because it asks the same
+# question of a different artefact: whether the type stubs under
+# xqffi/python/xqffi/ match the extension this tree builds. It needs that
+# extension built, which `.python-tools` (verify:python) never does, and
+# a job of its own would pay a second cold maturin build for a check that
+# takes seconds once the build exists. One `make -k` invocation runs both
+# targets, so a stale cdylib and a stale stub each surface even when the
+# other fails. check-stubs' own deps-py prerequisite re-syncs without the
+# dwave extra; `.venv/` is excluded from this job's cache, so the resync
+# does not carry into the next run.
 verify:xqffi:
     stage: verify
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     before_script:
         - !reference [.fragments, uv]
     cache:
@@ -364,8 +343,8 @@ verify:xqffi:
               - .cargo/registry/
               - .cargo/git/
               - target/
-    # 30m: sized against the CACHE SHAPE, not against verify:parity.
-    # verify:parity also builds the cdylib, but it rides `.python`'s
+    # 30m: sized against the CACHE SHAPE, not against test:python.
+    # test:python also builds the cdylib, but it rides `.python`'s
     # shared, pipeline-wide `target/` archive and so is warm in the
     # normal case. This job's per-job-name prefix means its `target/` is
     # populated by nobody but itself, so a cold full compile of xqvm +
@@ -376,7 +355,7 @@ verify:xqffi:
     # one that is merely slow.
     timeout: 30m
     script:
-        - make -k check-xqffi-fresh
+        - make -k check-xqffi-fresh check-stubs
 
 # cargo-deny over the standalone pallet fixture (`make -k
 # lint-deny-fixture`). The root `cargo deny check` in verify:policy sees
@@ -429,7 +408,9 @@ verify:xqffi:
 verify:substrate-deny:
     stage: verify
     extends: .rust-tools
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     rules:
         - if: $CI_COMMIT_TAG
         - if: $CI_COMMIT_REF_PROTECTED == "true"

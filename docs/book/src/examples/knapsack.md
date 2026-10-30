@@ -43,14 +43,13 @@ EQUALITY then adds the penalty term `P*(sum(a_k*x_k) - W)^2` to the QUBO.
 
 ```sh
 uv run python examples/knapsack/runner.py --seed 42
-uv run python examples/knapsack/runner.py --n 6 --interpreter rust
+uv run python examples/knapsack/runner.py --n 6
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--n` | `5` | Number of items |
-| `--solver` | `dwave-cpu` | Solver backend (see Choosing a solver) |
-| `--interpreter` | `python` | XQVM backend: `python` or `rust` |
+| `--solver` | `cpu` | Solver backend (see Choosing a solver) |
 | `--seed` | `42` | Random seed |
 | `-o` | stdout | Write JSON result to file |
 
@@ -58,11 +57,11 @@ uv run python examples/knapsack/runner.py --n 6 --interpreter rust
 
 Solver selection and install extras are the same for every example: see
 [Using the Examples](using-examples.md#running-one) and
-[Solving Overview](../solving/). The default is `dwave-cpu`, and a
+[Solving Overview](../solving/). The default is `cpu`, and a
 non-default solver will not reproduce the canonical result.
 
 ## Canonical output
 
-`example-smoke` validates both interpreters produce `valid == 1` with
-`--seed 42 --solver dwave-cpu`. The smoke test is invariant-based --
+`example-smoke` validates that the runner produces `valid == 1` with
+`--seed 42 --solver cpu`. The smoke test is invariant-based --
 it checks validity, not exact output.

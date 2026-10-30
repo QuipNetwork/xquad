@@ -17,7 +17,7 @@ pipeline, if a picture is what you want first.
    [step by step](../concepts/three-programs.md#a-concrete-run).
 2. **The encoder ran and built a model.** [Quadratic Models](../concepts/quadratic-models.md)
    covers the Hamiltonian it built, specialised to this graph's weights.
-3. **A solver minimised it.** `dwave-cpu`, the default backend, ran
+3. **A solver minimised it.** `cpu`, the default backend, ran
    simulated annealing over the model and returned a sample.
    [Backends](../concepts/backends.md) covers the other four solvers this
    same model could have gone to instead, unchanged.
@@ -28,11 +28,6 @@ pipeline, if a picture is what you want first.
 5. **The decoder turned the sample into `partition`.** See
    [Outputs and Decoding](../modelling/outputs-and-decoding.md) for what
    a decoder can read and what it hands back.
-
-`--interpreter rust` in the previous page swapped which machine ran steps
-2, 4, and 5. [Three Programs](../concepts/three-programs.md#a-concrete-run)
-covers what is and is not guaranteed to match between the two
-interpreters when that swap happens.
 
 ## Where to Go From Here
 

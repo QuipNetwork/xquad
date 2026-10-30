@@ -15,7 +15,7 @@ The **XQuad Toolchain** is a hardware-agnostic quantum VM and SDK: a problem is
 expressed once in XQVM bytecode and executed on any supported quantum backend
 (annealers, gate-based chips, etc.). Think LLVM for quantum computing. The codebase
 is dual-language: a Rust core (VM, assembler, bytecode) with Python interfaces
-(reference VM, constraint programming DSL, solver adapters, FFI bindings, the `xquad` CLI).
+(constraint programming DSL, solver adapters, FFI bindings, the `xquad` CLI).
 
 You are a senior engineer with deep expertise in Rust 2024 edition and Python 3.13+,
 specializing in compiler engineering, systems programming, and high-performance
@@ -31,12 +31,11 @@ make xquad            # bootstrap local dev: Python venv, including the xquad CL
 make install-hooks    # point git at .githooks/ pre-commit hook
 
 # Preflight (run locally exactly what CI enforces; N/A a language you didn't touch)
-make preflight         # preflight-rs + preflight-py + preflight-parity + preflight-docs + preflight-policy
-make preflight-rs      # fmt, taplo, clippy, rustdoc, deny (root + pallet fixture), unit/integration/doc tests
-make preflight-py      # taplo, ruff format + lint, pytest, uv.lock freshness
-make preflight-parity  # opcode parity, conformance, example smoke
+make preflight         # preflight-rs + preflight-py + preflight-docs + preflight-policy
+make preflight-rs      # fmt, clippy, rustdoc, deny (root + pallet fixture), unit/integration/doc tests + vectors, coverage report, wasm, pallet fixture
+make preflight-py      # taplo, ruff format + lint, pytest, example smoke, uv.lock freshness, xqffi stubs
 make preflight-docs    # generated-doc freshness + docs drift + README length + prose (needs vale)
-make preflight-release # crate packaging dry-run + five Python dists (needs maturin/twine/uv; not in `preflight`)
+make preflight-release # crate packaging dry-run + four Python dists (needs maturin/twine/uv; not in `preflight`)
 
 # Rust
 make fmt              # cargo fmt + taplo fmt + ruff format
@@ -47,7 +46,7 @@ make lint-deny-rs     # cargo deny check
 make lint-deny-fixture # cargo deny over fixtures/pallet-xqvm, with its own deny.toml
 make test             # test-unit-rs + test-integ-rs + test-doc + test-py
 make test-unit-rs     # cargo nextest run --workspace --all-features --lib
-make test-integ-rs    # cargo nextest run --workspace --exclude xquad-conformance --all-features --test '*'
+make test-integ-rs    # cargo nextest run --workspace --all-features --test '*' (includes the vectors)
 make test-doc         # cargo test --doc --workspace --all-features
 make test-miri        # cargo +nightly miri test --workspace --all-features
 make deps             # install rustup components + pinned cargo tools
@@ -58,20 +57,23 @@ cargo nextest run --workspace -E 'test(my_test_name)'
 cargo test --workspace my_test_name
 
 # Python
-make deps-py          # uv sync: editable installs, xqffi built from current Rust
+make deps-py          # uv sync: xqcp/xqsa/xquad editable, xqffi as a wheel from current Rust
 make fmt-py           # ruff format across all Python packages
 make fmt-check-py     # ruff format --check
 make lint-py          # ruff check across all Python packages
-make test-py          # pytest xqvm_py/tests xqcp/tests xqsa/tests xquad/tests
+make test-py          # pytest xqcp/tests xqsa/tests xquad/tests scripts/tests
 make check-uv-lock     # uv lock --check -- fails if uv.lock is stale against pyproject.toml
 make check-xqffi-fresh # uv sync --extra dwave + import xquad -- asserts the xqffi cdylib is
                        # fresh; mutates .venv/, re-run `make deps-py` afterwards
+make check-stubs      # mypy stubtest + fault docstrings -- the xqffi .pyi stubs match the built module
 make repl             # Python REPL with xqffi + workspace packages
 
-# Cross-language
-make opcode-parity    # opcode-parity-rs + opcode-parity-py
-make conformance      # conformance-rs + conformance-py
-make example-smoke    # run examples on both interpreters, check valid == 1
+# Conformance and examples
+make test-rust        # test-unit-rs + test-integ-rs + test-doc + conformance-coverage (CI test:rust)
+make test-python      # test-py + example-smoke (CI test:python)
+make conformance      # the specification vectors: cargo test -p xqvm --test vectors
+make conformance-coverage # report which opcodes the vectors reach
+make example-smoke    # run every example on the XQVM, check valid == 1
 
 # Documentation
 make build-docs            # mdbook build
@@ -154,7 +156,7 @@ All commit messages must follow the [Conventional Commits](https://www.conventio
 
 **Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`, `security`, `deprecate`, `release`
 
-**Scope** is optional. When used, it should be the crate or package name (e.g. `xqvm`, `xqcp`, `conformance`).
+**Scope** is optional. When used, it should be the crate or package name (e.g. `xqvm`, `xqcp`, `xqasm`).
 
 **Rules:**
 - Subject line: imperative mood, lowercase start, no trailing period, max 72 characters
@@ -275,7 +277,6 @@ After modifying files, run `make fmt` to format everything, or the per-file equi
 | `xqvm` | `xqvm/` | Bytecode definitions, opcode table, instruction types, builder, codec, stream reader, VM interpreter, disassembler |
 | `xqasm` | `xqasm/` | Text assembler: pest parser -> AST -> bytecode |
 | `xqffi` | `xqffi/` | PyO3 bindings exposing xqasm + xqvm to Python |
-| `xquad-conformance` | `conformance/` | Cross-implementation conformance harness |
 
 #### Key Patterns
 
@@ -297,15 +298,14 @@ Control flow, stack/register I/O, arithmetic (including `SQR`, `ABS`, `INC`, `DE
 
 ### Dependencies & Environment
 
-- **Dependencies:** manage via each package's `pyproject.toml`. The repo-root `pyproject.toml` hosts the `uv` workspace declaration and dev-tool pins (maturin, pytest, pyyaml, ruff); the xqvm_py / xqcp / xqsa / xqffi members carry their own. Never modify the dev-dep pins without explicit user approval.
-- **Virtual environment:** always use the workspace `.venv/` managed by `uv sync`. Never install packages globally or create ad-hoc venvs. Invoke scripts and tests through the `make` targets or `uv run`, which picks up the workspace packages without a manual activation step. `xqffi/pyproject.toml` lists the cdylib's Rust inputs as uv `cache-keys`, so any `uv sync` or `uv run` rebuilds `xqffi` after a Rust edit in `xqffi`, `xqvm` or `xqasm`; uv compares modification times, so a copy that keeps an old mtime over new content is not seen. The make targets pass `--no-sync` to skip a second resolve after their own sync. For an extra, `uv sync --extra <name>`, then `uv run ...`; `uv run` keeps an installed extra, but a plain `uv sync`, including the one in `make deps-py` and `make test-py`, removes it again.
-- **Setup:** `make deps-py` runs `uv sync`, which builds `xqffi` through maturin with `cargo --locked` (the root `pyproject.toml`'s `config-settings-package`). Each package's editable install carries `dev-mode-dirs = [".."]`, which puts the repo root on `sys.path`. Re-run after pulls that touch Rust sources or workspace deps.
+- **Dependencies:** manage via each package's `pyproject.toml`. The repo-root `pyproject.toml` hosts the `uv` workspace declaration and dev-tool pins (maturin, pytest, pyyaml, ruff); the xqcp / xqsa / xqffi / xquad members carry their own. Never modify the dev-dep pins without explicit user approval.
+- **Virtual environment:** always use the workspace `.venv/` managed by `uv sync`. Never install packages globally or create ad-hoc venvs. Invoke scripts and tests through the `make` targets or `uv run`, which picks up the workspace packages without a manual activation step. `xqffi/pyproject.toml` lists the cdylib's Rust inputs as uv `cache-keys`, so any `uv sync` or `uv run` rebuilds `xqffi` after a Rust edit in `xqffi`, `xqvm` or `xqasm`; uv compares modification times, so a copy that keeps an old mtime over new content is not seen. `xqffi` installs as a regular wheel (`editable = false` in the members' `[tool.uv.sources]`), so its compiled extension lives in the installed package, not the source tree, and a cached build always carries it; an edit under `xqffi/python/` takes effect on the next sync. The make targets pass `--no-sync` to skip a second resolve after their own sync. For an extra, `uv sync --extra <name>`, then `uv run ...`; `uv run` keeps an installed extra, but a plain `uv sync`, including the one in `make deps-py` and `make test-py`, removes it again.
+- **Setup:** `make deps-py` runs `uv sync`, which builds `xqffi` through maturin with `cargo --locked` (the root `pyproject.toml`'s `config-settings-package`). The `xqcp`, `xqsa` and `xquad` editable installs carry `dev-mode-dirs = [".."]`, which puts the repo root on `sys.path`. Re-run after pulls that touch Rust sources or workspace deps.
 
 ### Package Map
 
 | Package | Path | Role |
 | --- | --- | --- |
-| `xqvm_py` | `xqvm_py/` | Python reference VM implementation (conformance oracle) |
 | `xqcp` | `xqcp/` | High-level constraint programming DSL compiling to XQVM assembly |
 | `xqsa` | `xqsa/` | Solver adapters for XQMX models (dwave-samplers; pluggable solver interface) |
 | `xqffi` | `xqffi/` | PyO3 FFI bindings (maturin-built); also a Rust crate |
@@ -313,7 +313,7 @@ Control flow, stack/register I/O, arithmetic (including `SQR`, `ABS`, `INC`, `DE
 
 ### Testing
 
-`make test-py` runs pytest across `xqvm_py/tests`, `xqcp/tests`, `xqsa/tests`, `xquad/tests`. Test paths are configured in the root `pyproject.toml` under `[tool.pytest.ini_options]`.
+`make test-py` runs pytest across `xqcp/tests`, `xqsa/tests`, `xquad/tests`, `scripts/tests`. Test paths are configured in the root `pyproject.toml` under `[tool.pytest.ini_options]`.
 
 ## Cross-Language
 
@@ -325,17 +325,17 @@ The `spec/` directory contains authoritative specifications for each toolchain c
 - `spec/xqcp/README.md` -- XQCP constraint programming DSL
 - `spec/xqsa/README.md` -- XQSA solver adapter interface
 
-Spec changes are governed by the conformance harness: any modification affecting the opcode table, control-flow rules, stack depth, type system, or HLF expansions must be mirrored in `conformance/opcodes.yaml` and validated against `xqvm_py/opcodes.py` via `scripts/check-opcode-parity.py`.
+Spec changes are governed by the conformance harness: any modification affecting the opcode table, control-flow rules, stack depth, type system, or HLF expansions must be mirrored in `xqvm/opcodes.yaml`. The `xqvm` build compares that file with the `opcodes!` table at compile time (`xqvm/src/bytecode/types/parity.rs`), so a mismatch fails the build.
 
 ### Conformance Vectors
 
-Behavioural parity between `xqvm_py` (Python reference) and the Rust `xqvm` crate is enforced by the `xquad-conformance` test suite. Vectors live in `conformance/vectors/`. New semantics require a new vector; divergence between impls fails CI with no drift-tracking middle ground.
+The specification vectors live in `xqvm/tests/vectors/` and run as the `xqvm` crate's `vectors` test target (`cargo test -p xqvm --test vectors`); `xqvm/tests/vectors/README.md` documents the format. New semantics require a new vector, written from the spec rather than from the VM's output; a mismatch fails CI with no drift-tracking middle ground.
 
 ### Atomic Spec-MR Rule
 
-Any MR that changes VM semantics must touch **all four** layers in the same MR: (1) `spec/xqvm/*.md`, (2) `xqvm/src/**/*.rs`, (3) `xqvm_py/{executor,opcodes,xqmx,state,vector,tracer,errors}.py`, (4) `conformance/vectors/**` or `conformance/opcodes.yaml`. CI enforces this via `verify:policy` (`scripts/check-atomic-spec-mr.sh`). MRs touching 0 or all 4 layers pass; partial changes (1-3 layers) fail.
+Any MR that changes VM semantics must touch **all three** layers in the same MR: (1) `spec/xqvm/*.md`, (2) `xqvm/src/**/*.rs`, (3) `xqvm/tests/vectors/**` or `xqvm/opcodes.yaml`. CI enforces this via `verify:policy` (`scripts/check-atomic-spec-mr.sh`). MRs touching 0 or all 3 layers pass; partial changes (1-2 layers) fail.
 
-For deliberately one-sided changes (e.g. aligning one impl to existing behaviour), add an `Atomic-Spec-Exempt: QUI-<id> <reason>` trailer to a commit message. It goes in the message's last paragraph at column 0, beside the sign-off, with the whole reason and the ticket on that one line; git reads trailers from the last paragraph only and truncates a wrapped reason, so the guard fails on either instead of bypassing. A `Fixes QUI-NNN` footer may share the paragraph but not the line directly below the trailer. The guard scans every commit in the MR range and bypasses when it finds at least one well-formed trailer. See `docs/guide/development-workflow.md` for the full rationale and exempt cases.
+For deliberately one-sided changes (e.g. a spec clarification of behaviour the VM already has), add an `Atomic-Spec-Exempt: QUI-<id> <reason>` trailer to a commit message. It goes in the message's last paragraph at column 0, beside the sign-off, with the whole reason and the ticket on that one line; git reads trailers from the last paragraph only and truncates a wrapped reason, so the guard fails on either instead of bypassing. A `Fixes QUI-NNN` footer may share the paragraph but not the line directly below the trailer. The guard scans every commit in the MR range and bypasses when it finds at least one well-formed trailer. See `docs/guide/development-workflow.md` for the full rationale and exempt cases.
 
 ### Opcode Addition Gate
 
@@ -345,11 +345,11 @@ There is deliberately no CI guard for this one -- it is a correctness argument a
 
 ### Rust-Python Bindings (xqffi)
 
-`xqvm_py` consumes `xqffi.asm` only -- its executor stays pure-Python so `xqvm_py` remains an independent conformance oracle. `uv sync` builds it (handled by `make deps-py`).
+`uv sync` builds it through maturin (handled by `make deps-py`).
 
 ### Examples & Smoke Tests
 
-`examples/tsp/` (Travelling Salesman) and `examples/maxcut/` (Max-Cut) each consist of `.xqasm` programs driven by a Python runner (`runner.py`) that exercises both the Rust and Python interpreters via the `--interpreter` flag. These are the canonical references for how host code loads and runs `.xqasm` programs via the toolchain. `make example-smoke` runs both interpreters and checks each produces a valid solution (`valid == 1`); the check is invariant-based, not golden-file diffing.
+`examples/tsp/` (Travelling Salesman) and `examples/maxcut/` (Max-Cut) each consist of `.xqasm` programs driven by a Python runner (`runner.py`) that runs them on the Rust VM through `xquad.vm.VM`. These are the canonical references for how host code loads and runs `.xqasm` programs via the toolchain. `make example-smoke` runs every example once and checks it produces a valid solution (`valid == 1`); the check is invariant-based, not golden-file diffing.
 
 ### CI Pipeline
 
@@ -357,20 +357,20 @@ Five phases, each answering one question about the change. `verify` and
 `test` read as synonyms, so the boundary is stated explicitly rather than
 left to be inferred per job -- an unwritten boundary is exactly how the
 old `lint` stage decayed into four unrelated concerns (source formatting,
-Rust compilation, cross-implementation parity, release packaging) that
+Rust compilation, cross-language checks, release packaging) that
 happened to share a stage barrier and nothing else:
 
 - **`verify`** asks whether something matches what it is required to
-  match -- a licence against policy, one VM implementation's output
-  against the other's.
+  match -- a licence against policy, a lockfile against its manifests.
 - **`test`** asks whether something does what it should when actually
-  executed. Not a static-vs-dynamic split (`verify:parity` runs the VM);
-  it is consistency between artefacts versus correctness of one artefact.
+  executed. Not a static-vs-dynamic split (`verify:xqffi` imports the
+  built extension); it is consistency between artefacts versus
+  correctness of one artefact.
 
 | Phase | Question it answers | What it covers |
 | --- | --- | --- |
-| `verify` | Does the workspace match what it's required to match? | clippy, rustdoc, cargo-deny (root workspace and pallet fixture), ruff, `uv.lock` freshness, the fresh-xqffi-cdylib check, opcode parity, Rust + Python conformance vectors, example smoke tests, atomic spec-MR guard, commit-message guard, merge-request-title guard, branch containment guard, changelog render |
-| `test` | Does the workspace do what it should when executed? | unit, integration, doc tests (Rust); pytest (Python); Quip signing-layer tests; WASM no_std tests; Substrate pallet fixture |
+| `verify` | Does the workspace match what it's required to match? | clippy, rustdoc, cargo-deny (root workspace and pallet fixture), ruff, `uv.lock` freshness, the fresh-xqffi-cdylib check, the xqffi type-stub check, atomic spec-MR guard, commit-message guard, merge-request-title guard, branch containment guard, changelog render |
+| `test` | Does the workspace do what it should when executed? | unit, integration, doc tests, the specification vectors and their coverage report (Rust); pytest and example smoke tests (Python); Quip signing-layer tests; WASM no_std tests; Substrate pallet fixture |
 | `hardware` | Does it work on real hardware? | CUDA, D-Wave QPU, and Metal solver tests on real hardware (protected refs only) |
 | `docs` | Is the documentation correct and buildable? | generated-docs freshness, docs drift guard, package README length guard, mdbook build, GitLab Pages publish (release tags only) |
 | `release` | Is the artefact publishable, and (on a tag) published? | `release:validate` packaging checks on every pipeline including tags; crates.io + PyPI publishing and GitLab Release notes via git-cliff on a pushed tag |

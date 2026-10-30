@@ -56,7 +56,7 @@ use xqvm::{Program, verifier};
 #[pyfunction]
 fn verify(bytecode: &[u8]) -> PyResult<()> {
     let program = Program::decode(bytecode)
-        .map_err(|e| PyValueError::new_err(format!("decode error: {e:?}")))?;
+        .map_err(|e| PyValueError::new_err(format!("decode error: {e}")))?;
     verifier::verify(&program)
         .map_err(|e| PyValueError::new_err(format!("{}: {e}", e.variant_name())))
 }

@@ -1,0 +1,26 @@
+; equality_charge_before_unset_model: EQUALITY is charged its expansion
+; before it reads its model register, so an unset model under an exhausted
+; budget raises MemoryLimitExceeded rather than UnsetRegister.
+;
+; spec/xqvm/SPEC.md orders pops, then the allocation charge, then
+; validation, and states that the charge sized from the register reads it
+; only as a model and is zero for an unset one, while the charge is still
+; paid before the register is discriminated. The expansion itself is sized
+; from the indices operand: two terms, 2x32 + 1x48 = 112 bytes. The four
+; VECPUSHes spend the budget of 64 bytes exactly, so the charge is refused
+; before r0 is read.
+
+VECI r1
+PUSH 0
+VECPUSH r1
+PUSH 1
+VECPUSH r1       ; indices = [0, 1]
+VECI r2
+PUSH 1
+VECPUSH r2
+PUSH 1
+VECPUSH r2       ; coeffs = [1, 1]; 64 bytes: the whole budget
+PUSH 1           ; target
+PUSH 1           ; penalty
+EQUALITY r0 r1 r2  ; r0 was never written
+HALT

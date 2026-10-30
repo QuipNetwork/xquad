@@ -19,6 +19,7 @@
 Tests for the XQSA solver package.
 """
 
+import functools
 import os
 import sys
 import types
@@ -34,10 +35,14 @@ _IN_CI = os.environ.get("CI") is not None
 
 dimod = pytest.importorskip("dimod", reason="dwave-samplers / dimod not installed")
 
-from xqsa import Solver, SolverDWaveCPU, SolverDWaveQPU, SolverResult
-from xqvm_py.errors import ArithmeticOverflow
-from xqvm_py.limits import I64_MAX
-from xqvm_py.xqmx import XQMX, XQMXMode, compute_energy
+from xqffi.vm import ArithmeticOverflow, Domain, XqmxModel, XqmxSample
+from xqsa import SOLVERS, Solver, SolverCPU, SolverDWave, SolverGPU, SolverResult, build_solver
+from xqsa.solver import model_to_bqm, sample_to_xqmx
+
+_cuda = functools.partial(SolverGPU, engine="cuda")
+_metal = functools.partial(SolverGPU, engine="metal")
+
+I64_MAX = 2**63 - 1
 
 # ---------------------------------------------------------------------------
 # SolverResult
@@ -49,7 +54,7 @@ class TestSolverResult:
 
     def test_construction(self) -> None:
         """SolverResult stores sample, energy, timing, metadata."""
-        sample = XQMX.binary_sample(2)
+        sample = XqmxSample.default(Domain.BINARY, 2)
         result = SolverResult(sample=sample, energy=-5, timing=0.1, metadata={"k": "v"})
         assert result.sample is sample
         assert result.energy == -5
@@ -58,14 +63,14 @@ class TestSolverResult:
 
     def test_frozen(self) -> None:
         """SolverResult is immutable."""
-        sample = XQMX.binary_sample(2)
+        sample = XqmxSample.default(Domain.BINARY, 2)
         result = SolverResult(sample=sample, energy=0, timing=0.0)
         with pytest.raises(AttributeError):
             result.energy = 1
 
     def test_default_metadata(self) -> None:
         """Metadata defaults to empty dict."""
-        sample = XQMX.binary_sample(2)
+        sample = XqmxSample.default(Domain.BINARY, 2)
         result = SolverResult(sample=sample, energy=0, timing=0.0)
         assert result.metadata == {}
 
@@ -76,57 +81,41 @@ class TestSolverResult:
 
 
 class TestSolver:
-    """Tests for the abstract Solver base class."""
+    """Tests for the Solver base class."""
 
     def test_cannot_instantiate(self) -> None:
-        """Solver is abstract and cannot be instantiated directly."""
+        """Solver needs an implementation, so it cannot be built bare."""
         with pytest.raises(TypeError):
             Solver()
 
     def test_validate_rejects_sample_mode(self) -> None:
-        """_validate_model rejects SAMPLE mode."""
+        """_validate_model rejects a sample passed as a model."""
 
-        class DummySolver(Solver):
-            def solve(self, model, **kwargs):
-                pass
-
-        solver = DummySolver()
-        sample = XQMX.binary_sample(2)
-        with pytest.raises(ValueError, match="MODEL"):
+        solver = SolverCPU()
+        sample = XqmxSample.default(Domain.BINARY, 2)
+        with pytest.raises(ValueError, match="XqmxModel"):
             solver._validate_model(sample)
 
     def test_validate_rejects_integer_domain(self) -> None:
         """_validate_model rejects INTEGER domain."""
 
-        class DummySolver(Solver):
-            def solve(self, model, **kwargs):
-                pass
-
-        solver = DummySolver()
-        model = XQMX.integer_model(2, k=3)
-        with pytest.raises(ValueError, match="INTEGER"):
+        solver = SolverCPU()
+        model = XqmxModel.integer(2, 3)
+        with pytest.raises(ValueError, match="integer"):
             solver._validate_model(model)
 
     def test_validate_accepts_binary_model(self) -> None:
         """_validate_model accepts BINARY MODEL."""
 
-        class DummySolver(Solver):
-            def solve(self, model, **kwargs):
-                pass
-
-        solver = DummySolver()
-        model = XQMX.binary_model(2)
+        solver = SolverCPU()
+        model = XqmxModel.binary(2)
         solver._validate_model(model)  # should not raise
 
     def test_validate_accepts_spin_model(self) -> None:
         """_validate_model accepts SPIN MODEL."""
 
-        class DummySolver(Solver):
-            def solve(self, model, **kwargs):
-                pass
-
-        solver = DummySolver()
-        model = XQMX.spin_model(2)
+        solver = SolverCPU()
+        model = XqmxModel.spin(2)
         solver._validate_model(model)  # should not raise
 
     def test_recompute_energy_raises_past_the_i64_range(self) -> None:
@@ -143,60 +132,56 @@ class TestSolver:
         correct answer is one the solver may no longer report.
         """
 
-        class DummySolver(Solver):
-            def solve(self, model, **kwargs):
-                pass
-
-        model = XQMX.binary_model(3)
+        model = XqmxModel.binary(3)
         model.set_linear(0, I64_MAX)
         model.set_linear(1, 5)
         model.set_linear(2, -10)
 
-        sample = XQMX.binary_sample(3)
+        sample = XqmxSample.default(Domain.BINARY, 3)
         for i in range(3):
             sample.set_linear(i, 1)
 
-        with pytest.raises(ArithmeticOverflow, match=r"\(ENERGY\)"):
-            DummySolver()._recompute_energy(model, sample)
+        with pytest.raises(ArithmeticOverflow):
+            SolverCPU()._recompute_energy(model, sample)
 
 
 # ---------------------------------------------------------------------------
-# SolverDWaveCPU
+# SolverCPU
 # ---------------------------------------------------------------------------
 
 
-class TestSolverDWaveCPU:
+class TestSolverCPU:
     """Tests for the DWave CPU simulated annealing solver."""
 
     def test_default_params(self) -> None:
-        """SolverDWaveCPU stores default parameters."""
-        solver = SolverDWaveCPU()
-        assert solver.num_reads == 100
-        assert solver.num_sweeps == 1000
-        assert solver.num_sweeps_per_beta == 1
-        assert solver.beta_range is None
-        assert solver.seed is None
+        """SolverCPU stores default parameters."""
+        solver = SolverCPU()
+        assert solver._impl.defaults["num_reads"] == 100
+        assert solver._impl.defaults["num_sweeps"] == 1000
+        assert solver._impl.defaults["num_sweeps_per_beta"] == 1
+        assert solver._impl.defaults["beta_range"] is None
+        assert solver._impl.defaults["seed"] is None
 
     def test_custom_params(self) -> None:
-        """SolverDWaveCPU accepts custom parameters."""
-        solver = SolverDWaveCPU(num_reads=50, num_sweeps=500, num_sweeps_per_beta=5, seed=42)
-        assert solver.num_reads == 50
-        assert solver.num_sweeps == 500
-        assert solver.num_sweeps_per_beta == 5
-        assert solver.seed == 42
+        """SolverCPU accepts custom parameters."""
+        solver = SolverCPU(num_reads=50, num_sweeps=500, num_sweeps_per_beta=5, seed=42)
+        assert solver._impl.defaults["num_reads"] == 50
+        assert solver._impl.defaults["num_sweeps"] == 500
+        assert solver._impl.defaults["num_sweeps_per_beta"] == 5
+        assert solver._impl.defaults["seed"] == 42
 
     def test_solve_trivial_binary(self) -> None:
         """Solve a trivial 2-variable QUBO: minimize x0 + x1."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
-        solver = SolverDWaveCPU(num_reads=10, num_sweeps=100, seed=42)
+        solver = SolverCPU(num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model)
 
         assert isinstance(result, SolverResult)
-        assert isinstance(result.sample, XQMX)
-        assert result.sample.mode == XQMXMode.SAMPLE
+        assert isinstance(result.sample, XqmxSample)
+        assert isinstance(result.sample, XqmxSample)
         assert result.sample.size == 2
         assert result.energy == 0
         assert isinstance(result.energy, int)
@@ -207,10 +192,10 @@ class TestSolverDWaveCPU:
 
     def test_solve_antiferromagnetic(self) -> None:
         """Solve x0*x1 with positive coupling: optimal is x0 != x1."""
-        model = XQMX.binary_model(2)
-        model.set_quadratic(0, 1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_quad(0, 1, 1)
 
-        solver = SolverDWaveCPU(num_reads=10, num_sweeps=100, seed=42)
+        solver = SolverCPU(num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model)
 
         x0 = result.sample.get_linear(0)
@@ -219,55 +204,55 @@ class TestSolverDWaveCPU:
 
     def test_solve_preserves_grid(self) -> None:
         """Solver preserves rows/cols from the model."""
-        model = XQMX.binary_model(4, rows=2, cols=2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(4, rows=2, cols=2)
+        model.set_linear(0, 1)
 
-        solver = SolverDWaveCPU(num_reads=10, num_sweeps=100, seed=42)
+        solver = SolverCPU(num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model)
 
         assert result.sample.rows == 2
         assert result.sample.cols == 2
 
     def test_solve_rejects_sample_mode(self) -> None:
-        """Solve rejects SAMPLE mode input."""
-        sample = XQMX.binary_sample(2)
-        solver = SolverDWaveCPU()
-        with pytest.raises(ValueError, match="MODEL"):
+        """Solve rejects a sample passed as a model."""
+        sample = XqmxSample.default(Domain.BINARY, 2)
+        solver = SolverCPU()
+        with pytest.raises(ValueError, match="XqmxModel"):
             solver.solve(sample)
 
     def test_kwargs_override(self) -> None:
         """Per-call kwargs override constructor defaults."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
-        solver = SolverDWaveCPU(num_reads=100, seed=1)
+        solver = SolverCPU(num_reads=100, seed=1)
         result = solver.solve(model, num_reads=5, seed=99)
 
         assert result.metadata["reads"] == 5
         assert result.metadata["seed"] == 99
         assert result.metadata["params"]["num_sweeps"] == 1000
 
-    def test_energy_matches_compute_energy(self) -> None:
-        """Solver-reported energy matches compute_energy."""
-        model = XQMX.binary_model(3)
-        model.set_linear(0, -2.0)
-        model.set_linear(1, -3.0)
-        model.set_quadratic(0, 1, 5.0)
+    def test_energy_matches_model_energy(self) -> None:
+        """Solver-reported energy matches model.energy."""
+        model = XqmxModel.binary(3)
+        model.set_linear(0, -2)
+        model.set_linear(1, -3)
+        model.set_quad(0, 1, 5)
 
-        solver = SolverDWaveCPU(num_reads=50, num_sweeps=500, seed=42)
+        solver = SolverCPU(num_reads=50, num_sweeps=500, seed=42)
         result = solver.solve(model)
 
-        expected_energy = compute_energy(model, result.sample)
+        expected_energy = model.energy(result.sample)
         assert result.energy == expected_energy
         assert isinstance(result.energy, int)
 
     def test_solve_ising_basic(self) -> None:
         """Solve a trivial Ising model: minimize -s0 - s1 (ground state: +1, +1)."""
-        model = XQMX.spin_model(2)
-        model.set_linear(0, -1.0)
-        model.set_linear(1, -1.0)
+        model = XqmxModel.spin(2)
+        model.set_linear(0, -1)
+        model.set_linear(1, -1)
 
-        solver = SolverDWaveCPU(num_reads=10, num_sweeps=100, seed=42)
+        solver = SolverCPU(num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model)
 
         assert isinstance(result, SolverResult)
@@ -278,35 +263,35 @@ class TestSolverDWaveCPU:
 
     def test_beta_range_passthrough(self) -> None:
         """beta_range is recorded in result metadata."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
-        solver = SolverDWaveCPU(num_reads=10, num_sweeps=100, seed=42)
+        solver = SolverCPU(num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model, beta_range=(0.1, 5.0))
 
         assert result.metadata["params"]["beta_range"] == (0.1, 5.0)
 
     def test_num_reads_validation(self) -> None:
         """num_reads < 1 raises ValueError."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        solver = SolverDWaveCPU()
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        solver = SolverCPU()
         with pytest.raises(ValueError, match="num_reads"):
             solver.solve(model, num_reads=0)
 
     def test_num_sweeps_validation(self) -> None:
         """num_sweeps < 1 raises ValueError."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        solver = SolverDWaveCPU()
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        solver = SolverCPU()
         with pytest.raises(ValueError, match="num_sweeps"):
             solver.solve(model, num_sweeps=0)
 
     def test_num_sweeps_per_beta_validation(self) -> None:
         """num_sweeps_per_beta < 1 raises, and indivisible counts raise."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        solver = SolverDWaveCPU()
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        solver = SolverCPU()
         with pytest.raises(ValueError, match="num_sweeps_per_beta"):
             solver.solve(model, num_sweeps_per_beta=0)
         # Local validation keeps this message independent of upstream wording.
@@ -317,11 +302,11 @@ class TestSolverDWaveCPU:
 
     def test_num_sweeps_per_beta_run(self) -> None:
         """num_sweeps_per_beta > 1 solves and is recorded in metadata."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
-        solver = SolverDWaveCPU(num_reads=10, num_sweeps=100, num_sweeps_per_beta=10, seed=42)
+        solver = SolverCPU(num_reads=10, num_sweeps=100, num_sweeps_per_beta=10, seed=42)
         result = solver.solve(model)
 
         assert result.energy == 0
@@ -329,42 +314,39 @@ class TestSolverDWaveCPU:
         assert result.metadata["params"]["num_betas"] == 10
 
     def test_model_to_bqm_qubo(self) -> None:
-        """_model_to_bqm produces correct BQM for a QUBO model."""
-        model = XQMX.binary_model(3)
-        model.set_linear(0, -2.0)
-        model.set_linear(1, 3.0)
-        model.set_quadratic(0, 2, 1.5)
+        """model_to_bqm produces correct BQM for a QUBO model."""
+        model = XqmxModel.binary(3)
+        model.set_linear(0, -2)
+        model.set_linear(1, 3)
+        model.set_quad(0, 2, 3)
 
-        solver = SolverDWaveCPU()
-        bqm = solver._model_to_bqm(model)
+        bqm = model_to_bqm(model)
 
         assert bqm.vartype is dimod.BINARY
         assert len(bqm.variables) == 3
         assert bqm.get_linear(0) == pytest.approx(-2.0)
         assert bqm.get_linear(1) == pytest.approx(3.0)
-        assert bqm.get_quadratic(0, 2) == pytest.approx(1.5)
+        assert bqm.get_quadratic(0, 2) == pytest.approx(3.0)
 
     def test_model_to_bqm_ising(self) -> None:
-        """_model_to_bqm produces correct BQM for an Ising model."""
-        model = XQMX.spin_model(2)
-        model.set_linear(0, -1.0)
-        model.set_quadratic(0, 1, 2.0)
+        """model_to_bqm produces correct BQM for an Ising model."""
+        model = XqmxModel.spin(2)
+        model.set_linear(0, -1)
+        model.set_quad(0, 1, 2)
 
-        solver = SolverDWaveCPU()
-        bqm = solver._model_to_bqm(model)
+        bqm = model_to_bqm(model)
 
         assert bqm.vartype is dimod.SPIN
         assert bqm.get_linear(0) == pytest.approx(-1.0)
         assert bqm.get_quadratic(0, 1) == pytest.approx(2.0)
 
     def test_sample_to_xqmx(self) -> None:
-        """_sample_to_xqmx converts a raw sample dict to an XQMX sample."""
-        model = XQMX.binary_model(3, rows=1, cols=3)
+        """sample_to_xqmx converts a raw sample dict to an XQMX sample."""
+        model = XqmxModel.binary(3, rows=1, cols=3)
 
-        solver = SolverDWaveCPU()
-        sample = solver._sample_to_xqmx(model, {0: 1, 1: 0, 2: 1})
+        sample = sample_to_xqmx(model, {0: 1, 1: 0, 2: 1})
 
-        assert sample.mode == XQMXMode.SAMPLE
+        assert isinstance(sample, XqmxSample)
         assert sample.size == 3
         assert sample.rows == 1
         assert sample.cols == 3
@@ -374,7 +356,7 @@ class TestSolverDWaveCPU:
 
 
 # ---------------------------------------------------------------------------
-# SolverDWaveQPU
+# SolverDWave
 # ---------------------------------------------------------------------------
 
 
@@ -415,89 +397,90 @@ def mock_dwave_system(monkeypatch):
     }
 
 
-class TestSolverDWaveQPU:
+class TestSolverDWave:
     """Tests for the D-Wave QPU solver (hardware mocked)."""
 
     def test_default_params(self, mock_dwave_system, monkeypatch) -> None:
-        """SolverDWaveQPU stores default parameters."""
+        """SolverDWave stores default parameters."""
         monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
-        solver = SolverDWaveQPU()
-        assert solver.num_reads == 100
-        assert solver.annealing_time == 20
+        solver = SolverDWave()
+        assert solver._impl.defaults["num_reads"] == 100
+        assert solver._impl.defaults["annealing_time"] == 20
 
     def test_custom_params(self, mock_dwave_system, monkeypatch) -> None:
-        """SolverDWaveQPU accepts custom parameters."""
+        """SolverDWave accepts custom parameters."""
         monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
-        solver = SolverDWaveQPU(num_reads=50, annealing_time=100)
-        assert solver.num_reads == 50
-        assert solver.annealing_time == 100
+        solver = SolverDWave(num_reads=50, annealing_time=100)
+        assert solver._impl.defaults["num_reads"] == 50
+        assert solver._impl.defaults["annealing_time"] == 100
 
     def test_solve_binary(self, mock_dwave_system, monkeypatch) -> None:
         """Solve a trivial 2-variable QUBO with mocked sampler."""
         monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
-        solver = SolverDWaveQPU()
+        solver = SolverDWave()
         result = solver.solve(model)
 
         assert isinstance(result, SolverResult)
-        assert isinstance(result.sample, XQMX)
-        assert result.sample.mode == XQMXMode.SAMPLE
+        assert isinstance(result.sample, XqmxSample)
+        assert isinstance(result.sample, XqmxSample)
         assert result.energy == 0  # x0=0, x1=0 -> energy 0
         assert isinstance(result.energy, int)
         assert result.timing >= 0.0
-        assert result.metadata["solver"] == "Advantage_system5.4"
-        assert result.metadata["qpu_timing"] == {"qpu_sampling_time": 1000}
+        assert result.metadata["seed"] is None
+        assert result.metadata["params"]["solver"] == "Advantage_system5.4"
+        assert result.metadata["params"]["qpu_timing"] == {"qpu_sampling_time": 1000}
 
     def test_solve_spin(self, mock_dwave_system, monkeypatch) -> None:
         """Solve a 2-variable Ising model with mocked sampler."""
         mock_dwave_system["first"].sample = {0: -1, 1: -1}
         mock_dwave_system["first"].energy = -2.0
         monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
-        model = XQMX.spin_model(2)
-        model.set_linear(0, -1.0)
-        model.set_linear(1, -1.0)
+        model = XqmxModel.spin(2)
+        model.set_linear(0, -1)
+        model.set_linear(1, -1)
 
-        solver = SolverDWaveQPU()
+        solver = SolverDWave()
         result = solver.solve(model)
 
-        assert result.sample.mode == XQMXMode.SAMPLE
+        assert isinstance(result.sample, XqmxSample)
         # _recompute_energy: -1*(-1) + -1*(-1) = -2
-        expected = compute_energy(model, result.sample)
+        expected = model.energy(result.sample)
         assert result.energy == expected
         assert isinstance(result.energy, int)
 
     def test_solve_kwargs_override(self, mock_dwave_system, monkeypatch) -> None:
         """Per-call kwargs override constructor defaults."""
         monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
-        model = XQMX.binary_model(2)
+        model = XqmxModel.binary(2)
 
-        solver = SolverDWaveQPU(num_reads=100, annealing_time=20)
+        solver = SolverDWave(num_reads=100, annealing_time=20)
         result = solver.solve(model, num_reads=50, annealing_time=40)
 
         assert result.metadata["reads"] == 50
         assert result.metadata["params"]["annealing_time"] == 40
 
     def test_solve_rejects_sample_mode(self, mock_dwave_system, monkeypatch) -> None:
-        """SolverDWaveQPU raises ValueError for SAMPLE mode input."""
+        """SolverDWave raises ValueError for a sample passed as a model."""
         monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
-        sample = XQMX.binary_sample(2)
-        solver = SolverDWaveQPU()
-        with pytest.raises(ValueError, match="MODEL"):
+        sample = XqmxSample.default(Domain.BINARY, 2)
+        solver = SolverDWave()
+        with pytest.raises(ValueError, match="XqmxModel"):
             solver.solve(sample)
 
     def test_missing_token_raises(self, mock_dwave_system, monkeypatch) -> None:
         """ValueError raised when token absent from constructor and env."""
         monkeypatch.delenv("DWAVE_API_TOKEN", raising=False)
         with pytest.raises(ValueError, match="DWAVE_API_TOKEN"):
-            SolverDWaveQPU()
+            SolverDWave()
 
     def test_token_from_env(self, mock_dwave_system, monkeypatch) -> None:
         """Token resolved from DWAVE_API_TOKEN env var."""
         monkeypatch.setenv("DWAVE_API_TOKEN", "env-token")
-        SolverDWaveQPU()
+        SolverDWave()
         call_kwargs = mock_dwave_system["dwave_system"].DWaveSampler.call_args.kwargs
         assert call_kwargs["token"] == "env-token"
 
@@ -507,14 +490,14 @@ class TestSolverDWaveQPU:
         monkeypatch.setitem(sys.modules, "dwave", None)
         monkeypatch.setitem(sys.modules, "dwave.system", None)
         with pytest.raises(ImportError, match="pip install xqsa"):
-            SolverDWaveQPU()
+            SolverDWave()
 
 
 # ---------------------------------------------------------------------------
-# SolverCudaGPU -- mocked tests (no GPU required, runs everywhere)
+# SolverGPU (CUDA engine) -- mocked tests (no GPU required, runs everywhere)
 # ---------------------------------------------------------------------------
 
-# Python mirrors of the CUDA device RNG in xqsa.cuda_gpu._RNG_PRELUDE
+# Python mirrors of the CUDA device RNG in xqsa.inprocess.cuda._RNG_PRELUDE
 # (QUI-705). Constants and update order must match the kernel bit-for-bit;
 # the fake kernel below consumes these so the mocked solve reproduces the
 # device sampling stream exactly.
@@ -651,60 +634,60 @@ def mock_cupy_env(monkeypatch):
     return fake_cupy
 
 
-class TestSolverCudaGPUMocked:
-    """Tests for SolverCudaGPU with mocked CuPy (no GPU required)."""
+class TestSolverGPUCudaMocked:
+    """Tests for SolverGPU (CUDA engine) with mocked CuPy (no GPU required)."""
 
     def test_solve_trivial_binary_mocked(self, mock_cupy_env) -> None:
         """Solve trivial QUBO through mocked pipeline."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
         solver = _Solver(num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model)
 
         assert isinstance(result, SolverResult)
         assert result.energy == 0
-        assert result.energy == compute_energy(model, result.sample)
+        assert result.energy == model.energy(result.sample)
 
     def test_solve_trivial_spin_mocked(self, mock_cupy_env) -> None:
         """Solve trivial Ising through mocked pipeline."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
-        model = XQMX.spin_model(2)
-        model.set_linear(0, -1.0)
-        model.set_linear(1, -1.0)
+        model = XqmxModel.spin(2)
+        model.set_linear(0, -1)
+        model.set_linear(1, -1)
 
         solver = _Solver(num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model)
 
         assert isinstance(result, SolverResult)
         assert result.energy == -2
-        assert result.energy == compute_energy(model, result.sample)
+        assert result.energy == model.energy(result.sample)
 
-    def test_energy_matches_compute_energy_mocked(self, mock_cupy_env) -> None:
-        """Solver-reported energy matches compute_energy (mocked)."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+    def test_energy_matches_model_energy_mocked(self, mock_cupy_env) -> None:
+        """Solver-reported energy matches model.energy (mocked)."""
+        _Solver = _cuda
 
-        model = XQMX.binary_model(3)
-        model.set_linear(0, -2.0)
-        model.set_linear(1, -3.0)
-        model.set_quadratic(0, 1, 5.0)
+        model = XqmxModel.binary(3)
+        model.set_linear(0, -2)
+        model.set_linear(1, -3)
+        model.set_quad(0, 1, 5)
 
         solver = _Solver(num_reads=50, num_sweeps=500, seed=42)
         result = solver.solve(model)
 
-        assert result.energy == compute_energy(model, result.sample)
+        assert result.energy == model.energy(result.sample)
         assert isinstance(result.energy, int)
 
     def test_kwargs_override_mocked(self, mock_cupy_env) -> None:
         """Per-call kwargs override constructor defaults (mocked)."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
         solver = _Solver(num_reads=100, seed=1)
         result = solver.solve(model, num_reads=5, seed=99)
@@ -714,17 +697,18 @@ class TestSolverCudaGPUMocked:
 
     def test_metadata_schema_mocked(self, mock_cupy_env) -> None:
         """Metadata has exactly {seed, reads, params} keys (mocked)."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
         solver = _Solver(num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model)
 
         assert set(result.metadata.keys()) == {"seed", "reads", "params"}
         assert set(result.metadata["params"].keys()) == {
-            "strategy",
+            "algorithm",
+            "engine",
             "num_sweeps",
             "num_sweeps_per_beta",
             "num_betas",
@@ -737,7 +721,7 @@ class TestSolverCudaGPUMocked:
         """ImportError with install hint when cupy is not installed."""
         monkeypatch.setitem(sys.modules, "cupy", None)
         with pytest.raises(ImportError, match="pip install xqsa"):
-            from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+            _Solver = _cuda
 
             _Solver()
 
@@ -745,45 +729,45 @@ class TestSolverCudaGPUMocked:
         """RuntimeError when no GPU is detected."""
         mock_cupy_env.cuda.runtime.getDeviceCount = lambda: 0
         with pytest.raises(RuntimeError, match="No NVIDIA CUDA GPU"):
-            from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+            _Solver = _cuda
 
             _Solver()
 
     def test_compute_beta_schedule_mocked(self, mock_cupy_env) -> None:
         """_compute_beta_schedule returns num_betas float64 points for both types."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
         solver = _Solver()
         for schedule_type in ("geometric", "linear"):
-            schedule = solver._compute_beta_schedule(20, (0.05, 5.0), schedule_type)
+            schedule = solver._impl._compute_beta_schedule(20, (0.05, 5.0), schedule_type)
             assert schedule.shape == (20,)
             assert schedule.dtype == np.float64
 
     def test_compute_beta_schedule_linear_bit_identical_mocked(self, mock_cupy_env) -> None:
         """The linear schedule reproduces the retired in-kernel ramp bit-for-bit."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
         solver = _Solver()
-        schedule = solver._compute_beta_schedule(200, (0.05, 5.0), "linear")
+        schedule = solver._impl._compute_beta_schedule(200, (0.05, 5.0), "linear")
         expected = 0.05 + (5.0 - 0.05) * (np.arange(200, dtype=np.float64) / np.float64(199))
         np.testing.assert_array_equal(schedule, expected)
 
     def test_compute_beta_schedule_single_level_mocked(self, mock_cupy_env) -> None:
         """A single temperature level anneals at beta_end (coldest quench)."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
         solver = _Solver()
         for schedule_type in ("geometric", "linear"):
-            schedule = solver._compute_beta_schedule(1, (0.05, 5.0), schedule_type)
+            schedule = solver._impl._compute_beta_schedule(1, (0.05, 5.0), schedule_type)
             assert schedule.shape == (1,)
             assert schedule[0] == np.float64(5.0)
 
     def test_num_sweeps_per_beta_validation_mocked(self, mock_cupy_env) -> None:
         """num_sweeps_per_beta < 1 raises, and indivisible counts raise (mocked)."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
         with pytest.raises(ValueError, match="num_sweeps_per_beta"):
             _Solver().solve(model, num_sweeps_per_beta=0)
         with pytest.raises(ValueError, match="divisible"):
@@ -793,10 +777,10 @@ class TestSolverCudaGPUMocked:
 
     def test_range_errors_carry_offending_value_mocked(self, mock_cupy_env) -> None:
         """num_reads / num_sweeps range errors name the rejected value (QUI-685)."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
         with pytest.raises(ValueError, match=r"num_reads must be >= 1, got 0"):
             _Solver().solve(model, num_reads=0)
         with pytest.raises(ValueError, match=r"num_sweeps must be >= 1, got -3"):
@@ -804,10 +788,10 @@ class TestSolverCudaGPUMocked:
 
     def test_beta_schedule_type_validation_mocked(self, mock_cupy_env) -> None:
         """Unsupported beta_schedule_type raises in constructor and solve (mocked)."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
         with pytest.raises(ValueError, match="beta_schedule_type"):
             _Solver(beta_schedule_type="exponential")
         with pytest.raises(ValueError, match="beta_schedule_type"):
@@ -815,11 +799,11 @@ class TestSolverCudaGPUMocked:
 
     def test_num_sweeps_per_beta_run_mocked(self, mock_cupy_env) -> None:
         """num_sweeps_per_beta > 1 solves and records the schedule split (mocked)."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
         solver = _Solver(num_reads=10, num_sweeps=200, num_sweeps_per_beta=10, seed=42)
         result = solver.solve(model)
@@ -834,7 +818,7 @@ class TestSolverCudaGPUMocked:
     def _capture_kernel_args(solver) -> dict:
         """Shadow the cached binary kernel with a wrapper that records call args."""
         captured: dict = {}
-        real_kernel = solver._binary_kernel
+        real_kernel = solver._impl._binary_kernel
 
         def wrapper(grid, block, args):
             captured["grid"] = grid
@@ -842,16 +826,17 @@ class TestSolverCudaGPUMocked:
             captured["args"] = args
             return real_kernel(grid, block, args)
 
-        solver.__dict__["_binary_kernel"] = wrapper
+        solver._impl.__dict__["_binary_kernel"] = wrapper
         return captured
 
     def test_launch_shape_parallel_reduction_mocked(self, mock_cupy_env) -> None:
         """Each replica's block launches _THREADS_PER_REPLICA threads (QUI-852)."""
-        from xqsa.cuda_gpu import _THREADS_PER_REPLICA
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        from xqsa.inprocess.cuda import _THREADS_PER_REPLICA
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        _Solver = _cuda
+
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
         solver = _Solver(num_reads=7, num_sweeps=10, seed=1)
         captured = self._capture_kernel_args(solver)
@@ -869,10 +854,10 @@ class TestSolverCudaGPUMocked:
         20 distinct, strictly increasing betas (a collapsed-constant schedule
         would fail the uniqueness assertions).
         """
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
         solver = _Solver(num_reads=5, num_sweeps=200, num_sweeps_per_beta=10, beta_range=(0.05, 5.0), seed=7)
         captured = self._capture_kernel_args(solver)
@@ -888,10 +873,10 @@ class TestSolverCudaGPUMocked:
 
     def test_default_schedule_bit_identical_mocked(self, mock_cupy_env) -> None:
         """num_sweeps_per_beta=1 + linear reproduces the retired kernel ramp bit-for-bit."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
         solver = _Solver(num_reads=5, num_sweeps=200, beta_range=(0.05, 5.0), seed=7)
         captured = self._capture_kernel_args(solver)
@@ -904,13 +889,13 @@ class TestSolverCudaGPUMocked:
     def test_single_beta_level_uses_beta_end_mocked(self, mock_cupy_env) -> None:
         """num_sweeps_per_beta == num_sweeps runs a cold quench at beta_end.
 
-        Matches SolverDWaveCPU and SolverMetalGPU (QUI-685); the retired
+        Matches SolverCPU and SolverGPU Metal engine (QUI-685); the retired
         in-kernel ramp used beta_start for this degenerate case.
         """
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
         solver = _Solver(num_reads=5, num_sweeps=50, num_sweeps_per_beta=50, beta_range=(0.05, 5.0), seed=7)
         captured = self._capture_kernel_args(solver)
@@ -923,11 +908,11 @@ class TestSolverCudaGPUMocked:
 
     def test_geometric_schedule_mocked(self, mock_cupy_env) -> None:
         """The geometric schedule solves a trivial model and is recorded (mocked)."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
         solver = _Solver(num_reads=10, num_sweeps=100, beta_schedule_type="geometric", seed=42)
         result = solver.solve(model)
@@ -937,10 +922,10 @@ class TestSolverCudaGPUMocked:
 
     def test_geometric_schedule_shape_mocked(self, mock_cupy_env) -> None:
         """The geometric schedule has a constant level ratio and spans beta_range."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
         solver = _Solver(
             num_reads=5,
@@ -962,11 +947,11 @@ class TestSolverCudaGPUMocked:
 
     def test_num_sweeps_per_beta_spin_run_mocked(self, mock_cupy_env) -> None:
         """num_sweeps_per_beta > 1 solves a spin model through the spin kernel (mocked)."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
-        model = XQMX.spin_model(2)
-        model.set_linear(0, -1.0)
-        model.set_linear(1, -1.0)
+        model = XqmxModel.spin(2)
+        model.set_linear(0, -1)
+        model.set_linear(1, -1)
 
         solver = _Solver(num_reads=10, num_sweeps=100, num_sweeps_per_beta=10, seed=42)
         result = solver.solve(model)
@@ -976,10 +961,10 @@ class TestSolverCudaGPUMocked:
 
     def test_num_sweeps_per_beta_kwargs_override_mocked(self, mock_cupy_env) -> None:
         """Per-call kwargs override non-default constructor values (mocked)."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
         solver = _Solver(num_reads=10, num_sweeps=100, num_sweeps_per_beta=10, seed=1)
         result = solver.solve(model, num_sweeps_per_beta=5, beta_schedule_type="geometric")
@@ -990,15 +975,15 @@ class TestSolverCudaGPUMocked:
 
     def test_same_seed_reproducible_mocked(self, mock_cupy_env) -> None:
         """Identical seeds give identical best energy and sample (QUI-705)."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
-        model = XQMX.spin_model(6)
-        model.set_quadratic(0, 1, 1.0)
-        model.set_quadratic(1, 2, -1.0)
-        model.set_quadratic(2, 3, 1.0)
-        model.set_quadratic(3, 4, -1.0)
-        model.set_quadratic(4, 5, 1.0)
-        model.set_quadratic(0, 5, 1.0)
+        model = XqmxModel.spin(6)
+        model.set_quad(0, 1, 1)
+        model.set_quad(1, 2, -1)
+        model.set_quad(2, 3, 1)
+        model.set_quad(3, 4, -1)
+        model.set_quad(4, 5, 1)
+        model.set_quad(0, 5, 1)
 
         r1 = _Solver(num_reads=4, num_sweeps=30, seed=7).solve(model)
         r2 = _Solver(num_reads=4, num_sweeps=30, seed=7).solve(model)
@@ -1008,11 +993,11 @@ class TestSolverCudaGPUMocked:
 
     def test_seed_none_solves_mocked(self, mock_cupy_env) -> None:
         """seed=None draws a random base seed and still solves (QUI-705)."""
-        from xqsa.cuda_gpu import SolverCudaGPU as _Solver
+        _Solver = _cuda
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
         result = _Solver(num_reads=10, num_sweeps=100, seed=None).solve(model)
 
@@ -1021,8 +1006,35 @@ class TestSolverCudaGPUMocked:
 
 
 # ---------------------------------------------------------------------------
-# SolverCudaGPU -- real GPU tests (requires cupy + NVIDIA GPU)
+# SolverGPU (CUDA engine) -- real GPU tests (requires cupy + NVIDIA GPU)
 # ---------------------------------------------------------------------------
+
+
+class TestSolverGPUCudaPlumbing:
+    """SolverGPU(engine="cuda") settings reach the sampler (cupy and kernels faked)."""
+
+    def test_settings_reach_the_sampler(self, monkeypatch) -> None:
+        """Constructor values, per-call overrides and selectors flow through run()."""
+        from xqsa.inprocess.cuda import InProcessCuda
+
+        fake_cupy = types.ModuleType("cupy")
+        fake_cupy.cuda = types.SimpleNamespace(runtime=types.SimpleNamespace(getDeviceCount=lambda: 1))
+        monkeypatch.setitem(sys.modules, "cupy", fake_cupy)
+        monkeypatch.setattr(InProcessCuda, "_to_dense_arrays", lambda self, model: (None, None))
+        run_sa = MagicMock(return_value=({0: 1, 1: 0}, -1.0))
+        monkeypatch.setattr(InProcessCuda, "_run_sa", run_sa)
+
+        solver = SolverGPU(engine="cuda", num_sweeps=40, seed=3)
+        result = solver.solve(XqmxModel.binary(2), num_reads=7, num_sweeps_per_beta=4)
+
+        sa = run_sa.call_args.kwargs
+        assert (sa["num_reads"], sa["num_sweeps"], sa["num_sweeps_per_beta"], sa["num_betas"]) == (7, 40, 4, 10)
+        assert (sa["beta_schedule_type"], sa["beta_range"], sa["seed"]) == ("linear", None, 3)
+        assert result.metadata["seed"] == 3
+        assert result.metadata["reads"] == 7
+        params = result.metadata["params"]
+        assert (params["engine"], params["algorithm"], params["num_sweeps"]) == ("cuda", "sa", 40)
+        assert params["raw_energy"] == -1.0
 
 
 _has_cupy = True
@@ -1031,64 +1043,62 @@ try:
 except ImportError:
     _has_cupy = False
 
-if _has_cupy or _IN_CI:
-    from xqsa.cuda_gpu import SolverCudaGPU
-
 
 @pytest.mark.cuda
 @pytest.mark.skipif(
     not _IN_CI and not _has_cupy,
     reason="cupy not installed (skipped locally; runs and hard-fails in CI)",
 )
-class TestSolverCudaGPU:
+class TestSolverGPUCuda:
     """Tests for the CUDA GPU simulated annealing solver (real hardware)."""
 
     def test_default_params(self) -> None:
-        """SolverCudaGPU stores default parameters."""
-        solver = SolverCudaGPU()
-        assert solver.strategy == "sa"
-        assert solver.num_reads == 100
-        assert solver.num_sweeps == 1000
-        assert solver.beta_range is None
-        assert solver.seed is None
-        assert solver.num_sweeps_per_beta == 1
-        assert solver.beta_schedule_type == "linear"
+        """SolverGPU (CUDA engine) stores default parameters."""
+        solver = _cuda()
+        assert solver._impl.algorithm == "sa"
+        assert solver._impl.defaults["num_reads"] == 100
+        assert solver._impl.defaults["num_sweeps"] == 1000
+        assert solver._impl.defaults["beta_range"] is None
+        assert solver._impl.defaults["seed"] is None
+        assert solver._impl.defaults["num_sweeps_per_beta"] == 1
+        assert solver._impl.defaults["beta_schedule_type"] == "linear"
 
     def test_custom_params(self) -> None:
-        """SolverCudaGPU accepts custom parameters."""
-        solver = SolverCudaGPU(strategy="sa", num_reads=50, num_sweeps=500, num_sweeps_per_beta=5, seed=42)
-        assert solver.num_reads == 50
-        assert solver.num_sweeps == 500
-        assert solver.num_sweeps_per_beta == 5
-        assert solver.seed == 42
+        """SolverGPU (CUDA engine) accepts custom parameters."""
+        solver = _cuda(algorithm="sa", num_reads=50, num_sweeps=500, num_sweeps_per_beta=5, seed=42)
+        assert solver._impl.defaults["num_reads"] == 50
+        assert solver._impl.defaults["num_sweeps"] == 500
+        assert solver._impl.defaults["num_sweeps_per_beta"] == 5
+        assert solver._impl.defaults["seed"] == 42
 
     def test_solve_trivial_binary(self) -> None:
         """Solve a trivial 2-variable QUBO: minimize x0 + x1."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
-        solver = SolverCudaGPU(num_reads=10, num_sweeps=100, seed=42)
+        solver = _cuda(num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model)
 
         assert isinstance(result, SolverResult)
-        assert isinstance(result.sample, XQMX)
-        assert result.sample.mode == XQMXMode.SAMPLE
+        assert isinstance(result.sample, XqmxSample)
+        assert isinstance(result.sample, XqmxSample)
         assert result.sample.size == 2
         assert result.energy == 0
         assert isinstance(result.energy, int)
         assert result.timing > 0.0
         assert result.metadata["reads"] == 10
         assert result.metadata["seed"] == 42
-        assert "strategy" in result.metadata["params"]
+        assert result.metadata["params"]["algorithm"] == "sa"
+        assert result.metadata["params"]["engine"] == "cuda"
 
     def test_solve_trivial_spin(self) -> None:
         """Solve a trivial Ising model: minimize -s0 - s1."""
-        model = XQMX.spin_model(2)
-        model.set_linear(0, -1.0)
-        model.set_linear(1, -1.0)
+        model = XqmxModel.spin(2)
+        model.set_linear(0, -1)
+        model.set_linear(1, -1)
 
-        solver = SolverCudaGPU(num_reads=10, num_sweeps=100, seed=42)
+        solver = _cuda(num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model)
 
         assert isinstance(result, SolverResult)
@@ -1100,10 +1110,10 @@ class TestSolverCudaGPU:
 
     def test_solve_antiferromagnetic(self) -> None:
         """Solve x0*x1 with positive coupling: optimal is x0 != x1."""
-        model = XQMX.binary_model(2)
-        model.set_quadratic(0, 1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_quad(0, 1, 1)
 
-        solver = SolverCudaGPU(num_reads=10, num_sweeps=100, seed=42)
+        solver = _cuda(num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model)
 
         x0 = result.sample.get_linear(0)
@@ -1112,97 +1122,98 @@ class TestSolverCudaGPU:
 
     def test_solve_preserves_grid(self) -> None:
         """Solver preserves rows/cols from the model."""
-        model = XQMX.binary_model(4, rows=2, cols=2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(4, rows=2, cols=2)
+        model.set_linear(0, 1)
 
-        solver = SolverCudaGPU(num_reads=10, num_sweeps=100, seed=42)
+        solver = _cuda(num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model)
 
         assert result.sample.rows == 2
         assert result.sample.cols == 2
 
     def test_solve_rejects_sample_mode(self) -> None:
-        """Solve rejects SAMPLE mode input."""
-        sample = XQMX.binary_sample(2)
-        solver = SolverCudaGPU()
-        with pytest.raises(ValueError, match="MODEL"):
+        """Solve rejects a sample passed as a model."""
+        sample = XqmxSample.default(Domain.BINARY, 2)
+        solver = _cuda()
+        with pytest.raises(ValueError, match="XqmxModel"):
             solver.solve(sample)
 
     def test_kwargs_override(self) -> None:
         """Per-call kwargs override constructor defaults."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
-        solver = SolverCudaGPU(num_reads=100, seed=1)
+        solver = _cuda(num_reads=100, seed=1)
         result = solver.solve(model, num_reads=5, seed=99)
 
         assert result.metadata["reads"] == 5
         assert result.metadata["seed"] == 99
         assert result.metadata["params"]["num_sweeps"] == 1000
 
-    def test_energy_matches_compute_energy(self) -> None:
-        """Solver-reported energy matches compute_energy."""
-        model = XQMX.binary_model(3)
-        model.set_linear(0, -2.0)
-        model.set_linear(1, -3.0)
-        model.set_quadratic(0, 1, 5.0)
+    def test_energy_matches_model_energy(self) -> None:
+        """Solver-reported energy matches model.energy."""
+        model = XqmxModel.binary(3)
+        model.set_linear(0, -2)
+        model.set_linear(1, -3)
+        model.set_quad(0, 1, 5)
 
-        solver = SolverCudaGPU(num_reads=50, num_sweeps=500, seed=42)
+        solver = _cuda(num_reads=50, num_sweeps=500, seed=42)
         result = solver.solve(model)
 
-        expected_energy = compute_energy(model, result.sample)
+        expected_energy = model.energy(result.sample)
         assert result.energy == expected_energy
         assert isinstance(result.energy, int)
 
     def test_num_reads_validation(self) -> None:
         """num_reads < 1 raises ValueError."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        solver = SolverCudaGPU()
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        solver = _cuda()
         with pytest.raises(ValueError, match="num_reads"):
             solver.solve(model, num_reads=0)
 
     def test_num_sweeps_validation(self) -> None:
         """num_sweeps < 1 raises ValueError."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        solver = SolverCudaGPU()
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        solver = _cuda()
         with pytest.raises(ValueError, match="num_sweeps"):
             solver.solve(model, num_sweeps=0)
 
-    def test_strategy_validation_init(self) -> None:
-        """Unsupported strategy in __init__ raises ValueError."""
-        with pytest.raises(ValueError, match="Unsupported strategy"):
-            SolverCudaGPU(strategy="gibbs")
+    def test_algorithm_validation_init(self) -> None:
+        """Unsupported algorithm in __init__ raises ValueError."""
+        with pytest.raises(ValueError, match="not available in-process"):
+            _cuda(algorithm="gibbs")
 
-    def test_strategy_validation_kwargs(self) -> None:
-        """Unsupported strategy in solve() kwargs raises ValueError."""
-        model = XQMX.binary_model(2)
-        solver = SolverCudaGPU()
-        with pytest.raises(ValueError, match="Unsupported strategy"):
-            solver.solve(model, strategy="gibbs")
+    def test_algorithm_per_call_rejected(self) -> None:
+        """A per-call algorithm keyword raises TypeError: it is constructor-only."""
+        model = XqmxModel.binary(2)
+        solver = _cuda()
+        with pytest.raises(TypeError, match="algorithm"):
+            solver.solve(model, algorithm="gibbs")
 
     def test_beta_range_passthrough(self) -> None:
         """beta_range is recorded in result metadata."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
-        solver = SolverCudaGPU(num_reads=10, num_sweeps=100, seed=42)
+        solver = _cuda(num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model, beta_range=(0.1, 5.0))
 
         assert result.metadata["params"]["beta_range"] == (0.1, 5.0)
 
     def test_metadata_schema(self) -> None:
         """Metadata has exactly {seed, reads, params} top-level keys."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
-        solver = SolverCudaGPU(num_reads=10, num_sweeps=100, seed=42)
+        solver = _cuda(num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model)
 
         assert set(result.metadata.keys()) == {"seed", "reads", "params"}
         assert set(result.metadata["params"].keys()) == {
-            "strategy",
+            "algorithm",
+            "engine",
             "num_sweeps",
             "num_sweeps_per_beta",
             "num_betas",
@@ -1213,9 +1224,9 @@ class TestSolverCudaGPU:
 
     def test_num_sweeps_per_beta_validation(self) -> None:
         """num_sweeps_per_beta < 1 raises, and indivisible counts raise."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        solver = SolverCudaGPU()
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        solver = _cuda()
         with pytest.raises(ValueError, match="num_sweeps_per_beta"):
             solver.solve(model, num_sweeps_per_beta=0)
         with pytest.raises(ValueError, match="divisible"):
@@ -1223,11 +1234,11 @@ class TestSolverCudaGPU:
 
     def test_num_sweeps_per_beta_run(self) -> None:
         """num_sweeps_per_beta > 1 solves and records the schedule split."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
-        solver = SolverCudaGPU(num_reads=20, num_sweeps=200, num_sweeps_per_beta=10, seed=42)
+        solver = _cuda(num_reads=20, num_sweeps=200, num_sweeps_per_beta=10, seed=42)
         result = solver.solve(model)
 
         assert result.energy == 0
@@ -1237,11 +1248,11 @@ class TestSolverCudaGPU:
 
     def test_geometric_schedule(self) -> None:
         """The geometric beta schedule solves a trivial model on real hardware."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
-        solver = SolverCudaGPU(num_reads=20, num_sweeps=200, beta_schedule_type="geometric", seed=42)
+        solver = _cuda(num_reads=20, num_sweeps=200, beta_schedule_type="geometric", seed=42)
         result = solver.solve(model)
 
         assert result.energy == 0
@@ -1261,20 +1272,20 @@ class TestSolverCudaGPU:
         """
         rng = np.random.default_rng(0)
         n = 512
-        model = XQMX.binary_model(n)
+        model = XqmxModel.binary(n)
         for i in range(n):
             for j in range(i + 1, n):
                 if rng.random() < 0.25:
-                    model.set_quadratic(i, j, 1.0)
+                    model.set_quad(i, j, 1)
 
-        solver = SolverCudaGPU(strategy="sa", num_reads=10, num_sweeps=100, seed=42)
+        solver = _cuda(algorithm="sa", num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model)
 
         assert float(result.metadata["params"]["raw_energy"]) == float(result.energy)
 
 
 # ---------------------------------------------------------------------------
-# SolverMetalGPU -- mocked tests (no Apple GPU required, runs everywhere)
+# SolverGPU (Metal engine) -- mocked tests (no Apple GPU required, runs everywhere)
 # ---------------------------------------------------------------------------
 
 
@@ -1347,7 +1358,7 @@ def mock_metal_env(monkeypatch):
     """Inject a fake ``Metal`` module backed by numpy CPU references.
 
     The fake reproduces the slice of the pyobjc-Metal API that
-    ``SolverMetalGPU`` drives (device, library, function, pipeline, queue,
+    ``SolverGPU(engine="metal")`` drives (device, library, function, pipeline, queue,
     command buffer, encoder, buffers). ``waitUntilCompleted`` decodes the
     buffers the solver bound -- by the documented kernel ABI -- and runs the
     corresponding CPU SA/Gibbs reference, writing results back into the
@@ -1358,7 +1369,7 @@ def mock_metal_env(monkeypatch):
     bookkeeping. It does NOT validate the MSL kernels themselves: the kernel
     source is never compiled, and the CPU reference uses numpy's RNG rather
     than the on-device xorshift32, so acceptance/sampling decisions differ
-    from real hardware. Kernel correctness is covered by ``TestSolverMetalGPU``
+    from real hardware. Kernel correctness is covered by ``TestSolverGPUMetal``
     (real Apple GPU), which is skipped without hardware.
     """
     import types as _types
@@ -1527,102 +1538,102 @@ def mock_metal_env(monkeypatch):
     return fake_metal
 
 
-class TestSolverMetalGPUMocked:
-    """Tests for SolverMetalGPU with a mocked Metal framework (no GPU)."""
+class TestSolverGPUMetalMocked:
+    """Tests for SolverGPU (Metal engine) with a mocked Metal framework (no GPU)."""
 
     def test_solve_trivial_binary_sa_mocked(self, mock_metal_env) -> None:
-        """Solve a trivial QUBO with the SA strategy through the mock."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        """Solve a trivial QUBO with the SA algorithm through the mock."""
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
-        solver = _Solver(strategy="sa", num_reads=10, num_sweeps=100, seed=42)
+        solver = _Solver(algorithm="sa", num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model)
 
         assert isinstance(result, SolverResult)
         assert result.energy == 0
-        assert result.energy == compute_energy(model, result.sample)
+        assert result.energy == model.energy(result.sample)
 
     def test_solve_trivial_spin_sa_mocked(self, mock_metal_env) -> None:
-        """Solve a trivial Ising with the SA strategy through the mock."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        """Solve a trivial Ising with the SA algorithm through the mock."""
+        _Solver = _metal
 
-        model = XQMX.spin_model(2)
-        model.set_linear(0, -1.0)
-        model.set_linear(1, -1.0)
+        model = XqmxModel.spin(2)
+        model.set_linear(0, -1)
+        model.set_linear(1, -1)
 
-        solver = _Solver(strategy="sa", num_reads=10, num_sweeps=100, seed=42)
+        solver = _Solver(algorithm="sa", num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model)
 
         assert result.energy == -2
-        assert result.energy == compute_energy(model, result.sample)
+        assert result.energy == model.energy(result.sample)
 
     def test_solve_trivial_binary_gibbs_mocked(self, mock_metal_env) -> None:
-        """Solve a trivial QUBO with the Gibbs strategy through the mock."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        """Solve a trivial QUBO with the Gibbs algorithm through the mock."""
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
-        solver = _Solver(strategy="gibbs", num_reads=50, num_sweeps=200, seed=42)
+        solver = _Solver(algorithm="gibbs", num_reads=50, num_sweeps=200, seed=42)
         result = solver.solve(model)
 
         assert result.energy == 0
-        assert result.energy == compute_energy(model, result.sample)
+        assert result.energy == model.energy(result.sample)
 
     def test_solve_trivial_spin_gibbs_mocked(self, mock_metal_env) -> None:
-        """Solve a trivial Ising with the Gibbs strategy through the mock."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        """Solve a trivial Ising with the Gibbs algorithm through the mock."""
+        _Solver = _metal
 
-        model = XQMX.spin_model(2)
-        model.set_linear(0, -1.0)
-        model.set_linear(1, -1.0)
+        model = XqmxModel.spin(2)
+        model.set_linear(0, -1)
+        model.set_linear(1, -1)
 
-        solver = _Solver(strategy="gibbs", num_reads=50, num_sweeps=200, seed=42)
+        solver = _Solver(algorithm="gibbs", num_reads=50, num_sweeps=200, seed=42)
         result = solver.solve(model)
 
         assert result.energy == -2
-        assert result.energy == compute_energy(model, result.sample)
+        assert result.energy == model.energy(result.sample)
 
     def test_solve_antiferromagnetic_gibbs_mocked(self, mock_metal_env) -> None:
         """Gibbs on coupled vars exercises graph colouring (two colours)."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
-        model.set_quadratic(0, 1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_quad(0, 1, 1)
 
-        solver = _Solver(strategy="gibbs", num_reads=50, num_sweeps=200, seed=42)
+        solver = _Solver(algorithm="gibbs", num_reads=50, num_sweeps=200, seed=42)
         result = solver.solve(model)
 
         x0 = result.sample.get_linear(0)
         x1 = result.sample.get_linear(1)
         assert x0 * x1 == 0
-        assert result.energy == compute_energy(model, result.sample)
+        assert result.energy == model.energy(result.sample)
 
-    def test_energy_matches_compute_energy_mocked(self, mock_metal_env) -> None:
-        """Solver-reported energy matches compute_energy (mocked)."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+    def test_energy_matches_model_energy_mocked(self, mock_metal_env) -> None:
+        """Solver-reported energy matches model.energy (mocked)."""
+        _Solver = _metal
 
-        model = XQMX.binary_model(3)
-        model.set_linear(0, -2.0)
-        model.set_linear(1, -3.0)
-        model.set_quadratic(0, 1, 5.0)
+        model = XqmxModel.binary(3)
+        model.set_linear(0, -2)
+        model.set_linear(1, -3)
+        model.set_quad(0, 1, 5)
 
         solver = _Solver(num_reads=50, num_sweeps=300, seed=42)
         result = solver.solve(model)
 
-        assert result.energy == compute_energy(model, result.sample)
+        assert result.energy == model.energy(result.sample)
         assert isinstance(result.energy, int)
 
     def test_kwargs_override_mocked(self, mock_metal_env) -> None:
         """Per-call kwargs override constructor defaults (mocked)."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
         solver = _Solver(num_reads=100, seed=1)
         result = solver.solve(model, num_reads=5, seed=99)
@@ -1633,17 +1644,18 @@ class TestSolverMetalGPUMocked:
 
     def test_metadata_schema_mocked(self, mock_metal_env) -> None:
         """Metadata has exactly {seed, reads, params} keys (mocked)."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
         solver = _Solver(num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model)
 
         assert set(result.metadata.keys()) == {"seed", "reads", "params"}
         assert set(result.metadata["params"].keys()) == {
-            "strategy",
+            "algorithm",
+            "engine",
             "num_sweeps",
             "num_sweeps_per_beta",
             "num_betas",
@@ -1652,35 +1664,35 @@ class TestSolverMetalGPUMocked:
             "raw_energy",
         }
 
-    def test_strategy_validation_mocked(self, mock_metal_env) -> None:
-        """Unsupported strategy raises ValueError (mocked)."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+    def test_algorithm_validation_mocked(self, mock_metal_env) -> None:
+        """Unsupported algorithm raises ValueError (mocked)."""
+        _Solver = _metal
 
-        with pytest.raises(ValueError, match="Unsupported strategy"):
-            _Solver(strategy="metropolis")
+        with pytest.raises(ValueError, match="not available in-process"):
+            _Solver(algorithm="metropolis")
 
     def test_schedule_validation_mocked(self, mock_metal_env) -> None:
         """Unsupported beta_schedule_type raises ValueError (mocked)."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
         with pytest.raises(ValueError, match="beta_schedule_type"):
             _Solver(beta_schedule_type="exponential")
 
-    def test_strategy_validation_kwargs_mocked(self, mock_metal_env) -> None:
-        """Unsupported strategy in solve() kwargs raises ValueError (mocked)."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+    def test_algorithm_per_call_rejected_mocked(self, mock_metal_env) -> None:
+        """A per-call algorithm keyword raises TypeError: it is constructor-only (mocked)."""
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
+        model = XqmxModel.binary(2)
         solver = _Solver()
-        with pytest.raises(ValueError, match="Unsupported strategy"):
-            solver.solve(model, strategy="metropolis")
+        with pytest.raises(TypeError, match="algorithm"):
+            solver.solve(model, algorithm="metropolis")
 
     def test_beta_range_passthrough_mocked(self, mock_metal_env) -> None:
         """beta_range is recorded in result metadata (mocked)."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
         solver = _Solver(num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model, beta_range=(0.1, 5.0))
@@ -1691,7 +1703,7 @@ class TestSolverMetalGPUMocked:
         """ImportError with install hint when Metal is not installed."""
         monkeypatch.setitem(sys.modules, "Metal", None)
         with pytest.raises(ImportError, match="pip install xqsa"):
-            from xqsa.metal_gpu import SolverMetalGPU as _Solver
+            _Solver = _metal
 
             _Solver()
 
@@ -1699,34 +1711,34 @@ class TestSolverMetalGPUMocked:
         """RuntimeError when no Metal device is present."""
         mock_metal_env.MTLCreateSystemDefaultDevice = lambda: None
         with pytest.raises(RuntimeError, match="No Metal GPU"):
-            from xqsa.metal_gpu import SolverMetalGPU as _Solver
+            _Solver = _metal
 
             _Solver()
 
     def test_num_reads_validation_mocked(self, mock_metal_env) -> None:
         """num_reads < 1 raises ValueError (host-side, no GPU needed)."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
         with pytest.raises(ValueError, match="num_reads"):
             _Solver().solve(model, num_reads=0)
 
     def test_num_sweeps_validation_mocked(self, mock_metal_env) -> None:
         """num_sweeps < 1 raises ValueError (host-side, no GPU needed)."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
         with pytest.raises(ValueError, match="num_sweeps"):
             _Solver().solve(model, num_sweeps=0)
 
     def test_num_sweeps_per_beta_validation_mocked(self, mock_metal_env) -> None:
         """num_sweeps_per_beta < 1 raises, and indivisible counts raise (mocked)."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
         with pytest.raises(ValueError, match="num_sweeps_per_beta"):
             _Solver().solve(model, num_sweeps_per_beta=0)
         with pytest.raises(ValueError, match="divisible"):
@@ -1737,7 +1749,7 @@ class TestSolverMetalGPUMocked:
     def _capture_beta_buffer(self, solver, model):
         """Run ``solve`` and return the beta buffer bound to the Metal encoder."""
         captured: dict = {}
-        original_queue = solver._device.newCommandQueue
+        original_queue = solver._impl._device.newCommandQueue
 
         def capturing_queue():
             queue = original_queue()
@@ -1758,7 +1770,7 @@ class TestSolverMetalGPUMocked:
             queue.commandBuffer = capturing_buffer
             return queue
 
-        solver._device.newCommandQueue = capturing_queue
+        solver._impl._device.newCommandQueue = capturing_queue
         result = solver.solve(model)
         beta = np.frombuffer(captured["encoder"].buffers[2]._raw, dtype=np.float32)
         return result, beta
@@ -1771,13 +1783,13 @@ class TestSolverMetalGPUMocked:
         holding each of the ``num_betas`` levels for ``num_sweeps_per_beta``
         consecutive sweeps.
         """
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
-        solver = _Solver(strategy="sa", num_reads=10, num_sweeps=200, num_sweeps_per_beta=10, seed=42)
+        solver = _Solver(algorithm="sa", num_reads=10, num_sweeps=200, num_sweeps_per_beta=10, seed=42)
         result, beta = self._capture_beta_buffer(solver, model)
 
         assert result.energy == 0
@@ -1795,27 +1807,27 @@ class TestSolverMetalGPUMocked:
 
     def test_default_beta_schedule_is_bit_identical_mocked(self, mock_metal_env) -> None:
         """The default one-beta-per-sweep buffer matches the legacy schedule."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
-        solver = _Solver(strategy="sa", num_reads=10, num_sweeps=200, seed=42)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
+        solver = _Solver(algorithm="sa", num_reads=10, num_sweeps=200, seed=42)
         result, beta = self._capture_beta_buffer(solver, model)
 
-        expected = solver._compute_beta_schedule(
+        expected = solver._impl._compute_beta_schedule(
             200, result.metadata["params"]["beta_range"], result.metadata["params"]["beta_schedule_type"]
         )
         np.testing.assert_array_equal(beta, expected)
 
     def test_single_temperature_level_uses_beta_end_mocked(self, mock_metal_env) -> None:
         """A single temperature level binds beta_end for every sweep."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
-        solver = _Solver(strategy="sa", num_reads=10, num_sweeps=50, num_sweeps_per_beta=50, seed=42)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
+        solver = _Solver(algorithm="sa", num_reads=10, num_sweeps=50, num_sweeps_per_beta=50, seed=42)
         result, beta = self._capture_beta_buffer(solver, model)
 
         beta_end = result.metadata["params"]["beta_range"][-1]
@@ -1824,11 +1836,11 @@ class TestSolverMetalGPUMocked:
 
     def test_linear_schedule_mocked(self, mock_metal_env) -> None:
         """The linear beta schedule solves a trivial model (mocked)."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
         solver = _Solver(num_reads=20, num_sweeps=200, beta_schedule_type="linear", seed=42)
         result = solver.solve(model)
@@ -1838,47 +1850,47 @@ class TestSolverMetalGPUMocked:
 
     def test_single_sweep_mocked(self, mock_metal_env) -> None:
         """num_sweeps == 1 exercises the schedule special case (mocked)."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
         solver = _Solver(num_reads=50, num_sweeps=1, seed=42)
         result = solver.solve(model)
 
-        assert result.energy == compute_energy(model, result.sample)
+        assert result.energy == model.energy(result.sample)
 
     def test_single_sweep_uses_beta_end(self, mock_metal_env) -> None:
         """num_sweeps == 1 anneals at beta_end, matching dwave-samplers."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
         solver = _Solver()
         beta_start, beta_end = 0.05, 5.0
         for schedule_type in ("geometric", "linear"):
-            schedule = solver._compute_beta_schedule(1, (beta_start, beta_end), schedule_type)
+            schedule = solver._impl._compute_beta_schedule(1, (beta_start, beta_end), schedule_type)
             assert schedule.shape == (1,)
             assert schedule[0] == pytest.approx(beta_end)
 
     def test_compute_beta_schedule_length_mocked(self, mock_metal_env) -> None:
         """_compute_beta_schedule returns one beta per temperature level."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
         solver = _Solver()
         for schedule_type in ("geometric", "linear"):
-            schedule = solver._compute_beta_schedule(20, (0.05, 5.0), schedule_type)
+            schedule = solver._impl._compute_beta_schedule(20, (0.05, 5.0), schedule_type)
             assert schedule.shape == (20,)
 
     def test_command_buffer_error_raises_mocked(self, mock_metal_env) -> None:
         """A GPU command-buffer error surfaces as RuntimeError, not silently."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
         solver = _Solver(num_reads=5, num_sweeps=10, seed=42)
         # Patch the device's queue so dispatched command buffers report failure.
-        original_queue = solver._device.newCommandQueue
+        original_queue = solver._impl._device.newCommandQueue
 
         def failing_queue():
             queue = original_queue()
@@ -1893,21 +1905,21 @@ class TestSolverMetalGPUMocked:
             queue.commandBuffer = failing_buffer
             return queue
 
-        solver._device.newCommandQueue = failing_queue
+        solver._impl._device.newCommandQueue = failing_queue
         with pytest.raises(RuntimeError, match="command buffer failed"):
             solver.solve(model)
 
     def test_graph_coloring_is_valid_mocked(self, mock_metal_env) -> None:
         """Greedy colouring partitions all nodes and gives no edge one colour."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
         # Triangle + a pendant: forces >= 3 colours and a non-trivial layout.
-        model = XQMX.binary_model(4)
+        model = XqmxModel.binary(4)
         for i, j in [(0, 1), (1, 2), (0, 2), (2, 3)]:
-            model.set_quadratic(i, j, 1.0)
+            model.set_quad(i, j, 1)
 
         solver = _Solver()
-        starts, counts, nodes, num_colors = solver._compute_graph_coloring(model)
+        starts, counts, nodes, num_colors = solver._impl._compute_graph_coloring(model)
 
         # Every node appears exactly once across the colour slices.
         seen = sorted(int(nodes[starts[c] + k]) for c in range(num_colors) for k in range(int(counts[c])))
@@ -1915,20 +1927,21 @@ class TestSolverMetalGPUMocked:
 
         # color[node] lookup; no edge may join two same-colour nodes.
         color_of = {int(nodes[starts[c] + k]): c for c in range(num_colors) for k in range(int(counts[c]))}
-        for i, j in model.quadratic:
+        for (i, j), _ in model.quadratic_items():
             assert color_of[i] != color_of[j]
 
     def test_sa_dispatch_width_mocked(self, mock_metal_env) -> None:
         """The sa pipeline dispatches _SA_THREADGROUP_WIDTH threads per replica (QUI-852)."""
-        from xqsa.metal_gpu import _SA_THREADGROUP_WIDTH
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        from xqsa.inprocess.metal import _SA_THREADGROUP_WIDTH
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        _Solver = _metal
 
-        solver = _Solver(strategy="sa", num_reads=5, num_sweeps=10, seed=1)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+
+        solver = _Solver(algorithm="sa", num_reads=5, num_sweeps=10, seed=1)
         captured: dict = {}
-        original_queue = solver._device.newCommandQueue
+        original_queue = solver._impl._device.newCommandQueue
 
         def capturing_queue():
             queue = original_queue()
@@ -1949,7 +1962,7 @@ class TestSolverMetalGPUMocked:
             queue.commandBuffer = capturing_buffer
             return queue
 
-        solver._device.newCommandQueue = capturing_queue
+        solver._impl._device.newCommandQueue = capturing_queue
         solver.solve(model)
 
         assert _SA_THREADGROUP_WIDTH == 256
@@ -1959,14 +1972,14 @@ class TestSolverMetalGPUMocked:
 
     def test_gibbs_dispatch_width_mocked(self, mock_metal_env) -> None:
         """The gibbs pipeline keeps one thread per replica (out of QUI-852 scope)."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
-        solver = _Solver(strategy="gibbs", num_reads=5, num_sweeps=10, seed=1)
+        solver = _Solver(algorithm="gibbs", num_reads=5, num_sweeps=10, seed=1)
         captured: dict = {}
-        original_queue = solver._device.newCommandQueue
+        original_queue = solver._impl._device.newCommandQueue
 
         def capturing_queue():
             queue = original_queue()
@@ -1987,26 +2000,26 @@ class TestSolverMetalGPUMocked:
             queue.commandBuffer = capturing_buffer
             return queue
 
-        solver._device.newCommandQueue = capturing_queue
+        solver._impl._device.newCommandQueue = capturing_queue
         solver.solve(model)
 
         assert captured["encoder"].threads_per_group == (1, 1, 1)
 
     def test_sa_dispatch_width_down_clamps_mocked(self, mock_metal_env) -> None:
         """The sa dispatch clamps to the largest power of two <= the pipeline max (QUI-852)."""
-        from xqsa.metal_gpu import SolverMetalGPU as _Solver
+        _Solver = _metal
 
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
-        solver = _Solver(strategy="sa", num_reads=5, num_sweeps=10, seed=1)
+        solver = _Solver(algorithm="sa", num_reads=5, num_sweeps=10, seed=1)
         # Force the cached_property to compile and cache the sa pipeline now, so
         # patching its class below is visible to the (already-cached) instance
         # that solve() will use.
-        type(solver._sa_pipeline).maxTotalThreadsPerThreadgroup = lambda self: 96
+        type(solver._impl._sa_pipeline).maxTotalThreadsPerThreadgroup = lambda self: 96
 
         captured: dict = {}
-        original_queue = solver._device.newCommandQueue
+        original_queue = solver._impl._device.newCommandQueue
 
         def capturing_queue():
             queue = original_queue()
@@ -2027,7 +2040,7 @@ class TestSolverMetalGPUMocked:
             queue.commandBuffer = capturing_buffer
             return queue
 
-        solver._device.newCommandQueue = capturing_queue
+        solver._impl._device.newCommandQueue = capturing_queue
         solver.solve(model)
 
         # 96 is not a power of two; the largest power of two <= 96 is 64.
@@ -2035,7 +2048,7 @@ class TestSolverMetalGPUMocked:
 
 
 # ---------------------------------------------------------------------------
-# SolverMetalGPU -- real GPU tests (requires macOS + Metal)
+# SolverGPU (Metal engine) -- real GPU tests (requires macOS + Metal)
 # ---------------------------------------------------------------------------
 
 
@@ -2047,62 +2060,60 @@ try:
 except ImportError:
     _has_metal = False
 
-if _has_metal or _IN_CI:
-    from xqsa.metal_gpu import SolverMetalGPU
-
 
 @pytest.mark.metal
 @pytest.mark.skipif(
     not _IN_CI and not _has_metal,
     reason="Metal GPU not available (skipped locally; runs and hard-fails in CI)",
 )
-class TestSolverMetalGPU:
+class TestSolverGPUMetal:
     """Tests for the Metal GPU solver (real Apple hardware)."""
 
     def test_default_params(self) -> None:
-        """SolverMetalGPU stores default parameters."""
-        solver = SolverMetalGPU()
-        assert solver.strategy == "sa"
-        assert solver.num_reads == 100
-        assert solver.num_sweeps == 1000
-        assert solver.num_sweeps_per_beta == 1
-        assert solver.beta_range is None
-        assert solver.beta_schedule_type == "geometric"
-        assert solver.seed is None
+        """SolverGPU (Metal engine) stores default parameters."""
+        solver = _metal()
+        assert solver._impl.algorithm == "sa"
+        assert solver._impl.defaults["num_reads"] == 100
+        assert solver._impl.defaults["num_sweeps"] == 1000
+        assert solver._impl.defaults["num_sweeps_per_beta"] == 1
+        assert solver._impl.defaults["beta_range"] is None
+        assert solver._impl.defaults["beta_schedule_type"] == "geometric"
+        assert solver._impl.defaults["seed"] is None
 
     def test_custom_params(self) -> None:
-        """SolverMetalGPU accepts custom parameters."""
-        solver = SolverMetalGPU(strategy="gibbs", num_reads=50, num_sweeps=500, num_sweeps_per_beta=5, seed=42)
-        assert solver.strategy == "gibbs"
-        assert solver.num_reads == 50
-        assert solver.num_sweeps == 500
-        assert solver.num_sweeps_per_beta == 5
-        assert solver.seed == 42
+        """SolverGPU (Metal engine) accepts custom parameters."""
+        solver = _metal(algorithm="gibbs", num_reads=50, num_sweeps=500, num_sweeps_per_beta=5, seed=42)
+        assert solver._impl.algorithm == "gibbs"
+        assert solver._impl.defaults["num_reads"] == 50
+        assert solver._impl.defaults["num_sweeps"] == 500
+        assert solver._impl.defaults["num_sweeps_per_beta"] == 5
+        assert solver._impl.defaults["seed"] == 42
 
     def test_solve_trivial_binary_sa(self) -> None:
         """Solve a trivial 2-variable QUBO with SA: minimize x0 + x1."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
-        solver = SolverMetalGPU(strategy="sa", num_reads=20, num_sweeps=200, seed=42)
+        solver = _metal(algorithm="sa", num_reads=20, num_sweeps=200, seed=42)
         result = solver.solve(model)
 
         assert isinstance(result, SolverResult)
-        assert result.sample.mode == XQMXMode.SAMPLE
+        assert isinstance(result.sample, XqmxSample)
         assert result.energy == 0
         assert isinstance(result.energy, int)
         assert result.timing > 0.0
         assert result.metadata["reads"] == 20
-        assert result.metadata["params"]["strategy"] == "sa"
+        assert result.metadata["params"]["algorithm"] == "sa"
+        assert result.metadata["params"]["engine"] == "metal"
 
     def test_solve_trivial_spin_sa(self) -> None:
         """Solve a trivial Ising with SA: minimize -s0 - s1 (ground +1,+1)."""
-        model = XQMX.spin_model(2)
-        model.set_linear(0, -1.0)
-        model.set_linear(1, -1.0)
+        model = XqmxModel.spin(2)
+        model.set_linear(0, -1)
+        model.set_linear(1, -1)
 
-        solver = SolverMetalGPU(strategy="sa", num_reads=20, num_sweeps=200, seed=42)
+        solver = _metal(algorithm="sa", num_reads=20, num_sweeps=200, seed=42)
         result = solver.solve(model)
 
         assert result.energy == -2
@@ -2110,96 +2121,96 @@ class TestSolverMetalGPU:
             assert result.sample.get_linear(i) in (-1, 1)
 
     def test_solve_trivial_binary_gibbs(self) -> None:
-        """Solve a trivial QUBO with the Gibbs strategy."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        """Solve a trivial QUBO with the Gibbs algorithm."""
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
-        solver = SolverMetalGPU(strategy="gibbs", num_reads=50, num_sweeps=200, seed=42)
+        solver = _metal(algorithm="gibbs", num_reads=50, num_sweeps=200, seed=42)
         result = solver.solve(model)
 
         assert result.energy == 0
-        assert result.energy == compute_energy(model, result.sample)
+        assert result.energy == model.energy(result.sample)
 
     def test_solve_trivial_spin_gibbs(self) -> None:
-        """Solve a trivial Ising with the Gibbs strategy."""
-        model = XQMX.spin_model(2)
-        model.set_linear(0, -1.0)
-        model.set_linear(1, -1.0)
+        """Solve a trivial Ising with the Gibbs algorithm."""
+        model = XqmxModel.spin(2)
+        model.set_linear(0, -1)
+        model.set_linear(1, -1)
 
-        solver = SolverMetalGPU(strategy="gibbs", num_reads=50, num_sweeps=200, seed=42)
+        solver = _metal(algorithm="gibbs", num_reads=50, num_sweeps=200, seed=42)
         result = solver.solve(model)
 
         assert result.energy == -2
-        assert result.energy == compute_energy(model, result.sample)
+        assert result.energy == model.energy(result.sample)
 
     def test_solve_antiferromagnetic(self) -> None:
         """Solve x0*x1 with positive coupling: optimal is x0 != x1."""
-        model = XQMX.binary_model(2)
-        model.set_quadratic(0, 1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_quad(0, 1, 1)
 
-        solver = SolverMetalGPU(num_reads=20, num_sweeps=200, seed=42)
+        solver = _metal(num_reads=20, num_sweeps=200, seed=42)
         result = solver.solve(model)
 
         assert result.sample.get_linear(0) * result.sample.get_linear(1) == 0
 
     def test_solve_preserves_grid(self) -> None:
         """Solver preserves rows/cols from the model."""
-        model = XQMX.binary_model(4, rows=2, cols=2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(4, rows=2, cols=2)
+        model.set_linear(0, 1)
 
-        solver = SolverMetalGPU(num_reads=20, num_sweeps=200, seed=42)
+        solver = _metal(num_reads=20, num_sweeps=200, seed=42)
         result = solver.solve(model)
 
         assert result.sample.rows == 2
         assert result.sample.cols == 2
 
     def test_solve_rejects_sample_mode(self) -> None:
-        """Solve rejects SAMPLE mode input."""
-        sample = XQMX.binary_sample(2)
-        solver = SolverMetalGPU()
-        with pytest.raises(ValueError, match="MODEL"):
+        """Solve rejects a sample passed as a model."""
+        sample = XqmxSample.default(Domain.BINARY, 2)
+        solver = _metal()
+        with pytest.raises(ValueError, match="XqmxModel"):
             solver.solve(sample)
 
-    def test_energy_matches_compute_energy(self) -> None:
-        """Solver-reported energy matches compute_energy."""
-        model = XQMX.binary_model(3)
-        model.set_linear(0, -2.0)
-        model.set_linear(1, -3.0)
-        model.set_quadratic(0, 1, 5.0)
+    def test_energy_matches_model_energy(self) -> None:
+        """Solver-reported energy matches model.energy."""
+        model = XqmxModel.binary(3)
+        model.set_linear(0, -2)
+        model.set_linear(1, -3)
+        model.set_quad(0, 1, 5)
 
-        solver = SolverMetalGPU(num_reads=50, num_sweeps=500, seed=42)
+        solver = _metal(num_reads=50, num_sweeps=500, seed=42)
         result = solver.solve(model)
 
-        assert result.energy == compute_energy(model, result.sample)
+        assert result.energy == model.energy(result.sample)
         assert isinstance(result.energy, int)
 
     def test_num_reads_validation(self) -> None:
         """num_reads < 1 raises ValueError."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        solver = SolverMetalGPU()
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        solver = _metal()
         with pytest.raises(ValueError, match="num_reads"):
             solver.solve(model, num_reads=0)
 
     def test_num_sweeps_validation(self) -> None:
         """num_sweeps < 1 raises ValueError."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        solver = SolverMetalGPU()
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        solver = _metal()
         with pytest.raises(ValueError, match="num_sweeps"):
             solver.solve(model, num_sweeps=0)
 
-    def test_strategy_validation_init(self) -> None:
-        """Unsupported strategy in __init__ raises ValueError."""
-        with pytest.raises(ValueError, match="Unsupported strategy"):
-            SolverMetalGPU(strategy="metropolis")
+    def test_algorithm_validation_init(self) -> None:
+        """Unsupported algorithm in __init__ raises ValueError."""
+        with pytest.raises(ValueError, match="not available in-process"):
+            _metal(algorithm="metropolis")
 
     def test_num_sweeps_per_beta_validation(self) -> None:
         """num_sweeps_per_beta < 1 raises, and indivisible counts raise."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        solver = SolverMetalGPU()
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        solver = _metal()
         with pytest.raises(ValueError, match="num_sweeps_per_beta"):
             solver.solve(model, num_sweeps_per_beta=0)
         with pytest.raises(ValueError, match="divisible"):
@@ -2209,20 +2220,20 @@ class TestSolverMetalGPU:
 
     def test_single_temperature_level_uses_beta_end(self) -> None:
         """A single Metal temperature level uses the coldest beta."""
-        solver = SolverMetalGPU()
+        solver = _metal()
         beta_start, beta_end = 0.05, 5.0
         for schedule_type in ("geometric", "linear"):
-            schedule = solver._compute_beta_schedule(1, (beta_start, beta_end), schedule_type)
+            schedule = solver._impl._compute_beta_schedule(1, (beta_start, beta_end), schedule_type)
             assert schedule.shape == (1,)
             assert schedule[0] == pytest.approx(beta_end)
 
     def test_num_sweeps_per_beta_run(self) -> None:
         """num_sweeps_per_beta > 1 solves and records the schedule split."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
-        solver = SolverMetalGPU(strategy="sa", num_reads=20, num_sweeps=200, num_sweeps_per_beta=10, seed=42)
+        solver = _metal(algorithm="sa", num_reads=20, num_sweeps=200, num_sweeps_per_beta=10, seed=42)
         result = solver.solve(model)
 
         assert result.energy == 0
@@ -2232,11 +2243,11 @@ class TestSolverMetalGPU:
 
     def test_linear_schedule(self) -> None:
         """The linear beta schedule also solves a trivial model."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
-        model.set_linear(1, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
+        model.set_linear(1, 1)
 
-        solver = SolverMetalGPU(num_reads=20, num_sweeps=200, beta_schedule_type="linear", seed=42)
+        solver = _metal(num_reads=20, num_sweeps=200, beta_schedule_type="linear", seed=42)
         result = solver.solve(model)
 
         assert result.energy == 0
@@ -2244,15 +2255,16 @@ class TestSolverMetalGPU:
 
     def test_metadata_schema(self) -> None:
         """Metadata has exactly {seed, reads, params} top-level keys."""
-        model = XQMX.binary_model(2)
-        model.set_linear(0, 1.0)
+        model = XqmxModel.binary(2)
+        model.set_linear(0, 1)
 
-        solver = SolverMetalGPU(num_reads=20, num_sweeps=200, seed=42)
+        solver = _metal(num_reads=20, num_sweeps=200, seed=42)
         result = solver.solve(model)
 
         assert set(result.metadata.keys()) == {"seed", "reads", "params"}
         assert set(result.metadata["params"].keys()) == {
-            "strategy",
+            "algorithm",
+            "engine",
             "num_sweeps",
             "num_sweeps_per_beta",
             "num_betas",
@@ -2273,13 +2285,145 @@ class TestSolverMetalGPU:
         """
         rng = np.random.default_rng(0)
         n = 512
-        model = XQMX.binary_model(n)
+        model = XqmxModel.binary(n)
         for i in range(n):
             for j in range(i + 1, n):
                 if rng.random() < 0.25:
-                    model.set_quadratic(i, j, 1.0)
+                    model.set_quad(i, j, 1)
 
-        solver = SolverMetalGPU(strategy="sa", num_reads=10, num_sweeps=100, seed=42)
+        solver = _metal(algorithm="sa", num_reads=10, num_sweeps=100, seed=42)
         result = solver.solve(model)
 
         assert float(result.metadata["params"]["raw_energy"]) == float(result.energy)
+
+
+# ---------------------------------------------------------------------------
+# Selectors and the solve() template's keyword checks
+# ---------------------------------------------------------------------------
+
+
+class TestSelectors:
+    """algorithm, engine and mode accept only what runs in-process."""
+
+    def test_cpu_rejects_unknown_algorithm(self) -> None:
+        with pytest.raises(ValueError, match="'gibbs' is not available in-process on CPU"):
+            SolverCPU(algorithm="gibbs")
+
+    def test_cuda_rejects_gibbs(self, mock_cupy_env) -> None:
+        with pytest.raises(ValueError, match="not available in-process on the CUDA engine"):
+            _cuda(algorithm="gibbs")
+
+    def test_metal_rejects_unknown_algorithm(self, mock_metal_env) -> None:
+        with pytest.raises(ValueError, match="not available in-process on the Metal engine"):
+            _metal(algorithm="msa")
+
+    def test_engine_is_required(self) -> None:
+        with pytest.raises(TypeError, match="engine"):
+            SolverGPU()
+
+    def test_unknown_engine_rejected(self) -> None:
+        with pytest.raises(ValueError, match="Unsupported engine 'rocm'"):
+            SolverGPU(engine="rocm")
+
+    def test_algorithm_checked_before_the_engine_import(self, monkeypatch) -> None:
+        """An unsupported algorithm is reported as such, not as a missing CuPy."""
+        monkeypatch.setitem(sys.modules, "cupy", None)
+        with pytest.raises(ValueError, match="not available in-process on the CUDA engine"):
+            _cuda(algorithm="gibbs")
+
+    def test_metal_records_gibbs(self, mock_metal_env) -> None:
+        result = _metal(algorithm="gibbs", num_reads=4, num_sweeps=10, seed=1).solve(XqmxModel.binary(2))
+        assert result.metadata["params"]["algorithm"] == "gibbs"
+        assert result.metadata["params"]["engine"] == "metal"
+
+    def test_unknown_mode_rejected(self) -> None:
+        with pytest.raises(ValueError, match="hybrid modes are not available yet"):
+            SolverDWave(mode="hybrid")
+
+    def test_unknown_constructor_param_rejected(self) -> None:
+        with pytest.raises(TypeError, match="num_raeds"):
+            SolverCPU(num_raeds=5)
+
+
+class TestUnknownSolveKeyword:
+    """solve() rejects a per-call keyword the implementation does not take."""
+
+    def test_error_names_key_solver_and_accepted_keys(self) -> None:
+        model = XqmxModel.binary(2)
+        with pytest.raises(TypeError) as exc:
+            SolverCPU(seed=1).solve(model, num_raeds=5)
+        message = str(exc.value)
+        assert "'num_raeds'" in message
+        assert "SolverCPU.solve()" in message
+        assert "num_reads, num_sweeps, num_sweeps_per_beta, seed" in message
+
+    def test_rejected_before_running(self, mock_cupy_env) -> None:
+        solver = _cuda()
+        solver._impl.run = MagicMock()
+        with pytest.raises(TypeError, match="'algorithm'"):
+            solver.solve(XqmxModel.binary(2), algorithm="sa")
+        solver._impl.run.assert_not_called()
+
+
+class TestDWaveOceanAllowlist:
+    """SolverDWave forwards chain_strength and auto_scale and records them."""
+
+    def test_forwarded_and_recorded(self, mock_dwave_system, monkeypatch) -> None:
+        monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
+        solver = SolverDWave(chain_strength=2.5)
+        result = solver.solve(XqmxModel.binary(2), auto_scale=False)
+
+        call_kwargs = mock_dwave_system["composite"].sample.call_args.kwargs
+        assert call_kwargs["chain_strength"] == 2.5
+        assert call_kwargs["auto_scale"] is False
+        assert result.metadata["params"]["chain_strength"] == 2.5
+        assert result.metadata["params"]["auto_scale"] is False
+
+    def test_unset_params_not_forwarded(self, mock_dwave_system, monkeypatch) -> None:
+        monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
+        result = SolverDWave().solve(XqmxModel.binary(2))
+
+        call_kwargs = mock_dwave_system["composite"].sample.call_args.kwargs
+        assert "chain_strength" not in call_kwargs
+        assert "auto_scale" not in call_kwargs
+        assert set(result.metadata["params"]) == {"mode", "solver", "qpu_timing", "annealing_time", "raw_energy"}
+
+    def test_other_ocean_params_rejected(self, mock_dwave_system, monkeypatch) -> None:
+        monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
+        with pytest.raises(TypeError, match="'answer_mode'"):
+            SolverDWave().solve(XqmxModel.binary(2), answer_mode="raw")
+        with pytest.raises(TypeError, match="answer_mode"):
+            SolverDWave(answer_mode="raw")
+        mock_dwave_system["composite"].sample.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Metadata contract across the registry
+# ---------------------------------------------------------------------------
+
+# Hardware each registered solver needs mocked. SolverQuip keeps its own
+# metadata until QUI-1608 brings it under the contract.
+_MOCKS = {"cpu": None, "cuda": "mock_cupy_env", "metal": "mock_metal_env", "dwave": "mock_dwave_system"}
+# The selectors each registered solver records in params.
+_SELECTORS = {
+    "cpu": {"algorithm": "sa"},
+    "cuda": {"algorithm": "sa", "engine": "cuda"},
+    "metal": {"algorithm": "sa", "engine": "metal"},
+    "dwave": {"mode": "qpu"},
+}
+
+
+@pytest.mark.parametrize("name", sorted(set(SOLVERS) - {"quip"}))
+def test_registered_solver_metadata_is_seed_reads_params(name, request, monkeypatch) -> None:
+    """Every registered solver except SolverQuip returns exactly seed, reads and params."""
+    if _MOCKS[name] is not None:
+        request.getfixturevalue(_MOCKS[name])
+    monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
+    model = XqmxModel.binary(2)
+    model.set_linear(0, 1)
+
+    result = build_solver(name, seed=1).solve(model)
+
+    assert set(result.metadata) == {"seed", "reads", "params"}
+    params = result.metadata["params"]
+    assert {key: params.get(key) for key in ("algorithm", "engine", "mode") if key in params} == _SELECTORS[name]

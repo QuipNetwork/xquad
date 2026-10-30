@@ -44,10 +44,11 @@ every feasible packing, because each item lands in exactly one bin, so it
 could not tell a one-bin packing from a three-bin one.
 
 Running `examples/bin_packing/runner.py --seed 42` (4 items, 3 bins,
-capacity `5`, sizes `[1, 2, 1, 1]`) decodes to `assignment: [2, 2, 2, 2]`
--- all four items in bin 2, total size `5` against a capacity of `5`. The
-`rust` interpreter returns `[0, 0, 0, 0]` instead: which single bin gets
-used is a tie, and the two interpreters break it differently. Every item
+capacity `5`, sizes `[1, 2, 1, 1]`) decodes to `assignment: [0, 0, 0, 0]`
+-- all four items in bin 0, total size `5` against a capacity of `5`.
+Which single bin gets used is a tie: packing everything into bin 1 or
+bin 2 has the same energy, and the solver's seed decides which one comes
+back. Every item
 appears in exactly one bin, which is what the row constraint guarantees;
 nothing requires a bin to be used, and the bin-count objective pushes the
 other way.

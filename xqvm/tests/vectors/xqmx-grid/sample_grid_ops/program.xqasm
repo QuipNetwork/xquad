@@ -1,0 +1,73 @@
+; sample_grid_ops: exercise the XQMX grid opcodes (ROWFIND, COLFIND,
+; ROWSUM, COLSUM) on a Sample register.
+;
+; Spec reference: SPEC.md §303 "XQMX Grid" — `reg` must hold an XQMX,
+; with no mode restriction (unlike §317 high-level functions). Both
+; Model and Sample registers are valid operands. This vector regresses
+; the fix for QUI-461 (pre-fix: `Sample` was rejected here
+; with RegisterType { expected: "model" }).
+;
+; Test: allocate a binary Sample of size 6, RESIZE to a 2x3 grid, then
+; probe the four grid opcodes. All sample values are 0 (BSMX default),
+; so:
+;   ROWSUM row=0 → 0     (all-zero row)
+;   COLSUM col=1 → 0     (all-zero column)
+;   ROWFIND row=0 value=0 → 0   (first column with value=0)
+;   ROWFIND row=1 value=1 → -1  (no 1s in the sample)
+;   COLFIND col=2 value=0 → 0   (first row with value=0)
+;   COLFIND col=0 value=1 → -1  (no 1s in the sample)
+
+PUSH 6
+BSMX r0              ; r0 = binary sample, size 6, all zeros
+
+PUSH 2
+PUSH 3
+RESIZE r0            ; rows=2, cols=3
+
+; ROWSUM r0 row=0 → 0
+PUSH 0
+ROWSUM r0
+STOW r1
+
+; COLSUM r0 col=1 → 0
+PUSH 1
+COLSUM r0
+STOW r2
+
+; ROWFIND r0 row=0 value=0 → 0
+PUSH 0
+PUSH 0
+ROWFIND r0
+STOW r3
+
+; ROWFIND r0 row=1 value=1 → -1
+PUSH 1
+PUSH 1
+ROWFIND r0
+STOW r4
+
+; COLFIND r0 col=2 value=0 → 0
+PUSH 2
+PUSH 0
+COLFIND r0
+STOW r5
+
+; COLFIND r0 col=0 value=1 → -1
+PUSH 0
+PUSH 1
+COLFIND r0
+STOW r6
+
+PUSH 0
+OUTPUT r1             ; outputs[0] = ROWSUM row=0
+PUSH 1
+OUTPUT r2             ; outputs[1] = COLSUM col=1
+PUSH 2
+OUTPUT r3             ; outputs[2] = ROWFIND row=0 value=0
+PUSH 3
+OUTPUT r4             ; outputs[3] = ROWFIND row=1 value=1
+PUSH 4
+OUTPUT r5             ; outputs[4] = COLFIND col=2 value=0
+PUSH 5
+OUTPUT r6             ; outputs[5] = COLFIND col=0 value=1
+HALT

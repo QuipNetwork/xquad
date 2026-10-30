@@ -9,23 +9,23 @@ choice.
 
 | Name | Class | Where it solves | Install |
 |---|---|---|---|
-| `dwave-cpu` (default) | `SolverDWaveCPU` | Locally, on the CPU: simulated annealing | base `xqsa` |
-| `dwave-qpu` | `SolverDWaveQPU` | D-Wave Leap cloud: physical quantum annealing hardware | `xqsa[dwave]` |
-| `cuda-gpu` | `SolverCudaGPU` | Locally, on an NVIDIA GPU: simulated annealing | `xqsa[cuda]` |
-| `metal-gpu` | `SolverMetalGPU` | Locally, on an Apple GPU: simulated annealing or block Gibbs sampling | `xqsa[metal]` |
+| `cpu` (default) | `SolverCPU` | Locally, on the CPU: simulated annealing | base `xqsa` |
+| `dwave` | `SolverDWave` | D-Wave Leap cloud: physical quantum annealing hardware | `xqsa[dwave]` |
+| `cuda` | `SolverGPU(engine="cuda")` | Locally, on an NVIDIA GPU: simulated annealing | `xqsa[cuda]` |
+| `metal` | `SolverGPU(engine="metal")` | Locally, on an Apple GPU: simulated annealing or block Gibbs sampling | `xqsa[metal]` |
 | `quip` | `SolverQuip` | The Quip network: submitted to a decentralised compute market, solved by a miner you do not control | `xqsa[quip]` |
 
 `build_solver(name, seed=...)` constructs any of the five from this name,
 so a caller can stay backend-agnostic. `seed` reaches the three classical
-simulated-annealing backends and is ignored by `dwave-qpu` (physical
+simulated-annealing backends and is ignored by `dwave` (physical
 hardware has no seed) and `quip` (env-configured, no local randomness).
 
 ## What Actually Distinguishes Them
 
-**Where the computation happens.** `dwave-cpu`, `cuda-gpu`, and
-`metal-gpu` all run the identical algorithm family -- simulated annealing
+**Where the computation happens.** `cpu`, `cuda`, and
+`metal` all run the identical algorithm family -- simulated annealing
 -- just on different local processors; picking between them is a
-performance question, not a correctness one. `dwave-qpu` hands the problem
+performance question, not a correctness one. `dwave` hands the problem
 to real annealing hardware over the network. `quip` does not solve
 anything itself: it posts the model as a job to the network's mempool, a
 miner solves it on hardware of its own choosing, and the adapter decodes
@@ -46,11 +46,11 @@ it. See [Three Programs](three-programs.md).
 
 ## Before You Choose
 
-`dwave-cpu` needs no hardware and no credentials, so it is the default:
+`cpu` needs no hardware and no credentials, so it is the default:
 the reproducible baseline every other backend is compared against. The
 other four need something this book cannot check for you --
-a GPU for `cuda-gpu` or `metal-gpu`, D-Wave Leap credentials for
-`dwave-qpu`, network configuration for `quip` -- and setting each of those
+a GPU for `cuda` or `metal`, D-Wave Leap credentials for
+`dwave`, network configuration for `quip` -- and setting each of those
 up belongs to the pages below.
 
 ## Depth Lives in Solving

@@ -19,11 +19,10 @@
 """
 Invariant-based smoke test for example programs.
 
-Runs each example on both the Python and Rust XQVM interpreters and
-verifies that both produce a valid solution (valid == 1).  Does NOT
-require byte-for-byte output parity — SA is sensitive to BQM
-construction order, so the two paths may find different (but equally
-valid) optima.
+Runs each example once on the XQVM and verifies that it produces a
+valid solution (valid == 1).  Checks the invariant, not a golden
+output: the annealer may find a different (but equally valid) optimum
+when BQM construction order changes.
 """
 
 from __future__ import annotations
@@ -75,8 +74,7 @@ def _hardware_examples() -> tuple[str, ...]:
 
     Kept deliberately small (a binary problem, a permutation, a constrained
     problem) to bound GPU time and the monthly D-Wave QPU quota; every
-    example still runs on the CPU annealer on both interpreters regardless
-    of this flag. This is an independent, minimal read of
+    example still runs on the CPU annealer regardless of this flag. This is an independent, minimal read of
     examples/manifest.yaml rather than a call into
     scripts/gen-example-docs.py's stricter schema validation -- that
     script's hyphenated filename blocks import (see scripts/_hwprobe.py for
@@ -97,14 +95,14 @@ def _hardware_examples() -> tuple[str, ...]:
 HARDWARE_EXAMPLES = _hardware_examples()
 
 
-def run_example(runner: Path, interpreter: str, solver: str = DEFAULT_SOLVER) -> dict:
+def run_example(runner: Path, solver: str = DEFAULT_SOLVER) -> dict:
     result = subprocess.run(
-        ["python", str(runner), "--seed", str(SEED), "--interpreter", interpreter, "--solver", solver],
+        ["python", str(runner), "--seed", str(SEED), "--solver", solver],
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
-        print(f"  FAIL ({interpreter}/{solver}): runner exited {result.returncode}", file=sys.stderr)
+        print(f"  FAIL ({solver}): runner exited {result.returncode}", file=sys.stderr)
         print(result.stderr[-500:], file=sys.stderr)
         sys.exit(1)
     return json.loads(result.stdout)
@@ -127,16 +125,15 @@ def main() -> int:
         name = runner.parent.name
         print(f"==> {name}")
 
-        for interp in ("python", "rust"):
-            out = run_example(runner, interp)
-            valid = out.get("valid")
-            energy = out.get("energy")
+        out = run_example(runner)
+        valid = out.get("valid")
+        energy = out.get("energy")
 
-            if valid != 1:
-                print(f"  FAIL ({interp}): valid={valid}, energy={energy}")
-                failures += 1
-            else:
-                print(f"  ok   ({interp}): energy={energy}")
+        if valid != 1:
+            print(f"  FAIL: valid={valid}, energy={energy}")
+            failures += 1
+        else:
+            print(f"  ok  : energy={energy}")
 
     # Hardware-backed solver runs over the subset, gated by availability.
     print("\n==> hardware solvers")
@@ -144,7 +141,7 @@ def main() -> int:
     for solver in hw_solvers:
         for name in HARDWARE_EXAMPLES:
             runner = EXAMPLES_DIR / name / "runner.py"
-            out = run_example(runner, "rust", solver=solver)
+            out = run_example(runner, solver=solver)
             valid, energy = out.get("valid"), out.get("energy")
             if valid != 1:
                 print(f"  FAIL ({solver}/{name}): valid={valid}, energy={energy}")
@@ -157,7 +154,7 @@ def main() -> int:
         return 1
 
     hw_note = f", {len(hw_solvers)} hardware solver(s)" if hw_solvers else ""
-    print(f"\nAll {len(runners)} examples passed on both interpreters{hw_note}.")
+    print(f"\nAll {len(runners)} examples passed{hw_note}.")
     return 0
 
 

@@ -9,8 +9,8 @@ DSL, see
 [Modelling](../modelling/). For what `xquad vm check` checks and how
 to fix a rejected program, see [Verification](verification.md).
 
-Every example on this page ran against the Rust backend, the default for
-both `xquad.program` and `xquad.vm.VM`.
+All three surfaces run the same Rust `xqvm` interpreter, and every example
+on this page runs as shown.
 
 ## Program and Session
 
@@ -67,7 +67,13 @@ all. A fresh `Session` starts at `xquad.vm.DEFAULT_STEP_LIMIT`, which is
 10,000,000. `None` is the only unbounded spelling, and a caller has to
 write it -- unbounded execution is asked for, never inherited.
 
+A run that faults raises the `xqffi.vm.XqvmError` subclass named for the
+fault -- here `StepLimitExceeded` -- with the fault's description as its
+message. `XqvmError` is a `RuntimeError`.
+
 ```python
+from xqffi.vm import StepLimitExceeded
+
 session = program.session(output_slots=1)
 session.set_calldata([1, 2])
 assert "step_limit=10000000" in repr(session)
@@ -75,16 +81,17 @@ assert "step_limit=10000000" in repr(session)
 session.set_step_limit(3)
 try:
     session.run()
-except RuntimeError as e:
-    assert "StepLimitExceeded" in str(e)
+except StepLimitExceeded as e:
+    print(e)
+# step charge of 1 exceeds the step limit of 3 (3 steps already charged)
 
 # 0 is not a sentinel for "unlimited" -- it executes nothing, so this
 # 11-step program fails at its first instruction.
 session.set_step_limit(0)
 try:
     session.run()
-except RuntimeError as e:
-    assert "StepLimitExceeded" in str(e)
+except StepLimitExceeded:
+    pass
 
 # None removes the bound. A program that never halts will not return,
 # and it does not take SIGALRM: the GIL is held inside the Rust run.
@@ -119,7 +126,7 @@ try:
     s.run()
 except RuntimeError as e:
     print(e)
-# decode error: TruncatedHeader
+# decode error: XQBC header is truncated
 ```
 
 `Program.from_source` validates at load time instead: an unassemblable
@@ -132,20 +139,20 @@ A calldata list may mix any of `int`, `list[int]`, `xqffi.vm.XqmxModel`,
 every element's type as soon as you call it, not at run time:
 
 ```python
-from xqffi.vm import XqmxModel, XqmxSample
+from xqffi.vm import Domain, InvalidGridDimensions, XqmxModel, XqmxSample
 
-model = XqmxModel("binary", size=4)
+model = XqmxModel.binary(size=4)   # or XqmxModel(Domain.BINARY, size=4)
 model.set_linear(0, -1)
 model.set_quad(0, 1, 2)
 
-sample = XqmxSample("spin", values=[-1, 1, -1, 1])
+sample = XqmxSample.spin(values=[-1, 1, -1, 1])
 
 session.set_calldata([model, sample, [1, 2, 3], 42])
 # session.run() now sees four typed input slots.
 
 try:
-    XqmxModel("binary", size=4, rows=2, cols=3)
-except ValueError as e:
+    XqmxModel.binary(size=4, rows=2, cols=3)
+except InvalidGridDimensions as e:
     print(e)
 # a 2 x 3 grid does not fit 4 variables; rows and cols must both be 0,
 # or both positive with rows * cols <= size
@@ -179,24 +186,31 @@ helper in this package today. Read a model's coefficients through its own
 accessors:
 
 ```python
-model = XqmxModel("binary", size=4)
+model = XqmxModel.binary(size=4)
 model.set_linear(0, -1)
 model.set_linear(2, 3)
-model.set_quad(0, 1, 2)
+model.add_quad(0, 1, 2)
 
-model.domain          # "binary"
+model.domain          # Domain.BINARY
+model.domain.name     # "binary"
 model.size            # 4
 list(model.linear_items())     # [(0, -1), (2, 3)]
 list(model.quadratic_items())  # [((0, 1), 2)]
 model.get_linear(0)   # -1
 model.get_quad(0, 1)  # 2
 repr(model)            # 'XqmxModel(domain=binary, size=4)'
+
+model.energy(XqmxSample.binary([1, 1, 0, 0]))  # 1, as ENERGY computes it
 ```
 
-`__repr__` is intentionally minimal. Convert to `xquad.types.XQMX` (the
-canonical, backend-independent type covered next) if you want a Python
-object you can inspect with normal attribute access, or serialise by
-iterating `linear_items()` / `quadratic_items()` yourself.
+`add_linear` and `add_quad` accumulate into a coefficient and raise
+`xqffi.vm.ArithmeticOverflow`, leaving the model unchanged, if the result
+leaves the signed 64-bit range. A sample's values are checked against its
+domain when it is constructed; `XqmxSample.binary([2])` raises
+`ValueError`.
+
+`__repr__` is intentionally minimal. To inspect every coefficient or
+serialise a model, iterate `linear_items()` and `quadratic_items()`.
 
 ## The other two VM surfaces
 
@@ -205,8 +219,7 @@ both worth knowing about directly.
 
 **`xqffi.vm.Vm`** is the thinnest possible wrapper over the Rust
 interpreter: construct it, call `set_calldata` / `set_output_slots`, call
-`.run(bytecode)`, read `.outputs()` as a positional list. It always targets
-the Rust backend. `.reset()` clears the stack, registers, loop stack, and
+`.run(bytecode)`, read `.outputs()` as a positional list. `.reset()` clears the stack, registers, loop stack, and
 step counter, but calldata and output slots are untouched by it -- both
 persist across runs until you call `set_calldata()` or `set_output_slots()`
 again. It is what `Session.run()` builds internally:
@@ -228,29 +241,29 @@ covers when to reach for it directly instead of `Session`.
 
 **`xquad.vm.VM`** is a separate wrapper that every example runner under
 `examples/` actually uses (`examples/maxcut/runner.py`,
-`examples/knapsack/runner.py`). It selects between the Rust interpreter and
-the pure-Python reference VM via `VMBackend`, converts FFI
-objects to and from the canonical `xquad.types.XQMX` at the boundary, and
-runs `.xqasm` source text directly rather than pre-assembled bytecode:
+`examples/knapsack/runner.py`). It wraps `xqffi.vm.Vm` and runs `.xqasm`
+source text directly, assembling it on each `run()`; `run_bytecode()`
+takes pre-assembled bytes instead:
 
 ```python
-from xquad.vm import VM, VMBackend
+from xquad.vm import VM
 
 src = "PUSH 7\nPUSH 5\nADD\nSTOW r0\nPUSH 0\nOUTPUT r0\nHALT\n"
-v = VM(backend=VMBackend.RUST)  # RUST is also the default with no argument
+v = VM()
 v.set_output_slots(1)
 v.run(src)
 assert v.outputs() == [12]
 assert v.stack() == []
 ```
 
-`VM.outputs()` returns `xquad.types.XQMX` instances for model and sample
-outputs, where `xqffi.vm.Vm.outputs()` and `Session.run().outputs` return
-the raw pyo3 `XqmxModel` / `XqmxSample` objects. Pick `VM` when you need
-Python-backend parity checking or when your calldata and outputs are
-already in `xquad.types` terms; pick `Session` for the dict-keyed,
-slot-sparse ergonomics shown above; pick `xqffi.vm.Vm` only if you are
-building your own layer on top of the raw Rust FFI.
+`VM` keeps calldata, output slots, and the step and memory limits across
+runs until `reset()`, but resets the machine before every run, so no stack
+or register state leaks from one run into the next. `VM.outputs()` returns
+the same `XqmxModel` / `XqmxSample` objects as `xqffi.vm.Vm.outputs()` and
+`Session.run().outputs`. Pick `VM` when you run `.xqasm` source from a
+script and want the settings to carry across runs; pick `Session` for the
+dict-keyed, slot-sparse ergonomics shown above; pick `xqffi.vm.Vm` only if
+you are building your own layer on top of the raw Rust FFI.
 
 `VM.set_calldata()` applies the same size, grid and index rules to every
 `xquad.types.XQMX` it is given, with the same errors on both backends,
@@ -289,7 +302,7 @@ enc_session.set_calldata([n, weights, values, capacity])
 model = enc_session.run().outputs[0]
 
 # A hand-picked sample -- items 1, 2, 3 selected, no solver involved.
-sample = XqmxSample("binary", values=[0, 1, 1, 1, 0, 0, 0, 0])
+sample = XqmxSample.binary(values=[0, 1, 1, 1, 0, 0, 0, 0])
 
 # Verifier: the encoder's own inputs, then model and sample; (energy, valid) out.
 verifier = Program.from_source(programs.verifier)

@@ -1,0 +1,14 @@
+; implies_sample_register: IMPLIES on a sample register raises TypeMismatch.
+;
+; spec/xqvm/SPEC.md's Faults table: a model-only opcode applied to a sample
+; register raises TypeMismatch. IMPLIES writes QUBO terms, so it is
+; model-only. Its charge is paid first and the default budget covers it, so
+; the type check decides.
+
+PUSH 4
+BSMX r0          ; a binary sample, not a model
+PUSH 0
+PUSH 1
+PUSH 1           ; i, j, penalty
+IMPLIES r0
+HALT

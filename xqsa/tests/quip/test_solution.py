@@ -30,6 +30,21 @@ from xqsa.quip.solution import decode_answers, no_answer_note, pick_best
 from .test_client import _job, _model, _spin_vector
 from .test_receipt import TOP_N, _answer, _receipt_for, _receipt_order
 
+
+class _ScoredModel:
+    """Forwards to a model but scores samples from a table; XqmxModel.energy cannot be patched."""
+
+    def __init__(self, model, energies: dict[tuple[int, int], int]) -> None:
+        self._model = model
+        self._energies = energies
+
+    def __getattr__(self, name: str):
+        return getattr(self._model, name)
+
+    def energy(self, sample) -> int:
+        return self._energies.get((sample.get_linear(0), sample.get_linear(1)), 2)
+
+
 # Energies of _model() by (s0, s1): (-1, 1) -> -4, (1, 1) -> 0, (1, -1) and (-1, -1) -> +2.
 BEST, MID, HIGH, HIGH2 = (-1, 1), (1, 1), (1, -1), (-1, -1)
 
@@ -97,13 +112,9 @@ class TestPickBest:
         # milli energy does not: here MID beats BEST on the model, while the
         # chain ranked the leader at BEST's -4000. The leader still holds it.
         energies = {(1, 1): -10, (-1, 1): -4}
-        monkeypatch.setattr(
-            "xqsa.quip.solution.compute_energy",
-            lambda model, sample: energies.get((sample.get_linear(0), sample.get_linear(1)), 2),
-        )
         answers = [("0xA", [BEST, MID], -4000), ("0xB", [MID], 0)]
         receipt, job = _setup(monkeypatch, answers, front={"solver": "0xA", "energy_milli": -4000})
-        pick = pick_best(receipt, job, _model())
+        pick = pick_best(receipt, job, _ScoredModel(_model(), energies))
         assert (pick.solution.solver, pick.solution.energy) == ("0xA", -10)
         assert pick.energy_matches_chain is True
 

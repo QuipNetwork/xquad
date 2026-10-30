@@ -1,0 +1,9 @@
+; div_by_zero: DIV with a zero divisor must fault with DivisionByZero.
+;
+; Exercises: DIV's error path, the first error-asserting vector in the
+; suite.
+
+PUSH 1
+PUSH 0
+DIV
+HALT

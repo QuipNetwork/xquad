@@ -19,10 +19,9 @@
 TSP end-to-end XQuad pipeline example.
 
 Build a random Travelling-Salesman-Problem instance, compile it to
-XQVM assembly via xqcp, run the encoder on the chosen VM (Python
-reference or Rust), sample the resulting QUBO with xqsa's
-SolverDWaveCPU, run the verifier and decoder on the sampled
-solution, and print the decoded tour.
+XQVM assembly via xqcp, run the encoder on the XQVM, sample the
+resulting QUBO with xqsa's SolverCPU, run the verifier and
+decoder on the sampled solution, and print the decoded tour.
 
 The runner is the showcase: a single file exercises every layer of
 the toolchain. No pre-authored .xqasm files, no JSON inputs — just
@@ -30,7 +29,7 @@ CP in, decoded tour out.
 
 Usage:
     uv run python examples/tsp/runner.py --seed 42
-    uv run python examples/tsp/runner.py --n 5 --interpreter rust
+    uv run python examples/tsp/runner.py --n 5
 """
 
 from __future__ import annotations
@@ -43,15 +42,15 @@ from pathlib import Path
 from typing import Any
 
 from xquad import cp, sa
-from xquad.types import XQMX, Vec, triu
-from xquad.vm import VM, VMBackend
+from xquad.types import XqmxModel, triu
+from xquad.vm import VM
 
 
 def build_problem(n: int, seed: int) -> tuple[cp.Problem, list[int]]:
     """Construct a TSP problem with a random symmetric distance matrix.
 
     Distances live in the upper triangle only (`n*(n-1)/2` entries)
-    and are fed to the VM as a flat Vec indexed by xq_triu(i, j).
+    and are fed to the VM as a flat list indexed by xq_triu(i, j).
     """
     rng = random.Random(seed)
     distances = [rng.randint(1, 100) for _ in range(n * (n - 1) // 2)]
@@ -114,11 +113,9 @@ def canonicalize_tour(tour: list[int]) -> list[int]:
     2. Between the forward tour and its reverse, pick the lex-smaller
        one (handles the 2 directions).
 
-    Rust and Python interpreters on different host platforms have been
-    observed to disagree on direction alone (QUI-465) due to
-    iteration-order differences in the decoder's XQMX scan; both
-    invariants (energy / tour_distance / validity) stay identical.
-    Lex-min canonicalisation closes that gap and lets
+    Runs that agree on energy, tour distance and validity can still
+    disagree on direction alone (QUI-465 saw it across interpreters and
+    host platforms). Lex-min canonicalisation closes that gap and lets
     `make example-smoke` diff byte-for-byte against `golden.json`.
     """
     if 0 not in tour:
@@ -132,16 +129,14 @@ def canonicalize_tour(tour: list[int]) -> list[int]:
     return min(rotated, reversed_direction)
 
 
-def run(
-    programs: Any, n: int, distances: list[int], seed: int, backend: VMBackend, solver_name: str
-) -> tuple[int, int, list[int]]:
-    """Full pipeline on the selected VM backend."""
-    vm = VM(backend=backend)
+def run(programs: Any, n: int, distances: list[int], seed: int, solver_name: str) -> tuple[int, int, list[int]]:
+    """Full pipeline on the XQVM."""
+    vm = VM()
     vm.set_calldata([n, distances])
     vm.set_output_slots(1)
     vm.run(programs.encoder)
     model = vm.outputs()[0]
-    assert isinstance(model, XQMX)
+    assert isinstance(model, XqmxModel)
 
     try:
         solver = sa.build_solver(solver_name, seed=seed)
@@ -150,22 +145,19 @@ def run(
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([n, distances, model, sample])
     vm.set_output_slots(2)
     vm.run(programs.verifier)
     outs = vm.outputs()
     energy, valid = outs[0], outs[1]
 
-    vm = VM(backend=backend)
+    vm = VM()
     vm.set_calldata([sample, n])
     vm.set_output_slots(1)
     vm.run(programs.decoder)
     tour_out = vm.outputs()[0]
-    if isinstance(tour_out, Vec):
-        tour_list = [tour_out.get(i) for i in range(n)]
-    else:
-        tour_list = list(tour_out)
+    tour_list = list(tour_out)
 
     return energy, valid, tour_list
 
@@ -174,12 +166,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="TSP end-to-end XQuad pipeline example")
     parser.add_argument("--n", type=int, default=4, help="Number of cities (default: 4)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
-    parser.add_argument(
-        "--interpreter",
-        choices=("python", "rust"),
-        default="python",
-        help="XQVM interpreter to run the compiled programs on",
-    )
     parser.add_argument(
         "--solver",
         choices=sorted(sa.SOLVERS),
@@ -198,8 +184,7 @@ def main() -> int:
     problem, distances = build_problem(args.n, args.seed)
     programs = problem.compile()
 
-    backend = VMBackend.PYTHON if args.interpreter == "python" else VMBackend.RUST
-    energy, valid, tour = run(programs, args.n, distances, args.seed, backend, args.solver)
+    energy, valid, tour = run(programs, args.n, distances, args.seed, args.solver)
     tour = canonicalize_tour(tour)
 
     result = {

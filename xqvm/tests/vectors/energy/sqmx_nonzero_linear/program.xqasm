@@ -1,0 +1,26 @@
+; sqmx_nonzero_linear: compute energy of a 2-variable spin (Ising) model
+; with non-zero linear biases against the default-initialised spin sample.
+;
+; linear = [2, 3], quadratic = {}, sample = [-1, -1]
+; ⇒ energy = 2*(-1) + 3*(-1) = -5.
+;
+; Companion to sqmx_spin (which uses zero coefficients). This vector
+; asserts the canonical SSMX default of [-1, ..., -1] (QUI-453).
+
+PUSH 2
+SQMX r0
+PUSH 0
+PUSH 2
+SETLINE r0
+PUSH 1
+PUSH 3
+SETLINE r0
+
+PUSH 2
+SSMX r1
+
+ENERGY r0 r1
+STOW r2
+PUSH 0
+OUTPUT r2
+HALT

@@ -29,10 +29,10 @@
 //! costs one step and an embedder pricing `WeightPerStep * steps` underprices
 //! it without bound.
 //!
-//! The constants are consensus-visible: `xqvm_py/metering.py` mirrors them
-//! value for value, `scripts/check-metering-parity.py` enforces it, and
-//! `spec/xqvm/METERING.md` specifies them normatively. Changing one is a
-//! breaking change to observable behaviour.
+//! The constants are consensus-visible: `spec/xqvm/METERING.md` specifies
+//! them normatively, and `tests/metering_spec.rs` checks them against its
+//! constants table. Changing one is a breaking change to observable
+//! behaviour.
 
 use crate::RegVal;
 
@@ -105,8 +105,7 @@ pub fn model_eval_steps(sample_len: u64, terms: u64) -> u64 {
 /// as the sum of this function over the elements. The fold below inlines the
 /// [`RegVal::Model`] arm instead, which is equivalent here because
 /// [`RegVal::VecXqmx`] holds `XqmxModel` values and so cannot contain a
-/// sample. An implementation whose vec elements can be samples must recurse,
-/// as `xqvm_py/metering.py` does.
+/// sample. An implementation whose vec elements can be samples must recurse.
 #[must_use]
 pub fn value_copy_steps(value: &RegVal) -> u64 {
     match value {

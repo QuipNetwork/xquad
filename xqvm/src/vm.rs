@@ -275,8 +275,8 @@ const fn bit_length(value: i64) -> u32 {
 ///
 /// Public because it is the number every host that does not choose its own
 /// has to agree on, and there are four such hosts: `xquad vm run`'s
-/// `--step-limit` default, `xquad`'s Python VM wrapper, the conformance
-/// harness's per-vector default, and this crate. Each used to restate the
+/// `--step-limit` default, `xquad.vm.VM`, the specification vectors'
+/// per-vector default, and this crate. Each used to restate the
 /// literal with a comment claiming to match this constant, and nothing
 /// enforced the claim.
 pub const DEFAULT_STEP_LIMIT: u64 = 10_000_000;
@@ -290,8 +290,8 @@ pub const DEFAULT_STEP_LIMIT: u64 = 10_000_000;
 /// smaller budget with [`Vm::set_memory_limit`].
 ///
 /// Public for the same reason [`DEFAULT_STEP_LIMIT`] is: `xquad vm run`, the
-/// conformance harness and `xqvm_py` all carry this budget's default, and
-/// each restating the literal is how the two halves of a limit drift apart.
+/// bindings and the vector runner all carry this budget's default, and each
+/// restating the literal is how two halves of a limit drift apart.
 pub const DEFAULT_MEMORY_LIMIT: u64 = 1 << 30;
 
 /// Largest `size` an allocator may be given.
@@ -314,9 +314,9 @@ pub const DEFAULT_MEMORY_LIMIT: u64 = 1 << 30;
 /// `InvalidAllocation` on a chain node and a successful allocation on the
 /// 64-bit machine beside it, which is the divergence this closes.
 ///
-/// It is public because `xqvm_py` carries the same limit and `spec/xqvm`
-/// states it normatively: as with [`DEFAULT_MEMORY_LIMIT`], each restating of
-/// the literal is how the halves of a limit drift apart.
+/// It is public for the embedder and because `spec/xqvm` states it
+/// normatively: as with [`DEFAULT_MEMORY_LIMIT`], each restating of the
+/// literal is how the halves of a limit drift apart.
 pub const MAX_ALLOCATION_SIZE: i64 = u32::MAX as i64;
 
 /// Bytes charged per XQMX variable.
@@ -348,7 +348,7 @@ const VEC_ELEMENT_BYTES: u64 = 2 * size_of::<i64>() as u64;
 /// The charge schedule is normative and target-independent, so it may not be
 /// derived from the executing target's pointer width: the derivation gave 32
 /// on a 64-bit host and 24 on wasm32, which is the runtime the pallet executes
-/// in, while `xqvm_py/executor.py` and the published documentation both state
+/// in, while `spec/xqvm/SPEC.md` and the published documentation both state
 /// 32. That made the deployed VM enforce a schedule nothing in this repository
 /// reproduced.
 const LINEAR_ENTRY_BYTES: u64 = 32;
@@ -376,10 +376,12 @@ fn equality_expansion_bytes(n: u64) -> u64 {
 
 /// Bytes one whole [`XqmxModel`] costs to duplicate.
 ///
-/// Priced at exactly what the allocator and the coefficient writes charged
-/// to build it: the declared size at [`VARIABLE_BYTES`] plus one entry per
-/// live coefficient. Measuring the copy the same way the original was
-/// measured is what keeps a copy from being cheaper than the thing it copies.
+/// Priced the way the allocator and the coefficient writes charged to build
+/// it: the declared size at [`VARIABLE_BYTES`] plus one entry per non-zero
+/// coefficient. A write that left a coefficient at zero removed its entry,
+/// so the copy does not count it (`spec/xqvm/SPEC.md`, `xqmx`). Measuring the
+/// copy the same way the original was measured is what keeps a copy from
+/// being cheaper than the thing it copies.
 fn model_bytes(m: &XqmxModel) -> u64 {
     let size = u64::try_from(m.size).unwrap_or(u64::MAX);
     let linear = u64::try_from(m.linear_len()).unwrap_or(u64::MAX);
@@ -532,6 +534,11 @@ impl Vm {
     ///
     /// Only safe where the caller controls the program or can abandon the
     /// thread. A program that never halts will not return.
+    ///
+    /// Equivalent to `set_step_limit(u64::MAX)`. The step counter is a
+    /// `u64`, so a run whose count would pass `u64::MAX` still fails with
+    /// [`Error::StepLimitExceeded`](crate::Error::StepLimitExceeded) rather
+    /// than reporting a clamped count.
     pub fn set_unlimited_steps(&mut self) -> &mut Self {
         self.step_limit = u64::MAX;
         self
@@ -650,9 +657,8 @@ impl Vm {
     /// [`set_memory_limit`]) are settings rather than run state and survive.
     ///
     /// Clearing the outputs and the calldata is the point. Leaving them
-    /// standing meant a reused VM answered with the previous run's outputs:
-    /// the Rust backend returned `[42]` where the Python one returned `[]`
-    /// for the same reuse. A host that resets and runs again must call
+    /// standing meant a reused VM answered with the previous run's outputs,
+    /// returning `[42]` where a fresh VM returns `[]`. A host that resets and runs again must call
     /// [`set_calldata`] and [`set_output_slots`] again too, exactly as it
     /// does after [`Vm::new`].
     ///
@@ -732,8 +738,8 @@ impl Vm {
         // Probe for the next instruction before charging: the limit bounds
         // instructions executed, so a program that ends -- HALT or end of
         // stream -- having executed exactly `step_limit` instructions
-        // succeeds, and `steps()` never counts the probe. This is the Python
-        // VM's loop shape (`while pc < len`).
+        // succeeds, and `steps()` never counts the probe: the loop shape is
+        // `while pc < len`.
         while let Some(item) = cursor.next_instruction() {
             self.charge_steps_base()?;
             self.instructions += 1;
@@ -851,7 +857,7 @@ impl Vm {
 macro_rules! impl_dispatch {
     (
         $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal,
-            $_delta:expr, {$($field:ident: $ftype:ty),*}) ),*
+            $_stack:expr, {$($field:ident: $ftype:ty),*}) ),*
         $(,)?
     ) => {
         impl Vm {
@@ -922,18 +928,25 @@ impl Vm {
         self.charge_steps_at(None, metering::BASE_STEPS)
     }
 
+    /// The accumulation is exact, for the reason [`charge`](Self::charge)
+    /// gives: a saturating total is admitted at `step_limit = u64::MAX`, so
+    /// the budget would stop binding at its own ceiling. A count that does
+    /// not fit a `u64` exceeds every `u64` limit, so overflow is
+    /// [`Error::StepLimitExceeded`] and `steps()` never reports a clamped
+    /// value (`spec/xqvm/METERING.md`'s The Step Counter).
     fn charge_steps_at(&mut self, pos: Option<usize>, units: u64) -> Result<(), Error> {
-        let total = self.steps.saturating_add(units);
-        if total > self.step_limit {
-            return Err(Error::StepLimitExceeded {
+        match self.steps.checked_add(units) {
+            Some(total) if total <= self.step_limit => {
+                self.steps = total;
+                Ok(())
+            }
+            _ => Err(Error::StepLimitExceeded {
                 pos,
                 requested: units,
                 used: self.steps,
                 limit: self.step_limit,
-            });
+            }),
         }
-        self.steps = total;
-        Ok(())
     }
 
     /// Charge `bytes` against the allocation budget.
@@ -950,12 +963,7 @@ impl Vm {
     /// the budget stops binding at its own ceiling. A cost that does not fit
     /// a `u64` exceeds every `u64` budget by definition, so overflow is
     /// [`Error::MemoryLimitExceeded`] and there is no second answer to pick.
-    ///
-    /// The step budget in [`Vm::charge_steps_at`] deliberately does *not*
-    /// match: it saturates, and `xqvm_py._charge_steps` clamps to mirror it,
-    /// because a step count is observable through conformance in a way a
-    /// byte count is not. Changing that is a specification decision rather
-    /// than a bug fix, so the two budgets differ here on purpose.
+    /// The step budget in [`Vm::charge_steps_at`] follows the same rule.
     fn charge(&mut self, pos: usize, bytes: u64) -> Result<(), Error> {
         let Some(total) = self.memory_used.checked_add(bytes) else {
             return Err(Error::MemoryLimitExceeded {
@@ -992,7 +1000,7 @@ impl Vm {
     /// u64::MAX` is affordable -- the budget would stop binding exactly
     /// where the request is largest. The true cost exceeds every `u64`
     /// budget, so the refusal is forced rather than chosen, and it is the
-    /// answer `xqvm_py` already gives from unbounded integers.
+    /// answer an implementation with unbounded integers gives too.
     fn charge_variable_count(&mut self, pos: usize, count: u64) -> Result<(), Error> {
         match count.checked_mul(VARIABLE_BYTES) {
             Some(bytes) => self.charge(pos, bytes),
@@ -1024,11 +1032,9 @@ impl Vm {
     /// it certain to refuse first, which is every limit below
     /// `2^32 * VARIABLE_BYTES` (32 GiB). Above that a size past a 32-bit
     /// target's address space was charged successfully and then decided by
-    /// the narrowing: `InvalidAllocation` on wasm32, a sparse model on a
-    /// 64-bit host, and a sparse model again in `xqvm_py`, whose integers
-    /// are unbounded and which therefore has no narrowing at all. The
-    /// [`MAX_ALLOCATION_SIZE`] range check closes that at every budget, and
-    /// closes it to `InvalidAllocation` on all three.
+    /// the narrowing: `InvalidAllocation` on wasm32 and a sparse model on a
+    /// 64-bit host. The [`MAX_ALLOCATION_SIZE`] range check closes that at
+    /// every budget, and closes it to `InvalidAllocation` on both.
     ///
     /// It sits after the charge rather than before it so that no program
     /// which runs today changes its fault identity: under any ordinary
@@ -1116,11 +1122,10 @@ impl Vm {
     /// discriminate the register kind without also borrowing its contents.
     ///
     /// An unset register raises [`Error::UnsetRegister`] rather than
-    /// [`Error::RegisterType`]. The two are distinct fault identities --
-    /// `UnsetRegister` is what `xqvm_py`'s `RegisterNotFound` maps onto and
-    /// `RegisterType` is what its `TypeMismatch` maps onto -- so folding
-    /// "never written" into the type arm makes an unset register a
-    /// `TypeMismatch` here and an `UnsetRegister` there. `LOAD` and `OUTPUT`
+    /// [`Error::RegisterType`]. The two are distinct fault identities in
+    /// `spec/xqvm/SPEC.md`'s Faults table -- `UnsetRegister` for a register
+    /// never written, `TypeMismatch` for one holding the wrong kind -- so
+    /// folding "never written" into the type arm reports the wrong one. `LOAD` and `OUTPUT`
     /// already discriminate the two; this is the helper that did not.
     fn require_vec(&self, pos: usize, r: Register) -> Result<(), Error> {
         match self.reg(r) {
@@ -1355,9 +1360,9 @@ impl Vm {
         // overflow rule over every i64 operation the VM performs on a
         // program's behalf, and loop control is not carved out of it. Wrapping
         // made `PUSH 2^63-2 / PUSH 3 / RANGE / LIDX r0 / NEXT / HALT` run one
-        // iteration here and three on xqvm_py, with different register
-        // contents and different step counts -- and step count is metering on
-        // a chain that prices per step.
+        // iteration where exact integer arithmetic runs three, with
+        // different register contents and different step counts -- and step
+        // count is metering on a chain that prices per step.
         let end = start
             .checked_add(count)
             .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
@@ -1639,8 +1644,8 @@ impl Vm {
         // as many words that an instruction may raise `MemoryLimitExceeded`
         // for work it would never have done "because ... the index it was
         // given is out of range". Validating first made a near-exhausted
-        // budget plus an out-of-range slot raise `OutputIndex` here and
-        // `MemoryLimitExceeded` on xqvm_py. `regval_bytes` of an unset
+        // budget plus an out-of-range slot raise `OutputIndex` where the spec
+        // requires `MemoryLimitExceeded`. `regval_bytes` of an unset
         // register is 0, so an unset register still charges nothing and
         // still faults.
         let bytes = regval_bytes(self.reg(reg));
@@ -2139,7 +2144,7 @@ impl Vm {
 
     #[expect(
         clippy::arithmetic_side_effects,
-        reason = "NOT COVERED BY THE SPEC: `spec/xqvm/SPEC.md`'s overflow rule reaches the index sequence SLACK appends (which is checked), but nothing normative permits the `power = power.wrapping_mul(2)` that drives these two loops; recorded here pending normative text. The behaviour is correct and verified equivalent to xqvm_py across the whole domain: `power > 0` consumes the wrap to i64::MIN, so Rust runs `bit_length(capacity)` iterations where Python runs `capacity.bit_length()`, equal for every positive i64. `bit_length(capacity) <= 63` bounds the charge, and `i` is bounded by the same 63 iterations"
+        reason = "`spec/xqvm/SPEC.md`'s overflow rule states that SLACK computes its powers of two only up to the largest one not exceeding `capacity`, so none of these operations overflows for a positive i64 `capacity` (pinned by the `slack_max_capacity` vector). `power > 0` consumes the final `wrapping_mul` to i64::MIN, so the loops run `bit_length(capacity)` times, at most 63; that bounds the charge and `i`"
     )]
     fn exec_slack(
         &mut self,
@@ -2157,8 +2162,8 @@ impl Vm {
         // `INPUT r0 / INPUT r1 / PUSH 0 / PUSH 0 / SLACK r0 r1` is
         // verifier-clean and reaches here with two ints. Returning on
         // `capacity <= 0` before touching either register discarded the
-        // effect and halted Ok where xqvm_py faulted. Same rule, and same
-        // reason, as `ITER`'s register-read-before-skip.
+        // effect and halted Ok where the spec requires a fault. Same rule,
+        // and same reason, as `ITER`'s register-read-before-skip.
         //
         // Resolving both up front also fixes the order within the non-empty
         // path: the second register used to be discriminated only after the
@@ -2193,8 +2198,8 @@ impl Vm {
                 // so `start_index + i` leaves the range for any start within
                 // 63 of `i64::MAX`. `VECI r0 / VECI r1 / PUSH 2^63-1 /
                 // PUSH 3 / SLACK r0, r1` charged 64 bytes and passed at any
-                // default while iteration 2 panicked under `ci-test`, wrapped
-                // under `release`, and stored 2^63 on xqvm_py.
+                // default while iteration 2 panicked under `ci-test` and
+                // wrapped under `release`.
                 vec.push(
                     start_index
                         .checked_add(i)
@@ -2236,21 +2241,8 @@ impl Vm {
     fn exec_idx_triu(&mut self, pos: usize) -> Result<StepResult, Error> {
         let j = self.pop(pos)?;
         let i = self.pop(pos)?;
-        // The pair is unordered: `spec/xqvm/ISA.md` requires the operands to
-        // be swapped when i > j, so (i, j) and (j, i) address the same cell.
-        let (i, j) = if i > j { (j, i) } else { (i, j) };
-        // Upper-triangular index for (i, j) with i <= j:
-        // index = j*(j-1)/2 + i
-        //
-        // j*(j-1) is a product of consecutive integers, so it is non-negative
-        // and even for every operand, negative ones included. Truncating and
-        // flooring division therefore agree here and cannot diverge.
-        let idx = j
-            .checked_sub(1)
-            .and_then(|jm1| j.checked_mul(jm1))
-            .and_then(|product| product.checked_div(2))
-            .and_then(|half| half.checked_add(i))
-            .ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
+        let idx =
+            crate::model::triu_index(i, j).ok_or(Error::ArithmeticOverflow { pos: Some(pos) })?;
         self.push_stack(idx, pos)?;
         Ok(StepResult::Continue)
     }
@@ -2675,8 +2667,8 @@ impl Vm {
         // decide the fault: on wasm32 an index past a 32-bit width failed
         // `usize::try_from`, collapsed `needed` to zero and charged
         // nothing, leaving `indices_to_usize` below to raise
-        // `IndexOutOfBounds`, while a 64-bit host and `xqvm_py` charged the
-        // full growth and raised `MemoryLimitExceeded`. That split was
+        // `IndexOutOfBounds`, while a 64-bit host charged the full growth
+        // and raised `MemoryLimitExceeded`. That split was
         // reachable at the default budget, not only above the 32 GiB one
         // `allocation_size` needs, and wasm32 is where the pallet runs.
         //
@@ -2686,13 +2678,13 @@ impl Vm {
         //
         // `max_idx + 1` overflows only at `i64::MAX`, and that one index
         // clamps up rather than down. Clamping it to zero, as this did,
-        // charged nothing and fell through to `IndexOutOfBounds` while
-        // `xqvm_py` computed `2^63` from unbounded integers and raised
-        // `MemoryLimitExceeded` -- the same divergence the narrowing above
-        // caused, on one index value, at the shipped default budget.
-        // `i64::MAX` is one variable short of Python's `2^63`, which the
-        // charge cannot see: both exceed every `u64` budget by more than a
-        // factor of four, so both are refused for the same reason.
+        // charged nothing and fell through to `IndexOutOfBounds` where the
+        // exact growth, `2^63` variables, raises `MemoryLimitExceeded` --
+        // the same divergence the narrowing above caused, on one index
+        // value, at the shipped default budget. `i64::MAX` is one variable
+        // short of the exact `2^63`, which the charge cannot see: both
+        // exceed every `u64` budget by more than a factor of four, so both
+        // are refused for the same reason.
         let needed = idx_vec
             .iter()
             .max()
@@ -2964,8 +2956,7 @@ impl Vm {
         // model walk for one step (QUI-1056).
         // The model register is checked before the sample register, in
         // operand order, so that a program holding the wrong type in both
-        // sees the same error here as it does from the Python VM. The order
-        // is normative -- see `spec/xqvm/METERING.md` (Conformance).
+        // sees the model register's error. The order is normative -- see `spec/xqvm/METERING.md` (Conformance).
         let terms = match self.reg(model) {
             RegVal::Model(m) => m.linear_len().saturating_add(m.quadratic_len()),
             other => {
@@ -3120,7 +3111,7 @@ impl GridShape {
     /// unaddressable grid raises `InvalidGridDimensions` -- the same identity
     /// ONEHOTR/ONEHOTC raise without a grid -- and an out-of-range index
     /// raises `IndexOutOfBounds`, so an absent row is an error rather than a
-    /// silent sum of zeroes (`xqvm_py` has always raised here).
+    /// silent sum of zeroes.
     ///
     /// The grid check is [`grid_fits`], the rule `RESIZE` enforces, so no
     /// bytecode path reaches its failure arm. It stays as defence in depth,
@@ -3775,14 +3766,13 @@ mod tests {
     }
 
     /// The quadratic trio requires a model: a sample carries no quadratic
-    /// storage. `xqvm_py` accepted the write until QUI-1160 and grew a map
-    /// its own accessors never read back.
+    /// storage (QUI-1160).
     ///
     /// The budget half is the QUI-1178 failure class: if the charge ran
     /// before the register was discriminated *and* were sized from the
     /// sample's real extent, a tight budget would turn this into
-    /// `MemoryLimitExceeded` on one implementation only. `charge_coefficient`
-    /// is model-gated on both, so the identity must survive a budget with no
+    /// `MemoryLimitExceeded` instead of `TypeMismatch`. `charge_coefficient`
+    /// is model-gated, so the identity must survive a budget with no
     /// headroom past the `BSMX` allocation itself.
     #[test]
     fn quadratic_opcodes_reject_a_sample_at_any_budget() {
@@ -3816,6 +3806,72 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A charge that lands exactly on `u64::MAX` is admitted at the largest
+    /// limit, and the next one, which would carry the counter past it, is
+    /// refused rather than clamped (QUI-1342). No program can reach the
+    /// ceiling in a test's lifetime, so the counter is set directly.
+    #[test]
+    fn step_counter_refuses_rather_than_saturates_at_its_ceiling() {
+        let mut vm = Vm::new();
+        let _ = vm.set_unlimited_steps();
+        vm.steps = u64::MAX - 1;
+
+        let err = vm.charge_steps(7, 2).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::StepLimitExceeded {
+                    pos: Some(7),
+                    requested: 2,
+                    used,
+                    limit: u64::MAX,
+                } if used == u64::MAX - 1
+            ),
+            "expected StepLimitExceeded at the counter's ceiling, got {err:?}"
+        );
+        assert_eq!(vm.steps(), u64::MAX - 1, "a refused charge must not land");
+
+        vm.charge_steps(7, 1)
+            .expect("a charge onto u64::MAX fits the counter");
+        assert_eq!(vm.steps(), u64::MAX);
+
+        let err = vm.charge_steps_base().unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::StepLimitExceeded {
+                    pos: None,
+                    used: u64::MAX,
+                    limit: u64::MAX,
+                    ..
+                }
+            ),
+            "expected the base charge to be refused at u64::MAX, got {err:?}"
+        );
+        assert_eq!(vm.steps(), u64::MAX);
+    }
+
+    /// The largest charge a cost formula can produce is `u64::MAX` (every
+    /// formula saturates). It is affordable from an empty counter and from
+    /// no other state, so one base step before it is enough to be refused.
+    #[test]
+    fn a_saturated_charge_is_refused_once_any_step_is_spent() {
+        let mut vm = Vm::new();
+        let _ = vm.set_unlimited_steps();
+        vm.charge_steps(0, u64::MAX)
+            .expect("u64::MAX fits an empty counter");
+        assert_eq!(vm.steps(), u64::MAX);
+
+        let mut vm = Vm::new();
+        let _ = vm.set_unlimited_steps();
+        vm.charge_steps_base().expect("one base step fits");
+        assert!(matches!(
+            vm.charge_steps(0, u64::MAX),
+            Err(Error::StepLimitExceeded { used: 1, .. })
+        ));
+        assert_eq!(vm.steps(), 1);
     }
 
     mod grid_lines {

@@ -36,7 +36,7 @@ through:
 
 ```python
 from examples.knapsack.runner import build_problem
-from xquad.vm import VM, VMBackend
+from xquad.vm import VM
 
 n = 6
 weights = [2, 3, 4, 5, 6, 7]
@@ -46,7 +46,7 @@ capacity = 12
 problem = build_problem(n, weights, values, capacity)
 programs = problem.compile()
 
-vm = VM(backend=VMBackend.RUST)
+vm = VM()
 vm.set_calldata([n, weights, values, capacity])
 vm.set_output_slots(1)
 vm.run(programs.encoder)
@@ -54,7 +54,7 @@ model = vm.outputs()[0]
 ```
 
 `model.size` comes back `10`: six item variables plus four slack bits,
-`S = floor(log2(12)) + 1 = 4`. Solving with `SolverDWaveCPU` and decoding:
+`S = floor(log2(12)) + 1 = 4`. Solving with `SolverCPU` and decoding:
 
 ```text
 selection [0, 0, 0, 1, 0, 1] weight 12 capacity 12 feasible True value 18 energy -14418

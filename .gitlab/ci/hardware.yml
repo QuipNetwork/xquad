@@ -136,6 +136,8 @@ hardware:cuda:
     tags: [linux, x86_64, cuda]
     extends: .hardware
     needs:
+        - job: dependency-gate
+          optional: true
         - !reference [.needs-gates, verify-and-test]
     # 45m: no run data (never executed -- protected refs only). Deliberate
     # guess with cold-start headroom for first-run driver and kernel warmup
@@ -197,6 +199,8 @@ hardware:qpu:
     tags: [linux, x86_64]
     extends: .hardware
     needs:
+        - job: dependency-gate
+          optional: true
         - !reference [.needs-gates, verify-and-test]
     # 45m: no run data (never executed -- protected refs only). Deliberate
     # guess with cold-start headroom for a real network round-trip to a
@@ -225,7 +229,7 @@ hardware:qpu:
         # not a new failure mode, only an earlier and clearer one: with no
         # token this job was already red, because test_qpu_live.py's
         # skip_no_token deliberately does not skip when CI is set, so every
-        # test ran and died constructing SolverDWaveQPU. The probe replaces a
+        # test ran and died constructing SolverDWave. The probe replaces a
         # D-Wave client traceback with one line.
         #
         # No before_script: `extends: .hardware` supplies exactly the uv
@@ -237,6 +241,8 @@ hardware:metal:
     tags: [macos, arm64]
     extends: .hardware
     needs:
+        - job: dependency-gate
+          optional: true
         - !reference [.needs-gates, verify-and-test]
     # 30m: no run data (never executed -- protected refs only). The Metal
     # solve itself has no network queueing, unlike the other two, and this

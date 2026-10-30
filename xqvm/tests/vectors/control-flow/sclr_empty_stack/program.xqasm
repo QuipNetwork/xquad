@@ -1,0 +1,10 @@
+; sclr_empty_stack: SCLR on an empty stack is a no-op, not a
+; StackUnderflow.
+;
+; spec/xqvm/ISA.md's SCLR row: clear the entire value stack; depth becomes
+; 0. It pops nothing, so an empty stack is already the result. Three
+; instructions at BASE_STEPS each.
+
+SCLR
+PUSH 3
+HALT

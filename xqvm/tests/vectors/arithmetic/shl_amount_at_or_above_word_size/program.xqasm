@@ -1,0 +1,15 @@
+; shl_amount_at_or_above_word_size: a shift count of 64 or more is out of
+; range.
+;
+; The VM guards the amount with `(0..64)` before shifting. A VM that
+; computes in unbounded integers would let `PUSH 1 / PUSH 64 / SHL` reach
+; the push check and raise ARITHMETIC_OVERFLOW instead of INVALID_SHIFT --
+; a fault-identity error -- while `PUSH 0 / PUSH 100 / SHL` would complete
+; and push 0, a fault-versus-success error on a verifier-clean
+; four-instruction program. Both are admissible to a stored program, so
+; both are reachable from a signed account.
+
+PUSH 1
+PUSH 64
+SHL
+HALT

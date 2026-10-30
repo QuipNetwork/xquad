@@ -12,8 +12,15 @@ dynamic         = [ "version" ]
 
 [tool.maturin]
 manifest-path = "Cargo.toml"
-module-name   = "xqffi"
-strip         = true
+# Mixed layout: the extension builds as `xqffi/xqffi.*.so` beside a package
+# shim and the submodule type stubs under `python/xqffi/`. A pure-Rust layout
+# ships only one `.pyi`, which cannot describe `xqffi.vm` and its siblings.
+module-name   = "xqffi.xqffi"
+python-source = "python"
+# A local test run leaves bytecode caches beside the shim; maturin before 1.14
+# would ship them.
+exclude = [ "**/__pycache__/**" ]
+strip   = true
 
 # uv rebuilds a local package only when one of its cache keys changes, and
 # the default keys are just the packaging files. List every input to the
@@ -38,5 +45,5 @@ cache-keys = [
     { file = "../xqvm/src/**/*.rs" },
     { file = "../xqasm/Cargo.toml" },
     { file = "../xqasm/src/**/*" },
-    { file = "../conformance/opcodes.yaml" },
+    { file = "../xqvm/opcodes.yaml" },
 ]

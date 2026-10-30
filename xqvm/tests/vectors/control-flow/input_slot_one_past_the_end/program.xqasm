@@ -1,0 +1,9 @@
+; input_slot_one_past_the_end: INPUT at a slot one past the last slot raises CallDataIndex.
+;
+; spec/xqvm/ISA.md's INPUT row: s outside [0, slots) is a program error
+; and raises CallDataIndex. The host fixed one slot. input_slot_out_of_range
+; pins the empty-calldata case.
+
+PUSH 1
+INPUT r0
+HALT

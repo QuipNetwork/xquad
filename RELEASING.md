@@ -8,11 +8,10 @@ Cutting a release publishes ten artefacts in one shot from a single
 | 1 | [`xqvm`](xqvm/) | crates.io | before xqasm |
 | 2 | [`xqasm`](xqasm/) | crates.io | last Rust crate |
 | 3 | [`xqffi`](xqffi/) abi3 wheels + sdist | PyPI | before peers (2 abi3 wheels + sdist) |
-| 4 | [`xqvm_py`](xqvm_py/) sdist | PyPI | before xquad |
-| 5 | [`xqcp`](xqcp/) sdist | PyPI | before xquad |
-| 6 | [`xqsa`](xqsa/) sdist | PyPI | before xquad |
-| 7 | [`xquad`](xquad/) sdist (and the `xquad` command) | PyPI | last -- depends on 3-6 |
-| 8 | GitLab Release notes | GitLab | last -- `release:notes` |
+| 4 | [`xqcp`](xqcp/) sdist | PyPI | before xquad |
+| 5 | [`xqsa`](xqsa/) sdist | PyPI | before xquad |
+| 6 | [`xquad`](xquad/) sdist (and the `xquad` command) | PyPI | last -- depends on 3-5 |
+| 7 | GitLab Release notes | GitLab | last -- `release:notes` |
 
 Triggered by `.gitlab/ci/release.yml`; see that file for the exact
 ordering and rules. `xqffi` the Rust *crate* stays `publish = false`
@@ -34,7 +33,7 @@ Variables**; masked + protected):
   + publish-update.
 
 **PyPI Trusted Publishing (OIDC)** -- no long-lived token in CI. Each
-of the 5 PyPI projects (`xqffi`, `xqvm_py`, `xqcp`, `xqsa`, `xquad`)
+of the 4 PyPI projects (`xqffi`, `xqcp`, `xqsa`, `xquad`)
 must have a GitLab Trusted Publisher configured at
 `pypi.org/manage/project/<name>/settings/publishing/` pointing at:
 
@@ -163,7 +162,7 @@ git fetch origin && git switch -c release/vX.Y.Z origin/main   # or origin/dev
 #    scripts/check-version-sites.py and is not repeated here, so the
 #    prose cannot fall behind the check. In shape it is: every crate
 #    manifest, the two workspace dependency aliases in Cargo.toml, every
-#    pyproject [project] version, xqvm_py/__init__.py, every `==X.Y.Z`
+#    pyproject [project] version, every `==X.Y.Z`
 #    peer pin including xquad's optional-dependencies, and the pallet
 #    fixture's lock entry.
 make set-version VERSION=X.Y.Z
@@ -315,7 +314,7 @@ The tag push triggers a fully-automatic pipeline in stage `release`:
    own pipeline, using the same setup `release:pypi` uses. `make -k
    check-release` checks every version site against `$CI_COMMIT_TAG`,
    dry-runs both crates, and builds, `twine check`s and
-   smoke-installs all five Python distributions against the tagged
+   smoke-installs all four Python distributions against the tagged
    commit. The version check is the one part that does nothing on the
    MR pipeline, where there is no tag to compare against, so the tag
    pipeline is the first run that exercises it.
@@ -329,8 +328,8 @@ The tag push triggers a fully-automatic pipeline in stage `release`:
    in topological order. Fires automatically once
    `release:validate` passes.
 3. **`release:pypi`** -- `maturin build` + `twine upload` (OIDC) for
-   `xqffi`, then `uv build` + `twine upload` for `xqvm_py` / `xqcp` /
-   `xqsa` / `xquad`. Fires automatically once `release:crates` passes
+   `xqffi`, then `uv build` + `twine upload` for `xqcp` / `xqsa` /
+   `xquad`. Fires automatically once `release:crates` passes
    (`needs:` enforces ordering so PyPI cannot run before crates.io).
 4. **`release:notes`** -- git-cliff renders the GitLab Release page
    from the conventional-commit history, scoped to the range between
@@ -363,8 +362,8 @@ and rerun the pipeline.
 
 1. **Verify on the registries.** All three crates (xqvm, xqasm,
    and -- eventually, once we publish it -- xqffi's cdylib) should show
-   `vX.Y.Z` within a minute of pipeline completion; all five Python
-   distributions (`xqffi`, `xqvm_py`, `xqcp`, `xqsa`, `xquad`) on
+   `vX.Y.Z` within a minute of pipeline completion; all four Python
+   distributions (`xqffi`, `xqcp`, `xqsa`, `xquad`) on
    PyPI within seconds.
 2. **Smoke-test the install.** In a fresh venv on your workstation:
 

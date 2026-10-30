@@ -1,0 +1,39 @@
+; atleastw_weight_overflow: the weight sum leaves the i64 range and must
+; raise rather than wrap.
+;
+; weights = [2^62, 2^62, 2^62], k = 2^61, penalty = 0. The second partial
+; sum is 2^63, which is not representable, so ATLEASTW raises
+; ArithmeticOverflow before it derives a slack count from the total.
+;
+; The operands are chosen so the vector discriminates against a wrapping
+; implementation instead of merely agreeing with a checked one. Wrapped,
+; the sum is -2^62, the excess is negative, no slack variables are
+; allocated, the penalty of 0 emits nothing, and the program HALTs
+; successfully with a size-3 all-zero model -- a silently wrong answer
+; rather than a fault. A weight pair that overflows into a fault on the
+; wrapping build would not tell the two apart.
+
+PUSH 3
+BQMX r0
+
+VECI r1
+PUSH 0
+VECPUSH r1
+PUSH 1
+VECPUSH r1
+PUSH 2
+VECPUSH r1
+
+VECI r2
+PUSH 4611686018427387904
+VECPUSH r2
+PUSH 4611686018427387904
+VECPUSH r2
+PUSH 4611686018427387904
+VECPUSH r2
+
+PUSH 2305843009213693952   ; k
+PUSH 0                     ; penalty
+ATLEASTW r0 r1 r2
+
+HALT

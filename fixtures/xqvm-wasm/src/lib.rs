@@ -129,9 +129,9 @@ mod tests {
     /// `LINEAR_ENTRY_BYTES` and `QUAD_ENTRY_BYTES` used to be derived as
     /// `2 * (size_of::<usize>() + size_of::<i64>())`, which gives 32 and 48
     /// on a 64-bit host but 24 and 32 on wasm32, where `usize` is 4 bytes
-    /// wide. The reference VM, the book, and every native test said 32 and
-    /// 48, so the deployed wasm VM -- the one the Substrate pallet actually
-    /// runs -- enforced a charge schedule nothing else in the repository
+    /// wide. The spec, the book, and every native test said 32 and 48, so
+    /// the deployed wasm VM -- the one the Substrate pallet actually runs --
+    /// enforced a charge schedule nothing else in the repository
     /// reproduced. Two nodes charging differently for the same bytecode is a
     /// consensus split. The rates are literals now; this test pins the exact
     /// total so a rate re-derived from pointer width on any target goes red
@@ -263,8 +263,8 @@ mod tests {
     /// This target is the one that used to disagree. The size was narrowed
     /// with `usize::try_from(..).ok()` and the failure swallowed, so an index
     /// past a 32-bit width collapsed the needed size to zero here, charged
-    /// nothing, and fell through to `IndexOutOfBounds`, while 64-bit Rust and
-    /// `xqvm_py` charged the full growth and raised `MemoryLimitExceeded`.
+    /// nothing, and fell through to `IndexOutOfBounds`, while 64-bit Rust
+    /// charged the full growth and raised `MemoryLimitExceeded`.
     /// That split was reachable at the shipped 1 GiB default budget, unlike
     /// the allocator operand's, which needs a budget above 32 GiB.
     ///

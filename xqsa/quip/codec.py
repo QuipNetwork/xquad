@@ -58,6 +58,7 @@ from typing import TYPE_CHECKING, Any
 
 import dimod
 
+from xqffi.vm import Domain, XqmxModel, XqmxSample
 from xqsa.quip.errors import (  # noqa: F401 -- the Quip* errors stay importable from here.
     EncodingError,
     PlacementError,
@@ -65,7 +66,6 @@ from xqsa.quip.errors import (  # noqa: F401 -- the Quip* errors stay importable
     QuipMetadataError,
     QuipSigningError,
 )
-from xqvm_py.xqmx import XQMX, XQMXDomain, XQMXMode
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -326,7 +326,7 @@ class IsingJob:
     h_values: tuple[int, ...]
     j_values: tuple[int, ...]
     mapping: dict[int, int]
-    domain: XQMXDomain
+    domain: Domain
     quantization_error: float = 0.0
     offset: float = 0.0
 
@@ -622,7 +622,7 @@ def check_allowed_values(
 
 
 def _ising_coefficients(
-    model: XQMX,
+    model: XqmxModel,
 ) -> tuple[dict[int, float], dict[tuple[int, int], float], float]:
     """Return ``(h, j, offset)`` spin coefficients for a model.
 
@@ -632,21 +632,21 @@ def _ising_coefficients(
     sees the offset, but a model-unit energy ceiling must subtract it before it
     is compared with the chain's spin energy.
     """
-    if model.domain == XQMXDomain.SPIN:
+    if model.domain == Domain.SPIN:
         return (
-            dict(model.linear),
-            {(min(u, v), max(u, v)): float(c) for (u, v), c in model.quadratic.items()},
+            dict(model.linear_items()),
+            {(min(u, v), max(u, v)): float(c) for (u, v), c in model.quadratic_items()},
             0.0,
         )
 
-    bqm = dimod.BinaryQuadraticModel(model.linear, model.quadratic, 0.0, dimod.BINARY)
+    bqm = dimod.BinaryQuadraticModel(dict(model.linear_items()), dict(model.quadratic_items()), 0.0, dimod.BINARY)
     spin = bqm.change_vartype(dimod.SPIN, inplace=False)
     h = {int(var): float(bias) for var, bias in spin.linear.items()}
     j = {(min(int(u), int(v)), max(int(u), int(v))): float(bias) for (u, v), bias in spin.quadratic.items()}
     return h, j, float(spin.offset)
 
 
-def native_placement(model: XQMX) -> tuple[Topology, dict[int, int]]:
+def native_placement(model: XqmxModel) -> tuple[Topology, dict[int, int]]:
     """Build a topology from a model's own coupling graph, relabelled densely.
 
     The participating variables are the ones :func:`model_to_ising` places:
@@ -667,7 +667,7 @@ def native_placement(model: XQMX) -> tuple[Topology, dict[int, int]]:
 
 
 def model_to_ising(
-    model: XQMX,
+    model: XqmxModel,
     topology: Topology,
     *,
     mapping: Mapping[int, int] | None = None,
@@ -699,11 +699,11 @@ def model_to_ising(
             ``i32`` at milli scale.
         PlacementError: if the model cannot be placed onto the topology.
     """
-    if model.mode != XQMXMode.MODEL:
-        raise EncodingError(f"expected a MODEL-mode XQMX, got {model.mode.name}")
-    if model.domain not in (XQMXDomain.BINARY, XQMXDomain.SPIN):
+    if not isinstance(model, XqmxModel):
+        raise EncodingError(f"expected an XqmxModel, got {type(model).__name__}")
+    if model.domain not in (Domain.BINARY, Domain.SPIN):
         raise EncodingError(f"unsupported domain for the Quip backend: {model.domain.name}")
-    if not model.linear and not model.quadratic:
+    if not model.linear_items() and not model.quadratic_items():
         raise EncodingError("model has no linear or quadratic terms; nothing to solve")
 
     h, j, offset = _ising_coefficients(model)
@@ -759,7 +759,7 @@ def model_to_ising(
     )
 
 
-def decode_solution(job: IsingJob, spin_vector: Sequence[int], model: XQMX) -> XQMX:
+def decode_solution(job: IsingJob, spin_vector: Sequence[int], model: XqmxModel) -> XqmxSample:
     """Decode a returned spin vector into an XQMX sample over the model.
 
     ``spin_vector`` is the miner's per-node solution: ``spin_vector[k]`` is the
@@ -781,12 +781,8 @@ def decode_solution(job: IsingJob, spin_vector: Sequence[int], model: XQMX) -> X
         if spin not in (-1, 1):
             raise EncodingError(f"invalid spin {spin} at position {position}; expected -1 or +1")
 
-    is_binary = model.domain == XQMXDomain.BINARY
-    sample = (
-        XQMX.binary_sample(model.size, model.rows, model.cols)
-        if is_binary
-        else XQMX.spin_sample(model.size, model.rows, model.cols)
-    )
+    is_binary = model.domain == Domain.BINARY
+    sample = XqmxSample.default(model.domain, model.size, model.rows, model.cols)
 
     for var, node in job.mapping.items():
         spin = int(spin_vector[job.topology.index_of(node)])

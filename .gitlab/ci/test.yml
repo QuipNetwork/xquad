@@ -136,14 +136,6 @@
         # approximately never.
         - .cargo/config.toml
         - Makefile
-        # NOT redundant with `xqvm/**/*`. `xqvm/opcodes.yaml` is a SYMLINK
-        # to this file (xqvm/build.rs reads the symlinked path so the
-        # workspace build and the packaged-tarball build resolve
-        # identically). Editing the opcode table changes the target, and git
-        # reports that change at `conformance/opcodes.yaml` -- the symlink
-        # node itself never changes, so `xqvm/**/*` would not catch it. Do
-        # not delete this entry as noise.
-        - conformance/opcodes.yaml
         # wasm-only: `test:wasm` extends `.rust` and so runs `make deps`,
         # and wasm-pack is one of the pinned tools, so a bump there must
         # re-run this job. `test:substrate` has no `extends:` and sources
@@ -168,9 +160,6 @@
         # `cargo update` of the main workspace cannot move this build.
         - .cargo/config.toml
         - Makefile
-        # Symlink target -- see the wasm list above for why this entry is
-        # required and is not covered by `xqvm/**/*`.
-        - conformance/opcodes.yaml
         - xqvm/**/*
         - fixtures/pallet-xqvm/**/*
         - .gitlab-ci.yml
@@ -178,16 +167,18 @@
         - .gitlab/ci/test.yml
 
 # Merged into one job running `make -k test-rust` (test-unit-rs
-# test-integ-rs test-doc). Unlike the Rust lint merge, this wins
-# outright rather than trading wall clock for job-seconds: all three
-# targets build with `--profile ci-test` into the same target dir, so
-# the second and third invocations reuse the first's dependency build
-# instead of each starting a `cargo build` from scratch, which is what
-# the old three-job layout paid for on every pipeline.
+# test-integ-rs test-doc, then the conformance-coverage report). Unlike
+# the Rust lint merge, this wins outright rather than trading wall clock
+# for job-seconds: every target builds with `--profile ci-test` into the
+# same target dir, so each later invocation reuses the first's
+# dependency build instead of starting a `cargo build` from scratch,
+# which is what the old three-job layout paid for on every pipeline.
 test:rust:
     stage: test
     extends: .rust
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     # 25m: cold-cache room for a full `ci-test` profile build of the
     # workspace before any of the three test tiers start. See setup.yml's
     # "Job timeouts" section.
@@ -198,13 +189,15 @@ test:rust:
 test:python:
     stage: test
     extends: .python
-    needs: []
-    # 20m: cold-cache room for the uv resolve and the maturin build of
-    # xqffi's cdylib that `uv sync` performs before pytest starts. See
-    # setup.yml's "Job timeouts" section.
-    timeout: 20m
+    needs:
+        - job: dependency-gate
+          optional: true
+    # 25m: cold-cache room for the uv resolve and the maturin build of
+    # xqffi's cdylib that `uv sync` performs before pytest starts, then
+    # the example smoke run on top. See setup.yml's "Job timeouts" section.
+    timeout: 25m
     script:
-        - make -k test-py
+        - make -k test-python
 
 # Quip Network signing-layer tests. These are pure-Python SCALE / keystore /
 # submission-state-machine tests that need only the `quip_signer` wheel from the
@@ -221,7 +214,9 @@ test:python:
 test:quip:
     stage: test
     extends: .python
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     # 20m: the same cold-cache shape as test:python -- uv resolve plus the
     # maturin xqffi build -- with the `[quip]` extra synced on top. See
     # setup.yml's "Job timeouts" section.
@@ -244,7 +239,9 @@ test:quip:
 test:wasm:
     stage: test
     extends: .rust
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     # Path-gated -- see the "Path gating" section at the top of this file
     # for the clause-by-clause reasoning and the list's per-entry
     # justification. Every `needs:` edge into this job is `optional: true`.
@@ -279,7 +276,9 @@ test:wasm:
 # what actually governs when those downloads need to change.
 test:substrate:
     stage: test
-    needs: []
+    needs:
+        - job: dependency-gate
+          optional: true
     # Path-gated -- see the "Path gating" section at the top of this file,
     # including the note on why gating this job in particular makes its
     # runner-local cache colder. Every `needs:` edge into this job is

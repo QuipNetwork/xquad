@@ -28,8 +28,9 @@ from __future__ import annotations
 
 import pytest
 
+from xqffi.vm import StepLimitExceeded
 from xquad.program import Program
-from xquad.vm import DEFAULT_STEP_LIMIT, VM, VMBackend
+from xquad.vm import DEFAULT_STEP_LIMIT, VM
 
 #: Runs forever unless something bounds it.
 RUNAWAY = "TARGET .0\nNOP\nJUMP .0"
@@ -42,7 +43,7 @@ def test_the_default_is_the_documented_bound() -> None:
 
 
 def test_a_fresh_session_bounds_a_runaway_program() -> None:
-    with pytest.raises(Exception, match="StepLimit"):
+    with pytest.raises(StepLimitExceeded):
         Program.from_source(RUNAWAY).session().run()
 
 
@@ -57,15 +58,13 @@ def test_an_explicit_none_is_still_unlimited() -> None:
     assert session.run().stack == [3]
 
 
-@pytest.mark.parametrize("backend", [VMBackend.RUST, VMBackend.PYTHON])
-def test_a_fresh_vm_bounds_a_runaway_program(backend: VMBackend) -> None:
-    vm = VM(backend)
-    with pytest.raises(Exception, match="[Ss]tep [Ll]imit|StepLimit"):
+def test_a_fresh_vm_bounds_a_runaway_program() -> None:
+    vm = VM()
+    with pytest.raises(StepLimitExceeded):
         vm.run(RUNAWAY)
 
 
-@pytest.mark.parametrize("backend", [VMBackend.RUST, VMBackend.PYTHON])
-def test_reset_restores_the_bounded_default(backend: VMBackend) -> None:
+def test_reset_restores_the_bounded_default() -> None:
     """`reset()` must not silently hand the caller an unbounded VM.
 
     Resetting to `None` was the same defect one level down: a VM the caller
@@ -74,20 +73,19 @@ def test_reset_restores_the_bounded_default(backend: VMBackend) -> None:
     that default is pinned above; this asserts `reset()` lands on it rather
     than spending another ten million steps proving the same thing twice.
     """
-    vm = VM(backend)
+    vm = VM()
     vm.set_step_limit(None)
     vm.reset()
     assert vm._step_limit == DEFAULT_STEP_LIMIT
 
     # And a budget the caller did set is still enforced after a reset.
     vm.set_step_limit(2)
-    with pytest.raises(Exception, match="[Ss]tep [Ll]imit|StepLimit"):
+    with pytest.raises(StepLimitExceeded):
         vm.run(TRIVIAL)
 
 
-@pytest.mark.parametrize("backend", [VMBackend.RUST, VMBackend.PYTHON])
-def test_reset_then_run_still_executes_an_ordinary_program(backend: VMBackend) -> None:
-    vm = VM(backend)
+def test_reset_then_run_still_executes_an_ordinary_program() -> None:
+    vm = VM()
     vm.run(TRIVIAL)
     assert vm.stack() == [3]
     vm.reset()

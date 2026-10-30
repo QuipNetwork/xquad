@@ -69,35 +69,8 @@ may surface the next.
 
 ## Passing verification is not a runtime guarantee
 
-Verification is a set of static, per-basic-block checks. The stack-depth
-phase sees each block's *net* stack effect, so an instruction that pops
-more operands than it pushes has its pop requirement absorbed by earlier
-pushes. `idx_underflow.xqasm` pushes two values and then runs `IDXGRID`,
-which pops three:
-
-```asm
-PUSH 1
-PUSH 2
-IDXGRID
-HALT
-```
-
-```sh
-xquad vm check --text idx_underflow.xqasm
-```
-
-```
-ok: idx_underflow.xqasm (4 instructions)
-```
-
-`xquad vm run --text idx_underflow.xqasm` then underflows the value stack
-at the `IDXGRID`, byte `0x0004`:
-
-```
-Error: run failed: StackUnderflow { pos: 4 }
-```
-
-Nor does verification look at values. An allocator size, a grid extent, a
+Verification is a set of static checks over types, control flow and
+stack depth. It does not look at values. An allocator size, a grid extent, a
 loop bound and every arithmetic operand are runtime quantities, so a
 program that allocates a negative model, resizes past its own variable
 count, overflows an `i64` or exhausts its step or allocation budget

@@ -18,8 +18,8 @@ so they read out as one value rather than breaking apart under the
 problem's own couplings. See [D-Wave QPU](../solving/dwave-qpu.md).
 
 **Conformance vector.** A fixed test case -- program, calldata, and
-expected output -- that the conformance harness runs on both the Rust and
-Python VMs and checks for agreement. See [Conformance](../embedding/conformance.md).
+expected outcome, written from the specification -- that the vector suite
+runs on `xqvm` and checks against its recorded expectation. See [Conformance](../embedding/conformance.md).
 
 **Decoder.** One of the three programs a problem compiles to: takes a
 sample and extracts the answer in the problem's own terms (a tour, a
@@ -34,7 +34,7 @@ Models](../concepts/quadratic-models.md#three-domains).
 **Embedding (D-Wave).** Mapping a model's logical variables onto a QPU's
 physical qubit graph, called *minor embedding*: each logical variable
 becomes a chain of one or more physical qubits held together by chain
-strength (above). `SolverDWaveQPU` builds this automatically. See [D-Wave
+strength (above). `SolverDWave` builds this automatically. See [D-Wave
 QPU](../solving/dwave-qpu.md#what-embedding-means).
 
 **Embedding (Rust).** Using the `xqvm` and `xqasm` crates directly from a
@@ -92,9 +92,9 @@ variable count with the model it answers, but not its shape. See
 [Quadratic Models](../concepts/quadratic-models.md).
 
 **Solver.** Anything implementing the `xqsa` interface: takes a model,
-returns a sample and its reported energy. `xqsa` ships five: a CPU
-annealer, CUDA and Metal GPU annealers, the D-Wave QPU, and the Quip
-network. See [Solving Overview](../solving/).
+returns a sample and its reported energy. `xqsa` ships five backends: a
+CPU annealer, CUDA and Metal GPU annealers (both `SolverGPU`), the D-Wave
+QPU, and the Quip network. See [Solving Overview](../solving/).
 
 **Step limit.** The maximum number of instructions a VM run will execute
 before faulting with `StepLimitExceeded`, guarding against runaway
@@ -134,5 +134,5 @@ Architecture](../xqvm/machine-model.md).
 adapter per solving backend. See [Solving Overview](../solving/).
 
 **XQVM.** X-Quadratic Virtual Machine: the stack machine every XQuad
-problem compiles to, and the layer both the Rust and Python
-implementations implement. See [XQVM Reference](../xqvm/).
+problem compiles to, specified in `spec/xqvm/` and implemented by the
+`xqvm` crate. See [XQVM Reference](../xqvm/).

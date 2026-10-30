@@ -1,0 +1,13 @@
+; vecset_index_out_of_range: VECSET with an index one past the end raises IndexOutOfBounds.
+;
+; spec/xqvm/ISA.md's VECSET row bounds-checks 0 <= idx < len, and
+; spec/xqvm/SPEC.md's Faults table raises IndexOutOfBounds for an index
+; outside the vec it addresses.
+
+VECI r0
+PUSH 7
+VECPUSH r0       ; r0 = [7], length 1
+PUSH 1          ; index, one past the end
+PUSH 9           ; value
+VECSET r0
+HALT

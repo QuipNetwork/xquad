@@ -1,0 +1,23 @@
+; equality_sample_register: EQUALITY on a sample register raises TypeMismatch.
+;
+; spec/xqvm/SPEC.md's Faults table: a model-only opcode applied to a sample
+; register raises TypeMismatch. EQUALITY writes QUBO terms, so it is
+; model-only. Its charge is paid first and the default budget covers it, so
+; the type check decides.
+
+PUSH 4
+BSMX r0          ; a binary sample, not a model
+VECI r1
+PUSH 0
+VECPUSH r1
+PUSH 1
+VECPUSH r1       ; indices = [0, 1]
+VECI r2
+PUSH 1
+VECPUSH r2
+PUSH 1
+VECPUSH r2       ; coeffs = [1, 1]
+PUSH 1
+PUSH 1           ; target, penalty
+EQUALITY r0 r1 r2
+HALT

@@ -37,9 +37,9 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from xqsa.quip.access import AccessAllow
 from xqsa.quip.codec import decode_solution, ising_energy_milli
 from xqsa.quip.errors import QuipJobFailedError
-from xqvm_py.xqmx import XQMX, compute_energy
 
 if TYPE_CHECKING:
+    from xqffi.vm import XqmxModel, XqmxSample
     from xqsa.quip.codec import IsingJob
     from xqsa.quip.receipt import JobOrderReceipt
 
@@ -58,7 +58,7 @@ class Solution:
     order's first-ranked solver.
     """
 
-    sample: XQMX
+    sample: XqmxSample
     energy: int
     energy_milli: int
     solver: Any
@@ -85,7 +85,7 @@ class Pick(NamedTuple):
     num_solutions: int
 
 
-def decode_answers(receipt: JobOrderReceipt, job: IsingJob, model: XQMX, solver: Any = None) -> list[Solution]:
+def decode_answers(receipt: JobOrderReceipt, job: IsingJob, model: XqmxModel, solver: Any = None) -> list[Solution]:
     """Decode every stored answer to ``receipt``'s order, best first.
 
     Ordered by energy recomputed on ``model``; on a tie the leader's vectors
@@ -123,7 +123,7 @@ def no_answer_note(floors: str | None, access: Any = None) -> str:
 def pick_best(
     receipt: JobOrderReceipt,
     job: IsingJob,
-    model: XQMX,
+    model: XqmxModel,
     floors: Callable[[], str | None] | None = None,
     access: Any = None,
 ) -> Pick:
@@ -211,7 +211,7 @@ def _ranked(receipt: JobOrderReceipt) -> Mapping[str, Any] | None:
     return ranking[0] if ranking else None
 
 
-def _decode_all(job: IsingJob, model: XQMX, answers: Mapping[Any, Any], leader: Any) -> list[Solution]:
+def _decode_all(job: IsingJob, model: XqmxModel, answers: Mapping[Any, Any], leader: Any) -> list[Solution]:
     """Decode every vector in ``answers``, lowest recomputed energy first, the leader's first on ties."""
     decoded = [
         solution
@@ -221,7 +221,7 @@ def _decode_all(job: IsingJob, model: XQMX, answers: Mapping[Any, Any], leader: 
     return sorted(decoded, key=lambda solution: (solution.energy, not solution.leader))
 
 
-def _decode(job: IsingJob, model: XQMX, solver: Any, vectors: list[list[int]], *, leader: bool) -> list[Solution]:
+def _decode(job: IsingJob, model: XqmxModel, solver: Any, vectors: list[list[int]], *, leader: bool) -> list[Solution]:
     """Decode one solver's vectors, lowest recomputed energy first (storage order on ties)."""
     solutions = []
     for vector in vectors:
@@ -229,7 +229,7 @@ def _decode(job: IsingJob, model: XQMX, solver: Any, vectors: list[list[int]], *
         solutions.append(
             Solution(
                 sample=sample,
-                energy=int(compute_energy(model, sample)),
+                energy=model.energy(sample),
                 energy_milli=ising_energy_milli(job, vector),
                 solver=solver,
                 leader=leader,

@@ -26,7 +26,7 @@ use super::RegisterEffect;
 
 macro_rules! impl_instruction {
     (
-        $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal, $_delta:expr, {$($fname:ident: $ftype:ty),*}) ),*
+        $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal, $_stack:expr, {$($fname:ident: $ftype:ty),*}) ),*
         $(,)?
     ) => {
         /// A fully decoded XQVM instruction with its operands.
@@ -108,55 +108,67 @@ opcodes!(impl_instruction);
 // Stack effect
 // ---------------------------------------------------------------------------
 
-/// Net effect of a single instruction on the value stack depth.
+/// Effect of a single instruction on the value stack.
 ///
-/// Most instructions apply a fixed `Delta(d)` where `d = pushes − pops`.
-/// The sole exception is [`SCLR`](Instruction::Sclr), which resets depth to
-/// zero regardless of the current depth (`Reset`).
+/// Most instructions pop a fixed number of values and then push a fixed
+/// number (`Fixed`). The order matters: an instruction needs `pops` values
+/// on the stack before it runs, whatever it pushes afterwards, so `SWAP`
+/// (pop 2, push 2) needs two values even though it leaves the depth
+/// unchanged. The sole exception is [`SCLR`](Instruction::Sclr), which
+/// empties the stack whatever its depth (`Reset`).
 ///
-/// The sentinel value `i8::MIN` in the [`opcodes!`](crate::opcodes) table
-/// maps to `Reset`; all other values map to `Delta`.
+/// # Examples
+///
+/// ```rust
+/// use xqvm::StackEffect;
+///
+/// let swap = StackEffect::fixed(2, 2);
+/// assert_eq!(swap, StackEffect::Fixed { pops: 2, pushes: 2 });
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StackEffect {
-    /// Fixed net change to stack depth: positive means net push, negative means net pop.
-    Delta(i8),
+    /// Pop `pops` values, then push `pushes` values.
+    Fixed {
+        /// Values the instruction pops before it pushes anything.
+        pops: u8,
+        /// Values the instruction pushes after popping.
+        pushes: u8,
+    },
     /// Set depth to zero unconditionally (SCLR).
     Reset,
 }
 
 impl StackEffect {
-    /// Convert the raw `i8` delta stored in the opcode table to a [`StackEffect`].
+    /// Build a [`StackEffect::Fixed`] from its pop and push counts.
     ///
-    /// `i8::MIN` is the sentinel for [`StackEffect::Reset`] (SCLR).
-    pub fn from_delta(delta: i8) -> Self {
-        if delta == i8::MIN {
-            Self::Reset
-        } else {
-            Self::Delta(delta)
-        }
+    /// A `const fn` so the [`opcodes!`](crate::opcodes) table can spell
+    /// each row's effect in a `const` context.
+    pub const fn fixed(pops: u8, pushes: u8) -> Self {
+        Self::Fixed { pops, pushes }
     }
 }
 
 macro_rules! impl_stack_effect {
     (
-        $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal, $delta:expr, {$($f:tt)*}) ),*
+        $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal, $stack:expr, {$($f:tt)*}) ),*
         $(,)?
     ) => {
         impl Instruction {
-            /// Return the net stack effect of this instruction.
+            /// Return the stack effect of this instruction.
             ///
             /// # Examples
             ///
             /// ```rust
             /// use xqvm::{Instruction, StackEffect};
             ///
-            /// assert_eq!(Instruction::Add {}.stack_effect(), StackEffect::Delta(-1));
-            /// assert_eq!(Instruction::Push1 { val: [0] }.stack_effect(), StackEffect::Delta(1));
+            /// assert_eq!(Instruction::Add {}.stack_effect(), StackEffect::fixed(2, 1));
+            /// assert_eq!(Instruction::Push1 { val: [0] }.stack_effect(), StackEffect::fixed(0, 1));
+            /// assert_eq!(Instruction::Swap {}.stack_effect(), StackEffect::fixed(2, 2));
             /// assert_eq!(Instruction::Sclr {}.stack_effect(), StackEffect::Reset);
             /// ```
             pub fn stack_effect(&self) -> StackEffect {
                 match self {
-                    $( Self::$variant { .. } => StackEffect::from_delta($delta as i8), )*
+                    $( Self::$variant { .. } => $stack, )*
                 }
             }
         }
@@ -531,7 +543,7 @@ mod tests {
     // Each operand is zero-initialised: Register(0), 0i16, 0i64.
     macro_rules! all_instruction_opcode_pairs {
         (
-            $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal, $_delta:expr, {$($fname:ident: $ftype:ty),*}) ),*
+            $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal, $_stack:expr, {$($fname:ident: $ftype:ty),*}) ),*
             $(,)?
         ) => {
             [

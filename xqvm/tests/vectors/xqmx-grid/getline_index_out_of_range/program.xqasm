@@ -1,0 +1,18 @@
+; getline_index_out_of_range: a linear read at the declared extent must raise.
+;
+; A read with no range check would halt with 0 on the stack instead of
+; raising IndexOutOfBounds: a fault-versus-success difference on four
+; instructions, and the one case no vector reached.
+;
+; The index is exactly `size`, not a large number, so this pins the off-by-one
+; and not merely the rejection of something obviously wrong. Reading index 3
+; of the same model returns 0 and is correct, which is the distinction the
+; bound has to make: an absent in-range coefficient and a read past the end
+; are different outcomes rather than the same 0.
+
+PUSH 4
+BQMX r0
+
+PUSH 4           ; index == size
+GETLINE r0
+HALT

@@ -1,0 +1,12 @@
+; step_limit_zero: a budget of exactly zero executes nothing.
+;
+; The limit is exact, so zero is a real budget and not a sentinel for
+; "unbounded". No vector anywhere else uses 0, and a falsy-guard form
+; that reads it as unlimited leaves every other vector green.
+;
+; The first instruction is refused, so the run faults before the ADD
+; that would otherwise leave 3 on the stack.
+
+PUSH 1
+PUSH 2
+ADD

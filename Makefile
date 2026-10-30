@@ -1,9 +1,9 @@
 .PHONY: all xquad repl \
-        preflight preflight-rs preflight-py preflight-parity preflight-docs \
+        preflight preflight-rs preflight-py preflight-docs \
         preflight-policy preflight-release \
         lint-rust lint-python lint-policy check-atomic-spec check-commit-messages \
         check-release-notes \
-        test-rust test-python check-parity check-docs-handwritten \
+        test-rust test-python check-docs-handwritten \
         check-crate-publish check-python-dists check-release \
         check-version-sites list-version-sites set-version \
         check-branch-containment check-main-direct-push \
@@ -12,11 +12,9 @@
         lint lint-clippy lint-doc lint-deny-rs lint-deny-fixture lint-py check-uv-lock \
         fmt fmt-rs fmt-toml fmt-check fmt-check-rs fmt-check-toml fmt-py fmt-check-py \
         test test-unit-rs test-integ-rs test-doc test-miri test-py test-wasm test-substrate-fixture \
-        test-quip test-quip-sign test-quip-e2e check-xqffi-fresh \
+        test-quip test-quip-sign test-quip-e2e check-xqffi-fresh check-stubs \
         test-cuda test-qpu test-metal \
-        opcode-parity opcode-parity-rs opcode-parity-py \
-        metering-parity \
-        conformance conformance-rs conformance-py conformance-coverage \
+        conformance conformance-coverage \
         example-smoke \
         build-docs regen-docs regen-docs-opcodes regen-docs-examples \
         check-docs-generated check-docs-opcodes check-docs-examples \
@@ -117,16 +115,17 @@ check-atomic-spec:
 check-commit-messages:
 	bash scripts/check-commit-messages.sh "$(BASE)" "$(HEAD)"
 
-test-rust: test-unit-rs test-integ-rs test-doc
-
-test-python: test-py
-
 # conformance-coverage runs last and always passes: it prints the
 # per-opcode coverage report into the CI log so the holes are visible on
 # every pipeline rather than only when someone runs the target by hand.
-# The check that can *fail* on coverage is the ratchet in
-# conformance/tests/coverage.rs, which conformance-rs already runs.
-check-parity: opcode-parity conformance example-smoke metering-parity conformance-coverage
+# The check that can *fail* on coverage is the ratchet in the xqvm vector
+# suite (xqvm/tests/vector_suite/coverage.rs), which test-integ-rs runs
+# along with every vector.
+test-rust: test-unit-rs test-integ-rs test-doc conformance-coverage
+
+# example-smoke runs every example end to end on the VM through the xquad
+# bindings, so it rides the Python job, which has the synced venv.
+test-python: test-py example-smoke
 
 # All three are alpine, handwritten-docs checks -- no uv, no generation, no
 # mdbook. Kept apart from check-docs-generated (which needs uv) so the two
@@ -205,10 +204,9 @@ set-version:
 # scripts/validate-crate-publish.sh, deleted in this change.
 #
 # --workspace covers exactly xqvm and xqasm. The workspace has
-# five members (Cargo.toml `members`); the other three carry
+# four members (Cargo.toml `members`); the other two carry
 # publish = false and are skipped: xqffi (pyo3 cdylib, shipped as a
-# PyPI wheel), conformance (cross-implementation test harness) and
-# fixtures/xqvm-wasm (no_std build fixture). Enumerated in full because
+# PyPI wheel) and fixtures/xqvm-wasm (no_std build fixture). Enumerated in full because
 # this comment is the justification for using --workspace here at all,
 # and a reader auditing it against `members` should not find a member
 # it does not account for.
@@ -250,7 +248,7 @@ check-crate-publish:
 
 # Needs maturin, twine and uv on PATH -- the same kind of prerequisite
 # note the hardware tiers below give for a CUDA device, a D-Wave QPU
-# token or a Metal-capable Mac. Builds the five distributions, runs
+# token or a Metal-capable Mac. Builds the four distributions, runs
 # twine check, and smoke-installs each into a throwaway venv via
 # scripts/smoke-wheels.sh (wired into python-dists.sh's verify phase).
 check-python-dists:
@@ -269,24 +267,24 @@ check-release: check-version-sites check-crate-publish check-python-dists
 # aggregates above so the two structures stay in sync by construction
 # rather than by discipline.
 #
-# preflight-rs is pure-Rust (no uv / maturin prereqs); preflight-py and
-# preflight-parity pull the deps-py sync (which rebuilds xqffi) via their
-# leaf prereqs; preflight-docs needs uv for docs generation but not the
-# xqffi build. test-wasm, test-substrate-fixture and
-# lint-deny-fixture are blocking CI gates with no phase aggregate of their
-# own (each is a single dedicated CI job), so preflight-rs lists them as
-# leaves alongside lint-rust and test-rust -- omitting the first two here
-# was a prior gap, not a deliberate exclusion. All three CI jobs are
-# path-gated (the "Path gating" sections of .gitlab/ci/test.yml and
-# .gitlab/ci/verify.yml) while these targets are not: a local preflight
-# runs them unconditionally, so it still covers the case where the MR
+# preflight-rs is pure-Rust (no uv / maturin prereqs); preflight-py pulls
+# the deps-py sync (which rebuilds xqffi) via its leaf prereqs;
+# preflight-docs needs uv for docs generation but not the xqffi build.
+# test-wasm, test-substrate-fixture and lint-deny-fixture are blocking CI
+# gates with no phase aggregate of their own (each is a single dedicated CI
+# job), so preflight-rs lists them as leaves alongside lint-rust and
+# test-rust -- omitting the first two here was a prior gap, not a deliberate
+# exclusion. All three CI jobs are path-gated (the "Path gating" sections
+# of .gitlab/ci/test.yml and .gitlab/ci/verify.yml) while these targets
+# are not: a local preflight runs them unconditionally, so it still
+# covers the case where the MR
 # pipeline decided the diff could not reach them. Still excluded on
 # purpose: test-miri (not a CI gate, needs nightly; lives under Optional
 # Checks in the MR template), the hardware / SolverQuip tiers
 # (test-quip*, test-cuda, test-qpu, test-metal), which need a real
 # device, token or devnet and are driven by hand or a dedicated runner,
 # and preflight-release (below), which needs maturin/twine/uv and builds
-# five distributions into a throwaway venv on top of a full-verify
+# four distributions into a throwaway venv on top of a full-verify
 # workspace packaging dry-run.
 preflight-rs: lint-rust lint-deny-rs lint-deny-fixture test-rust test-wasm test-substrate-fixture
 
@@ -313,9 +311,12 @@ preflight-rs: lint-rust lint-deny-rs lint-deny-fixture test-rust test-wasm test-
 # environment as a side effect is a bad trade. It stays reachable only
 # as its own leaf target (make check-xqffi-fresh) and through its own
 # CI job (verify:xqffi).
-preflight-py: fmt-check-toml check-uv-lock lint-python test-py
-
-preflight-parity: check-parity
+#
+# check-stubs is here although CI runs it in that same verify:xqffi job:
+# it needs only the plain deps-py sync test-python already performs, so
+# it leaves .venv/ as a local preflight expects to find it. Mypy runs in
+# an overlay environment `uv run --with` builds outside .venv/.
+preflight-py: fmt-check-toml check-uv-lock lint-python test-python check-stubs
 
 preflight-docs: check-docs-generated check-docs-handwritten
 
@@ -327,7 +328,7 @@ preflight-docs: check-docs-generated check-docs-handwritten
 preflight-policy: lint-policy
 
 # Stays OUT of the plain preflight aggregate below, on purpose, matching
-# test-miri and the hardware tiers: check-release builds five
+# test-miri and the hardware tiers: check-release builds four
 # distributions and installs them into a throwaway venv, on top of the
 # workspace-wide cargo publish dry-run, so hanging it off preflight-rs
 # or the default `make preflight` would be an unwelcome surprise for a
@@ -335,16 +336,16 @@ preflight-policy: lint-policy
 # before a release MR.
 preflight-release: check-release
 
-preflight: preflight-rs preflight-py preflight-parity preflight-docs preflight-policy
+preflight: preflight-rs preflight-py preflight-docs preflight-policy
 
 # -- Local setup ------------------------------------------------------------
 
 # Bootstrap everything a contributor needs to use the XQuad toolchain
 # locally:
-#   - Python workspace (xqvm_py, xqcp, xqsa, xqffi) synced into .venv/
-#     with the maturin-built xqffi extension; each package's editable
-#     install puts the repo root on sys.path, so any script in the
-#     repo can `import xqcp` etc.
+#   - Python workspace (xqcp, xqsa, xqffi, xquad) synced into .venv/
+#     with the maturin-built xqffi wheel; the xqcp, xqsa and xquad
+#     editable installs put the repo root on sys.path, so any script in
+#     the repo can `import xqcp` etc.
 #   - the `xquad` command, installed into .venv/bin/ by the same sync
 #     from the umbrella package's console script, so `uv run xquad vm
 #     run …` (or `xquad` with the venv active) works.
@@ -411,13 +412,17 @@ deps-wasm:
 	rustup target add wasm32-unknown-unknown
 	rustup target add wasm32v1-none
 
-# Sync the Python workspace (xqffi, xqvm_py, xqcp, xqsa) into .venv/
+# Sync the Python workspace (xqffi, xqcp, xqsa, xquad) into .venv/
 # via uv. Assumes `uv` is already on $PATH; CI installs it in its
 # before_script.
 #
 # The sync builds xqffi's cdylib through maturin, and rebuilds it
 # whenever its Rust inputs change: xqffi/pyproject.toml lists them as uv
-# `cache-keys`. No separate `maturin develop` step is needed.
+# `cache-keys`. No separate `maturin develop` step is needed. xqffi
+# installs as a regular wheel (`editable = false` in the members'
+# `[tool.uv.sources]`): an editable install leaves the extension in
+# xqffi/python/xqffi/, outside anything uv tracks, so a `git clean`
+# with unchanged inputs left uv reusing an install with no extension.
 #
 # That build runs `cargo --locked --profile dev` (the root
 # pyproject.toml's `config-settings-package`, which explains the
@@ -429,7 +434,7 @@ deps-wasm:
 # re-resolved into a different dependency set. Regenerate with
 # `cargo check` and commit the result.
 #
-# Each package's pyproject.toml sets `dev-mode-dirs = [".."]`, so its
+# xqcp, xqsa and xquad each set `dev-mode-dirs = [".."]`, so their
 # editable install puts the repo root on sys.path rather than just
 # the package directory (a flat-layout quirk: without it, only
 # /repo/xqcp would be importable, not /repo). That's what lets
@@ -465,6 +470,12 @@ RUFF_VERSION := 0.15.16
 # for why the docs generators run this way). Same rationale and same
 # by-hand-with-uv.lock upkeep as RUFF_VERSION above.
 PYYAML_VERSION := 6.0.3
+
+# Pinned mypy version for check-stubs, which runs mypy's stubtest. Not a
+# dev-group dependency in pyproject.toml, so not in uv.lock either: like
+# ruff above it is fetched on demand at this pin, and nothing else has to
+# be kept in step with it.
+MYPY_VERSION := 2.4.0
 
 # Pinned Vale version for check-docs-prose. The single source of truth for
 # it: the `vale` fragment in .gitlab/ci/setup.yml greps this line out of the
@@ -507,7 +518,7 @@ fmt-toml:
 	taplo fmt
 
 fmt-py:
-	uvx ruff@$(RUFF_VERSION) format xqvm_py xqcp xqsa xqffi xquad examples scripts
+	uvx ruff@$(RUFF_VERSION) format xqcp xqsa xqffi xquad examples scripts
 
 fmt-check: fmt-check-rs fmt-check-toml fmt-check-py
 
@@ -518,12 +529,15 @@ fmt-check-toml:
 	taplo fmt --check
 
 fmt-check-py:
-	uvx ruff@$(RUFF_VERSION) format --check xqvm_py xqcp xqsa xqffi xquad examples scripts
+	uvx ruff@$(RUFF_VERSION) format --check xqcp xqsa xqffi xquad examples scripts
 
 # -- Lints ------------------------------------------------------------------
 
 lint: lint-clippy lint-doc lint-deny-rs lint-py fmt-check
 
+# Also the opcode-table check: compiling xqvm runs build.rs, and
+# parity.rs asserts the table it generates from xqvm/opcodes.yaml against
+# the opcodes! x-macro in a const context.
 lint-clippy:
 	cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
@@ -549,7 +563,7 @@ lint-deny-fixture:
 	cargo deny --locked --manifest-path fixtures/pallet-xqvm/Cargo.toml check --config fixtures/pallet-xqvm/deny.toml
 
 lint-py:
-	uvx ruff@$(RUFF_VERSION) check xqvm_py xqcp xqsa xqffi xquad examples scripts
+	uvx ruff@$(RUFF_VERSION) check xqcp xqsa xqffi xquad examples scripts
 
 # `uv lock --check` is read-only -- it is an alias of `uv sync --locked`
 # with no environment sync at all, and fails when uv.lock is stale
@@ -588,13 +602,8 @@ test: test-unit-rs test-integ-rs test-doc test-py
 test-unit-rs:
 	cargo nextest run --locked --workspace --all-features --lib --cargo-profile ci-test
 
-# xquad-conformance is excluded here because its `python` feature gates
-# a test file that shells out to `uv run --no-sync python -m xqvm_py`, and the
-# test:rust CI job does not install uv. The conformance suite has its
-# own dedicated job (verify:parity) that covers both runtimes with
-# the proper before_script setup.
 test-integ-rs:
-	cargo nextest run --locked --workspace --exclude xquad-conformance --all-features --test '*' --cargo-profile ci-test
+	cargo nextest run --locked --workspace --all-features --test '*' --cargo-profile ci-test
 
 # nextest cannot execute rustdoc doctests, so they are driven by the
 # built-in test harness on a dedicated target.
@@ -613,8 +622,10 @@ test-miri: deps-miri
 # tests (quip), which need the `[quip]` extra and run in the dedicated
 # `test:quip` job (.gitlab/ci/test.yml). This job runs everywhere, so it must
 # deselect them or they would run unconfigured in CI.
+# The real quip-cpu-sa binary tests (quip_cpu) are deselected too; run them on
+# their own with `-m quip_cpu` and XQSA_QUIP_CPU_SA set.
 test-py: deps-py
-	uv run --no-sync pytest xqvm_py/tests xqcp/tests xqsa/tests xquad/tests scripts/tests -m "not cuda and not qpu and not metal and not quip"
+	uv run --no-sync pytest xqcp/tests xqsa/tests xquad/tests scripts/tests -m "not cuda and not qpu and not metal and not quip and not quip_cpu"
 
 # Run the WASM no_std correctness tests (fixtures/xqvm-wasm).
 # Two gates in sequence:
@@ -659,9 +670,8 @@ test-quip: test-quip-sign test-quip-e2e
 #      xqffi when its Rust inputs changed. setup.yml names test:quip the
 #      SOLE writer of the quip extra's cache contents, and it holds that
 #      role only because this call performs its own sync (it pulls in the
-#      quip_signer wheel neither test:python nor verify:parity install). A
-#      `deps-py` prerequisite would sync without the extra and drop that
-#      role.
+#      quip_signer wheel test:python does not install). A `deps-py`
+#      prerequisite would sync without the extra and drop that role.
 #   2. `uv run --no-sync pytest ...` -- runs in the environment step 1
 #      wrote, with no second resolve.
 test-quip-sign:
@@ -781,52 +791,52 @@ check-xqffi-fresh:
 		assert all(s is not None for s in syms), 'xqffi symbol failed to resolve'; \
 		print(f'xqffi fresh: {len(syms)} symbols resolved')"
 
+# Asserts the hand-written type stubs under xqffi/python/xqffi/ describe
+# the extension deps-py just built (QUI-1506). Two checks, because neither
+# covers the other:
+#
+#   1. mypy's stubtest imports xqffi and compares every name, signature,
+#      parameter name and default in the stubs against the runtime
+#      module. A method added to xqffi/src/vm.rs and not to vm.pyi, or an
+#      argument renamed in one and not the other, fails here.
+#   2. scripts/check-fault-docstrings.py compares the docstring of each
+#      fault class in vm.pyi with the one xqffi/src/fault.rs gives it.
+#      stubtest does not read docstrings at all, so the stub's copy of
+#      fault.rs would otherwise drift silently.
+#
+# `uv run --no-sync --with mypy==...` layers mypy over the synced .venv/
+# in a separate, cached environment: stubtest needs the project's xqffi
+# importable, which `uvx` (isolated from the project) cannot give it, and
+# `--no-sync` keeps uv from swapping the build deps-py just made for a
+# cached wheel. CI runs this in verify:xqffi (.gitlab/ci/verify.yml).
+check-stubs: deps-py
+	uv run --no-sync --with mypy==$(MYPY_VERSION) python -m mypy.stubtest xqffi
+	uv run --no-sync python scripts/check-fault-docstrings.py
+
 # -- Conformance ------------------------------------------------------------
 
-# Cross-implementation parity (opcode table, spec conformance vectors).
-# `cargo build -p xqvm` exercises the compile-time YAML ↔ opcodes! macro
-# check via xqvm/build.rs; the Python script covers the xqvm_py side.
-opcode-parity: opcode-parity-rs opcode-parity-py
-
-opcode-parity-rs:
-	cargo build --locked -p xqvm
-
-# `deps-py` + `--no-sync` for the same reason as `test-py` and
-# `example-smoke`: deps-py syncs the workspace once, and `--no-sync` keeps
-# each later call from re-resolving it.
-opcode-parity-py: deps-py
-	uv run --no-sync python scripts/check-opcode-parity.py
-
-# Cross-checks the step-cost constants across xqvm/src/metering.rs,
-# xqvm_py/metering.py, and spec/xqvm/METERING.md -- the same "generated
-# code vs. handwritten mirror vs. spec table" shape as opcode-parity-py,
-# for the metering constants instead of the opcode table.
-metering-parity: deps-py
-	uv run --no-sync python scripts/check-metering-parity.py
-
-conformance: conformance-rs conformance-py
-
-conformance-rs:
-	cargo test --locked -p xquad-conformance --no-default-features --features rust
-
-# The Python side (run by CI's verify:parity job) shells out to
-# `uv run --no-sync python -m xqvm_py run` from within the Rust test; the xqffi
-# extension (maturin-built) and xqvm_py (editable) must both be
-# installed in .venv/ first.
-conformance-py: deps-py
-	cargo test --locked -p xquad-conformance --no-default-features --features python
+# The specification vectors under xqvm/tests/vectors/, run on the VM. The
+# same test target runs under test-integ-rs; this is the short spelling
+# for running only the vectors.
+conformance:
+	cargo test --locked -p xqvm --test vectors
 
 # Per-opcode vector coverage: which of the 93 opcodes no vector covers.
-# Reports only. The ratchet that stops coverage regressing is a test
-# (conformance/tests/coverage.rs) and so already runs under
-# conformance-rs; this target is for reading the list.
+# Reports only. The ratchet that stops coverage regressing is a test in
+# the same target and so already runs under `conformance`; this target is
+# for reading the list.
+#
+# Spelled like test-integ-rs (`--workspace --all-features`, the `ci-test`
+# profile) so that under test-rust it reuses that build instead of
+# compiling the workspace again. `-p xqvm` alone would unify features
+# differently and rebuild xqvm and xqasm.
 conformance-coverage:
-	cargo run --locked -q -p xquad-conformance -- --coverage
+	cargo test --locked -q --workspace --all-features --profile ci-test --test vectors -- --ignored --exact coverage::report --nocapture
 
 # -- Dev ergonomics ---------------------------------------------------------
 
 # Open a Python REPL with the xqffi extension fresh and the
-# workspace packages (xqvm_py, xqcp, xqsa) importable. Depends on
+# workspace packages (xqcp, xqsa, xquad) importable. Depends on
 # deps-py so the .so and per-package .pth files stay current;
 # `uv run --no-sync` skips the implicit sync that would otherwise
 # revert maturin's fresh extension build to a cached wheel.
@@ -835,11 +845,11 @@ repl: deps-py
 
 # -- Examples ---------------------------------------------------------------
 
-# Run each top-level example on both the Python and the Rust XQVM
-# interpreters with the canonical seed and check each finds a valid
-# solution (valid == 1). The check is invariant-based rather than a
-# golden-file diff: simulated annealing is sensitive to BQM construction
-# order, so the two paths can land on different but equally valid optima.
+# Run each top-level example on the XQVM with the canonical seed and
+# check each finds a valid solution (valid == 1). The check is
+# invariant-based rather than a golden-file diff: simulated annealing is
+# sensitive to BQM construction order, so a change there can land on a
+# different but equally valid optimum.
 example-smoke: deps-py
 	uv run --no-sync python scripts/example-smoke.py
 
@@ -864,13 +874,9 @@ build-docs:
 # skips project/workspace discovery; `--isolated` on top of that is what
 # actually guarantees an ephemeral, PyYAML-only environment rather than
 # reusing whatever venv uv finds by walking up parent directories.
-#
-# scripts/check-opcode-parity.py is NOT run through this: it lazily imports
-# xqvm_py.opcodes (see the opcode-parity-py target below), so it genuinely
-# needs the full workspace synced.
 DOCSGEN := uv run --no-project --isolated --with pyyaml==$(PYYAML_VERSION) python
 
-# Regenerate generated documentation from conformance/opcodes.yaml and
+# Regenerate generated documentation from xqvm/opcodes.yaml and
 # examples/manifest.yaml.
 regen-docs: regen-docs-opcodes regen-docs-examples
 

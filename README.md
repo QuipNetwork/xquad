@@ -10,7 +10,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 XQuad is a hardware-agnostic toolchain for expressing and running quadratic
 optimization problems (QUBO / Ising / integer) across quantum annealers and
-classical solvers. It ships as two Rust crates plus five Python distributions
+classical solvers. It ships as two Rust crates plus four Python distributions
 built around a single virtual-machine specification.
 
 Think of it as **LLVM for quadratic models** -- a common intermediate
@@ -18,9 +18,9 @@ representation that lets you write a problem once and retarget it to any
 supported backend.
 
 - **Spec-first.** Every behaviour is nailed down in [`spec/xqvm/SPEC.md`](spec/xqvm/SPEC.md)
-  and cross-implementation parity is mechanically enforced: every committed
-  conformance vector runs on both the Rust production VM (`xqvm`) and the
-  Python reference VM (`xqvm_py`) in CI; disagreement fails the build.
+  and the VM is mechanically held to it: every committed conformance vector
+  runs `xqvm` in CI against the outcome the spec prescribes, and a mismatch
+  fails the build.
 - **Embeddable.** The Rust core supports `no_std + alloc`, so the same VM
   runs inside WASM runtimes, Substrate pallets, and native binaries.
 - **Interactive.** The Python umbrella (`xquad`) is REPL and Jupyter-friendly:
@@ -58,9 +58,9 @@ The base install includes CPU simulated annealing only. To use GPU or quantum ha
 
 | Solver | Install | Prerequisite |
 |--------|---------|-------------|
-| NVIDIA CUDA GPU (`cuda-gpu`) | `pip install 'xquad[cuda]'` | CUDA 12.x driver + NVIDIA GPU |
-| Apple Metal GPU (`metal-gpu`) | `pip install 'xquad[metal]'` | Apple Silicon Mac with a Metal device |
-| D-Wave Advantage QPU (`dwave-qpu`) | `pip install 'xquad[dwave]'` | D-Wave Leap account + API token |
+| NVIDIA CUDA GPU (`cuda`) | `pip install 'xquad[cuda]'` | CUDA 12.x driver + NVIDIA GPU |
+| Apple Metal GPU (`metal`) | `pip install 'xquad[metal]'` | Apple Silicon Mac with a Metal device |
+| D-Wave Advantage QPU (`dwave`) | `pip install 'xquad[dwave]'` | D-Wave Leap account + API token |
 | Quip Network solver (`quip`) | `pip install 'xquad[quip]'` | `QUIP_RPC_URL` + a configured signer |
 
 Extras are composable: `pip install 'xquad[cuda,dwave]'`. See [`xqsa/README.md`](xqsa/README.md#install) for driver prerequisites and per-solver quick-starts.
@@ -78,12 +78,11 @@ Two Rust crates on **crates.io**:
 | [`xqvm`](xqvm/) | X-Quadratic Virtual Machine interpreter, bytecode codec, opcode table (`no_std + alloc`) |
 | [`xqasm`](xqasm/) | `.xqasm` text-format assembler |
 
-Five Python distributions on **PyPI**:
+Four Python distributions on **PyPI**:
 
 | Package | Description |
 |---|---|
 | [`xqffi`](xqffi/) | PyO3 FFI bindings for `xqvm` + `xqasm` (`xqffi.vm`, `xqffi.asm`, `xqffi.verifier`) |
-| [`xqvm_py`](xqvm_py/) | Pure-Python reference VM (conformance oracle) |
 | [`xqcp`](xqcp/) | Constraint-programming DSL that compiles to `.xqasm` |
 | [`xqsa`](xqsa/) | Solver adapters -- CPU/GPU annealers, D-Wave QPU, Quip network |
 | [`xquad`](xquad/) | Umbrella meta-package with interactive `Program` / `Session` / `RunResult` API, and the `xquad` CLI (`xquad vm asm` / `dis` / `run` / `check`) |
@@ -159,21 +158,20 @@ v.run(bytecode)
 assert v.outputs() == [42]
 ```
 
-The `xquad.vm.VM` class offers a middle tier -- a unified wrapper with
-backend dispatch (`VMBackend.RUST` / `VMBackend.PYTHON`) that accepts
-`.xqasm` source and normalises types across the two interpreters.
+The `xquad.vm.VM` class offers a middle tier -- a wrapper around the
+Rust VM that accepts `.xqasm` source, keeps calldata, output slots and
+limits across runs, and hands back the `xqffi` types unchanged.
 
 ### End-to-end worked example
 
 [`examples/tsp/`](examples/tsp/) shows a full Travelling Salesman Problem
-driven from the `xqcp` DSL through the VM and `xqsa` solver, runnable on
-either the Python reference VM or the Rust VM:
+driven from the `xqcp` DSL through the VM and `xqsa` solver:
 
 ```sh
 uv run python examples/tsp/runner.py --seed 42
-uv run python examples/maxcut/runner.py --seed 42 --interpreter rust
+uv run python examples/maxcut/runner.py --seed 42
 
-# Run every example on both interpreters, check each finds a valid solution:
+# Run every example and check each finds a valid solution:
 make example-smoke
 ```
 
@@ -185,18 +183,17 @@ hold typed values -- integers, integer vectors, QUBO/Ising models
 drives `RANGE`/`ITER` iteration.
 
 The opcode table is declared once in `xqvm/src/bytecode/types/table.rs` via
-the `opcodes!` x-macro; `conformance/opcodes.yaml` is the machine-readable
-mirror that all three representations (YAML, Rust macro, `xqvm_py.opcodes`)
-are checked against at build time and in CI
-(`scripts/check-opcode-parity.py`).
+the `opcodes!` x-macro; `xqvm/opcodes.yaml` is the machine-readable
+mirror, compared with the Rust macro at compile time
+(`xqvm/src/bytecode/types/parity.rs`), so the two cannot drift.
 
 The binary format (`.xqb`) opens with a fixed 15-byte XQBC header --
 magic, version, calldata/output-slot counts, code length, and a CRC-32
 checksum of the payload -- followed by the instruction stream: an
 opcode byte followed by its operands in big-endian byte order.
 
-See [`conformance/opcodes.md`](conformance/opcodes.md) for
-instruction-by-instruction semantics and
+See [`docs/book/src/xqvm/opcodes.md`](docs/book/src/xqvm/opcodes.md) for
+the opcode reference and
 [`spec/xqvm/SPEC.md`](spec/xqvm/SPEC.md) for the normative spec.
 
 ## Development
@@ -214,10 +211,10 @@ make deps                                                          # dev tools
 make xquad
 ```
 
-This syncs the Python workspace (`xqvm_py`, `xqcp`, `xqsa`, `xqffi`,
-`xquad`) into `.venv/`, builds the `xqffi` pyo3 extension via maturin,
+This syncs the Python workspace (`xqcp`, `xqsa`, `xqffi`, `xquad`) into
+`.venv/`, builds the `xqffi` pyo3 extension via maturin,
 puts the repo root on `sys.path` so scripts anywhere in the repo can
-`import xqcp` / `xqsa` / `xqvm_py` / `xqffi` / `xquad` naturally, and
+`import xqcp` / `xqsa` / `xqffi` / `xquad` naturally, and
 installs the `xquad` command into `.venv/bin/`, run with `uv run xquad`.
 
 Open a REPL with everything ready:
@@ -229,8 +226,8 @@ make repl
 ### CI-equivalent locally
 
 ```sh
-make preflight    # what CI enforces, split into preflight-rs / -py / -parity / -docs / -policy
-make conformance  # cross-impl parity suite (Rust + Python)
+make preflight    # what CI enforces, split into preflight-rs / -py / -docs / -policy
+make conformance  # the specification vectors under xqvm/tests/vectors/
 ```
 
 ### Contributing

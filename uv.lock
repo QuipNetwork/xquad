@@ -13,7 +13,6 @@ members = [
     "xqffi",
     "xqsa",
     "xquad",
-    "xqvm-py",
 ]
 
 [manifest.dependency-groups]
@@ -1575,26 +1574,26 @@ wheels = [
 
 [[package]]
 name = "xqcp"
-version = "0.4.6.dev0"
+version = "0.5.0"
 source = { editable = "xqcp" }
 dependencies = [
-    { name = "xqvm-py" },
+    { name = "xqffi" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "xqvm-py", editable = "xqvm_py" }]
+requires-dist = [{ name = "xqffi", directory = "xqffi" }]
 
 [[package]]
 name = "xqffi"
-source = { editable = "xqffi" }
+source = { directory = "xqffi" }
 
 [[package]]
 name = "xqsa"
-version = "0.4.6.dev0"
+version = "0.5.0"
 source = { editable = "xqsa" }
 dependencies = [
     { name = "dwave-samplers" },
-    { name = "xqvm-py" },
+    { name = "xqffi" },
 ]
 
 [package.optional-dependencies]
@@ -1626,20 +1625,19 @@ requires-dist = [
     { name = "pyobjc-framework-metal", marker = "sys_platform == 'darwin' and extra == 'metal'", specifier = ">=11.0" },
     { name = "quip-signer", marker = "extra == 'quip'", specifier = ">=0.3.0,<0.4" },
     { name = "substrate-interface", marker = "extra == 'quip'", specifier = ">=1.7.4,<2" },
-    { name = "xqvm-py", editable = "xqvm_py" },
+    { name = "xqffi", directory = "xqffi" },
 ]
 provides-extras = ["cuda", "dwave", "metal", "quip"]
 
 [[package]]
 name = "xquad"
-version = "0.4.6.dev0"
+version = "0.5.0"
 source = { editable = "xquad" }
 dependencies = [
     { name = "click" },
     { name = "xqcp" },
     { name = "xqffi" },
     { name = "xqsa" },
-    { name = "xqvm-py" },
 ]
 
 [package.optional-dependencies]
@@ -1660,25 +1658,14 @@ quip = [
 requires-dist = [
     { name = "click", specifier = ">=8.2" },
     { name = "xqcp", editable = "xqcp" },
-    { name = "xqffi", editable = "xqffi" },
+    { name = "xqffi", directory = "xqffi" },
     { name = "xqsa", editable = "xqsa" },
     { name = "xqsa", extras = ["cuda"], marker = "extra == 'cuda'", editable = "xqsa" },
     { name = "xqsa", extras = ["dwave"], marker = "extra == 'dwave'", editable = "xqsa" },
     { name = "xqsa", extras = ["metal"], marker = "extra == 'metal'", editable = "xqsa" },
     { name = "xqsa", extras = ["quip"], marker = "extra == 'quip'", editable = "xqsa" },
-    { name = "xqvm-py", editable = "xqvm_py" },
 ]
 provides-extras = ["cuda", "dwave", "metal", "quip"]
-
-[[package]]
-name = "xqvm-py"
-source = { editable = "xqvm_py" }
-dependencies = [
-    { name = "xqffi" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "xqffi", editable = "xqffi" }]
 
 [[package]]
 name = "xxhash"

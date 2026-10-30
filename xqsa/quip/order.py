@@ -61,11 +61,11 @@ from xqsa.quip.resolution import (
 from xqsa.quip.solution import Solution, decode_answers, pick_best
 
 if TYPE_CHECKING:
+    from xqffi.vm import XqmxModel
     from xqsa.quip.chain import ChainLimits
     from xqsa.quip.client import SolverQuip
     from xqsa.quip.codec import IsingJob
     from xqsa.quip.quote import JobQuote
-    from xqvm_py.xqmx import XQMX
 
 logger = logging.getLogger("xqsa.quip")
 
@@ -573,7 +573,7 @@ class JobOrder:
     """
 
     def __init__(
-        self, client: SolverQuip, model: XQMX, options: _OrderOptions, job: IsingJob, genesis_hash: str
+        self, client: SolverQuip, model: XqmxModel, options: _OrderOptions, job: IsingJob, genesis_hash: str
     ) -> None:
         self._client = client
         self._model = model
@@ -1117,7 +1117,7 @@ class JobOrder:
         problem = [
             (
                 "Model",
-                f"{count(model.size, 'variable')}, {count(len(model.quadratic), 'coupling')}, "
+                f"{count(model.size, 'variable')}, {count(len(model.quadratic_items()), 'coupling')}, "
                 f"{model.domain.name.lower()}",
             ),
             ("Placed", placed),

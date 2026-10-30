@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from xqffi.vm import XqmxModel, XqmxSample
+from xqffi.vm import StepLimitExceeded, XqmxModel, XqmxSample
 from xquad.program import Program, RunResult
 
 ADD_CALLDATA_SRC = """
@@ -108,7 +108,7 @@ class TestSession:
         s = p.session(output_slots=1)
         s.set_calldata([1, 2])
         s.set_step_limit(3)
-        with pytest.raises(RuntimeError, match="StepLimitExceeded"):
+        with pytest.raises(StepLimitExceeded):
             s.run()
         s.set_step_limit(None)
         assert dict(s.run().outputs) == {0: 3}
@@ -119,7 +119,7 @@ class TestSession:
         s = p.session(output_slots=1)
         s.set_calldata([1, 2])
         s.set_step_limit(0)
-        with pytest.raises(RuntimeError, match="StepLimitExceeded"):
+        with pytest.raises(StepLimitExceeded):
             s.run()
 
     def test_stack_and_steps_exposed(self):
@@ -134,7 +134,7 @@ class TestSession:
         src = "PUSH 0\nINPUT r0\nHALT\n"
         p = Program.from_source(src)
         s = p.session(output_slots=0)
-        m = XqmxModel("binary", size=4)
+        m = XqmxModel.binary(size=4)
         s.set_calldata([m])
         r = s.run()
         assert dict(r.outputs) == {}
@@ -143,7 +143,7 @@ class TestSession:
         src = "PUSH 0\nINPUT r0\nHALT\n"
         p = Program.from_source(src)
         s = p.session(output_slots=0)
-        s.set_calldata([XqmxSample("spin", values=[-1, 1, -1])])
+        s.set_calldata([XqmxSample.spin(values=[-1, 1, -1])])
         s.run()
 
     def test_rejects_unknown_calldata_type(self):

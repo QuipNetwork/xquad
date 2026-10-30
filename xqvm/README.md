@@ -4,9 +4,8 @@ X-Quadratic Virtual Machine -- bytecode interpreter for the [XQuad Toolchain](ht
 
 `xqvm` is the runtime layer of XQuad: the opcode table, instruction types, a
 bytecode builder and codec, an incremental instruction-stream reader, the
-VM interpreter, and a disassembler. A problem compiled once to XQVM
-bytecode runs unchanged on this interpreter or on the pure-Python
-reference VM (`xqvm_py`); the two are checked for behavioural parity in CI.
+VM interpreter, and a disassembler. The specification vectors under
+`tests/vectors/` check this interpreter against `spec/xqvm/` in CI.
 
 The crate is `no_std + alloc`-compatible. The bytecode layer (opcode
 table, instruction codec, `InstructionBuilder`, `Program`) and the

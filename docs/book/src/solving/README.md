@@ -4,44 +4,51 @@
 distinguishes them. This chapter covers each one in enough depth to run
 it: installation, parameters, and what its result actually contains.
 
-`xqsa` is the package that does this. It defines one abstract interface,
-`Solver`, and five classes built on it -- `SolverDWaveCPU`,
-`SolverDWaveQPU`, `SolverCudaGPU`, `SolverMetalGPU`, and `SolverQuip`. A
-model built from `xqcp` or by hand in XQVM bytecode does not know or care
-which one samples it.
+`xqsa` is the package that does this. It defines one base class,
+`Solver`, and four classes built on it -- `SolverCPU`, `SolverGPU`,
+`SolverDWave`, and `SolverQuip` -- which cover the five backends:
+`SolverGPU` runs on either a CUDA or a Metal GPU, picked by its `engine`.
+A model built from `xqcp` or by hand in XQVM bytecode does not know or
+care which one samples it.
 
 ## The Solver Interface
 
-Every backend defines the same single method:
+Every backend is called through the same single method:
 
 ```python
-class Solver(ABC):
-    @abstractmethod
-    def solve(self, model: XQMX, **kwargs: Any) -> SolverResult: ...
+class Solver:
+    def solve(self, model: XqmxModel, **kwargs: Any) -> SolverResult: ...
 ```
 
-`model` is an XQMX in MODEL mode, binary or spin domain. `**kwargs`
+`model` is an `XqmxModel` over the binary or spin domain. `**kwargs`
 override that solver's constructor defaults for this call only --
-`solver = SolverDWaveCPU(num_reads=100)` then `solver.solve(model,
-num_reads=500)` runs 500 reads without building a new solver. `solve()`
-raises on failure (hardware unreachable, no embedding found, connection
-lost); it never returns a partial or empty result.
+`solver = SolverCPU(num_reads=100)` then `solver.solve(model,
+num_reads=500)` runs 500 reads without building a new solver. On every
+backend except `quip`, a keyword the solver does not take raises
+`TypeError` instead of being ignored, so a typo such as `num_raeds=500`
+fails loudly. `solve()` raises on failure
+(hardware unreachable, no embedding found, connection lost); it never
+returns a partial or empty result.
+
+`solve()` is the same code for every backend except `quip`: it validates
+the model, runs the backend, recomputes the energy and assembles the
+result. A backend only supplies the part that turns a model into a
+sample, so the result has the same shape whichever one ran.
 
 The return value is a frozen dataclass:
 
 ```python
 @dataclass(frozen=True)
 class SolverResult:
-    sample: XQMX
+    sample: XqmxSample
     energy: int
     timing: float
     metadata: dict[str, Any] = field(default_factory=dict)
 ```
 
-`sample` is the solution, an XQMX in SAMPLE mode. `energy` is the
+`sample` is the solution, an `XqmxSample` with one value per variable. `energy` is the
 authoritative Hamiltonian energy. `timing` is wall-clock seconds spent
-solving. `metadata` defaults to an empty dict; its actual shape is
-per-backend, covered below.
+solving. `metadata` holds what the run used, covered below.
 
 `energy` is never the backend's own reported value taken on faith. Every
 `solve()` recomputes it with the same integer formula the XQVM `ENERGY`
@@ -49,17 +56,27 @@ opcode uses, over the model and the returned sample. See
 [Energy and Precision](energy-and-precision.md) for what that buys you
 and what it costs on hardware with limited precision.
 
-`metadata`'s shape is not identical across all five backends. The three
-classical simulated-annealing backends -- `dwave-cpu`, `cuda-gpu`, and
-`metal-gpu` -- carry `seed` and `reads` at the top level plus a `params`
-dict of solver-specific detail (sweep counts, the raw pre-recompute
-energy). `dwave-qpu` carries a `params` dict the same way, but omits
-`seed` (there is no seed on physical hardware) and adds `solver` and
-`qpu_timing` at the top level, alongside `reads`; see
-[D-Wave QPU](dwave-qpu.md#how-a-qpu-result-differs). `quip` returns a
-different set entirely -- no `seed`, `reads`, or `params` at all; see
-[Quip Network](quip-network.md#metadata). Check the backend you are
-calling before indexing into `result.metadata`.
+`metadata` has exactly three keys on `cpu`, `cuda`, `metal`, and
+`dwave`:
+
+| Key | Holds |
+|---|---|
+| `seed` | The seed the run used; `None` when unseeded, and always `None` on `dwave` (physical hardware has no seed) |
+| `reads` | How many samples the backend took |
+| `params` | Everything else: the selectors that chose the backend (`algorithm`, `engine`, `mode`), the parameters the run used, and diagnostics such as the raw pre-recompute energy |
+
+```python
+result = SolverCPU(seed=42).solve(model)
+result.metadata["params"]["algorithm"]
+# 'sa'
+```
+
+Backend-specific detail lives under `params`, so code that reads `seed`
+and `reads` works on any of the four; see
+[D-Wave QPU](dwave-qpu.md#how-a-qpu-result-differs) for what `dwave`
+puts there. `quip` is the exception: it returns a different set of keys
+entirely, with no `seed`, `reads`, or `params`; see
+[Quip Network](quip-network.md#metadata).
 
 ## Picking a Backend by Name
 
@@ -71,23 +88,26 @@ backend-agnostic:
 from xqsa import SOLVERS, DEFAULT_SOLVER, build_solver
 
 print(sorted(SOLVERS))
-# ['cuda-gpu', 'dwave-cpu', 'dwave-qpu', 'metal-gpu', 'quip']
+# ['cpu', 'cuda', 'dwave', 'metal', 'quip']
 print(DEFAULT_SOLVER)
-# dwave-cpu
+# cpu
 
-solver = build_solver("dwave-cpu", seed=42)
+solver = build_solver("cpu", seed=42)
 result = solver.solve(model)
 ```
 
 `seed` reaches the three classical simulated-annealing backends
-(`dwave-cpu`, `cuda-gpu`, `metal-gpu`) and is ignored for `dwave-qpu`
+(`cpu`, `cuda`, `metal`) and is ignored for `dwave`
 (physical hardware has no seed) and `quip` (configured from the
 environment; the miner's own randomness is out of the caller's control).
 
-`build_solver` otherwise uses each backend's own constructor defaults,
-with one exception: for `cuda-gpu` and `metal-gpu` it raises `num_reads`
+The registry otherwise uses each backend's own constructor defaults,
+with one exception: its `cuda` and `metal` entries raise `num_reads`
 to 200 and `num_sweeps` to 2000, rather than the 100 and 1000 the bare
-constructor defaults to. [Local Solvers](local.md#gpu-backends-cuda-gpu-and-metal-gpu)
+constructor defaults to. They build
+`SolverGPU(engine="cuda", num_reads=200, num_sweeps=2000)` and the same
+with `engine="metal"`.
+[Local Solvers](local.md#gpu-backends-solvergpu)
 has the constructor defaults for every backend.
 
 ## Swapping Backends Without Changing the Model
@@ -96,15 +116,15 @@ This is the claim the whole toolchain rests on, so here it is checked
 rather than asserted. `examples/maxcut/runner.py` builds one Max-Cut
 model with `xqcp`, runs the encoder on the Rust XQVM, and samples the
 result with whichever solver `--solver` names, built through
-`build_solver`. Run it against two different backends -- `dwave-cpu`
-(CPU simulated annealing, 100 reads and 1000 sweeps) and `metal-gpu` (an
+`build_solver`. Run it against two different backends -- `cpu`
+(CPU simulated annealing, 100 reads and 1000 sweeps) and `metal` (an
 Apple Silicon GPU kernel, a different process on different hardware, and
--- per `build_solver`'s override above -- 200 reads and 2000 sweeps) --
+-- per the registry's override above -- 200 reads and 2000 sweeps) --
 and nothing about the model or the encoder changes:
 
 ```sh
-uv run python examples/maxcut/runner.py --n 6 --seed 42 --interpreter rust --solver dwave-cpu
-uv run python examples/maxcut/runner.py --n 6 --seed 42 --interpreter rust --solver metal-gpu
+uv run python examples/maxcut/runner.py --n 6 --seed 42 --solver cpu
+uv run python examples/maxcut/runner.py --n 6 --seed 42 --solver metal
 ```
 
 Both print the same result: `"energy": -571`, `"cut_weight": 571`,
@@ -121,12 +141,12 @@ XQVM has three domains: binary, spin, and integer. Every current
 `ValueError` on integer:
 
 ```python
-from xqsa import SolverDWaveCPU
-from xqvm_py.xqmx import XQMX
+from xqsa import SolverCPU
+from xquad.types import XqmxModel
 
-model = XQMX.integer_model(size=3, k=4)
-SolverDWaveCPU().solve(model)
-# ValueError: Unsupported domain for solving: INTEGER
+model = XqmxModel.integer(size=3, k=4)
+SolverCPU().solve(model)
+# ValueError: Unsupported domain for solving: integer
 ```
 
 An integer `XqmxModel` is a real thing you can build in XQVM bytecode
@@ -140,12 +160,12 @@ only route around it today.
 
 | You want | Read |
 |---|---|
-| A baseline that runs anywhere, no hardware or credentials required | [Local Solvers](local.md), `dwave-cpu` |
-| A local GPU for a bigger or faster run | [Local Solvers](local.md), `cuda-gpu` / `metal-gpu` |
+| A baseline that runs anywhere, no hardware or credentials required | [Local Solvers](local.md), `cpu` |
+| A local GPU for a bigger or faster run | [Local Solvers](local.md), `cuda` / `metal` |
 | Real quantum annealing hardware | [D-Wave QPU](dwave-qpu.md) |
 | A decentralised, miner-solved compute market | [Quip Network](quip-network.md) |
 | What the numbers in `SolverResult` actually mean | [Energy and Precision](energy-and-precision.md) |
 
 That baseline requirement -- runs anywhere, needs nothing -- is exactly
 `DEFAULT_SOLVER`: every other backend is worth comparing against
-`dwave-cpu` before you trust its answer.
+`cpu` before you trust its answer.

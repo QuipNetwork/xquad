@@ -1,0 +1,9 @@
+; next_outside_loop: NEXT with no frame on the loop stack raises
+; NO_ACTIVE_LOOP.
+;
+; spec/xqvm/SPEC.md:195 gives the fault to NEXT, LIDX and LVAL alike. It
+; is distinct from the UNMATCHED_LOOP that an unclosed RANGE raises
+; (QUI-1289).
+
+NEXT
+HALT

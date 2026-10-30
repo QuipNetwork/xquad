@@ -1,0 +1,14 @@
+; calldata_hole_is_in_range: a slot the host left unset still occupies its
+; place in the calldata, so the slots after it keep their indices.
+;
+; spec/xqvm/ISA.md's INPUT row bounds the slot against the count the host
+; fixed, and the entries of that sequence need not all be set. The VM
+; holds an unset entry as RegVal::Unset and counts it in calldata.len().
+; A host that dropped the unset entry would turn [null, 5] into a single
+; slot, so reading slot 1 would raise CallDataIndex instead of returning 5.
+
+PUSH 1
+INPUT r0         ; slot 1 is populated, and the hole at 0 does not shift it
+PUSH 0
+OUTPUT r0
+HALT

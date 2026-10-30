@@ -55,7 +55,7 @@ LINK_MAP = {
 SOLVER_SECTION_REPLACEMENT = [
     "Solver selection and install extras are the same for every example: see",
     "[Using the Examples](using-examples.md#running-one) and",
-    "[Solving Overview](../solving/). The default is `dwave-cpu`, and a",
+    "[Solving Overview](../solving/). The default is `cpu`, and a",
     "non-default solver will not reproduce the canonical result.",
 ]
 INLINE_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
@@ -380,9 +380,8 @@ def render_repo_index(groups: list[ExampleGroup]) -> str:
         "uv run python examples/maxcut/runner.py --seed 42",
         "```",
         "",
-        "Every runner accepts `--seed`, `--interpreter` (`python` or `rust`),",
-        "`--solver`, and `-o`/`--output`. Problem size flags vary; each directory's",
-        "`README.md` carries the exact table.",
+        "Every runner accepts `--seed`, `--solver`, and `-o`/`--output`. Problem",
+        "size flags vary; each directory's `README.md` carries the exact table.",
         "",
     ]
     for group in groups:

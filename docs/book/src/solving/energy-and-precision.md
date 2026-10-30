@@ -21,18 +21,18 @@ formula two independent ways.
 
 ## The Precision Contract
 
-`SolverResult.energy` must equal `compute_energy(model, sample)`
+`SolverResult.energy` must equal `model.energy(sample)`
 exactly, an integer-to-integer comparison with zero tolerance for
 drift. Every XQMX
 coefficient and every variable assignment is an integer, so the energy
 formula is a sum of integer products, not a float that merely rounds to
 the right answer. It is an exact integer whenever it is representable at
-all, and representable is a real condition: `compute_energy` checks every
+all, and representable is a real condition: `XqmxModel.energy` checks every
 term product and every partial sum against the `i64` range and raises
 `ArithmeticOverflow` rather than returning a wrapped number, so a model
 whose energy leaves that range has no energy this contract can report.
 `Solver._recompute_energy()`
-calls `compute_energy()` and casts to `int`; every backend in this
+returns `model.energy(sample)`; every backend in this
 chapter uses it instead of trusting whatever float its underlying
 library reports. That raw float, where one exists, survives only as
 `metadata["params"]["raw_energy"]`, for diagnostics -- never as the
@@ -44,9 +44,9 @@ three outcomes, not two: the comparison holds, the comparison fails, or
 `ENERGY` raises `ArithmeticOverflow` and the verifier produces no verdict
 at all. The third is not a solver disagreement and must not be read as
 one -- it says the model's energy left the `i64` range on the way to
-being computed. Both `ENERGY` and `compute_energy` accumulate in the same
-sorted key order and check the same intermediates, so the two agree on
-which models fall into it.
+being computed. `XqmxModel.energy` is the function `ENERGY` itself
+calls, so the two accumulate in the same sorted key order, check the
+same intermediates, and agree on which models fall into it.
 
 ## A Large Penalty Does Not Corrupt the Model
 
@@ -55,7 +55,7 @@ argues that a large \\(P\\) cannot corrupt a model, because energy
 differences between feasible assignments survive exactly however large
 \\(P\\) gets. Take that page's three-node Max-Cut model with a one-hot
 penalty \\(P \cdot (x_0 + x_2 - 1)^2\\) added on top, and score two
-feasible assignments and one infeasible one through `compute_energy()`
+feasible assignments and one infeasible one through `XqmxModel.energy()`
 at three wildly different weights:
 
 ```text
@@ -85,39 +85,39 @@ cancel, so the stored energy falls by `P`.
 Nothing in the model degrades, but two things outside it do, and both
 matter to backends in this chapter.
 
-**Fixed-precision hardware loses resolution.** `metal-gpu` computes
+**Fixed-precision hardware loses resolution.** The Metal engine (`SolverGPU(engine="metal")`) computes
 coefficients in float32 on the GPU, not the integer arithmetic
 `ENERGY` uses -- `result.energy` is still recomputed in exact integers
 afterward, but the *search* that finds the sample runs at float32
-precision. `cuda-gpu` does not share this: its kernels take
+precision. The CUDA engine does not share this: its kernels take
 `const double*` throughout, its acceptance draws stay float64, and
 `result.energy` is recomputed the same way as every other backend. See
-[Local Solvers](local.md#gpu-backends-cuda-gpu-and-metal-gpu) for the
-per-backend split. The rest of this section applies to `metal-gpu` and
+[Local Solvers](local.md#gpu-backends-solvergpu) for the
+per-backend split. The rest of this section applies to the Metal engine and
 to fixed-precision annealing hardware, not to every GPU backend.
 
 A float32 mantissa carries about seven decimal digits. Once a term in
 the combined Hamiltonian is large enough that a difference of `2` no
-longer changes the float, `metal-gpu`'s search cannot distinguish the
+longer changes the float, the Metal engine's search cannot distinguish the
 two assignments that difference separates, even though `ENERGY` still
 resolves them exactly afterward:
 
 ```python
 import numpy as np
-np.float32(-2000000006) == np.float32(-2000000004)   # True -- the 2 vanished, at metal-gpu's width
-np.float64(-2000000006) == np.float64(-2000000004)   # False -- still resolved, at cuda-gpu's width
+np.float32(-2000000006) == np.float32(-2000000004)   # True -- the 2 vanished, at the Metal engine's width
+np.float64(-2000000006) == np.float64(-2000000004)   # False -- still resolved, at the CUDA engine's width
 np.float32(-1006) == np.float32(-1004)                 # False -- still resolved
 ```
 
 At `P = 2000000000` the two feasible assignments above are
-computationally indistinguishable to `metal-gpu`'s float32 search even
-though `compute_energy()` still tells them apart exactly; at
-`P = 1000` they are not. `cuda-gpu`'s float64 search keeps this pair
+computationally indistinguishable to the Metal engine's float32 search even
+though `XqmxModel.energy()` still tells them apart exactly; at
+`P = 1000` they are not. The CUDA engine's float64 search keeps this pair
 distinguishable at this scale, though a large enough \\(P\\) would
 eventually exhaust its wider but still finite mantissa too. Neither
 GPU backend's correctness ever suffers -- the returned energy is
-always the exact integer -- but `metal-gpu`'s search can lose the
-signal, at penalty weights where `cuda-gpu`'s still keeps it visible.
+always the exact integer -- but the Metal engine's search can lose the
+signal, at penalty weights where the CUDA engine's still keeps it visible.
 
 **Real annealing hardware rescales, and the Quip network encodes at
 fixed precision.** A physical D-Wave annealer maps coefficients onto

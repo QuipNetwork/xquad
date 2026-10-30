@@ -44,7 +44,7 @@ def build_problem(n: int) -> cp.Problem:
 ```
 
 Compiling for `n = 3` and running the encoder on the Rust VM, then solving
-the result with `SolverDWaveCPU` at `seed=42`. All six permutations of three
+the result with `SolverCPU` at `seed=42`. All six permutations of three
 things are tied at `-60`, so a different seed decodes to a different one and
 both lines below still hold:
 
@@ -97,7 +97,7 @@ one. That looser rule is [Assignment](assignment.md). The other failure
 is structural rather than semantic: `ONEHOTR`/`ONEHOTC` read grid
 dimensions from `RESIZE`, so a model with no grid set has no row or
 column for them to constrain. Both raise `InvalidGridDimensions` at the
-instruction that needed the grid, on either interpreter -- see
+instruction that needed the grid -- see
 [High-Level Constraints](../xqvm/instructions/constraints.md). `xquad vm
 check` does not catch it, since grid dimensions are runtime values, so
 the failure surfaces when the encoder runs rather than when it compiles.

@@ -16,7 +16,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-QUI-704 benchmark: dense int32 vs bit-packed spin storage for SolverCudaGPU.
+QUI-704 benchmark: dense int32 vs bit-packed spin storage for SolverGPU(engine="cuda").
 
 Runs the shipped solver and a bench-local bit-packed variant of the same
 CUDA kernel on identical seeded instances with an identical RNG stream and
@@ -42,8 +42,8 @@ from typing import Any
 
 import numpy as np
 
-from xqsa.cuda_gpu import SolverCudaGPU
-from xqvm_py.xqmx import XQMX
+from xqffi.vm import XqmxModel
+from xqsa import SolverGPU
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -56,14 +56,14 @@ REPS = 3
 COUPLINGS_PER_NODE = 8  # sparse couplings keep XQMX construction fast; J stays dense n^2
 
 
-def build_instance(n: int, seed: int) -> tuple[XQMX, np.ndarray, np.ndarray]:
+def build_instance(n: int, seed: int) -> tuple[XqmxModel, np.ndarray, np.ndarray]:
     """Seeded spin instance: each node couples to its next COUPLINGS_PER_NODE
-    neighbours with random +/-1. Returns the XQMX (for the stock solver) and
+    neighbours with random +/-1. Returns the XqmxModel (for the stock solver) and
     the matching dense (h, J) arrays (for the packed prototype). J is stored
-    symmetric-full, mirroring the layout SolverCudaGPU builds internally —
+    symmetric-full, mirroring the layout SolverGPU(engine="cuda") builds internally --
     verified end-to-end by Task 2's exact-trajectory check."""
     rng = random.Random(seed)
-    model = XQMX.spin_model(n)
+    model = XqmxModel.spin(n)
     h = np.zeros(n, dtype=np.float64)
     j_matrix = np.zeros((n, n), dtype=np.float64)
     for i in range(n):
@@ -71,8 +71,8 @@ def build_instance(n: int, seed: int) -> tuple[XQMX, np.ndarray, np.ndarray]:
             j = i + k
             if j >= n:
                 break
-            coupling = rng.choice((-1.0, 1.0))
-            model.set_quadratic(i, j, coupling)
+            coupling = rng.choice((-1, 1))
+            model.set_quad(i, j, coupling)
             j_matrix[i, j] = coupling
             j_matrix[j, i] = coupling
     return model, h, j_matrix
@@ -82,12 +82,12 @@ def _mempool_peak(cupy) -> int:
     return int(cupy.get_default_memory_pool().total_bytes())
 
 
-def run_stock(model: XQMX, n: int) -> dict:
-    """Run the shipped SolverCudaGPU REPS times; record wall times, the
+def run_stock(model: XqmxModel, n: int) -> dict:
+    """Run the shipped SolverGPU(engine="cuda") REPS times; record wall times, the
     (deterministic) best energy/sample, and the mempool peak."""
     import cupy
 
-    solver = SolverCudaGPU(num_reads=NUM_READS, num_sweeps=NUM_SWEEPS, beta_range=BETA_RANGE, seed=SEED)
+    solver = SolverGPU(engine="cuda", num_reads=NUM_READS, num_sweeps=NUM_SWEEPS, beta_range=BETA_RANGE, seed=SEED)
     cupy.get_default_memory_pool().free_all_blocks()
     walls: list[float] = []
     result = None

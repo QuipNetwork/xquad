@@ -29,7 +29,7 @@ pipeline::
     bytecode = asm.assemble_source(...)
     v = vm.VM()
     v.run_bytecode(bytecode)
-    samples = sa.SolverDWaveCPU().solve(problem.model())
+    samples = sa.SolverCPU().solve(problem.model())
 
 `cp`, `sa`, `asm` and `verifier` are aliases, not copies: `xquad.cp` *is*
 `xqcp`, `xquad.sa` *is* `xqsa`, `xquad.asm` *is* `xqffi.asm` and

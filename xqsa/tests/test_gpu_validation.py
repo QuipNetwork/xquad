@@ -20,7 +20,7 @@ Medium-model (20-100 var) real-GPU validation for the GPU SA solvers (QUI-687).
 
 Models have analytically known ground states (or a seeded CPU reference for
 the spin glass); the GPU best-energy is asserted against them, cross-checked
-with SolverDWaveCPU on the same model object. Hardware classes follow
+with SolverCPU on the same model object. Hardware classes follow
 test_xqsa.py's guard idiom: skip locally without the device, run and
 hard-fail in CI.
 """
@@ -32,8 +32,8 @@ import pytest
 
 pytest.importorskip("dimod", reason="dwave-samplers / dimod not installed")
 
-from xqsa import SolverDWaveCPU
-from xqvm_py.xqmx import XQMX
+from xqffi.vm import XqmxModel
+from xqsa import SolverCPU, SolverGPU
 
 # True in CI (GitLab/GitHub set CI). Hardware tests must run and hard-fail on
 # a misconfigured CI environment rather than skip silently; locally they skip
@@ -54,12 +54,6 @@ try:
 except ImportError:
     _has_metal = False
 
-if _has_cupy or _IN_CI:
-    from xqsa.cuda_gpu import SolverCudaGPU
-
-if _has_metal or _IN_CI:
-    from xqsa.metal_gpu import SolverMetalGPU
-
 # Explicit GPU budgets: QUI-167's sweep showed fixed-depth defaults degrade
 # with model size, so these tests never rely on solver defaults.
 GPU_PARAMS = {"num_reads": 64, "num_sweeps": 2000, "seed": 42}
@@ -68,19 +62,19 @@ GPU_PARAMS = {"num_reads": 64, "num_sweeps": 2000, "seed": 42}
 GLASS_TOLERANCE = 0.02
 
 
-def ferro_chain(n: int = 64) -> tuple[XQMX, int]:
+def ferro_chain(n: int = 64) -> tuple[XqmxModel, int]:
     """Ferromagnetic Ising chain: J=-1 on consecutive pairs.
 
     Ground state is all spins aligned; every coupling contributes -1, so
     the exact ground energy is -(n-1).
     """
-    model = XQMX.spin_model(n)
+    model = XqmxModel.spin(n)
     for i in range(n - 1):
-        model.set_quadratic(i, i + 1, -1.0)
+        model.set_quad(i, i + 1, -1)
     return model, -(n - 1)
 
 
-def frustrated_triangles(n: int = 51) -> tuple[XQMX, int]:
+def frustrated_triangles(n: int = 51) -> tuple[XqmxModel, int]:
     """Disjoint antiferromagnetic triangles: n//3 independent J=+1 3-cliques.
 
     Each triangle is frustrated — at best two of its three edges are
@@ -88,20 +82,20 @@ def frustrated_triangles(n: int = 51) -> tuple[XQMX, int]:
     -(n // 3). Triangles force the Gibbs graph-colouring path to use
     >= 3 colours (QUI-687's target), and the independent components keep
     the landscape easy for single-flip SA. (An odd AF *ring* was tried
-    first: analytically -(n-2), but SolverDWaveCPU cannot reach it for
+    first: analytically -(n-2), but SolverCPU cannot reach it for
     n >= 25 — domain-wall critical slowing — so it cannot serve as a
     reference model.)
     """
-    model = XQMX.spin_model(n)
+    model = XqmxModel.spin(n)
     for t in range(n // 3):
         a, b, c = 3 * t, 3 * t + 1, 3 * t + 2
-        model.set_quadratic(a, b, 1.0)
-        model.set_quadratic(a, c, 1.0)
-        model.set_quadratic(b, c, 1.0)
+        model.set_quad(a, b, 1)
+        model.set_quad(a, c, 1)
+        model.set_quad(b, c, 1)
     return model, -(n // 3)
 
 
-def bipartite_maxcut(n: int = 20) -> tuple[XQMX, int]:
+def bipartite_maxcut(n: int = 20) -> tuple[XqmxModel, int]:
     """MaxCut QUBO on the complete bipartite graph K(n/2, n/2), unit weights.
 
     Cut edges contribute -1 (-x_i - x_j + 2 x_i x_j with x_i != x_j),
@@ -109,37 +103,37 @@ def bipartite_maxcut(n: int = 20) -> tuple[XQMX, int]:
     ground energy is -(n/2)^2 = -cut size.
     """
     half = n // 2
-    model = XQMX.binary_model(n)
+    model = XqmxModel.binary(n)
     for i in range(half):
         for j in range(half, n):
-            model.add_linear(i, -1.0)
-            model.add_linear(j, -1.0)
-            model.add_quadratic(i, j, 2.0)
+            model.add_linear(i, -1)
+            model.add_linear(j, -1)
+            model.add_quad(i, j, 2)
     return model, -(half * half)
 
 
-def random_spin_glass(n: int = 100, seed: int = 7) -> tuple[XQMX, None]:
+def random_spin_glass(n: int = 100, seed: int = 7) -> tuple[XqmxModel, None]:
     """Seeded random +/-1 spin glass on ~6%-density pairs; no known optimum.
 
     Ground energy is unknown (returned as None): tests compare the GPU
-    best-energy against the SolverDWaveCPU reference on the same model.
+    best-energy against the SolverCPU reference on the same model.
     """
     rng = random.Random(seed)
-    model = XQMX.spin_model(n)
+    model = XqmxModel.spin(n)
     for i in range(n):
         for j in range(i + 1, n):
             if rng.random() < 0.06:
-                model.set_quadratic(i, j, rng.choice((-1.0, 1.0)))
+                model.set_quad(i, j, rng.choice((-1, 1)))
     return model, None
 
 
-def cpu_reference(model: XQMX) -> int:
-    """Best energy SolverDWaveCPU finds on ``model`` with the GPU budget.
+def cpu_reference(model: XqmxModel) -> int:
+    """Best energy SolverCPU finds on ``model`` with the GPU budget.
 
     Uses GPU_PARAMS so the glass cross-check compares equally-budgeted
     samplers rather than a differently-tuned CPU baseline.
     """
-    return SolverDWaveCPU(**GPU_PARAMS).solve(model).energy
+    return SolverCPU(**GPU_PARAMS).solve(model).energy
 
 
 class TestMediumModelReferences:
@@ -174,27 +168,27 @@ class TestMediumModelReferences:
     reason="cupy not installed (skipped locally; runs and hard-fails in CI)",
 )
 class TestCudaGPUMediumModels:
-    """SolverCudaGPU on 20-100 var models with known/CPU-referenced optima."""
+    """SolverGPU (CUDA engine) on 20-100 var models with known/CPU-referenced optima."""
 
     def test_ferro_chain_exact(self) -> None:
         model, ground = ferro_chain()
-        result = SolverCudaGPU(**GPU_PARAMS).solve(model)
+        result = SolverGPU(engine="cuda", **GPU_PARAMS).solve(model)
         assert result.energy == ground
 
     def test_frustrated_triangles_exact(self) -> None:
         model, ground = frustrated_triangles()
-        result = SolverCudaGPU(**GPU_PARAMS).solve(model)
+        result = SolverGPU(engine="cuda", **GPU_PARAMS).solve(model)
         assert result.energy == ground
 
     def test_bipartite_maxcut_exact(self) -> None:
         model, ground = bipartite_maxcut()
-        result = SolverCudaGPU(**GPU_PARAMS).solve(model)
+        result = SolverGPU(engine="cuda", **GPU_PARAMS).solve(model)
         assert result.energy == ground
 
     def test_random_spin_glass_within_tolerance_of_cpu(self) -> None:
         model, _ = random_spin_glass()
         cpu = cpu_reference(model)
-        gpu = SolverCudaGPU(**GPU_PARAMS).solve(model).energy
+        gpu = SolverGPU(engine="cuda", **GPU_PARAMS).solve(model).energy
         assert gpu <= cpu + GLASS_TOLERANCE * abs(cpu), (
             f"GPU best energy {gpu} more than {GLASS_TOLERANCE:.0%} above CPU reference {cpu}"
         )
@@ -206,38 +200,38 @@ class TestCudaGPUMediumModels:
     reason="Metal GPU not available (skipped locally; runs and hard-fails in CI)",
 )
 class TestMetalGPUMediumModels:
-    """SolverMetalGPU (sa + gibbs) on the same medium models."""
+    """SolverGPU (Metal engine) (sa + gibbs) on the same medium models."""
 
     def test_ferro_chain_exact_sa(self) -> None:
         model, ground = ferro_chain()
-        result = SolverMetalGPU(strategy="sa", **GPU_PARAMS).solve(model)
+        result = SolverGPU(engine="metal", algorithm="sa", **GPU_PARAMS).solve(model)
         assert result.energy == ground
 
     def test_frustrated_triangles_exact_sa(self) -> None:
         model, ground = frustrated_triangles()
-        result = SolverMetalGPU(strategy="sa", **GPU_PARAMS).solve(model)
+        result = SolverGPU(engine="metal", algorithm="sa", **GPU_PARAMS).solve(model)
         assert result.energy == ground
 
     def test_bipartite_maxcut_exact_sa(self) -> None:
         model, ground = bipartite_maxcut()
-        result = SolverMetalGPU(strategy="sa", **GPU_PARAMS).solve(model)
+        result = SolverGPU(engine="metal", algorithm="sa", **GPU_PARAMS).solve(model)
         assert result.energy == ground
 
     def test_frustrated_triangles_exact_gibbs(self) -> None:
         """Gibbs on a >= 3-colour interaction graph (the colouring path's first real test)."""
         model, ground = frustrated_triangles()
-        result = SolverMetalGPU(strategy="gibbs", **GPU_PARAMS).solve(model)
+        result = SolverGPU(engine="metal", algorithm="gibbs", **GPU_PARAMS).solve(model)
         assert result.energy == ground
 
     def test_bipartite_maxcut_exact_gibbs(self) -> None:
         model, ground = bipartite_maxcut()
-        result = SolverMetalGPU(strategy="gibbs", **GPU_PARAMS).solve(model)
+        result = SolverGPU(engine="metal", algorithm="gibbs", **GPU_PARAMS).solve(model)
         assert result.energy == ground
 
     def test_random_spin_glass_within_tolerance_of_cpu(self) -> None:
         model, _ = random_spin_glass()
         cpu = cpu_reference(model)
-        gpu = SolverMetalGPU(strategy="sa", **GPU_PARAMS).solve(model).energy
+        gpu = SolverGPU(engine="metal", algorithm="sa", **GPU_PARAMS).solve(model).energy
         assert gpu <= cpu + GLASS_TOLERANCE * abs(cpu), (
             f"GPU best energy {gpu} more than {GLASS_TOLERANCE:.0%} above CPU reference {cpu}"
         )

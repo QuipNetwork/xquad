@@ -1,0 +1,16 @@
+; input_slot_out_of_range: INPUT addressing a calldata slot the host did
+; not fix raises CallDataIndex rather than storing a null.
+;
+; spec/xqvm/ISA.md's INPUT row states that the host fixes the calldata
+; before the run and that a slot outside [0, slots) is a program error
+; rather than a null result. The bound is the slot count: an in-range slot
+; the host left unset is a different case and reads as unset, which
+; calldata_hole_reads_as_unset pins.
+;
+; A VM that returned None with no bounds check would charge nothing, store
+; None in r0, and halt successfully -- a fault-versus-success error
+; against the spec text.
+
+PUSH 0
+INPUT r0         ; calldata is empty, so slot 0 does not exist
+HALT

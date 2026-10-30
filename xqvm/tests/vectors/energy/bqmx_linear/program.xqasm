@@ -1,0 +1,27 @@
+; bqmx_linear: compute energy of a 2-variable binary model against the
+; default-initialised sample [0, 0].
+;
+; linear = [3, 5], quadratic = {}, sample = [0, 0]
+; ⇒ energy = 3*0 + 5*0 = 0.
+;
+; This vector exercises BQMX + SETLINE + BSMX + ENERGY under the "no SETLINE
+; on samples" contract (QUI-410). For a non-zero result we use the
+; spin-domain vectors below, whose default sample is [-1, -1].
+
+PUSH 2
+BQMX r0
+PUSH 0
+PUSH 3
+SETLINE r0
+PUSH 1
+PUSH 5
+SETLINE r0
+
+PUSH 2
+BSMX r1
+
+ENERGY r0 r1
+STOW r2
+PUSH 0
+OUTPUT r2
+HALT

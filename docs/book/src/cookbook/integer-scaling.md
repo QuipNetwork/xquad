@@ -60,7 +60,7 @@ At `factor = 20`: `weights = [50, 75, 25, 80]`, `values = [204, 315, 168,
 covers, at the penalty weight of `4` derived in [Coefficient
 Magnitude](#what-scaling-costs-coefficient-magnitude-and-two-backends-that-disagree)
 below), compiling, running the encoder on the Rust VM, solving with
-`SolverDWaveCPU`, and dividing the decoded totals back by the scale
+`SolverCPU`, and dividing the decoded totals back by the scale
 factor:
 
 ```text
@@ -133,8 +133,8 @@ factor large enough to expose it: a bound that is merely *safe* at
 natural scale can become the deciding factor once a scale factor
 multiplies every coefficient it touches.
 
-The same coefficient growth affects `metal-gpu`'s float32 search
-differently from `cuda-gpu`'s float64 one, the way
+The same coefficient growth affects the Metal engine's float32 search
+differently from the CUDA engine's float64 one, the way
 [Energy and Precision](../solving/energy-and-precision.md#what-a-large-penalty-costs-instead)
 covers for an unscaled model. At the loose penalty above, the resulting
 solved energy (`-24,480,687`, order \\(10^7\\)) is past float32's roughly
@@ -149,7 +149,7 @@ np.float32(e) != np.float32(e - 100)   # True -- a 100-unit difference still res
 ```
 
 A scaling choice that looks safe by natural-scale reasoning can cost
-`metal-gpu` resolution `cuda-gpu` keeps, at the identical model -- check
+the Metal engine resolution that the CUDA engine keeps, on the identical model -- check
 the actual coefficient magnitudes your factor produces against the target
 backend, not just against the input data's precision.
 

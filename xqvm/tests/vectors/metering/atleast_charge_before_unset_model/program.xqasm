@@ -1,0 +1,19 @@
+; atleast_charge_before_unset_model: ATLEAST is charged its expansion
+; before it reads its model register, so an unset model under an exhausted
+; budget raises MemoryLimitExceeded rather than UnsetRegister.
+;
+; spec/xqvm/SPEC.md orders pops, then the allocation charge, then
+; validation. ATLEAST's charge is computed from its operands -- the indices
+; and k -- so it is paid whatever the model register holds. k = 1 is inside
+; (0, 2], so the k range check passes. The two VECPUSHes spend the budget
+; of 32 bytes exactly, so the charge is refused before r0 is read.
+
+VECI r1
+PUSH 0
+VECPUSH r1
+PUSH 1
+VECPUSH r1       ; indices = [0, 1]; 32 bytes: the whole budget
+PUSH 1           ; k, in range
+PUSH 1           ; penalty
+ATLEAST r0 r1    ; r0 was never written
+HALT
