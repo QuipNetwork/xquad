@@ -50,8 +50,8 @@ semver as Cargo reads it, where the leftmost non-zero field is the major: before
 (`0.4.0` to `0.4.1`) carries only compatible changes, fixes and features alike.
 That policy governs the crate versions -- it is not a commitment that nothing
 observable will ever break before `1.0`. Treat every `0.x` release as a
-snapshot, not a foundation to build on without re-checking. Each breaking
-release comes with a migration page: see [Migrating from 0.4 to
+snapshot, not a foundation to build on without re-checking. The breaking
+changes in v0.5.0 are listed in [Migrating from 0.4 to
 0.5](migration-0.5.md). If your use
 case needs a stability guarantee this project does not yet make, [file an
 issue](https://gitlab.com/quip.network/xquad/-/issues) against the

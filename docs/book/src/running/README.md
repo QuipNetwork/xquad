@@ -139,7 +139,13 @@ A calldata list may mix any of `int`, `list[int]`, `xqffi.vm.XqmxModel`,
 every element's type as soon as you call it, not at run time:
 
 ```python
-from xqffi.vm import Domain, InvalidGridDimensions, XqmxModel, XqmxSample
+from xqffi.vm import (
+    Domain,
+    IndexOutOfBounds,
+    InvalidGridDimensions,
+    XqmxModel,
+    XqmxSample,
+)
 
 model = XqmxModel.binary(size=4)   # or XqmxModel(Domain.BINARY, size=4)
 model.set_linear(0, -1)
@@ -167,17 +173,19 @@ except TypeError as e:
 
 The constructors also refuse a `size` over
 `xqffi.vm.MAX_ALLOCATION_SIZE`, the largest allocation bytecode can
-make, with `ValueError`, and `XqmxSample` refuses a value outside its
-domain the same way. The coefficient accessors (`set_linear`,
-`get_linear`, `set_quad`, `get_quad`) raise `IndexError` for a variable
-index outside `0..size`, a negative index included:
+make, with `InvalidAllocation`, and `XqmxSample` refuses a value outside
+its domain with `ValueError`. The coefficient accessors (`set_linear`,
+`get_linear`, `set_quad`, `get_quad`) raise `IndexOutOfBounds` for a
+variable index outside `0..size`, a negative index included.
+`InvalidAllocation`, `InvalidGridDimensions` and `IndexOutOfBounds` are
+`XqvmError` faults, so `RuntimeError` subclasses:
 
 ```python
 try:
     model.set_linear(4, 1)
-except IndexError as e:
+except IndexOutOfBounds as e:
     print(e)
-# variable index 4 is out of range for a model of size 4
+# index 4 out of bounds (len 4)
 ```
 ## Inspecting a model or sample
 
@@ -265,8 +273,9 @@ script and want the settings to carry across runs; pick `Session` for the
 dict-keyed, slot-sparse ergonomics shown above; pick `xqffi.vm.Vm` only if
 you are building your own layer on top of the raw Rust FFI.
 
-`VM.set_calldata()` stores the list it is given and checks nothing
-itself, because the values check themselves. An `XqmxSample` raises
+`VM.set_calldata()` stores a copy of the list it is given, holding the
+same objects, and checks nothing itself, because the values check
+themselves. An `XqmxSample` raises
 `ValueError` when it is built with a value outside its domain, and again
 when such a value is written to it, so no out-of-domain sample can reach
 `run()`. The element types are checked at `run()`: anything other than an
