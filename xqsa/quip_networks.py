@@ -19,8 +19,8 @@
 Deprecated alias for :mod:`xqsa.quip.networks`.
 
 Importing ``xqsa.quip_networks`` warns and returns the ``xqsa.quip.networks`` module
-itself, so attribute access and patch targets keep working. QUI-1608 removes
-this shim.
+itself, so attribute access and patch targets keep working. The shim is removed
+in v0.6.0.
 """
 
 import importlib

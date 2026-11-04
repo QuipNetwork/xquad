@@ -146,7 +146,7 @@ def test_flat_quip_name_warns_at_caller(flat, home, name):
         line = sys._getframe().f_lineno + 1
         obj = getattr(flat, name)
     assert obj is getattr(home, name)
-    message = f"{flat.__name__}.{name} is deprecated; import it from {home.__name__} (removed in v0.5.0)"
+    message = f"{flat.__name__}.{name} is deprecated; import it from {home.__name__} (removed in v0.6.0)"
     if name in _xqsa_quip._DEPRECATED:  # retired in xqsa.quip too, so it also says why.
         message += f". {_xqsa_quip._DEPRECATED[name]}"
     assert [str(w.message) for w in record] == [message]

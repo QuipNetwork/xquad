@@ -148,7 +148,7 @@ belongs to
 
 `SolverQuip`'s `max_energy` order option (see [Quality
 floors](quip-orders.md#quality-floors)) is an energy ceiling, and it is
-in model units: the same units as `compute_energy()` and
+in model units: the same units as `XqmxModel.energy` and
 `result.energy`. The chain never sees your model, only its spin fields
 and couplings at milli scale, so the client converts the ceiling before
 sending it.

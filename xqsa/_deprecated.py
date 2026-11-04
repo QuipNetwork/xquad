@@ -15,7 +15,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Flat Quip names kept on ``xqsa`` and ``xquad.sa`` behind a ``DeprecationWarning`` until v0.5.0."""
+"""Flat Quip names kept on ``xqsa`` and ``xquad.sa`` behind a ``DeprecationWarning`` until v0.6.0."""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def flat_quip_getattr(flat: str, home: str) -> Callable[[str], object]:
     def __getattr__(name: str) -> object:
         if name not in FLAT_QUIP_NAMES:
             raise AttributeError(f"module {flat!r} has no attribute {name!r}")
-        message = f"{flat}.{name} is deprecated; import it from {home} (removed in v0.5.0)"
+        message = f"{flat}.{name} is deprecated; import it from {home} (removed in v0.6.0)"
         # A name xqsa.quip retires too also says why, which the flat path would otherwise hide.
         retired = importlib.import_module("xqsa.quip")._DEPRECATED.get(name)
         warnings.warn(f"{message}. {retired}" if retired else message, DeprecationWarning, stacklevel=2)

@@ -71,7 +71,7 @@ logger = logging.getLogger("xqsa.quip")
 
 # "unconfirmed" is deprecated: no longer produced since v0.4.5, it is kept so
 # that an order pickled by 0.4.3 or 0.4.4 in that state still loads and refuses
-# to be sent again; removed in v0.5.0.
+# to be sent again; removed in v0.6.0.
 OrderState = Literal["draft", "sending", "submitted", "unconfirmed", "failed", "finalized"]
 
 # The options an order accepts; ``delivery`` is a client default only.
@@ -1060,7 +1060,7 @@ class JobOrder:
         if self._state == "unconfirmed":
             warnings.warn(
                 f"this order is unconfirmed, a state deprecated and no longer produced since v0.4.5 (removed in "
-                f"v0.5.0); it may be on chain, so it is never sent again: look up extrinsic {self._ext_hash}",
+                f"v0.6.0); it may be on chain, so it is never sent again: look up extrinsic {self._ext_hash}",
                 DeprecationWarning,
                 stacklevel=2,
             )

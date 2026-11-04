@@ -55,7 +55,7 @@ naming both rather than picking one.
 decode compose on a chosen assignment. It proves nothing about optimisation:
 no solver samples an integer model yet, so `--solver` is accepted, ignored,
 and the pipeline runs against a hand-picked weight vector that sits inside the
-domain and sums to the budget. Integer lowering is XQSA v0.5.0 work.
+domain and sums to the budget.
 
 ## Pipeline overview
 

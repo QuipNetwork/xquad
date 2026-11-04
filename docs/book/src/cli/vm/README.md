@@ -19,7 +19,7 @@ The old top-level names `xquad asm`, `xquad dism`, `xquad run` and `xquad
 verify` still work in this release. Each prints one deprecation warning
 to stderr when it runs and otherwise behaves exactly like its `xquad vm`
 counterpart, so stdout and the exit code are unchanged. They are removed
-in v0.5.0.
+in v0.6.0.
 
 ## General usage
 

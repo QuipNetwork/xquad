@@ -957,12 +957,12 @@ def _warn_if_world_readable(path: Path) -> None:
 def __getattr__(name: str) -> object:
     """Serve the deprecated ``SIGNED_EXTENSIONS`` (PEP 562), warning at the caller's line.
 
-    QUI-1608 removes it in v0.5.0.
+    It is removed in v0.6.0.
     """
     if name != "SIGNED_EXTENSIONS":
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     warnings.warn(
-        "xqsa.quip.signing.SIGNED_EXTENSIONS is deprecated since v0.4.5 and removed in v0.5.0; "
+        "xqsa.quip.signing.SIGNED_EXTENSIONS is deprecated since v0.4.5 and removed in v0.6.0; "
         "the order comes from the runtime metadata",
         DeprecationWarning,
         stacklevel=2,

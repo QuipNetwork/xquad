@@ -130,7 +130,7 @@ class QuipReclaimRefusedError(QuipSubmissionError):
 
 
 class QuipUnconfirmedError(QuipSubmissionError):
-    """Deprecated: no longer produced since v0.4.5; removed in v0.5.0.
+    """Deprecated: no longer produced since v0.4.5; removed in v0.6.0.
 
     It was raised when a ``propose_job`` was sent but its outcome or order id
     was unknown, leaving the :class:`~xqsa.quip.JobOrder` ``unconfirmed``.
