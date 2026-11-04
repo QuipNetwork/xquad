@@ -238,11 +238,11 @@ __all__ = [
     "MINEABLE_TOPOLOGIES_STORAGE",
 ]
 
-# Importable, with a warning, until QUI-1608 removes them in v0.5.0.
+# Importable, with a warning, until QUI-1608 removes them in v0.6.0.
 _DEPRECATED = {
     "QuipUnconfirmedError": (
         "QuipUnconfirmedError is deprecated and no longer produced since v0.4.5: a send submit() cannot settle "
-        "raises QuipSubmitIncompleteError; removed in v0.5.0"
+        "raises QuipSubmitIncompleteError; removed in v0.6.0"
     ),
 }
 

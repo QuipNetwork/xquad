@@ -508,7 +508,7 @@ tour. Decoding needs the `JobOrder` from the session that submitted it.
 From a new session, the deprecated
 `solver.query(order_id, model, topology="native")` still returns a
 decoded `SolverResult`, with the same `topology` the order was proposed
-with; it warns and is removed in v0.5.0 (see [Deprecated
+with; it warns and is removed in v0.6.0 (see [Deprecated
 APIs](quip-network.md#deprecated-apis)).
 
 ## What Native Mode Gives Up

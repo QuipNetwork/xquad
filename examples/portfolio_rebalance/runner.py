@@ -27,7 +27,7 @@ The weights are declared with `lo=`/`hi=`, so coefficients are written over
 x in [-5, 5] while the model holds y = x - lo in {0, ..., 10}, and
 `sample.value()` shifts back on the way out.
 
-No solver samples an integer model yet -- that is XQSA v0.5.0 -- so `--solver`
+No solver samples an integer model yet, so `--solver`
 is accepted and ignored, and the pipeline runs against a hand-picked assignment.
 What that proves is stated in the README: the domain check, the shift and the
 decode compose. It does not prove anything optimises.

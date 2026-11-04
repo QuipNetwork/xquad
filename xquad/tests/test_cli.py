@@ -322,7 +322,7 @@ def test_alias_warns_on_stderr_and_matches_stdout(tmp_path: Path, old: str, new:
     new_result = invoke(["vm", new, *args])
     assert old_result.exit_code == new_result.exit_code == 0
     assert old_result.stdout_bytes == new_result.stdout_bytes
-    warning = f"warning: 'xquad {old}' is deprecated and will be removed in v0.5.0; use 'xquad vm {new}'\n"
+    warning = f"warning: 'xquad {old}' is deprecated and will be removed in v0.6.0; use 'xquad vm {new}'\n"
     assert old_result.stderr == warning + new_result.stderr
 
 

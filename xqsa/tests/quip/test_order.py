@@ -522,7 +522,7 @@ class TestClientDefaults:
         assert _make_solver(monkeypatch)._access == AccessOpen()
 
     def test_constructor_mode_is_deprecated(self, monkeypatch) -> None:
-        with pytest.warns(DeprecationWarning, match="mode= is deprecated, use access= .*QUI-1608"):
+        with pytest.warns(DeprecationWarning, match=r"mode= is deprecated, use access= .*v0\.6\.0"):
             solver = _make_solver(monkeypatch, mode="Open")
         assert solver._access == AccessOpen()
 
