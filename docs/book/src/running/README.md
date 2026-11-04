@@ -265,14 +265,14 @@ script and want the settings to carry across runs; pick `Session` for the
 dict-keyed, slot-sparse ergonomics shown above; pick `xqffi.vm.Vm` only if
 you are building your own layer on top of the raw Rust FFI.
 
-`VM.set_calldata()` applies the same size, grid and index rules to every
-`xquad.types.XQMX` it is given, with the same errors on both backends,
-and applies them again at `run()`, since it keeps your objects rather
-than copying them. A sample value outside its domain raises
-`xqvm_py.errors.SampleOutOfDomain`, a `ValueError` subclass, from
-`set_calldata()` on both backends. A sample changed out of its domain
-after `set_calldata()` is caught again at `run()`, where `RUST` raises a
-plain `ValueError` instead.
+`VM.set_calldata()` stores the list it is given and checks nothing
+itself, because the values check themselves. An `XqmxSample` raises
+`ValueError` when it is built with a value outside its domain, and again
+when such a value is written to it, so no out-of-domain sample can reach
+`run()`. The element types are checked at `run()`: anything other than an
+`int`, a `list[int]`, an `XqmxModel`, an `XqmxSample` or `None` raises
+`TypeError` there. A program that writes an out-of-domain value with
+`SETLINE` or `ADDLINE` faults with `SampleOutOfDomain`, an `XqvmError`.
 
 ## A complete run across three programs
 

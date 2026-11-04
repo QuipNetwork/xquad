@@ -621,7 +621,7 @@ on chain state or the round trip completing.
 ## Deprecated APIs
 
 Each of these warns with a `DeprecationWarning` and is removed in
-v0.5.0:
+v0.6.0:
 
 | Deprecated | Since | Use instead | Notes |
 |---|---|---|---|
