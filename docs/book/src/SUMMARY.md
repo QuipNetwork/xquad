@@ -102,5 +102,6 @@
 
 [Glossary](appendix/glossary.md)
 [Stability](appendix/stability.md)
+[Migrating from 0.4 to 0.5](appendix/migration-0.5.md)
 [Spec Index](appendix/spec-index.md)
 [Contributing to These Docs](appendix/contributing.md)
