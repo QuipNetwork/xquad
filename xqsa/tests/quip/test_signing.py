@@ -315,7 +315,7 @@ class TestDeprecatedSignedExtensions:
             order = shim.SIGNED_EXTENSIONS
         assert [str(w.message) for w in caught] == [
             "xqsa.quip_signing is deprecated; import xqsa.quip.signing instead",
-            "xqsa.quip.signing.SIGNED_EXTENSIONS is deprecated since v0.4.5 and removed in v0.5.0; "
+            "xqsa.quip.signing.SIGNED_EXTENSIONS is deprecated since v0.4.5 and removed in v0.6.0; "
             "the order comes from the runtime metadata",
         ]
         assert order == quip_signing._SIGNED_EXTENSIONS_0_4

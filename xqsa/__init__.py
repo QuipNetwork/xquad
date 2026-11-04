@@ -39,6 +39,6 @@ __all__ = [
     "build_solver",
 ]
 
-# The Quip names live in xqsa.quip; the flat ones warn until v0.5.0 (QUI-1608).
+# The Quip names live in xqsa.quip; the flat ones warn until v0.6.0 (QUI-1608).
 __getattr__ = flat_quip_getattr(__name__, "xqsa.quip")
 __dir__ = flat_quip_dir(__name__)
