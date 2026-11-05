@@ -71,12 +71,14 @@ The live suite runs in two tiers, by what a test needs from the chain:
 - **funded**: `QUIP_FAUCET_URL` set. The `funded_keystore` fixture generates a
   fresh keystore and draws one faucet drip into it; `second_funded_keystore`
   draws a second for another account and skips its tests if the funding has not
-  landed within 60 s. A full session makes two faucet requests.
+  landed within 60 s. A full session makes two faucet requests, and removes both
+  accounts when it ends (see [Teardown](#teardown)).
 
 A funded run places nine orders, of three kinds:
 
 - **network** orders go through `solve()` with open access and test that the
-  network answers. An order nobody answers before its deadline skips.
+  network answers and that our claim pays the winners. An order nobody answers
+  before its deadline skips.
 - **self-solved** orders test chain rules. Nobody but our own accounts can
   answer them, so ranks, energies and leaders are fixed by the test.
 - **unanswered** orders expire with nothing touching them.
@@ -101,12 +103,43 @@ answer does. The chain refuses an answer after the order's expiry with
 order's `deadline_blocks` and `block_wait`. The
 orders are then claimed with `claim_reward`, so nothing stays reserved.
 
-Registration is permanent: every account a run registers stays on chain as a
-solver. The fixtures use throwaway keystores for that reason, so a run adds two
-solver accounts to the network: the first account as `QpuPasqal`, and the
-second as `Gpu`. The network's solvers register as `Cpu` or `Gpu`, so an
-allowlist of `QpuPasqal` admits our first account alone and refuses the second.
-Both accounts are registered in their fixtures, before any test answers.
+A run registers two solver accounts, on throwaway keystores: the first account
+as `QpuPasqal`, and the second as `Gpu`. The network's solvers register as `Cpu`
+or `Gpu`, so an allowlist of `QpuPasqal` admits our first account alone and
+refuses the second. Both accounts are registered in their fixtures, before any
+test answers.
+
+### Teardown
+
+The `live_accounts` session fixture removes both accounts when the run ends, in
+one sequence:
+
+1. Settle each order the accounts still hold: wait for it to go final, then
+   send `claim_reward` if it was answered or `reclaim_order` if not. Tests claim
+   their own orders, so this catches what a failed test left. An order left open
+   can add up to its deadline to the run, about 10 minutes at 100 blocks.
+2. Send `deregister_solver` for each account still registered.
+3. Send each account's balance to the keyless `0x00…00` account with
+   `Balances.transfer_all`, which deletes the account.
+
+A failed step warns and names the account without failing the run, and an
+account with funds reserved or a solver row left keeps its balance. Teardown runs
+on Ctrl-C and SIGTERM. SIGKILL or power loss skips it, and the accounts stay on
+chain with no key to remove them: pytest rotates its temp directories after three
+sessions, and removing one then takes `Sudo.sudo_as`.
+
+The transfer marks the end of a fixture account's life. Look for a
+`Balances.Transfer` to `0x00…00` with the sender's `System.KilledAccount` in the
+same extrinsic. A plain transfer to `0x00…00` isn't enough, because aglais has
+two 10 AGLS transfers to it that came from another source. The account's row is
+gone by then, so this reads events. `0x00…00`'s balance only rises, so bisecting
+it over block history finds each transfer without scanning every block.
+
+The span from the account's first funding to that transfer is the fixture's
+lifetime on chain. Other accounts act during that span, so tie a side effect to
+the fixture through its account as signer, proposer or solver. A funded account
+with no such transfer points to a run that didn't finish its teardown. Anyone can
+send funds this way, so read the marker as a convention, not proof.
 
 Timing is set per order. Self-solved orders use a 30-block deadline with a
 `block_wait` of 4 to 8 blocks, long enough for the answers they wait on. The
