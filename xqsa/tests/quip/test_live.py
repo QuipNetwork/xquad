@@ -29,8 +29,8 @@ env vars at its RPC + faucet:
 Three kinds of order:
 
 * NETWORK orders (``TestNetwork``) go through ``solve()`` with open access and
-  test that the network answers. When nobody answers before the deadline they
-  skip with a ``network:`` reason.
+  test that the network answers and that our claim pays the winners. When
+  nobody answers before the deadline they skip with a ``network:`` reason.
 * SELF-SOLVED orders (``TestSelfSolved``) test chain rules. They go through the
   real submit, admit only our own accounts (our two, ours beside a keyless
   one, or our solver type beside a keyless one), and are answered by those
@@ -350,6 +350,24 @@ def _claim_from(solver: SolverQuip, order_id: int) -> tuple[dict[bytes, int], st
         if int(attrs["order_id"]) == order_id
     }
     return paid, sent.block_hash
+
+
+def _wait_until_closable(solver: SolverQuip, order_id: int) -> None:
+    """Wait for the chain to mark a final order ``Expired``, which it can do some blocks past the expiry."""
+    deadline = time.monotonic() + 120
+    while solver.get_receipt(order_id).status()["chain_status"] == "Opened":
+        if time.monotonic() >= deadline:
+            pytest.fail(f"order {order_id} still reads Opened 120 s after it went final")
+        time.sleep(3)
+
+
+def _claim_pays_winners(solver: SolverQuip, order_id: int) -> None:
+    """Claim a final order from ``solver``'s account and assert the claim paid the receipt's winners."""
+    _wait_until_closable(solver, order_id)
+    winners = solver.get_receipt(order_id).settlement()["winners"]
+    expected = {w["solver"]: w["allocation_planck"] for w in winners if w["allocation_planck"]}
+    paid, _block = _claim_from(solver, order_id)
+    assert {quip_chain.ss58_address(solver._iface, account): amount for account, amount in paid.items()} == expected
 
 
 def _ss58(solver: SolverQuip) -> str:
@@ -698,6 +716,7 @@ class TestNetwork:
             recovered = solver.query(order_id, model)
         assert recovered is not None
         assert recovered.energy == result.energy
+        _claim_pays_winners(solver, order_id)
 
     def test_network_solves_a_native_order(self, make_solver) -> None:
         """A K6 model, which the default topology cannot place, solves in native mode."""
@@ -710,6 +729,7 @@ class TestNetwork:
         assert result.metadata["energy_matches_chain"] is True
         assert result.metadata["num_solutions"] >= 1
         assert _feasible(result.sample, model.size, {-1, 1})
+        _claim_pays_winners(solver, result.metadata["order_id"])
 
 
 class TestSelfSolved:
