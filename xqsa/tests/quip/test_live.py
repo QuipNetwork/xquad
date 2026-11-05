@@ -95,7 +95,7 @@ from xqsa.quip.display import Floors, floors_text
 from xqsa.quip.faucet import fund_from_faucet
 from xqsa.quip.metadata import connect as connect_shimmed
 from xqsa.quip.resolution import MIN_RANK_WEIGHTED_SPEC
-from xqsa.quip.signing import check_runtime, load_keystore, load_or_generate_keystore
+from xqsa.quip.signing import check_runtime, load_or_generate_keystore
 from xqsa.quip.solution import decode_answers, pick_best
 
 RPC_URL = os.environ.get("QUIP_RPC_URL")
@@ -148,18 +148,19 @@ def chain():
     iface.close()
 
 
-def _new_funded_keystore(tmp_path_factory, live_accounts: list[str], name: str) -> str:
+def _new_funded_keystore(tmp_path_factory, live_accounts: dict[str, str], name: str) -> str:
     """Generate a keystore under ``name``, fund it from the faucet and wait for the transfer; returns its path.
 
     The keystore joins ``live_accounts`` before the faucet call, so a funding
-    that lands after this gives up is still torn down.
+    that lands after this gives up but before the teardown drains is removed.
+    One that lands later stays on chain; ``_drain`` warns that it could.
     """
     if not FAUCET_URL:
         pytest.skip("designed: QUIP_FAUCET_URL unset; funded live tests skipped")
     path = str(tmp_path_factory.mktemp(name) / "keystore.json")
     keystore = load_or_generate_keystore(path)
-    live_accounts.append(path)
     dest = "0x" + keystore.account_id.hex()
+    live_accounts[path] = dest
 
     try:
         fund_from_faucet(dest, url=FAUCET_URL)
@@ -187,7 +188,7 @@ def _new_funded_keystore(tmp_path_factory, live_accounts: list[str], name: str) 
 OWN_SOLVER_TYPE = "QpuPasqal"
 
 
-def _new_solver_keystore(tmp_path_factory, live_accounts: list[str], name: str, solver_type: str) -> str:
+def _new_solver_keystore(tmp_path_factory, live_accounts: dict[str, str], name: str, solver_type: str) -> str:
     """A funded keystore whose account is registered as a ``solver_type`` solver; returns its path.
 
     Registration happens once, here, before any test answers an order.
@@ -238,29 +239,30 @@ def _drain(solver: SolverQuip) -> None:
     """Send the account's balance to ``RETIRED_FUNDS_ACCOUNT``, which deletes the account.
 
     Refuses while an order or a solver row remains, so the transfer only ever
-    marks an account that finished clean.
+    marks an account that finished clean. Every account here asked the faucet
+    for funds, so an empty one means that funding hasn't landed and still could.
     """
     account = solver._signer.account_id
     data = solver._iface.query("System", "Account", [account]).value["data"]
     if data["reserved"] or solver._iface.query("QuantumComputeMempool", "Solvers", [account]).value is not None:
         raise RuntimeError(f"{data['reserved']} planck reserved or a solver row remains; keeping its balance")
-    if data["free"]:
-        solver._submit_extrinsic("Balances", "transfer_all", {"dest": RETIRED_FUNDS_ACCOUNT, "keep_alive": False})
+    if not data["free"]:
+        raise RuntimeError("it holds no balance; faucet funding that lands after this stays on chain")
+    solver._submit_extrinsic("Balances", "transfer_all", {"dest": RETIRED_FUNDS_ACCOUNT, "keep_alive": False})
 
 
-def _tear_down(keystores: list[str]) -> None:
+def _tear_down(accounts: dict[str, str]) -> None:
     """Run each step over every account: settling can pay another account, so draining waits for all of it.
 
     A failure warns and names the account and step: the tests have already reported.
     """
     for step in (_settle_orders, _deregister, _drain):
-        for path in keystores:
+        for path, account in accounts.items():
             solver = None
             try:
                 solver = _teardown_client(path)
                 step(solver)
             except Exception as exc:
-                account = "0x" + load_keystore(path).account_id.hex()
                 warnings.warn(f"live suite teardown: {step.__name__} failed for {account}: {exc}", stacklevel=2)
             finally:
                 if solver is not None:
@@ -272,19 +274,19 @@ def _interrupt_on_sigterm(signum, frame) -> None:
 
 
 @pytest.fixture(scope="session")
-def live_accounts() -> Iterator[list[str]]:
-    """The keystores this session put on chain; removes their accounts when it ends.
+def live_accounts() -> Iterator[dict[str, str]]:
+    """The accounts this session put on chain, by keystore path; removes them when it ends.
 
     One sequence over both accounts, set up before either keystore fixture so
     it runs after them. Pytest tears down on ``KeyboardInterrupt``, so SIGTERM
     becomes one for the session and is ignored while the teardown runs.
     """
-    keystores: list[str] = []
+    accounts: dict[str, str] = {}
     previous = signal.signal(signal.SIGTERM, _interrupt_on_sigterm)
-    yield keystores
+    yield accounts
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     try:
-        _tear_down(keystores)
+        _tear_down(accounts)
     finally:
         signal.signal(signal.SIGTERM, previous)
 

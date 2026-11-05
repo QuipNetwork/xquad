@@ -126,7 +126,9 @@ A failed step warns and names the account without failing the run, and an
 account with funds reserved or a solver row left keeps its balance. Teardown runs
 on Ctrl-C and SIGTERM. SIGKILL or power loss skips it, and the accounts stay on
 chain with no key to remove them: pytest rotates its temp directories after three
-sessions, and removing one then takes `Sudo.sudo_as`.
+sessions, and removing one then takes `Sudo.sudo_as`. Teardown also warns about
+an account with no balance, because faucet funding that lands after the run
+stays on chain.
 
 The transfer marks the end of a fixture account's life. Look for a
 `Balances.Transfer` to `0x00…00` with the sender's `System.KilledAccount` in the
