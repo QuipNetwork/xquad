@@ -29,8 +29,8 @@ env vars at its RPC + faucet:
 Three kinds of order:
 
 * NETWORK orders (``TestNetwork``) go through ``solve()`` with open access and
-  test that the network answers. When nobody answers before the deadline they
-  skip with a ``network:`` reason.
+  test that the network answers and that our claim pays the winners. When
+  nobody answers before the deadline they skip with a ``network:`` reason.
 * SELF-SOLVED orders (``TestSelfSolved``) test chain rules. They go through the
   real submit, admit only our own accounts (our two, ours beside a keyless
   one, or our solver type beside a keyless one), and are answered by those
@@ -50,7 +50,10 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 import time
+import warnings
+from collections.abc import Iterator
 
 import pytest
 
@@ -145,13 +148,19 @@ def chain():
     iface.close()
 
 
-def _new_funded_keystore(tmp_path_factory, name: str) -> str:
-    """Generate a keystore under ``name``, fund it from the faucet and wait for the transfer; returns its path."""
+def _new_funded_keystore(tmp_path_factory, live_accounts: dict[str, str], name: str) -> str:
+    """Generate a keystore under ``name``, fund it from the faucet and wait for the transfer; returns its path.
+
+    The keystore joins ``live_accounts`` before the faucet call, so a funding
+    that lands after this gives up but before the teardown drains is removed.
+    One that lands later stays on chain; ``_drain`` warns that it could.
+    """
     if not FAUCET_URL:
         pytest.skip("designed: QUIP_FAUCET_URL unset; funded live tests skipped")
     path = str(tmp_path_factory.mktemp(name) / "keystore.json")
     keystore = load_or_generate_keystore(path)
     dest = "0x" + keystore.account_id.hex()
+    live_accounts[path] = dest
 
     try:
         fund_from_faucet(dest, url=FAUCET_URL)
@@ -179,12 +188,13 @@ def _new_funded_keystore(tmp_path_factory, name: str) -> str:
 OWN_SOLVER_TYPE = "QpuPasqal"
 
 
-def _new_solver_keystore(tmp_path_factory, name: str, solver_type: str) -> str:
+def _new_solver_keystore(tmp_path_factory, live_accounts: dict[str, str], name: str, solver_type: str) -> str:
     """A funded keystore whose account is registered as a ``solver_type`` solver; returns its path.
 
-    Registration is permanent, so it happens once, here, before any test answers an order.
+    Registration happens once, here, before any test answers an order.
+    ``live_accounts`` removes the account when the session ends.
     """
-    path = _new_funded_keystore(tmp_path_factory, name)
+    path = _new_funded_keystore(tmp_path_factory, live_accounts, name)
     solver = SolverQuip(url=RPC_URL, keystore=path, **SOLVER_KWARGS)
     try:
         solver._submit_extrinsic("QuantumComputeMempool", "register_solver", {"solver_type": solver_type})
@@ -193,23 +203,152 @@ def _new_solver_keystore(tmp_path_factory, name: str, solver_type: str) -> str:
     return path
 
 
+# Where a torn-down account's balance goes: an account nobody holds a key for.
+# Its transfer is the fixture account's last act on chain; the guide describes
+# how to read that back.
+RETIRED_FUNDS_ACCOUNT = "0x" + "00" * 32
+
+
+def _teardown_client(path: str) -> SolverQuip:
+    """A client on a new connection: the session's old ones may have been dropped while idle."""
+    return SolverQuip(url=RPC_URL, keystore=path, **SOLVER_KWARGS)
+
+
+def _wait_for_pool(solver: SolverQuip) -> None:
+    """Wait until nothing this account sent is still in the transaction pool.
+
+    An interrupted run can leave a registration or a proposal there, and it
+    would land after this teardown had read the account. A proposal leaves the
+    pool when its inclusion window ends, so the wait gives up after that long;
+    an immortal transaction still pending then only gets a warning.
+    """
+    deadline = time.monotonic() + solver._inclusion_window_blocks * 6
+    account = solver._signer.account_id
+    while (
+        solver._iface.rpc_request("system_accountNextIndex", [solver.account])["result"]
+        > solver._iface.query("System", "Account", [account]).value["nonce"]
+    ):
+        if time.monotonic() >= deadline:
+            raise TimeoutError("a transaction it sent is still in the pool")
+        time.sleep(3)
+
+
+def _settle_orders(solver: SolverQuip) -> None:
+    """Close every order the account still holds: claim the answered ones and reclaim the rest.
+
+    Waits for each to go final, so an order a failed test left open costs up to
+    its deadline. Tests claim their own orders; this catches what a failure left.
+    A failed order warns and names itself, and the next one still gets settled.
+    """
+    account = "0x" + bytes(solver._signer.account_id).hex()
+    for order_id in quip_chain.proposer_orders(solver._iface, solver._signer.account_id):
+        try:
+            solver._reconnect()  # the wait for the previous order may have outlasted this connection.
+            receipt = solver.get_receipt(order_id).wait()
+            _wait_until_closable(solver, order_id)
+            if receipt.status()["solution_count"]:
+                _claim_from(solver, order_id)
+            else:
+                receipt.reclaim()
+        except Exception as exc:
+            warnings.warn(f"live suite teardown: order {order_id} of {account} not settled: {exc}", stacklevel=2)
+
+
+def _deregister(solver: SolverQuip) -> None:
+    """Remove the account's solver row, when it has one."""
+    if solver._iface.query("QuantumComputeMempool", "Solvers", [solver._signer.account_id]).value is not None:
+        solver._submit_extrinsic("QuantumComputeMempool", "deregister_solver", {})
+
+
+def _drain(solver: SolverQuip) -> None:
+    """Send the account's balance to ``RETIRED_FUNDS_ACCOUNT``, which deletes the account.
+
+    Refuses while an order, a reserve or a solver row remains, so the transfer
+    only ever marks an account that finished clean. Every account here asked the
+    faucet for funds, so an empty one means that funding hasn't landed and still could.
+    """
+    account = solver._signer.account_id
+    data = solver._iface.query("System", "Account", [account]).value["data"]
+    registered = solver._iface.query("QuantumComputeMempool", "Solvers", [account]).value is not None
+    if data["reserved"] or registered or quip_chain.proposer_orders(solver._iface, account):
+        raise RuntimeError(
+            f"{data['reserved']} planck reserved, or an order or a solver row remains; keeping its balance"
+        )
+    if not data["free"]:
+        raise RuntimeError("it holds no balance; faucet funding that lands after this stays on chain")
+    solver._submit_extrinsic("Balances", "transfer_all", {"dest": RETIRED_FUNDS_ACCOUNT, "keep_alive": False})
+
+
+def _tear_down(accounts: dict[str, str]) -> None:
+    """Run each step over every account: settling can pay another account, so draining waits for all of it.
+
+    A failure warns and names the account and step: the tests have already reported.
+    """
+    for step in (_wait_for_pool, _settle_orders, _deregister, _drain):
+        for path, account in accounts.items():
+            solver = None
+            try:
+                solver = _teardown_client(path)
+                step(solver)
+            except Exception as exc:
+                warnings.warn(f"live suite teardown: {step.__name__} failed for {account}: {exc}", stacklevel=2)
+            finally:
+                if solver is not None:
+                    _close(solver._iface)
+
+
+# A terminated run and a closed terminal would otherwise skip the teardown. Windows has no SIGHUP.
+_TEARDOWN_SIGNALS = tuple(getattr(signal, name) for name in ("SIGTERM", "SIGHUP") if hasattr(signal, name))
+
+
+def _interrupt_on_signal(signum, frame) -> None:
+    """Interrupt the run once: no later signal, of either kind, may interrupt pytest's teardown."""
+    for handled in _TEARDOWN_SIGNALS:
+        signal.signal(handled, signal.SIG_IGN)
+    raise KeyboardInterrupt(f"signal {signum}")
+
+
 @pytest.fixture(scope="session")
-def funded_keystore(tmp_path_factory):
+def live_accounts() -> Iterator[dict[str, str]]:
+    """The accounts this session put on chain, by keystore path; removes them when it ends.
+
+    One sequence over both accounts, set up before either keystore fixture so
+    it runs after them. Pytest tears down on ``KeyboardInterrupt``, so SIGTERM
+    and SIGHUP become one for the session and are ignored while the teardown
+    runs. A signal already ignored stays ignored, so ``nohup`` keeps working.
+    """
+    accounts: dict[str, str] = {}
+    previous = {signum: signal.getsignal(signum) for signum in _TEARDOWN_SIGNALS}
+    for signum, handler in previous.items():
+        if handler != signal.SIG_IGN:
+            signal.signal(signum, _interrupt_on_signal)
+    yield accounts
+    for signum in previous:
+        signal.signal(signum, signal.SIG_IGN)
+    try:
+        _tear_down(accounts)
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
+@pytest.fixture(scope="session")
+def funded_keystore(tmp_path_factory, live_accounts):
     """A fresh keystore funded via the chain's faucet, its account a solver of ``OWN_SOLVER_TYPE``.
 
     Skips the whole funded tier when ``QUIP_FAUCET_URL`` is unset -- without a
     funder we cannot reserve a reward.
     """
-    return _new_solver_keystore(tmp_path_factory, "quip", OWN_SOLVER_TYPE)
+    return _new_solver_keystore(tmp_path_factory, live_accounts, "quip", OWN_SOLVER_TYPE)
 
 
 @pytest.fixture(scope="session")
-def second_funded_keystore(tmp_path_factory):
+def second_funded_keystore(tmp_path_factory, live_accounts):
     """Another funded keystore, for a second solver account on one order, registered as a ``Gpu`` solver.
 
     Its type is what lets an allowlist of ``OWN_SOLVER_TYPE`` refuse it.
     """
-    return _new_solver_keystore(tmp_path_factory, "quip-second", "Gpu")
+    return _new_solver_keystore(tmp_path_factory, live_accounts, "quip-second", "Gpu")
 
 
 @pytest.fixture
@@ -304,6 +443,7 @@ def _submit_answer(solver: SolverQuip, order_id: int, vectors: list[list[int]]):
     """
     pallet = "QuantumComputeMempool"
     solutions = quip_chain.wrap_bounded([quip_chain.wrap_bounded(list(vector)) for vector in vectors])
+    solver._reconnect()  # this client may have sat idle past the limit, about two minutes on aglais.
 
     def late(where: str) -> None:
         timing = solver._fetch_order(order_id)["timing"]
@@ -343,6 +483,7 @@ def _claim_from(solver: SolverQuip, order_id: int) -> tuple[dict[bytes, int], st
     Returns what the claim paid, ``{account bytes: amount}`` from the block's
     ``RewardClaimed`` events for the order, and the block's hash.
     """
+    solver._reconnect()  # as in _submit_answer: a second account sits idle while the first waits on the order.
     sent = solver._submit_extrinsic("QuantumComputeMempool", "claim_reward", {"order_id": order_id})
     paid = {
         quip_chain.account_bytes(attrs["solver"]): int(attrs["amount"])
@@ -350,6 +491,24 @@ def _claim_from(solver: SolverQuip, order_id: int) -> tuple[dict[bytes, int], st
         if int(attrs["order_id"]) == order_id
     }
     return paid, sent.block_hash
+
+
+def _wait_until_closable(solver: SolverQuip, order_id: int) -> None:
+    """Wait for the chain to mark a final order ``Expired``, which it can do some blocks past the expiry."""
+    deadline = time.monotonic() + 120
+    while solver.get_receipt(order_id).status()["chain_status"] == "Opened":
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"order {order_id} still reads Opened 120 s after it went final")
+        time.sleep(3)
+
+
+def _claim_pays_winners(solver: SolverQuip, order_id: int) -> None:
+    """Claim a final order from ``solver``'s account and assert the claim paid the receipt's winners."""
+    _wait_until_closable(solver, order_id)
+    winners = solver.get_receipt(order_id).settlement()["winners"]
+    expected = {w["solver"]: w["allocation_planck"] for w in winners if w["allocation_planck"]}
+    paid, _block = _claim_from(solver, order_id)
+    assert {quip_chain.ss58_address(solver._iface, account): amount for account, amount in paid.items()} == expected
 
 
 def _ss58(solver: SolverQuip) -> str:
@@ -677,8 +836,8 @@ class TestNetwork:
 
         Optimality and encoding correctness are guarded deterministically by
         ``test_encoded_problem_argmin_decodes_to_optimum`` in ``test_client.py``.
-        This test covers propose, network solve, chain record, and decode without
-        requiring the probabilistic live network to reach the global optimum.
+        This test covers propose, network solve, chain record, decode and the claim
+        without requiring the probabilistic live network to reach the global optimum.
         """
         model = _asymmetric_spin_model()
         solver = make_solver()
@@ -698,6 +857,7 @@ class TestNetwork:
             recovered = solver.query(order_id, model)
         assert recovered is not None
         assert recovered.energy == result.energy
+        _claim_pays_winners(solver, order_id)
 
     def test_network_solves_a_native_order(self, make_solver) -> None:
         """A K6 model, which the default topology cannot place, solves in native mode."""
@@ -710,6 +870,7 @@ class TestNetwork:
         assert result.metadata["energy_matches_chain"] is True
         assert result.metadata["num_solutions"] >= 1
         assert _feasible(result.sample, model.size, {-1, 1})
+        _claim_pays_winners(solver, result.metadata["order_id"])
 
 
 class TestSelfSolved:
