@@ -72,7 +72,7 @@ The live suite runs in two tiers, by what a test needs from the chain:
   fresh keystore and draws one faucet drip into it; `second_funded_keystore`
   draws a second for another account and skips its tests if the funding has not
   landed within 60 s. A full session makes two faucet requests, and removes both
-  accounts when it ends (see [Teardown](#teardown)).
+  accounts when it ends (see [Removing the run's accounts](#removing-the-runs-accounts)).
 
 A funded run places nine orders, of three kinds:
 
@@ -89,7 +89,7 @@ A funded run places nine orders, of three kinds:
 | `TestSubmitPath` | the balance pre-check | funding |
 | `TestMortalEra` | the runtime accepts the mortal `propose_job` | funding |
 | `TestUnanswered` | an order only our account may answer: `solve()` times out, `on_initialize` expires it (`OrderExpired` in the `Initialization` phase), and its receipt reclaims it; auto-reclaim of a 1-block order | funding; the auto-reclaim test patches `MIN_DEADLINE_BLOCKS` to 1 |
-| `TestNetwork` | spin and native round trips through `solve()`; the deprecated `query()` and `status()` | the network to answer (skips otherwise) |
+| `TestNetwork` | spin and native round trips through `solve()`; the deprecated `query()` and `status()`; a claim that pays the winners | the network to answer (skips otherwise) |
 | `TestSelfSolved` | the draft lifecycle, the reclaim refusals for an open and an answered order, and a four-vector binary answer read back, also on a fresh client; a mixed-sign `TopNWeighted(2)` split claimed by the second account (runtime 119 and later); a `TopNEqual(2)` tie that keeps our lead; a type allowlist that refuses the second account; the solution, diversity and energy floors with a refusal for each | `second_funded_keystore`, except the lifecycle test, which needs funding only |
 | `TestPayoutRules` | `TopNWeighted` refused below runtime 119 (skips on 119 and later) | funding |
 
@@ -109,40 +109,6 @@ or `Gpu`, so an allowlist of `QpuPasqal` admits our first account alone and
 refuses the second. Both accounts are registered in their fixtures, before any
 test answers.
 
-### Teardown
-
-The `live_accounts` session fixture removes both accounts when the run ends, in
-one sequence:
-
-1. Settle each order the accounts still hold: wait for it to go final, then
-   send `claim_reward` if it was answered or `reclaim_order` if not. Tests claim
-   their own orders, so this catches what a failed test left. An order left open
-   can add up to its deadline to the run, about 10 minutes at 100 blocks.
-2. Send `deregister_solver` for each account still registered.
-3. Send each account's balance to the keyless `0x00…00` account with
-   `Balances.transfer_all`, which deletes the account.
-
-A failed step warns and names the account without failing the run, and an
-account with funds reserved or a solver row left keeps its balance. Teardown runs
-on Ctrl-C and SIGTERM. SIGKILL or power loss skips it, and the accounts stay on
-chain with no key to remove them: pytest rotates its temp directories after three
-sessions, and removing one then takes `Sudo.sudo_as`. Teardown also warns about
-an account with no balance, because faucet funding that lands after the run
-stays on chain.
-
-The transfer marks the end of a fixture account's life. Look for a
-`Balances.Transfer` to `0x00…00` with the sender's `System.KilledAccount` in the
-same extrinsic. A plain transfer to `0x00…00` isn't enough, because aglais has
-two 10 AGLS transfers to it that came from another source. The account's row is
-gone by then, so this reads events. `0x00…00`'s balance only rises, so bisecting
-it over block history finds each transfer without scanning every block.
-
-The span from the account's first funding to that transfer is the fixture's
-lifetime on chain. Other accounts act during that span, so tie a side effect to
-the fixture through its account as signer, proposer or solver. A funded account
-with no such transfer points to a run that didn't finish its teardown. Anyone can
-send funds this way, so read the marker as a convention, not proof.
-
 Timing is set per order. Self-solved orders use a 30-block deadline with a
 `block_wait` of 4 to 8 blocks, long enough for the answers they wait on. The
 unanswered orders use 10 blocks and 1 block. Network orders keep
@@ -158,6 +124,48 @@ chain or runtime makes the test inapplicable). `make test-quip-e2e` passes
 `-rs` so each reason is printed, and a summary hook in
 `xqsa/tests/quip/conftest.py` counts both kinds and lists any skip with
 neither prefix.
+
+### Removing the run's accounts
+
+The `live_accounts` session fixture removes both accounts when the run ends, in
+one sequence:
+
+1. Wait for anything the accounts sent to leave the transaction pool, so an
+   interrupted run's last transaction doesn't land after the teardown reads them.
+   The wait gives up with a warning after about 6 minutes, a proposal's inclusion
+   window. Only proposals expire from the pool, so a registration or an answer
+   still pending then can land later.
+2. Settle each order the accounts still hold: wait for it to go final, then
+   send `claim_reward` if it was answered or `reclaim_order` if not. Tests claim
+   their own orders, so this catches what a failed test left. An order left open
+   can add up to its deadline to the run, about 10 minutes at 100 blocks.
+3. Send `deregister_solver` for each account still registered.
+4. Send each account's balance to the keyless `0x00…00` account with
+   `Balances.transfer_all`, which deletes the account.
+
+A failed step warns and names the account without failing the run, and a failed
+order doesn't stop the others. An account with funds reserved, an order or a
+solver row left keeps its balance. Teardown runs on Ctrl-C, SIGTERM and SIGHUP.
+SIGKILL or power loss skips it, and the accounts stay on
+chain with no key to remove them: pytest rotates its temp directories after three
+sessions, and removing one then takes
+privileged access to the chain: `Sudo.sudo_as` up to runtime 119, since runtime
+120 removes sudo. Teardown also warns about
+an account with no balance, because faucet funding that lands after the run
+stays on chain.
+
+The transfer marks the end of a fixture account's life. Look for a
+`Balances.Transfer` to `0x00…00` with the sender's `System.KilledAccount` in the
+same extrinsic. A plain transfer to `0x00…00` isn't enough, because aglais has
+two 10 AGLS transfers to it that came from another source. The account's row is
+gone by then, so this reads events. `0x00…00`'s balance only rises, so bisecting
+it over block history finds each transfer without scanning every block.
+
+The span from the account's first funding to that transfer is the fixture's
+lifetime on chain. Other accounts act during that span, so tie a side effect to
+the fixture through its account as signer, proposer or solver. A funded account
+with no such transfer points to a run that didn't finish its teardown. Anyone can
+send funds this way, so read the marker as a convention, not proof.
 
 ## Common prerequisites
 
@@ -461,8 +469,8 @@ fleet is active.
   that is not the global optimum -- observed: a 3-var binary model whose true
   optimum is -2 came back as -1, while the controlled DevNet CPU fleet returns
   -2 deterministically. Do not assert global optimality against a live fleet.
-  `TestNetwork` asserts only pipeline correctness (`energy_matches_chain`, a
-  returned solution, domain feasibility); encoding and optimality correctness
+  `TestNetwork` asserts pipeline correctness (`energy_matches_chain`, a returned
+  solution, domain feasibility) and that a claim pays the winners; encoding and optimality correctness
   are guarded deterministically offline by
   `test_client.py::test_encoded_problem_argmin_decodes_to_optimum`.
 - **Direct `pytest` invocation:** export `QUIP_RPC_URL` / `QUIP_FAUCET_URL` as

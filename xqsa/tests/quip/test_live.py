@@ -214,19 +214,44 @@ def _teardown_client(path: str) -> SolverQuip:
     return SolverQuip(url=RPC_URL, keystore=path, **SOLVER_KWARGS)
 
 
+def _wait_for_pool(solver: SolverQuip) -> None:
+    """Wait until nothing this account sent is still in the transaction pool.
+
+    An interrupted run can leave a registration or a proposal there, and it
+    would land after this teardown had read the account. A proposal leaves the
+    pool when its inclusion window ends, so the wait gives up after that long;
+    an immortal transaction still pending then only gets a warning.
+    """
+    deadline = time.monotonic() + solver._inclusion_window_blocks * 6
+    account = solver._signer.account_id
+    while (
+        solver._iface.rpc_request("system_accountNextIndex", [solver.account])["result"]
+        > solver._iface.query("System", "Account", [account]).value["nonce"]
+    ):
+        if time.monotonic() >= deadline:
+            raise TimeoutError("a transaction it sent is still in the pool")
+        time.sleep(3)
+
+
 def _settle_orders(solver: SolverQuip) -> None:
     """Close every order the account still holds: claim the answered ones and reclaim the rest.
 
     Waits for each to go final, so an order a failed test left open costs up to
     its deadline. Tests claim their own orders; this catches what a failure left.
+    A failed order warns and names itself, and the next one still gets settled.
     """
+    account = "0x" + bytes(solver._signer.account_id).hex()
     for order_id in quip_chain.proposer_orders(solver._iface, solver._signer.account_id):
-        receipt = solver.get_receipt(order_id).wait()
-        _wait_until_closable(solver, order_id)
-        if receipt.status()["solution_count"]:
-            _claim_from(solver, order_id)
-        else:
-            receipt.reclaim()
+        try:
+            solver._reconnect()  # the wait for the previous order may have outlasted this connection.
+            receipt = solver.get_receipt(order_id).wait()
+            _wait_until_closable(solver, order_id)
+            if receipt.status()["solution_count"]:
+                _claim_from(solver, order_id)
+            else:
+                receipt.reclaim()
+        except Exception as exc:
+            warnings.warn(f"live suite teardown: order {order_id} of {account} not settled: {exc}", stacklevel=2)
 
 
 def _deregister(solver: SolverQuip) -> None:
@@ -238,14 +263,17 @@ def _deregister(solver: SolverQuip) -> None:
 def _drain(solver: SolverQuip) -> None:
     """Send the account's balance to ``RETIRED_FUNDS_ACCOUNT``, which deletes the account.
 
-    Refuses while an order or a solver row remains, so the transfer only ever
-    marks an account that finished clean. Every account here asked the faucet
-    for funds, so an empty one means that funding hasn't landed and still could.
+    Refuses while an order, a reserve or a solver row remains, so the transfer
+    only ever marks an account that finished clean. Every account here asked the
+    faucet for funds, so an empty one means that funding hasn't landed and still could.
     """
     account = solver._signer.account_id
     data = solver._iface.query("System", "Account", [account]).value["data"]
-    if data["reserved"] or solver._iface.query("QuantumComputeMempool", "Solvers", [account]).value is not None:
-        raise RuntimeError(f"{data['reserved']} planck reserved or a solver row remains; keeping its balance")
+    registered = solver._iface.query("QuantumComputeMempool", "Solvers", [account]).value is not None
+    if data["reserved"] or registered or quip_chain.proposer_orders(solver._iface, account):
+        raise RuntimeError(
+            f"{data['reserved']} planck reserved, or an order or a solver row remains; keeping its balance"
+        )
     if not data["free"]:
         raise RuntimeError("it holds no balance; faucet funding that lands after this stays on chain")
     solver._submit_extrinsic("Balances", "transfer_all", {"dest": RETIRED_FUNDS_ACCOUNT, "keep_alive": False})
@@ -256,7 +284,7 @@ def _tear_down(accounts: dict[str, str]) -> None:
 
     A failure warns and names the account and step: the tests have already reported.
     """
-    for step in (_settle_orders, _deregister, _drain):
+    for step in (_wait_for_pool, _settle_orders, _deregister, _drain):
         for path, account in accounts.items():
             solver = None
             try:
@@ -269,7 +297,14 @@ def _tear_down(accounts: dict[str, str]) -> None:
                     _close(solver._iface)
 
 
-def _interrupt_on_sigterm(signum, frame) -> None:
+# A terminated run and a closed terminal would otherwise skip the teardown. Windows has no SIGHUP.
+_TEARDOWN_SIGNALS = tuple(getattr(signal, name) for name in ("SIGTERM", "SIGHUP") if hasattr(signal, name))
+
+
+def _interrupt_on_signal(signum, frame) -> None:
+    """Interrupt the run once: no later signal, of either kind, may interrupt pytest's teardown."""
+    for handled in _TEARDOWN_SIGNALS:
+        signal.signal(handled, signal.SIG_IGN)
     raise KeyboardInterrupt(f"signal {signum}")
 
 
@@ -279,16 +314,22 @@ def live_accounts() -> Iterator[dict[str, str]]:
 
     One sequence over both accounts, set up before either keystore fixture so
     it runs after them. Pytest tears down on ``KeyboardInterrupt``, so SIGTERM
-    becomes one for the session and is ignored while the teardown runs.
+    and SIGHUP become one for the session and are ignored while the teardown
+    runs. A signal already ignored stays ignored, so ``nohup`` keeps working.
     """
     accounts: dict[str, str] = {}
-    previous = signal.signal(signal.SIGTERM, _interrupt_on_sigterm)
+    previous = {signum: signal.getsignal(signum) for signum in _TEARDOWN_SIGNALS}
+    for signum, handler in previous.items():
+        if handler != signal.SIG_IGN:
+            signal.signal(signum, _interrupt_on_signal)
     yield accounts
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    for signum in previous:
+        signal.signal(signum, signal.SIG_IGN)
     try:
         _tear_down(accounts)
     finally:
-        signal.signal(signal.SIGTERM, previous)
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 @pytest.fixture(scope="session")
@@ -402,7 +443,7 @@ def _submit_answer(solver: SolverQuip, order_id: int, vectors: list[list[int]]):
     """
     pallet = "QuantumComputeMempool"
     solutions = quip_chain.wrap_bounded([quip_chain.wrap_bounded(list(vector)) for vector in vectors])
-    solver._reconnect()  # this client may have sat idle past the node's limit, about two minutes on aglais.
+    solver._reconnect()  # this client may have sat idle past the limit, about two minutes on aglais.
 
     def late(where: str) -> None:
         timing = solver._fetch_order(order_id)["timing"]
@@ -795,8 +836,8 @@ class TestNetwork:
 
         Optimality and encoding correctness are guarded deterministically by
         ``test_encoded_problem_argmin_decodes_to_optimum`` in ``test_client.py``.
-        This test covers propose, network solve, chain record, and decode without
-        requiring the probabilistic live network to reach the global optimum.
+        This test covers propose, network solve, chain record, decode and the claim
+        without requiring the probabilistic live network to reach the global optimum.
         """
         model = _asymmetric_spin_model()
         solver = make_solver()
