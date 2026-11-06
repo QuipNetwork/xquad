@@ -1516,6 +1516,26 @@ class TestSolverQuipConstruction:
         with pytest.raises(QuipConnectionError, match="genesis block hash: socket closed"):
             _make_solver(monkeypatch, iface=iface)
 
+    def test_the_genesis_check_refuses_another_chain_after_a_dropped_connection(self, monkeypatch) -> None:
+        from xqsa.quip.chain import GenesisMismatch
+
+        solver = _make_solver(monkeypatch)
+        with pytest.raises(GenesisMismatch, match="0xother"):
+            solver._iface.genesis_check("0xOTHER")
+
+    def test_the_genesis_check_accepts_the_same_chain_in_any_case(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+        solver._iface.genesis_check(solver._genesis_hash.upper().replace("0X", "0x"))
+
+    def test_a_replaced_connection_carries_the_genesis_check(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+        fresh = _default_iface()
+        monkeypatch.setattr("xqsa.quip.client._open", lambda url, ssl_context=None: fresh)
+        monkeypatch.setattr(solver, "_check_connection", lambda iface, **_: solver._genesis_hash)
+        solver._reconnect()
+        assert solver._iface is fresh
+        assert fresh.genesis_check == solver._check_recovered_genesis
+
     def test_missing_genesis_hash_raises_connection_error(self, monkeypatch) -> None:
         from xqsa.quip import QuipConnectionError
 

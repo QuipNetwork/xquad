@@ -38,6 +38,7 @@ than asserted about a decoder that ignores its input.
 
 from __future__ import annotations
 
+import json
 import os
 import ssl
 import sys
@@ -45,7 +46,9 @@ import types
 
 import pytest
 
+from xqsa.quip.chain import GenesisMismatch
 from xqsa.quip.codec import QuipMetadataError
+from xqsa.quip.errors import QuipConnectionError
 from xqsa.quip.metadata import (
     METADATA_AT_VERSION_API,
     TARGET_METADATA_VERSION,
@@ -126,6 +129,42 @@ def _stub_scalecodec(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "scalecodec.base", base)
 
 
+class _WebSocketException(Exception):
+    """Stands in for ``websocket.WebSocketException``."""
+
+
+class _WebSocketConnectionClosedException(_WebSocketException):
+    """Stands in for ``websocket.WebSocketConnectionClosedException``."""
+
+
+class _SubstrateRequestException(Exception):
+    """Stands in for ``substrateinterface.exceptions.SubstrateRequestException``: the node's own error."""
+
+
+@pytest.fixture(autouse=True)
+def _stub_websocket(monkeypatch) -> None:
+    """Make ``from websocket import WebSocketException`` resolve without the ``[quip]`` extra."""
+    module = types.ModuleType("websocket")
+    module.WebSocketException = _WebSocketException  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "websocket", module)
+
+
+class _Transport:
+    """A transport that records its lifecycle; ``connect_raises`` is what each ``connect`` raises, in turn."""
+
+    def __init__(self, connect_raises: list[Exception] | None = None) -> None:
+        self.events: list[str] = []
+        self._connect_raises = connect_raises or []
+
+    def close(self) -> None:
+        self.events.append("close")
+
+    def connect(self) -> None:
+        self.events.append("connect")
+        if self._connect_raises:
+            raise self._connect_raises.pop(0)
+
+
 class _ScaleObject:
     """A SCALE object whose ``decode()`` returns a preset value."""
 
@@ -169,6 +208,7 @@ class _StubInterface:
     """
 
     url = "ws://stub:9944"
+    transport = _Transport()
 
     def __init__(
         self,
@@ -280,7 +320,7 @@ class TestStockFallback:
     """Nodes without the versioned runtime API keep working (older DevNet images)."""
 
     def test_falls_back_when_state_call_raises(self) -> None:
-        iface = _shimmed(state_call_error=ConnectionError("no such runtime API"))
+        iface = _shimmed(state_call_error=_SubstrateRequestException("no such runtime API"))
         assert iface.get_block_metadata() is STOCK_METADATA
         assert _methods(iface) == ["state_call", "get_block_metadata"]
 
@@ -385,6 +425,7 @@ class _RuntimeStateStub:
     """
 
     SPEC_VERSION = 116
+    transport = _Transport()
     url = "ws://stub:9944"
 
     def __init__(self, *, offline_until: int = 0) -> None:
@@ -464,6 +505,212 @@ class TestTransactionalInitRuntime:
         assert iface.runtime_version == _RuntimeStateStub.SPEC_VERSION
         assert iface.block_hash == "0xhead"
         assert isinstance(iface.metadata, _ScaleObject)
+
+
+# ---------------------------------------------------------------------------
+# Recovery from a dropped connection
+# ---------------------------------------------------------------------------
+
+GENESIS = "0xgenesis"
+
+# The three faults a dropped connection raises: the empty frame, the closed socket, the broken pipe.
+DROPPED = [
+    pytest.param(lambda: json.JSONDecodeError("Expecting value", "", 0), id="empty-frame"),
+    pytest.param(lambda: _WebSocketConnectionClosedException("socket is already closed."), id="closed-socket"),
+    pytest.param(lambda: BrokenPipeError(32, "Broken pipe"), id="broken-pipe"),
+]
+
+
+class _Node:
+    """Stands in for ``SubstrateInterface``: each request takes the next of ``faults``, or answers.
+
+    ``sent`` records every request that reached the transport.
+    """
+
+    def __init__(self, faults: list[Exception] | None = None, connect_raises: list[Exception] | None = None) -> None:
+        self.faults = faults or []
+        self.transport = _Transport(connect_raises)
+        self.sent: list[str] = []
+        self.genesis: str | None = GENESIS
+
+    def rpc_request(self, method: str, params: list, result_handler: object = None) -> dict:
+        self.sent.append(method)
+        if self.faults:
+            raise self.faults.pop(0)
+        return {"result": self.genesis if method == "chain_getBlockHash" else "ok"}
+
+
+def _node(*faults: Exception, connect_raises: list[Exception] | None = None, expect: str | None = None) -> _Node:
+    """A recovering :class:`_Node`, checking the genesis against ``expect`` if one is given."""
+    iface = v14_interface_class(_Node)(list(faults), connect_raises)
+    if expect is not None:
+
+        def check(genesis: str) -> None:
+            if genesis != expect:
+                raise GenesisMismatch(f"serves {genesis}, not {expect}")
+
+        iface.genesis_check = check
+    return iface
+
+
+class TestReadRecovery:
+    """A read over a dropped connection reconnects and tries once more."""
+
+    @pytest.mark.parametrize("fault", DROPPED)
+    def test_a_read_reconnects_and_retries(self, fault) -> None:
+        iface = _node(fault())
+        assert iface.rpc_request("state_getStorage", ["0xkey"]) == {"result": "ok"}
+        assert iface.transport.events == ["close", "connect"]
+        assert iface.sent == ["state_getStorage", "state_getStorage"]
+
+    @pytest.mark.parametrize(
+        "method", ["state_call", "chain_getHeader", "system_accountNextIndex", "payment_queryInfo", "rpc_methods"]
+    )
+    def test_every_read_namespace_recovers(self, method: str) -> None:
+        iface = _node(BrokenPipeError(32, "Broken pipe"))
+        assert iface.rpc_request(method, []) == {"result": "ok"}
+
+    def test_the_old_socket_closes_first_even_if_closing_fails(self) -> None:
+        iface = _node(BrokenPipeError(32, "Broken pipe"))
+
+        def close() -> None:
+            iface.transport.events.append("close")
+            raise OSError("already gone")
+
+        iface.transport.close = close
+        assert iface.rpc_request("state_getStorage", []) == {"result": "ok"}
+        assert iface.transport.events == ["close", "connect"]
+
+    def test_a_transport_without_connect_just_retries(self) -> None:
+        iface = _node(ConnectionResetError("reset"))
+        iface.transport = types.SimpleNamespace(close=lambda: None)
+        assert iface.rpc_request("state_getStorage", []) == {"result": "ok"}
+
+    @pytest.mark.parametrize("fault", DROPPED)
+    def test_a_failed_reconnect_raises_a_connection_error(self, fault) -> None:
+        refused = ConnectionRefusedError("refused")
+        iface = _node(fault(), connect_raises=[refused])
+        with pytest.raises(QuipConnectionError, match="state_getStorage failed") as excinfo:
+            iface.rpc_request("state_getStorage", [])
+        assert excinfo.value.__cause__ is refused
+        assert iface.sent == ["state_getStorage"]
+
+    @pytest.mark.parametrize("fault", DROPPED)
+    def test_a_persistent_fault_raises_a_connection_error_after_one_retry(self, fault) -> None:
+        last = fault()
+        iface = _node(fault(), last)
+        with pytest.raises(QuipConnectionError) as excinfo:
+            iface.rpc_request("state_getStorage", [])
+        assert excinfo.value.__cause__ is last
+        assert iface.sent == ["state_getStorage", "state_getStorage"]
+        assert iface.transport.events == ["close", "connect"]
+
+    def test_the_next_read_after_a_failed_recovery_reconnects_first(self) -> None:
+        iface = _node(BrokenPipeError(32, "Broken pipe"), connect_raises=[ConnectionRefusedError("refused")])
+        with pytest.raises(QuipConnectionError):
+            iface.rpc_request("state_getStorage", [])
+        assert iface.rpc_request("state_getStorage", []) == {"result": "ok"}
+        assert iface.transport.events == ["close", "connect", "close", "connect"]
+
+    def test_a_node_error_is_not_retried(self) -> None:
+        refusal = _SubstrateRequestException({"code": -32602, "message": "Invalid params"})
+        iface = _node(refusal)
+        with pytest.raises(_SubstrateRequestException) as excinfo:
+            iface.rpc_request("state_getStorage", ["nothex"])
+        assert excinfo.value is refusal
+        assert iface.sent == ["state_getStorage"]
+        assert iface.transport.events == []
+
+    def test_a_healthy_read_touches_nothing_else(self) -> None:
+        iface = _node(expect=GENESIS)
+        assert iface.rpc_request("state_getStorage", []) == {"result": "ok"}
+        assert iface.sent == ["state_getStorage"]
+        assert iface.transport.events == []
+
+
+class TestGenesisCheckOnRecovery:
+    """A reconnect must reach the same chain, or the read is refused."""
+
+    def test_the_genesis_is_read_after_reconnecting_and_before_retrying(self) -> None:
+        iface = _node(BrokenPipeError(32, "Broken pipe"), expect=GENESIS)
+        assert iface.rpc_request("state_getStorage", []) == {"result": "ok"}
+        assert iface.sent == ["state_getStorage", "chain_getBlockHash", "state_getStorage"]
+
+    def test_a_mismatch_raises_genesis_mismatch_without_retrying(self) -> None:
+        iface = _node(BrokenPipeError(32, "Broken pipe"), expect="0xanotherchain")
+        with pytest.raises(GenesisMismatch):
+            iface.rpc_request("state_getStorage", [])
+        assert iface.sent == ["state_getStorage", "chain_getBlockHash"]
+
+    def test_a_mismatch_keeps_refusing_later_reads(self) -> None:
+        # The socket that served the wrong chain still answers, so a read that
+        # trusted it would return another chain's state.
+        iface = _node(BrokenPipeError(32, "Broken pipe"), expect="0xanotherchain")
+        for _ in range(2):
+            with pytest.raises(GenesisMismatch):
+                iface.rpc_request("state_getStorage", [])
+        assert "state_getStorage" not in iface.sent[1:]
+        assert iface.transport.events == ["close", "connect", "close", "connect"]
+
+    def test_reads_resume_once_the_node_serves_the_chain_again(self) -> None:
+        iface = _node(BrokenPipeError(32, "Broken pipe"), expect="0xanotherchain")
+        with pytest.raises(GenesisMismatch):
+            iface.rpc_request("state_getStorage", [])
+        iface.genesis_check = lambda genesis: None
+        assert iface.rpc_request("state_getStorage", []) == {"result": "ok"}
+
+    def test_a_fault_reading_the_genesis_ends_the_recovery(self) -> None:
+        # Not another round of recovery: that read goes past the override.
+        iface = _node(BrokenPipeError(32, "Broken pipe"), BrokenPipeError(32, "still broken"), expect=GENESIS)
+        with pytest.raises(QuipConnectionError, match="still broken"):
+            iface.rpc_request("state_getStorage", [])
+        assert iface.sent == ["state_getStorage", "chain_getBlockHash"]
+        assert iface.transport.events == ["close", "connect"]
+
+    def test_a_read_that_cannot_verify_the_genesis_stays_suspect(self) -> None:
+        iface = _node(BrokenPipeError(32, "Broken pipe"), BrokenPipeError(32, "still broken"), expect=GENESIS)
+        with pytest.raises(QuipConnectionError):
+            iface.rpc_request("state_getStorage", [])
+        assert iface.rpc_request("state_getStorage", []) == {"result": "ok"}
+        assert iface.sent[-2:] == ["chain_getBlockHash", "state_getStorage"]
+
+    def test_no_genesis_in_the_answer_raises_a_connection_error(self) -> None:
+        iface = _node(BrokenPipeError(32, "Broken pipe"), expect=GENESIS)
+        iface.genesis = None
+        with pytest.raises(QuipConnectionError, match="no genesis"):
+            iface.rpc_request("state_getStorage", [])
+
+
+class TestSendsAreNeverRetried:
+    """A connection lost after a signed call went out says nothing about whether it landed."""
+
+    @pytest.mark.parametrize("fault", DROPPED)
+    @pytest.mark.parametrize(
+        ("method", "handler"),
+        [("author_submitExtrinsic", None), ("author_submitAndWatchExtrinsic", lambda *_: None)],
+    )
+    def test_a_signed_call_goes_out_once_and_its_fault_stays_raw(self, method, handler, fault) -> None:
+        dropped = fault()
+        iface = _node(dropped, expect=GENESIS)
+        with pytest.raises(type(dropped)) as excinfo:
+            iface.rpc_request(method, ["0x00"], result_handler=handler)
+        assert excinfo.value is dropped
+        assert iface.sent == [method]
+        assert iface.transport.events == []
+
+    def test_a_subscription_is_not_retried(self) -> None:
+        dropped = BrokenPipeError(32, "Broken pipe")
+        iface = _node(dropped)
+        with pytest.raises(BrokenPipeError):
+            iface.rpc_request("chain_subscribeNewHeads", [], result_handler=lambda *_: None)
+        assert iface.sent == ["chain_subscribeNewHeads"]
+
+    def test_a_send_after_a_failed_recovery_does_not_reconnect(self) -> None:
+        iface = _node(BrokenPipeError(32, "Broken pipe"), connect_raises=[ConnectionRefusedError("refused")])
+        with pytest.raises(QuipConnectionError):
+            iface.rpc_request("state_getStorage", [])
+        assert iface.rpc_request("author_submitExtrinsic", ["0x00"]) == {"result": "ok"}
+        assert iface.transport.events == ["close", "connect"]
 
 
 # ---------------------------------------------------------------------------
