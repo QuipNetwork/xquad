@@ -147,3 +147,10 @@ include:
     - local: .gitlab/ci/hardware.yml
     - local: .gitlab/ci/docs.yml
     - local: .gitlab/ci/release.yml
+
+# The gate reads workspace members' peer pins as registry prereleases. uv.lock
+# still covers their third-party dependencies. Remove with QUI-1913, which
+# deletes these manifests.
+dependency-report:
+    before_script:
+        - git rm -q --cached xqcp/pyproject.toml xqsa/pyproject.toml xquad/pyproject.toml
