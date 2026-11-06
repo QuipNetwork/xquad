@@ -2498,6 +2498,42 @@ class TestSolverQuipSubmission:
         with pytest.raises(QuipSubmissionError, match="failed on-chain"):
             solver._submit_built("QuantumComputeMempool", "propose_job", b"\x00\x01", "0xext")
 
+    @pytest.mark.parametrize(
+        "fault",
+        [
+            json.JSONDecodeError("Expecting value", "", 0),
+            BrokenPipeError(32, "Broken pipe"),
+            RuntimeError("Connection to remote host was lost."),
+        ],
+    )
+    def test_submit_built_reports_a_lost_connection_as_an_unknown_outcome(self, monkeypatch, fault) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        solver = _make_solver(monkeypatch)
+        _patch_signing(monkeypatch, solver)
+
+        def drop(*_args, **_kwargs):
+            raise fault
+
+        monkeypatch.setattr(solver._quip_signing, "submit_and_watch", drop)
+        with pytest.raises(QuipSubmissionError, match="outcome is unknown") as excinfo:
+            solver._submit_built("QuantumComputeMempool", "submit_solution", b"\x00\x01", "0xext")
+        assert "0xext" in str(excinfo.value)
+        assert excinfo.value.__cause__ is fault
+
+    def test_submit_built_keeps_a_quip_error_as_itself(self, monkeypatch) -> None:
+        from xqsa.quip import QuipMetadataError
+
+        solver = _make_solver(monkeypatch)
+        _patch_signing(monkeypatch, solver)
+
+        def refuse(*_args, **_kwargs):
+            raise QuipMetadataError("cannot read this runtime")
+
+        monkeypatch.setattr(solver._quip_signing, "submit_and_watch", refuse)
+        with pytest.raises(QuipMetadataError):
+            solver._submit_built("QuantumComputeMempool", "submit_solution", b"\x00\x01", "0xext")
+
     def test_propose_job_is_signed_mortal_from_the_finalized_head(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch, inclusion_window_blocks=100)
         solver._iface.head = 74773

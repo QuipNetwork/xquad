@@ -515,13 +515,21 @@ def submit_built(
     failure.
 
     Raises:
-        QuipSubmissionError: if submission fails or the dispatch was
-            rejected by the chain.
+        QuipSubmissionError: if submission fails, the connection is lost while
+            submitting (the outcome is then unknown and the message says so), or
+            the dispatch was rejected by the chain.
     """
     try:
         receipt = quip_signing.submit_and_watch(iface, wire, ext_hash, wait_for=wait_for)
     except quip_signing.QuipSigningError as exc:
         raise QuipSubmissionError(f"{call_module}.{call_function} could not be submitted: {exc}") from exc
+    except QuipError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- a transport fault mid-submit leaves the outcome unknown.
+        raise QuipSubmissionError(
+            f"the connection failed while submitting {call_module}.{call_function} {ext_hash}, so its outcome is "
+            f"unknown: it may already be on chain ({exc!r})"
+        ) from exc
     if not receipt.is_success:
         raise QuipSubmissionError(
             f"{call_module}.{call_function} failed on-chain (block {receipt.block_hash}): "
