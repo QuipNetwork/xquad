@@ -243,7 +243,6 @@ def _settle_orders(solver: SolverQuip) -> None:
     account = "0x" + bytes(solver._signer.account_id).hex()
     for order_id in quip_chain.proposer_orders(solver._iface, solver._signer.account_id):
         try:
-            solver._reconnect()  # the wait for the previous order may have outlasted this connection.
             receipt = solver.get_receipt(order_id).wait()
             _wait_until_closable(solver, order_id)
             if receipt.status()["solution_count"]:
@@ -443,7 +442,6 @@ def _submit_answer(solver: SolverQuip, order_id: int, vectors: list[list[int]]):
     """
     pallet = "QuantumComputeMempool"
     solutions = quip_chain.wrap_bounded([quip_chain.wrap_bounded(list(vector)) for vector in vectors])
-    solver._reconnect()  # this client may have sat idle past the limit, about two minutes on aglais.
 
     def late(where: str) -> None:
         timing = solver._fetch_order(order_id)["timing"]
@@ -483,7 +481,6 @@ def _claim_from(solver: SolverQuip, order_id: int) -> tuple[dict[bytes, int], st
     Returns what the claim paid, ``{account bytes: amount}`` from the block's
     ``RewardClaimed`` events for the order, and the block's hash.
     """
-    solver._reconnect()  # as in _submit_answer: a second account sits idle while the first waits on the order.
     sent = solver._submit_extrinsic("QuantumComputeMempool", "claim_reward", {"order_id": order_id})
     paid = {
         quip_chain.account_bytes(attrs["solver"]): int(attrs["amount"])
