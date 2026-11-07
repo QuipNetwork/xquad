@@ -25,7 +25,8 @@ pip install "xquad[quip]"
 The umbrella `xquad` package forwards `[quip]` to the matching `xqsa`
 extra, as it does `[cuda]`, `[dwave]`, and `[metal]`; with `xqsa` alone,
 `pip install "xqsa[quip]"` is the same install. The extra brings in
-`substrate-interface` (the chain RPC client), `certifi` (the CA
+`substrate-interface` (the chain RPC client), `websocket-client` (its
+transport), `certifi` (the CA
 bundle `wss://` falls back to on a macOS Python with none), and
 `quip-signer`, a
 native extension providing the chain's hybrid signature scheme

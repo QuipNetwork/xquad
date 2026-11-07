@@ -1536,6 +1536,41 @@ class TestSolverQuipConstruction:
         assert solver._iface is fresh
         assert fresh.genesis_check == solver._check_recovered_genesis
 
+    @pytest.mark.parametrize(
+        "read",
+        [
+            lambda iface: quip_chain.read_constant(iface, "MinReward"),
+            quip_chain.genesis_hash,
+            quip_chain.default_topology,
+            quip_chain.mineable_topologies,
+            lambda iface: quip_chain.account_nonce(iface, b"\x00" * 32),
+            quip_chain.finalized_head,
+            lambda iface: quip_chain.account_nonce_at(iface, b"\x00" * 32, "0xblock"),
+            lambda iface: quip_chain.block_hash(iface, 1),
+            lambda iface: quip_chain.block_timestamp(iface, "0xblock"),
+        ],
+    )
+    def test_a_read_lets_a_genesis_mismatch_through(self, read) -> None:
+        mismatch = quip_chain.GenesisMismatch("serves another chain")
+        iface = MagicMock()
+        for name in ("query", "query_map", "get_constant", "get_block_hash", "get_account_nonce"):
+            getattr(iface, name).side_effect = mismatch
+        iface.get_chain_finalised_head.side_effect = mismatch
+        with pytest.raises(quip_chain.GenesisMismatch) as excinfo:
+            read(iface)
+        assert excinfo.value is mismatch
+
+    def test_the_best_block_read_lets_a_genesis_mismatch_through(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+        mismatch = quip_chain.GenesisMismatch("serves another chain")
+
+        def refuse() -> None:
+            raise mismatch
+
+        monkeypatch.setattr(solver, "_current_block", refuse)
+        with pytest.raises(quip_chain.GenesisMismatch):
+            solver._best_block()
+
     def test_missing_genesis_hash_raises_connection_error(self, monkeypatch) -> None:
         from xqsa.quip import QuipConnectionError
 
@@ -4344,6 +4379,20 @@ class TestSettleProposal:
         history.blocks[37][1].extend([_job_proposed_event(8, phase=1), _job_proposed_event(9, phase=2)])
         assert self._settle(history) == quip_chain.Landed(history.hash_of(37), 37, order_id=9)
         assert len(history.reads) <= 1 + 6  # the head, then a binary search over 0..40.
+
+    @pytest.mark.parametrize("read", ["get_block", "get_events"])
+    def test_a_genesis_mismatch_reading_the_block_stays_itself(self, monkeypatch, read) -> None:
+        history = _History([5, 6])
+        history.blocks[1] = (["0xours"], [_system(0, "ExtrinsicSuccess")])
+        mismatch = quip_chain.GenesisMismatch("serves another chain")
+
+        def refuse(*_args, **_kwargs):
+            raise mismatch
+
+        monkeypatch.setattr(history, read, refuse)
+        with pytest.raises(quip_chain.GenesisMismatch) as excinfo:
+            self._settle(history)
+        assert excinfo.value is mismatch
 
     def test_failed_dispatch_is_landed_with_the_error(self) -> None:
         history = _History([5, 6])

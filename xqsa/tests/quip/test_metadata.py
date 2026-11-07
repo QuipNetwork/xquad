@@ -513,10 +513,13 @@ class TestTransactionalInitRuntime:
 
 GENESIS = "0xgenesis"
 
-# The three faults a dropped connection raises: the empty frame, the closed socket, the broken pipe.
+# The three faults a dropped connection raises: the empty frame, the socket closed on receive, the broken
+# pipe. A socket closed on send never gets here: the stock transport reconnects and sends again by itself.
 DROPPED = [
     pytest.param(lambda: json.JSONDecodeError("Expecting value", "", 0), id="empty-frame"),
-    pytest.param(lambda: _WebSocketConnectionClosedException("socket is already closed."), id="closed-socket"),
+    pytest.param(
+        lambda: _WebSocketConnectionClosedException("Connection to remote host was lost."), id="closed-on-recv"
+    ),
     pytest.param(lambda: BrokenPipeError(32, "Broken pipe"), id="broken-pipe"),
 ]
 
@@ -620,6 +623,13 @@ class TestReadRecovery:
         assert excinfo.value is refusal
         assert iface.sent == ["state_getStorage"]
         assert iface.transport.events == []
+
+    def test_a_recovered_connection_is_trusted_again(self) -> None:
+        iface = _node(BrokenPipeError(32, "Broken pipe"), expect=GENESIS)
+        iface.rpc_request("state_getStorage", [])
+        iface.rpc_request("state_getStorage", [])
+        assert iface.transport.events == ["close", "connect"]
+        assert iface.sent.count("chain_getBlockHash") == 1
 
     def test_a_healthy_read_touches_nothing_else(self) -> None:
         iface = _node(expect=GENESIS)

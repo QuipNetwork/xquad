@@ -873,7 +873,7 @@ class SolverQuip(Solver):
         """
         try:
             return self._current_block()
-        except QuipMetadataError:
+        except (QuipMetadataError, chain.GenesisMismatch):
             raise
         except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
             raise QuipConnectionError(f"could not read the best block: {exc}") from exc
@@ -996,7 +996,12 @@ class SolverQuip(Solver):
             if outcome != "pending":
                 return outcome
             if not self._pause(deadline, poll):
-                final = self._finalized_number()
+                try:
+                    final = chain.finalized_head(self._iface)[0]
+                except chain.GenesisMismatch as exc:
+                    raise self._unsettled(signed, exc) from exc
+                except Exception:  # noqa: BLE001 -- a failed read counts as no progress.
+                    final = None
                 if final is None or (last_final is not None and final <= last_final):
                     stall = QuipConnectionError(
                         f"finality did not reach the window's end block {signed.window_end} in time"

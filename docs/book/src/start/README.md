@@ -84,8 +84,9 @@ extras, and `xquad/pyproject.toml` forwards to the ones it re-exports:
 - `metal` -- `pyobjc-framework-Metal>=11.0`, marked `sys_platform ==
   'darwin'`, for a local Apple GPU. The marker means `pip install
   xquad[metal]` succeeds on Linux and installs nothing.
-- `quip` -- `substrate-interface>=1.7.4,<2` plus
-  `quip-signer>=0.3.0,<0.4`,
+- `quip` -- `substrate-interface>=1.8.0,<2`,
+  `websocket-client>=0.57.0,<2`, `quip-signer>=0.3.0,<0.4` and
+  `certifi>=2026.10.19`,
   for the Quip network solver, which needs a `QUIP_RPC_URL` and a
   configured signer; see [Quip Network](../solving/quip-network.md) for
   what that solver does.
