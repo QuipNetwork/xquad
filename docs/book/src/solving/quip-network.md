@@ -25,7 +25,8 @@ pip install "xquad[quip]"
 The umbrella `xquad` package forwards `[quip]` to the matching `xqsa`
 extra, as it does `[cuda]`, `[dwave]`, and `[metal]`; with `xqsa` alone,
 `pip install "xqsa[quip]"` is the same install. The extra brings in
-`substrate-interface` (the chain RPC client), `certifi` (the CA
+`substrate-interface` (the chain RPC client), `websocket-client` (its
+transport), `certifi` (the CA
 bundle `wss://` falls back to on a macOS Python with none), and
 `quip-signer`, a
 native extension providing the chain's hybrid signature scheme
@@ -264,6 +265,12 @@ the same way. A runtime it cannot read or sign for raises
 `QuipMetadataError`: at connect, or at signing when the runtime
 changed under a live client, before anything is sent. The remedy is
 upgrading xquad; retrying the same node gives the same answer.
+
+A node or proxy can drop an idle connection; `aglais` does after about two
+minutes. A chain read that hits a dropped connection reconnects and
+tries once more, and raises `QuipConnectionError` if that fails too. A
+signed call is never sent again by this recovery, since a lost
+connection does not say whether it landed.
 
 Every reconnect must reach the chain the first connection reached: a
 node that serves another genesis is refused with a
@@ -589,7 +596,7 @@ warning, but `import *` does not bring it in:
 | `EncodingError` | The model is not an `XqmxModel`, its domain is unsupported, or it has no nonzero linear or quadratic term. Also covers a coefficient whose milli value overflows `i32` (see [Coefficient Encoding](#coefficient-encoding)), and a native order over the mempool's `MaxNodes` or `MaxEdges` |
 | `PlacementError` | The model's coupling graph is not a subgraph of the target topology. Raised in default mode only; see [Native topology mode](#native-topology-mode) |
 | `QuipSigningError` | Extrinsic assembly, keystore handling, or submission fails |
-| `QuipConnectionError` | The node is unreachable; a configured Ising spec or topology is not registered on-chain; a mempool constant cannot be read (`MinReward`, `MaxDeadlineBlocks`, `MaxBlockWait`, `MaxSolutions` and `MaxBidMiners` at construction, `MaxNodes` and `MaxEdges` per native order); the chain defines no `MinReward` and no reward was given; an order id names no order; a balance, nonce or block read fails; or the node serves another chain than the preset pins, named by both genesis hashes. A reconnect to another chain than the first connection reached raises it too, but that happens only while a send is settling, so it reaches the caller as the `__cause__` of `QuipSubmitIncompleteError`. Most come from the constructor or `for_network()`, which read the limits once |
+| `QuipConnectionError` | The node is unreachable; a configured Ising spec or topology is not registered on-chain; a mempool constant cannot be read (`MinReward`, `MaxDeadlineBlocks`, `MaxBlockWait`, `MaxSolutions` and `MaxBidMiners` at construction, `MaxNodes` and `MaxEdges` per native order); the chain defines no `MinReward` and no reward was given; an order id names no order; a balance, nonce or block read fails; or the node serves another chain than the preset pins, named by both genesis hashes. A read that still fails after reconnecting raises it too, as does a reconnect to another chain than the first connection reached; while a send is settling, these reach the caller as the `__cause__` of `QuipSubmitIncompleteError`. Most come from the constructor or `for_network()`, which read the limits once |
 | `QuipMetadataError` | This client cannot read or sign for the node's runtime: its metadata, an extrinsic envelope or signed extension it cannot encode, or blocks or events it cannot decode while settling a send. Raised at connect, on a reconnect whose metadata it cannot read, and when `quote()` or `submit()` signs; while a send is settling it is the `__cause__` of `QuipSubmitIncompleteError` instead. The remedy is upgrading xquad, not retrying |
 | `QuipSubmissionError` | An extrinsic cannot be submitted or the chain rejects it. Raised when `propose_job` fails on chain (the fee was paid, no order was placed, and the order moves to `failed`), and when the account's nonce moves twice while submitting because another client is sending from the account. Also raised before proposing when the account cannot cover the quote and `autofund` cannot help, with a hint for each case: a named network with no faucet says to fund the account another way, a raw `url=` with none says how to name one, a shortfall larger than one drip suggests checking `reward=`, and a balance already above one drip is one the faucet will not top up. Also raised when a sent proposal certainly never reached the chain: the order stays a draft |
 | `QuipOrderOptionError` | A `QuipSubmissionError`: an order option fails a check before signing, such as a reward below `MinReward`, a deadline or block wait out of range, a bad payout or access rule, or a quality floor out of range. Carries the option's name as `option`. Nothing is spent |

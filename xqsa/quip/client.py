@@ -341,6 +341,7 @@ class SolverQuip(Solver):
         self._url = resolved_url
         try:
             self._genesis_hash = self._check_connection(self._iface, expected_genesis=pin)
+            self._iface.genesis_check = self._check_recovered_genesis
 
             self._spec_id = self._resolve_spec_id(spec_id)
             self._limits = chain.read_limits(self._iface)
@@ -872,7 +873,7 @@ class SolverQuip(Solver):
         """
         try:
             return self._current_block()
-        except QuipMetadataError:
+        except (QuipMetadataError, chain.GenesisMismatch):
             raise
         except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
             raise QuipConnectionError(f"could not read the best block: {exc}") from exc
@@ -995,7 +996,12 @@ class SolverQuip(Solver):
             if outcome != "pending":
                 return outcome
             if not self._pause(deadline, poll):
-                final = self._finalized_number()
+                try:
+                    final = chain.finalized_head(self._iface)[0]
+                except chain.GenesisMismatch as exc:
+                    raise self._unsettled(signed, exc) from exc
+                except Exception:  # noqa: BLE001 -- a failed read counts as no progress.
+                    final = None
                 if final is None or (last_final is not None and final <= last_final):
                     stall = QuipConnectionError(
                         f"finality did not reach the window's end block {signed.window_end} in time"
@@ -1117,6 +1123,7 @@ class SolverQuip(Solver):
         except BaseException:
             _close(iface)
             raise
+        iface.genesis_check = self._check_recovered_genesis
         old, self._iface = self._iface, iface
         if old is not iface:
             _close(old)
@@ -1134,24 +1141,45 @@ class SolverQuip(Solver):
             QuipConnectionError: if the genesis hash cannot be read.
         """
         genesis = chain.genesis_hash(iface).lower()
-        network = self._network or "custom endpoint"
-        if expected_genesis is not None and genesis != expected_genesis:
-            raise chain.GenesisMismatch(
-                f"the Quip node at {self._url} ({network}) serves genesis {genesis}, "
-                f"not the expected {expected_genesis}"
-            )
+        if expected_genesis is not None:
+            self._require_genesis(genesis, expected_genesis)
         if not reconnect:
             self._quip_signing.check_runtime(iface)
+        self._log_connection(iface, genesis, reconnect=reconnect)
+        return genesis
+
+    def _check_recovered_genesis(self, genesis: str) -> None:
+        """Check the genesis of a connection the chain client reopened after a dropped one.
+
+        Raises:
+            GenesisMismatch: if the node now serves another chain.
+        """
+        self._require_genesis(genesis.lower(), self._genesis_hash)
+        self._log_connection(self._iface, genesis.lower(), reconnect=True)
+
+    def _require_genesis(self, genesis: str, expected: str) -> None:
+        """Refuse a node that serves another chain than ``expected``.
+
+        Raises:
+            GenesisMismatch: if ``genesis`` differs from ``expected``.
+        """
+        if genesis != expected:
+            raise chain.GenesisMismatch(
+                f"the Quip node at {self._url} ({self._network or 'custom endpoint'}) serves genesis {genesis}, "
+                f"not the expected {expected}"
+            )
+
+    def _log_connection(self, iface: Any, genesis: str, *, reconnect: bool) -> None:
+        """Log the network, runtime and genesis of a connection at ``INFO``."""
         logger.info(
             "%s Quip %s at %s: specVersion %s, transactionVersion %s, genesis %s",
             "reconnected to" if reconnect else "connected to",
-            network,
+            self._network or "custom endpoint",
             self._url,
             iface.runtime_version,
             iface.transaction_version,
             genesis,
         )
-        return genesis
 
     @staticmethod
     def _unsettled(signed: _SignedCall, cause: Exception) -> QuipSubmitIncompleteError:

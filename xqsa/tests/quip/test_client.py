@@ -1516,6 +1516,61 @@ class TestSolverQuipConstruction:
         with pytest.raises(QuipConnectionError, match="genesis block hash: socket closed"):
             _make_solver(monkeypatch, iface=iface)
 
+    def test_the_genesis_check_refuses_another_chain_after_a_dropped_connection(self, monkeypatch) -> None:
+        from xqsa.quip.chain import GenesisMismatch
+
+        solver = _make_solver(monkeypatch)
+        with pytest.raises(GenesisMismatch, match="0xother"):
+            solver._iface.genesis_check("0xOTHER")
+
+    def test_the_genesis_check_accepts_the_same_chain_in_any_case(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+        solver._iface.genesis_check(solver._genesis_hash.upper().replace("0X", "0x"))
+
+    def test_a_replaced_connection_carries_the_genesis_check(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+        fresh = _default_iface()
+        monkeypatch.setattr("xqsa.quip.client._open", lambda url, ssl_context=None: fresh)
+        monkeypatch.setattr(solver, "_check_connection", lambda iface, **_: solver._genesis_hash)
+        solver._reconnect()
+        assert solver._iface is fresh
+        assert fresh.genesis_check == solver._check_recovered_genesis
+
+    @pytest.mark.parametrize(
+        "read",
+        [
+            lambda iface: quip_chain.read_constant(iface, "MinReward"),
+            quip_chain.genesis_hash,
+            quip_chain.default_topology,
+            quip_chain.mineable_topologies,
+            lambda iface: quip_chain.account_nonce(iface, b"\x00" * 32),
+            quip_chain.finalized_head,
+            lambda iface: quip_chain.account_nonce_at(iface, b"\x00" * 32, "0xblock"),
+            lambda iface: quip_chain.block_hash(iface, 1),
+            lambda iface: quip_chain.block_timestamp(iface, "0xblock"),
+        ],
+    )
+    def test_a_read_lets_a_genesis_mismatch_through(self, read) -> None:
+        mismatch = quip_chain.GenesisMismatch("serves another chain")
+        iface = MagicMock()
+        for name in ("query", "query_map", "get_constant", "get_block_hash", "get_account_nonce"):
+            getattr(iface, name).side_effect = mismatch
+        iface.get_chain_finalised_head.side_effect = mismatch
+        with pytest.raises(quip_chain.GenesisMismatch) as excinfo:
+            read(iface)
+        assert excinfo.value is mismatch
+
+    def test_the_best_block_read_lets_a_genesis_mismatch_through(self, monkeypatch) -> None:
+        solver = _make_solver(monkeypatch)
+        mismatch = quip_chain.GenesisMismatch("serves another chain")
+
+        def refuse() -> None:
+            raise mismatch
+
+        monkeypatch.setattr(solver, "_current_block", refuse)
+        with pytest.raises(quip_chain.GenesisMismatch):
+            solver._best_block()
+
     def test_missing_genesis_hash_raises_connection_error(self, monkeypatch) -> None:
         from xqsa.quip import QuipConnectionError
 
@@ -2477,6 +2532,42 @@ class TestSolverQuipSubmission:
         _patch_signing(monkeypatch, solver, receipt=_ok_receipt(solver, error="System.ExtrinsicFailed: {...}"))
         with pytest.raises(QuipSubmissionError, match="failed on-chain"):
             solver._submit_built("QuantumComputeMempool", "propose_job", b"\x00\x01", "0xext")
+
+    @pytest.mark.parametrize(
+        "fault",
+        [
+            json.JSONDecodeError("Expecting value", "", 0),
+            BrokenPipeError(32, "Broken pipe"),
+            RuntimeError("Connection to remote host was lost."),
+        ],
+    )
+    def test_submit_built_reports_a_lost_connection_as_an_unknown_outcome(self, monkeypatch, fault) -> None:
+        from xqsa.quip import QuipSubmissionError
+
+        solver = _make_solver(monkeypatch)
+        _patch_signing(monkeypatch, solver)
+
+        def drop(*_args, **_kwargs):
+            raise fault
+
+        monkeypatch.setattr(solver._quip_signing, "submit_and_watch", drop)
+        with pytest.raises(QuipSubmissionError, match="outcome is unknown") as excinfo:
+            solver._submit_built("QuantumComputeMempool", "submit_solution", b"\x00\x01", "0xext")
+        assert "0xext" in str(excinfo.value)
+        assert excinfo.value.__cause__ is fault
+
+    def test_submit_built_keeps_a_quip_error_as_itself(self, monkeypatch) -> None:
+        from xqsa.quip import QuipMetadataError
+
+        solver = _make_solver(monkeypatch)
+        _patch_signing(monkeypatch, solver)
+
+        def refuse(*_args, **_kwargs):
+            raise QuipMetadataError("cannot read this runtime")
+
+        monkeypatch.setattr(solver._quip_signing, "submit_and_watch", refuse)
+        with pytest.raises(QuipMetadataError):
+            solver._submit_built("QuantumComputeMempool", "submit_solution", b"\x00\x01", "0xext")
 
     def test_propose_job_is_signed_mortal_from_the_finalized_head(self, monkeypatch) -> None:
         solver = _make_solver(monkeypatch, inclusion_window_blocks=100)
@@ -4288,6 +4379,20 @@ class TestSettleProposal:
         history.blocks[37][1].extend([_job_proposed_event(8, phase=1), _job_proposed_event(9, phase=2)])
         assert self._settle(history) == quip_chain.Landed(history.hash_of(37), 37, order_id=9)
         assert len(history.reads) <= 1 + 6  # the head, then a binary search over 0..40.
+
+    @pytest.mark.parametrize("read", ["get_block", "get_events"])
+    def test_a_genesis_mismatch_reading_the_block_stays_itself(self, monkeypatch, read) -> None:
+        history = _History([5, 6])
+        history.blocks[1] = (["0xours"], [_system(0, "ExtrinsicSuccess")])
+        mismatch = quip_chain.GenesisMismatch("serves another chain")
+
+        def refuse(*_args, **_kwargs):
+            raise mismatch
+
+        monkeypatch.setattr(history, read, refuse)
+        with pytest.raises(quip_chain.GenesisMismatch) as excinfo:
+            self._settle(history)
+        assert excinfo.value is mismatch
 
     def test_failed_dispatch_is_landed_with_the_error(self) -> None:
         history = _History([5, 6])
