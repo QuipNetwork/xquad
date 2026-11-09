@@ -38,7 +38,16 @@ metal = [ "pyobjc-framework-Metal>=11.0; sys_platform == 'darwin'" ]
 # an https:// RPC goes through requests, which uses it on every platform.
 # The floor is the first certifi without the emSign ECC Root CA - G3, dropped
 # after eMudhra revoked eight Global TLS intermediates in October 2026.
-quip = [ "substrate-interface>=1.7.4,<2", "quip-signer>=0.3.0,<0.4", "certifi>=2026.10.19" ]
+# The substrate-interface floor is the first release with `iface.transport`,
+# which the read recovery in `xqsa.quip.metadata` reconnects through. That module
+# also imports `websocket` directly, so `websocket-client` is listed, at the range
+# substrate-interface itself requires.
+quip = [
+    "substrate-interface>=1.8.0,<2",
+    "websocket-client>=0.57.0,<2",
+    "quip-signer>=0.3.0,<0.4",
+    "certifi>=2026.10.19",
+]
 
 [tool.uv.sources]
 xqffi = { workspace = true, editable = false }

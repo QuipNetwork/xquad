@@ -1612,6 +1612,7 @@ quip = [
     { name = "certifi" },
     { name = "quip-signer" },
     { name = "substrate-interface" },
+    { name = "websocket-client" },
 ]
 
 [package.metadata]
@@ -1624,7 +1625,8 @@ requires-dist = [
     { name = "nvidia-cuda-runtime-cu12", marker = "extra == 'cuda'" },
     { name = "pyobjc-framework-metal", marker = "sys_platform == 'darwin' and extra == 'metal'", specifier = ">=11.0" },
     { name = "quip-signer", marker = "extra == 'quip'", specifier = ">=0.3.0,<0.4" },
-    { name = "substrate-interface", marker = "extra == 'quip'", specifier = ">=1.7.4,<2" },
+    { name = "substrate-interface", marker = "extra == 'quip'", specifier = ">=1.8.0,<2" },
+    { name = "websocket-client", marker = "extra == 'quip'", specifier = ">=0.57.0,<2" },
     { name = "xqffi", directory = "xqffi" },
 ]
 provides-extras = ["cuda", "dwave", "metal", "quip"]

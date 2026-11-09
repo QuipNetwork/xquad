@@ -1297,6 +1297,38 @@ class TestJobOrderSendOutcomes:
         assert order.status() == {"state": "sending", "extrinsic_hash": "0xext", "nonce": 0, "window_end": 263}
         assert len(set(captured["sent"])) == 1
 
+    @staticmethod
+    def _deadline_read_raises(monkeypatch, solver, captured, fault: Exception):
+        """Stall finality and end the settle deadline after one round; the read at the deadline raises ``fault``."""
+        _stall_finality(monkeypatch, solver, captured)
+        head = solver._iface.get_chain_finalised_head
+        reads = []
+
+        def read():
+            reads.append(True)
+            return _raise(fault) if len(reads) > 2 else head()  # the estimate's read and the round's read pass.
+
+        monkeypatch.setattr(solver._iface, "get_chain_finalised_head", read)
+        monkeypatch.setattr(solver, "_pause", lambda deadline, seconds: False)
+        order = solver.create_order(_model())
+        order.quote()
+        reads.clear()
+        return order
+
+    def test_another_chain_at_the_deadline_is_not_reported_as_a_stall(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        mismatch = GenesisMismatch("serves another chain")
+        order = self._deadline_read_raises(monkeypatch, solver, captured, mismatch)
+        with pytest.raises(QuipSubmitIncompleteError, match="the endpoint now serves a different chain") as info:
+            order.submit()
+        assert info.value.__cause__ is mismatch
+
+    def test_a_failed_read_at_the_deadline_counts_as_a_stall(self, monkeypatch) -> None:
+        solver, captured = _ready(monkeypatch)
+        order = self._deadline_read_raises(monkeypatch, solver, captured, ConnectionError("down"))
+        with pytest.raises(QuipSubmitIncompleteError, match="finality did not reach the window's end block"):
+            order.submit()
+
     def test_slow_finality_keeps_settling_while_it_advances(self, monkeypatch, virtual_clock) -> None:
         """Finality moves one block every other round, half the estimate's pace, and still reaches the window's end."""
         solver, captured = _ready(monkeypatch)
@@ -1367,6 +1399,20 @@ class TestJobOrderSendOutcomes:
         assert isinstance(info.value.__cause__, GenesisMismatch)
         assert len(virtual_clock) == 1  # one backoff before the reconnect, then no retries.
         assert (closed, solver._iface) == ([True], session)
+        assert order.status()["state"] == "sending"
+
+    def test_a_read_that_finds_another_chain_is_sending_at_once(self, monkeypatch, virtual_clock) -> None:
+        # The client's own recovery found the mismatch, so settling has nothing to back off for.
+        solver, captured = _ready(monkeypatch)
+        _send_raises(monkeypatch, solver, ConnectionError("websocket closed"), captured, lands_on=None)
+        order = solver.create_order(_model())
+        order.quote()
+        mismatch = GenesisMismatch("serves another chain")
+        monkeypatch.setattr(solver._iface, "get_chain_finalised_head", lambda: _raise(mismatch))
+        with pytest.raises(QuipSubmitIncompleteError, match="the endpoint now serves a different chain") as info:
+            order.submit()
+        assert info.value.__cause__ is mismatch
+        assert not virtual_clock
         assert order.status()["state"] == "sending"
 
     def test_one_settle_attempt_stops_on_another_chain(self, monkeypatch) -> None:

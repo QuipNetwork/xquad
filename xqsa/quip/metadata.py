@@ -53,19 +53,25 @@ The shim depends on the runtime continuing to answer
 ``substrate-interface`` client in the stack breaks at once and a migration to an
 async client becomes forced; :class:`~xqsa.quip.errors.QuipMetadataError` is what
 reports that day, naming the version the node actually serves.
+
+The same subclass recovers chain reads from a dropped connection, since a node or
+proxy can drop an idle websocket at any time and ``substrate-interface`` only
+reconnects when a send fails. :class:`_ReconnectingMixin` holds the rules.
 """
 
 from __future__ import annotations
 
+import contextlib
 import functools
+import json
 import logging
 import os
 import ssl
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
-from xqsa.quip.errors import QuipMetadataError
+from xqsa.quip.errors import QuipConnectionError, QuipMetadataError
 
 __all__ = ["METADATA_AT_VERSION_API", "TARGET_METADATA_VERSION", "connect", "v14_interface_class"]
 
@@ -90,6 +96,91 @@ _MAGIC_NUMBER_BYTES = 4
 # early returns, so a half-finished call leaves the next one convinced there is
 # nothing to do -- with the new version recorded beside the old metadata.
 _RUNTIME_STATE_ATTRS = ("block_hash", "block_id", "runtime_version", "transaction_version", "metadata")
+
+# The JSON-RPC namespaces that only read, so a request can be repeated safely.
+_READ_METHOD_PREFIXES = ("state_", "chain_", "system_", "payment_")
+
+
+def _transport_faults() -> tuple[type[Exception], ...]:
+    """The exceptions that mean the connection failed: an empty frame, a lost socket, a websocket error.
+
+    Imported lazily, so this module imports without the ``[quip]`` extra.
+    """
+    from websocket import WebSocketException
+
+    return (json.JSONDecodeError, OSError, WebSocketException)
+
+
+def _is_read(method: str, result_handler: Any) -> bool:
+    """Whether a request only reads and answers once, so repeating it cannot change the chain."""
+    return result_handler is None and (method == "rpc_methods" or method.startswith(_READ_METHOD_PREFIXES))
+
+
+class _ReconnectingMixin:
+    """Recovers chain reads from a dropped connection, and leaves every other request alone.
+
+    A read that hits a transport fault closes the socket, reconnects, checks the
+    genesis and tries once more. If that fails too it raises
+    :class:`~xqsa.quip.errors.QuipConnectionError`, with the last fault chained.
+
+    Any other request, an ``author_*`` call or a subscription, goes straight to
+    the transport and its faults travel unchanged. A connection lost after a
+    signed call went out says nothing about whether it landed, so it is never
+    sent again from here; its callers classify the raw fault themselves.
+
+    The connection stays suspect until a reconnect passes the genesis check, so a
+    read after a failed recovery starts over rather than trusting a socket that
+    may serve another chain.
+    """
+
+    #: Called with the node's genesis hash after each reconnect, and raises to
+    #: refuse the connection. :class:`~xqsa.quip.SolverQuip` sets it once it knows
+    #: the genesis; ``None`` skips the check.
+    genesis_check: Callable[[str], None] | None = None
+    _connection_suspect: bool = False
+
+    def rpc_request(self, method: str, params: Any, result_handler: Any = None) -> Any:
+        """Send a request, recovering a read from a dropped connection.
+
+        Raises:
+            QuipConnectionError: if a read still fails after reconnecting, or the
+                reconnected node's genesis cannot be read.
+            GenesisMismatch: a :class:`~xqsa.quip.errors.QuipConnectionError`, if
+                the reconnected node serves another chain.
+        """
+        if not _is_read(method, result_handler):
+            return super().rpc_request(method, params, result_handler=result_handler)  # type: ignore[misc]
+        if not self._connection_suspect:
+            try:
+                return super().rpc_request(method, params)  # type: ignore[misc]
+            except _transport_faults() as fault:
+                self._connection_suspect = True
+                logger.info("%s failed over a dropped connection (%r); reconnecting", method, fault)
+        try:
+            self._reopen_connection()
+            return super().rpc_request(method, params)  # type: ignore[misc]
+        except _transport_faults() as fault:
+            raise QuipConnectionError(f"{method} failed and reconnecting did not help: {fault!r}") from fault
+
+    def _reopen_connection(self) -> None:
+        """Replace the socket with a new one and clear the suspicion once its genesis passes the check.
+
+        The genesis is read past :meth:`rpc_request`, because a fault in this
+        read must end the recovery rather than start another one. The stock
+        transport's ``connect`` overwrites the socket without closing it, and an
+        HTTP transport has no ``connect`` and needs none.
+        """
+        transport = self.transport  # type: ignore[attr-defined]
+        with contextlib.suppress(Exception):  # the socket is being given up.
+            transport.close()
+        if hasattr(transport, "connect"):
+            transport.connect()
+        if self.genesis_check is not None:
+            genesis = super().rpc_request("chain_getBlockHash", [0]).get("result")  # type: ignore[misc]
+            if not genesis:
+                raise QuipConnectionError("the reconnected node returned no genesis block hash")
+            self.genesis_check(genesis)
+        self._connection_suspect = False
 
 
 class _V14MetadataMixin:
@@ -290,13 +381,13 @@ class _V14MetadataMixin:
 
 @functools.cache
 def v14_interface_class(base: type) -> type:
-    """Return a ``base`` subclass that decodes chain metadata at V14.
+    """Return a ``base`` subclass that decodes chain metadata at V14 and recovers reads from a dropped connection.
 
     ``base`` is the ``SubstrateInterface`` class to specialize, passed in rather
     than imported so this module stays free of the optional ``[quip]`` extra.
     Cached, so repeated calls for one base yield one class.
     """
-    return type(f"V14{base.__name__}", (_V14MetadataMixin, base), {})
+    return type(f"V14{base.__name__}", (_V14MetadataMixin, _ReconnectingMixin, base), {})
 
 
 def _default_ca_bundle() -> str | None:
@@ -326,7 +417,8 @@ def _default_ca_bundle() -> str | None:
 def connect(url: str, **kwargs: Any) -> Any:
     """Open a ``SubstrateInterface`` to ``url`` that decodes metadata at V14.
 
-    The shim lives on the returned instance's class alone; an unrelated
+    The shim and the read recovery (see :class:`_ReconnectingMixin`) live on the
+    returned instance's class alone; an unrelated
     ``substrate-interface`` client in the same process is untouched.
 
     On a macOS Python with an empty CA store, a ``wss://`` URL verifies TLS

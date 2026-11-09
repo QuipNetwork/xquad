@@ -101,8 +101,8 @@ def read_constant(iface: Any, name: str) -> Any | None:
     """
     try:
         const = iface.get_constant(MEMPOOL_PALLET, name)
-    except QuipMetadataError:
-        raise  # undecodable metadata, not an unreadable constant.
+    except (QuipMetadataError, GenesisMismatch):
+        raise  # undecodable metadata or another chain, not an unreadable constant.
     except Exception as exc:  # noqa: BLE001 -- a fault, not a genuine absence.
         raise QuipConnectionError(f"could not read the {MEMPOOL_PALLET}.{name} constant: {exc}") from exc
     return getattr(const, "value", None)
@@ -179,8 +179,8 @@ def genesis_hash(iface: Any) -> str:
     """
     try:
         raw = iface.get_block_hash(0)
-    except QuipMetadataError:
-        raise  # undecodable metadata, not a missing genesis block.
+    except (QuipMetadataError, GenesisMismatch):
+        raise  # undecodable metadata or another chain, not a missing genesis block.
     except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
         raise QuipConnectionError(f"could not read the genesis block hash: {exc}") from exc
     if not raw:
@@ -206,8 +206,8 @@ def default_topology(iface: Any) -> str | None:
     """
     try:
         entry = iface.query("QuantumPow", "DefaultTopology")
-    except QuipMetadataError:
-        raise  # undecodable metadata, not an absent storage item.
+    except (QuipMetadataError, GenesisMismatch):
+        raise  # undecodable metadata or another chain, not an absent storage item.
     except Exception as exc:  # noqa: BLE001 -- classify absence vs. fault below.
         if _is_storage_absent(exc):
             return None  # the runtime does not define this storage item.
@@ -256,8 +256,8 @@ def mineable_topologies(iface: Any) -> frozenset[str] | None:
     """
     try:
         entries = iface.query_map("QuantumPow", MINEABLE_TOPOLOGIES_STORAGE)
-    except QuipMetadataError:
-        raise  # undecodable metadata, not an absent storage item.
+    except (QuipMetadataError, GenesisMismatch):
+        raise  # undecodable metadata or another chain, not an absent storage item.
     except Exception as exc:  # noqa: BLE001 -- classify absence vs. fault below.
         if _is_storage_absent(exc):
             return None  # the runtime does not define this storage item.
@@ -439,6 +439,8 @@ def account_nonce(iface: Any, account_id: Any) -> int:
     address = "0x" + bytes(account_id).hex()
     try:
         return int(iface.get_account_nonce(account_address=address))
+    except GenesisMismatch:
+        raise
     except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
         raise QuipConnectionError(f"could not read the account nonce of {address}: {exc}") from exc
 
@@ -452,7 +454,7 @@ def finalized_head(iface: Any) -> tuple[int, str]:
     try:
         raw = iface.get_chain_finalised_head()
         number = block_number(iface, raw) if raw else None
-    except QuipMetadataError:
+    except (QuipMetadataError, GenesisMismatch):
         raise
     except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
         raise QuipConnectionError(f"could not read the finalized head: {exc}") from exc
@@ -515,13 +517,21 @@ def submit_built(
     failure.
 
     Raises:
-        QuipSubmissionError: if submission fails or the dispatch was
-            rejected by the chain.
+        QuipSubmissionError: if submission fails, the connection is lost while
+            submitting (the outcome is then unknown and the message says so), or
+            the dispatch was rejected by the chain.
     """
     try:
         receipt = quip_signing.submit_and_watch(iface, wire, ext_hash, wait_for=wait_for)
     except quip_signing.QuipSigningError as exc:
         raise QuipSubmissionError(f"{call_module}.{call_function} could not be submitted: {exc}") from exc
+    except QuipError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- a transport fault mid-submit leaves the outcome unknown.
+        raise QuipSubmissionError(
+            f"the connection failed while submitting {call_module}.{call_function} {ext_hash}, so its outcome is "
+            f"unknown: it may already be on chain ({exc!r})"
+        ) from exc
     if not receipt.is_success:
         raise QuipSubmissionError(
             f"{call_module}.{call_function} failed on-chain (block {receipt.block_hash}): "
@@ -588,7 +598,10 @@ class StatePruned(QuipConnectionError):
 
 
 class GenesisMismatch(QuipConnectionError):
-    """The node serves a different chain from the one expected; another node at a correct endpoint can serve it."""
+    """The node serves a different chain from the one expected; another node at a correct endpoint can serve it.
+
+    A read's wrapper lets it through unchanged, so a caller can stop at once rather than retry.
+    """
 
 
 def account_nonce_at(iface: Any, account_id: Any, block_hash: str) -> int:
@@ -604,7 +617,7 @@ def account_nonce_at(iface: Any, account_id: Any, block_hash: str) -> int:
     try:
         value = getattr(iface.query("System", "Account", [account_id], block_hash=block_hash), "value", None)
         return int(value["nonce"])
-    except QuipMetadataError:
+    except (QuipMetadataError, GenesisMismatch):
         raise
     except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
         error = StatePruned if _is_state_pruned(exc) else QuipConnectionError
@@ -668,7 +681,7 @@ def settle_proposal(
     spent_in = block_hash(iface, number)
     try:
         block = iface.get_block(block_hash=spent_in, include_author=False, ignore_decoding_errors=True)
-    except QuipMetadataError:
+    except (QuipMetadataError, GenesisMismatch):
         raise
     except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
         raise QuipConnectionError(f"could not read block {spent_in}: {exc}") from exc
@@ -686,7 +699,7 @@ def settle_proposal(
         return "never"
     try:
         events = list(_events(iface, spent_in))
-    except QuipMetadataError:
+    except (QuipMetadataError, GenesisMismatch):
         raise
     except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
         error = StatePruned if _is_state_pruned(exc) else QuipConnectionError
@@ -815,7 +828,7 @@ def block_hash(iface: Any, number: int) -> str:
     """
     try:
         raw = iface.get_block_hash(number)
-    except QuipMetadataError:
+    except (QuipMetadataError, GenesisMismatch):
         raise
     except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
         raise QuipConnectionError(f"could not read the hash of block {number}: {exc}") from exc
@@ -832,7 +845,7 @@ def block_timestamp(iface: Any, block_hash: str) -> int:
     """
     try:
         entry = iface.query("Timestamp", "Now", block_hash=block_hash)
-    except QuipMetadataError:
+    except (QuipMetadataError, GenesisMismatch):
         raise
     except Exception as exc:  # noqa: BLE001 -- any read failure is a connection fault.
         raise QuipConnectionError(f"could not read Timestamp.Now at block {block_hash}: {exc}") from exc
