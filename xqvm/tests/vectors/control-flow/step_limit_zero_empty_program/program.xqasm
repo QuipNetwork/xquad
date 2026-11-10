@@ -1,0 +1,8 @@
+; step_limit_zero_empty_program: zero steps is enough for a program that
+; needs zero steps.
+;
+; The success half of the exact-limit rule that step_limit_zero pins the
+; fault half of. The program has no instructions, so it ends at the end of
+; the stream without dispatching anything. Reaching the end of the stream
+; is not charged, so the run completes under a budget of exactly zero and
+; reports zero steps.
