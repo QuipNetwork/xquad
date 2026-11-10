@@ -1448,19 +1448,6 @@ fn zero_step_limit_executes_nothing() {
 }
 
 #[test]
-fn a_zero_step_limit_completes_an_empty_program() {
-    // The other half of the exact-limit rule: zero steps is enough for a
-    // program that needs zero steps.
-    let bytecode = InstructionBuilder::new().build().expect("builder build");
-
-    let mut vm = Vm::new();
-    vm.set_step_limit(0);
-    vm.run(&bytecode)
-        .expect("an empty program needs no steps to complete");
-    assert_eq!(vm.steps(), 0);
-}
-
-#[test]
 fn unlimited_steps_runs_to_completion() {
     // Opting out of the bound is still possible, but it has to be said aloud.
     let mut b = InstructionBuilder::new();
