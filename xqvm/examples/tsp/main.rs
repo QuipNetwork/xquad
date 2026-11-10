@@ -112,9 +112,8 @@ fn main() -> Result<()> {
     //     models, so the one-hot row/column scans need this shape.
     //   * `sample_values` is an `XqmxSample` carrying the same dense
     //     vector. `ENERGY` requires its sample operand to be an
-    //     `XqmxSample`, matching the xq-py spec; xq-rs used to allow a
-    //     model in the sample slot, but that shortcut was removed in
-    //     QUI-410.
+    //     `XqmxSample`, as `spec/xqvm/ISA.md` requires; a model in the
+    //     sample slot was allowed until QUI-410.
     //
     // Both are derived from the same dense values so they cannot drift.
 

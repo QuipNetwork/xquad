@@ -70,15 +70,15 @@ impl core::fmt::Display for OptionalPos {
 /// Errors that can occur during XQVM bytecode execution.
 ///
 /// This enum is deliberately not `#[non_exhaustive]`. The attribute forces a
-/// wildcard arm on matches in *downstream* crates, and `fault_from_rust` in
-/// the `conformance` crate depends on not having one: it maps each variant
-/// onto the implementation-neutral fault identity that `spec/xqvm/SPEC.md`
-/// specifies, and being wildcard-free is what makes adding a variant without
-/// extending it a compile error rather than a silent degradation to an
-/// "unknown" fault -- which is the whole value of those identities being
-/// normative. The `byte_pos` helper below is a second wildcard-free match
-/// over this enum, but it lives in this crate, where the attribute would
-/// change nothing.
+/// wildcard arm on matches in *downstream* crates, and the fault mappings in
+/// `xqvm/tests/vector_suite/vector.rs` and `xqffi/src/fault.rs` depend on not
+/// having one: each maps every variant onto the implementation-neutral
+/// fault identity that `spec/xqvm/SPEC.md` specifies, and being
+/// wildcard-free is what makes adding a variant without extending them a
+/// compile error rather than a silent degradation to an "unknown" fault --
+/// which is the whole value of those identities being normative. The
+/// `byte_pos` helper below is a third wildcard-free match over this enum,
+/// but it lives in this crate, where the attribute would change nothing.
 ///
 /// The cost is accepted rather than overlooked: adding a variant is a
 /// breaking change to this crate's public API and needs a major version bump.
@@ -111,7 +111,7 @@ pub enum Error {
     IncompatibleType(crate::value::IncompatibleTypeError),
 
     /// A `LOAD` was attempted on a register that is unset (`DROP`ped or
-    /// never written). Matches xq-py's `RegisterNotFound` exception.
+    /// never written). See `UnsetRegister` in `spec/xqvm/SPEC.md` (Faults).
     #[error("register r{reg} is unset at byte {pos:#06x}")]
     UnsetRegister { pos: usize, reg: u8 },
 
