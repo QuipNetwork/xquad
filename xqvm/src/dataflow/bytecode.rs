@@ -22,7 +22,7 @@
 //! 1. Builds a [`Cfg`] of basic blocks (`BlockId = byte offset of first instruction`).
 //! 2. Derives a [`BlockEffect`] for every block (abstract stack effect).
 //! 3. Runs a forward worklist analysis with a [`DepthValue`] lattice.
-//! 4. Reports the first [`VerifierError`] found.
+//! 4. Reports the first [`CheckerError`] found.
 //!
 //! Unlike a linear scan, this analysis follows conditional branches so
 //! underflows only reachable on non-fall-through paths are caught.
@@ -45,16 +45,16 @@
 //! silently exempted. (The `solve` worklist itself deliberately does not: it
 //! pins the entry input to `boundary_value` unconditionally, which is sound
 //! for every current phase's meet.) That is not hypothetical -- counting only
-//! predecessor *blocks* let `.0: PUSH 1 / JUMP .0 / HALT` verify clean and then
+//! predecessor *blocks* let `.0: PUSH 1 / JUMP .0 / HALT` check clean and then
 //! overflow the stack at runtime, because a back-edge onto the entry block
 //! leaves it with a single predecessor. Putting any instruction before the
 //! label splits the entry block off and the identical check fires, which is
 //! what gave it away. See the `StackDepthMismatch` check below.
 //!
-//! This is recorded here rather than only in `spec/xqvm/VERIFIER.md` because it
+//! This is recorded here rather than only in `spec/xqvm/CHECKER.md` because it
 //! is a property of *this* analysis, and the two regression tests in
-//! `verifier::tests` are what actually enforce it. The vector runner does not
-//! verify, so no conformance vector can pin it.
+//! `checker::tests` are what actually enforce it. The vector runner does not
+//! run the checker, so no conformance vector can pin it.
 
 #[cfg(not(feature = "std"))]
 use alloc::{
@@ -68,8 +68,8 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 #[cfg(not(feature = "std"))]
 use hashbrown::HashMap;
 
+use crate::CheckerError;
 use crate::Program;
-use crate::VerifierError;
 use crate::bytecode::{Instruction, InstructionStream, JumpTable, StackEffect};
 use crate::dataflow::analysis::Analysis;
 use crate::dataflow::cfg::Cfg;
@@ -227,7 +227,7 @@ enum BlockTerminatorKind {
 // LoopRegion  (internal)
 // ---------------------------------------------------------------------------
 
-/// Pre-built CFG context shared across the three CFG-based verifier phases.
+/// Pre-built CFG context shared across the three CFG-based checker phases.
 ///
 /// Constructed once by [`build_cfg`] so that the register, uninit, and stack-depth
 /// analyses can all operate on the same graph without repeating the two-pass construction.
@@ -377,7 +377,7 @@ fn compute_block_effect(
 /// Because back-edges are skipped, each block is visited at most once per
 /// depth-change, so the simulation always terminates.
 ///
-/// [`LoopStackImbalance`]: VerifierError::LoopStackImbalance
+/// [`LoopStackImbalance`]: CheckerError::LoopStackImbalance
 fn simulate_body(
     body_start: BlockId,
     entry: DepthValue,
@@ -430,7 +430,7 @@ fn simulate_body(
 /// 2. For each block `[leader_i, leader_{i+1})`, compute the [`BlockEffect`]
 ///    and emit outgoing CFG edges based on the terminator instruction.
 ///
-/// Returns `None` for empty bytecode.  Call after structural verification to
+/// Returns `None` for empty bytecode.  Call after structural checking to
 /// guarantee well-formed input (balanced loops, valid jump targets).
 #[expect(
     clippy::too_many_lines,
@@ -575,22 +575,22 @@ pub(crate) fn build_cfg(code: &[u8], jump_table: &JumpTable) -> Option<CfgContex
 /// Consumes `ctx` so that the caller can construct it once and pass it in
 /// without cloning.  The check order is:
 ///
-/// 1. [`VerifierError::LoopStackImbalance`] -- a loop body has non-zero net
+/// 1. [`CheckerError::LoopStackImbalance`] -- a loop body has non-zero net
 ///    stack effect (detected via a one-pass BFS that ignores back-edges).
-/// 2. [`VerifierError::StackDepthMismatch`] -- two incoming edges of a join
+/// 2. [`CheckerError::StackDepthMismatch`] -- two incoming edges of a join
 ///    point carry different stack depths.
-/// 3. [`VerifierError::StackUnderflow`] -- a reachable block has insufficient
+/// 3. [`CheckerError::StackUnderflow`] -- a reachable block has insufficient
 ///    entry depth or a static post-`SCLR` underflow.
-/// 4. [`VerifierError::StackOverflowRisk`] -- depth exceeds 8 192.
+/// 4. [`CheckerError::StackOverflowRisk`] -- depth exceeds 8 192.
 ///
 /// # Errors
 ///
-/// Returns the first [`VerifierError`] found, in the order described above.
+/// Returns the first [`CheckerError`] found, in the order described above.
 pub(crate) fn check_stack_depth_with_context(
     cfg: &Cfg<BlockId>,
     effects: &HashMap<BlockId, BlockEffect>,
     loop_regions: &[LoopRegion],
-) -> Result<(), VerifierError> {
+) -> Result<(), CheckerError> {
     let analysis = StackDepthAnalysis { effects };
     let result = solve(&analysis, cfg);
 
@@ -614,7 +614,7 @@ pub(crate) fn check_stack_depth_with_context(
         if let (DepthValue::Known(e), DepthValue::Known(x)) = (&entry, &exit)
             && e != x
         {
-            return Err(VerifierError::LoopStackImbalance {
+            return Err(CheckerError::LoopStackImbalance {
                 opener: region.opener_pos,
                 entry: *e,
                 exit: *x,
@@ -648,7 +648,7 @@ pub(crate) fn check_stack_depth_with_context(
         //
         // Without counting it, a back-edge onto the entry block leaves that
         // block with a single explicit predecessor, the join check is skipped,
-        // and `.0: PUSH 1 / JUMP .0 / HALT` verifies clean and then overflows
+        // and `.0: PUSH 1 / JUMP .0 / HALT` checks clean and then overflows
         // the stack at runtime. Putting any instruction before the label splits
         // the entry block off and the identical check fires correctly, which is
         // what gave the defect away.
@@ -672,7 +672,7 @@ pub(crate) fn check_stack_depth_with_context(
         // of raising a spurious mismatch against a hardcoded 0. A boundary
         // that is not `Known` contributes no edge, the same exclusion applied
         // to non-`Known` predecessors below -- this path runs inside the
-        // runtime once `store_program` calls `verify()`, where a panic fails
+        // runtime once `store_program` calls `check()`, where a panic fails
         // block import, so it must degrade rather than abort.
         let implicit_depth = match (has_implicit_entry_edge, analysis.boundary_value()) {
             (true, DepthValue::Known(depth)) => Some(depth),
@@ -690,7 +690,7 @@ pub(crate) fn check_stack_depth_with_context(
         let Some(first) = known.next() else { continue };
         for other in known {
             if other != first {
-                return Err(VerifierError::StackDepthMismatch {
+                return Err(CheckerError::StackDepthMismatch {
                     target_offset: block,
                     depth_a: first,
                     depth_b: other,
@@ -710,10 +710,10 @@ pub(crate) fn check_stack_depth_with_context(
 
         match &before {
             DepthValue::Underflow => {
-                return Err(VerifierError::StackUnderflow { offset: node });
+                return Err(CheckerError::StackUnderflow { offset: node });
             }
             DepthValue::Known(d) if *d > STACK_LIMIT => {
-                return Err(VerifierError::StackOverflowRisk {
+                return Err(CheckerError::StackOverflowRisk {
                     offset: node,
                     depth: *d,
                 });
@@ -723,10 +723,10 @@ pub(crate) fn check_stack_depth_with_context(
 
         match &after {
             DepthValue::Underflow => {
-                return Err(VerifierError::StackUnderflow { offset: node });
+                return Err(CheckerError::StackUnderflow { offset: node });
             }
             DepthValue::Known(d) if *d > STACK_LIMIT => {
-                return Err(VerifierError::StackOverflowRisk {
+                return Err(CheckerError::StackOverflowRisk {
                     offset: node,
                     depth: *d,
                 });
@@ -749,8 +749,8 @@ pub(crate) fn check_stack_depth_with_context(
 ///
 /// # Errors
 ///
-/// Returns the first [`VerifierError`] found.
-pub fn check_stack_depth(program: &Program) -> Result<(), VerifierError> {
+/// Returns the first [`CheckerError`] found.
+pub fn check_stack_depth(program: &Program) -> Result<(), CheckerError> {
     let code = program.code();
     if code.is_empty() {
         return Ok(());

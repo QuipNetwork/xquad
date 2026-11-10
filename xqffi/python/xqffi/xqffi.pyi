@@ -17,12 +17,12 @@
 
 """Type stub for `xqffi.xqffi`, the compiled extension.
 
-Importing it registers `xqffi.asm`, `xqffi.vm` and `xqffi.verifier`, which
+Importing it registers `xqffi.asm`, `xqffi.vm` and `xqffi.checker`, which
 it also carries as attributes.
 """
 
 from xqffi import asm as asm
-from xqffi import verifier as verifier
+from xqffi import checker as checker
 from xqffi import vm as vm
 
-__all__ = ["asm", "vm", "verifier"]
+__all__ = ["asm", "checker", "vm"]

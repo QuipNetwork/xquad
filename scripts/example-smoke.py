@@ -42,31 +42,31 @@ MANIFEST_PATH = EXAMPLES_DIR / "manifest.yaml"
 SEED = 42
 
 
-def _require_xqffi_verifier() -> None:
-    """Fail fast if the compiled bytecode verifier extension is missing.
+def _require_xqffi_checker() -> None:
+    """Fail fast if the compiled bytecode checker extension is missing.
 
-    ``xqcp.problem._verify_compiled`` silently skips verification on
+    ``xqcp.problem._check_compiled`` silently skips the bytecode check on
     ``ImportError`` by design, so xqcp stays usable in source-only
     environments where the ``xqffi`` extension has not been built. That
     silent skip is correct for xqcp as a library, but this smoke test is
-    the harness that is supposed to guarantee the verifier actually ran
+    the harness that is supposed to guarantee the checker actually ran
     over every compiled example program -- so here, an unimportable
-    verifier is a hard setup error rather than a silent skip that could
-    let verifier coverage quietly vanish.
+    checker is a hard setup error rather than a silent skip that could
+    let checker coverage quietly vanish.
 
     The import is written exactly as the consumer writes it, symbol and
     all, because ``ImportError`` covers a missing symbol as well as a
-    missing module. An ``xqffi`` build that ships ``xqffi.verifier``
-    without ``verify_source`` -- a rename, a partial cdylib, a symbol
+    missing module. An ``xqffi`` build that ships ``xqffi.checker``
+    without ``check_source`` -- a rename, a partial cdylib, a symbol
     dropped from the pyo3 module -- satisfies a module-level import while
-    ``_verify_compiled`` returns early on every call. Checking less than
+    ``_check_compiled`` returns early on every call. Checking less than
     the consumer checks is how this guard would pass on the day coverage
     disappeared.
     """
     try:
-        from xqffi.verifier import verify_source  # noqa: F401
+        from xqffi.checker import check_source  # noqa: F401
     except ImportError as exc:
-        raise SetupError(f"xqffi.verifier.verify_source is not importable: {exc}") from exc
+        raise SetupError(f"xqffi.checker.check_source is not importable: {exc}") from exc
 
 
 def _hardware_examples() -> tuple[str, ...]:
@@ -110,7 +110,7 @@ def run_example(runner: Path, solver: str = DEFAULT_SOLVER) -> dict:
 
 def main() -> int:
     try:
-        _require_xqffi_verifier()
+        _require_xqffi_checker()
     except SetupError as exc:
         print(f"example-smoke setup error: {format_setup_error(exc, REPO_ROOT)}", file=sys.stderr)
         return 2

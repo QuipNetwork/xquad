@@ -21,23 +21,23 @@ use alloc::vec::Vec;
 use crate::bytecode::error::StreamError;
 use crate::bytecode::{Cursor, Instruction, JumpTable};
 
-use super::error::VerifierError;
+use super::error::CheckerError;
 
-/// Convert a [`StreamError`] into a [`VerifierError`].
+/// Convert a [`StreamError`] into a [`CheckerError`].
 ///
 /// `SeekOutOfBounds` cannot be triggered by sequential stream iteration,
 /// so it is mapped defensively to `TruncatedInstruction`.
-pub(super) fn stream_err(e: &StreamError) -> VerifierError {
+pub(super) fn stream_err(e: &StreamError) -> CheckerError {
     match e {
         StreamError::TruncatedInstruction { offset } => {
-            VerifierError::TruncatedInstruction { offset: *offset }
+            CheckerError::TruncatedInstruction { offset: *offset }
         }
-        StreamError::UnknownOpcode { offset, byte } => VerifierError::BadOpcode {
+        StreamError::UnknownOpcode { offset, byte } => CheckerError::BadOpcode {
             offset: *offset,
             byte: *byte,
         },
         StreamError::SeekOutOfBounds { target, .. } => {
-            VerifierError::TruncatedInstruction { offset: *target }
+            CheckerError::TruncatedInstruction { offset: *target }
         }
     }
 }
@@ -55,11 +55,11 @@ pub(super) fn stream_err(e: &StreamError) -> VerifierError {
 /// immediately. Loop and jump-target errors are recorded after the walk.
 ///
 /// Returns `(jump_table, (input_slots, output_slots), first_error)`.
-pub(crate) fn scan(code: &[u8]) -> (JumpTable, (u8, u8), Option<VerifierError>) {
+pub(crate) fn scan(code: &[u8]) -> (JumpTable, (u8, u8), Option<CheckerError>) {
     let mut targets: Vec<usize> = Vec::new();
     let mut loop_offsets: Vec<usize> = Vec::new();
     let mut jump_refs: Vec<(usize, u16)> = Vec::new();
-    let mut first_error: Option<VerifierError> = None;
+    let mut first_error: Option<CheckerError> = None;
     let mut input_slots: u8 = 0;
     let mut output_slots: u8 = 0;
 
@@ -79,10 +79,10 @@ pub(crate) fn scan(code: &[u8]) -> (JumpTable, (u8, u8), Option<VerifierError>) 
             Instruction::Output { .. } => output_slots = output_slots.saturating_add(1),
             Instruction::Range {} | Instruction::Iter { .. } => loop_offsets.push(pos),
             Instruction::Next {} if first_error.is_none() && loop_offsets.pop().is_none() => {
-                first_error = Some(VerifierError::NoActiveLoop { offset: pos });
+                first_error = Some(CheckerError::NoActiveLoop { offset: pos });
             }
             Instruction::Lidx { .. } | Instruction::LVal { .. } if loop_offsets.is_empty() => {
-                let _ = first_error.get_or_insert(VerifierError::NoActiveLoop { offset: pos });
+                let _ = first_error.get_or_insert(CheckerError::NoActiveLoop { offset: pos });
             }
             Instruction::Jump1 { label } | Instruction::JumpI1 { label } => {
                 jump_refs.push((pos, u16::from(label)));
@@ -98,7 +98,7 @@ pub(crate) fn scan(code: &[u8]) -> (JumpTable, (u8, u8), Option<VerifierError>) 
     if first_error.is_none()
         && let Some(&outermost) = loop_offsets.first()
     {
-        first_error = Some(VerifierError::UnmatchedLoop {
+        first_error = Some(CheckerError::UnmatchedLoop {
             offset: outermost,
             depth: loop_offsets.len(),
         });
@@ -111,7 +111,7 @@ pub(crate) fn scan(code: &[u8]) -> (JumpTable, (u8, u8), Option<VerifierError>) 
         let target_count = jump_table.len();
         for (offset, label) in jump_refs {
             if usize::from(label) >= target_count {
-                first_error = Some(VerifierError::UndefinedJumpTarget {
+                first_error = Some(CheckerError::UndefinedJumpTarget {
                     offset,
                     label,
                     target_count,

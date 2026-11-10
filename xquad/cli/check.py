@@ -15,7 +15,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""`xquad vm check`: run the bytecode verifier over a program."""
+"""`xquad vm check`: run the bytecode checker over a program."""
 
 from __future__ import annotations
 
@@ -30,19 +30,19 @@ from xquad.cli._common import load_program
 @click.option("--text", is_flag=True, help="Treat FILE as assembly text and assemble before checking.")
 @click.argument("file", type=click.Path(path_type=Path))
 def check(text: bool, file: Path) -> None:
-    """Check XQVM bytecode statically (all verifier phases).
+    """Check XQVM bytecode statically (all checker phases).
 
     Reads FILE (binary bytecode, or assembly with --text) and runs every
-    verifier phase: structural, jump-target, loop-nesting, register
+    checker phase: structural, jump-target, loop-nesting, register
     type-state and stack depth. Exits 0 on success, 1 on the first
     violation found.
     """
     from xqffi.asm import instruction_count
-    from xqffi.verifier import verify
+    from xqffi.checker import check as check_bytecode
 
     bytecode = load_program(file, text=text)
     try:
-        verify(bytecode)
+        check_bytecode(bytecode)
     except ValueError as e:
         raise click.ClickException(f"check failed: {e}") from e
     count = instruction_count(bytecode)

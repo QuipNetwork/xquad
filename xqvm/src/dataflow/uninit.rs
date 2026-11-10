@@ -52,15 +52,15 @@ use std::collections::HashMap;
 #[cfg(not(feature = "std"))]
 use hashbrown::HashMap;
 
+use crate::CheckerError;
 use crate::Program;
-use crate::VerifierError;
 use crate::bytecode::InstructionStream;
+use crate::checker::reg_type::{RegType, check_reads, write_effect};
 use crate::dataflow::analysis::Analysis;
 use crate::dataflow::bytecode::{BlockId, CfgContext, build_cfg};
 use crate::dataflow::direction::Forward;
 use crate::dataflow::lattice::Lattice;
 use crate::dataflow::solver::solve;
-use crate::verifier::reg_type::{RegType, check_reads, write_effect};
 
 // ---------------------------------------------------------------------------
 // InitValue lattice
@@ -181,7 +181,7 @@ fn collect_block_inits(code: &[u8], block_start: usize, block_end: usize) -> Vec
 
 /// Run the CFG-based forward must-init analysis using a pre-built CFG.
 ///
-/// Detects [`VerifierError::ReadUnsetRegister`] for registers that are not
+/// Detects [`CheckerError::ReadUnsetRegister`] for registers that are not
 /// definitely written on every path to the read site.  This includes the case
 /// that [`crate::dataflow::register::check_register_types`] misses: a register
 /// written on only one branch of a conditional, then read after the join.
@@ -194,12 +194,12 @@ fn collect_block_inits(code: &[u8], block_start: usize, block_end: usize) -> Vec
 ///
 /// # Errors
 ///
-/// Returns the first [`VerifierError::ReadUnsetRegister`] found in program
+/// Returns the first [`CheckerError::ReadUnsetRegister`] found in program
 /// order across reachable blocks.
 pub(crate) fn check_uninit_registers_with_cfg(
     program: &Program,
     cfg: &crate::dataflow::cfg::Cfg<BlockId>,
-) -> Result<(), VerifierError> {
+) -> Result<(), CheckerError> {
     let code = program.code();
 
     let mut starts: Vec<BlockId> = cfg.nodes().to_vec();
@@ -287,8 +287,8 @@ pub(crate) fn check_uninit_registers_with_cfg(
 ///
 /// # Errors
 ///
-/// Returns the first [`VerifierError::ReadUnsetRegister`] found.
-pub fn check_uninit_registers(program: &Program) -> Result<(), VerifierError> {
+/// Returns the first [`CheckerError::ReadUnsetRegister`] found.
+pub fn check_uninit_registers(program: &Program) -> Result<(), CheckerError> {
     let code = program.code();
     if code.is_empty() {
         return Ok(());

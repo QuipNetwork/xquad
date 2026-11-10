@@ -31,9 +31,9 @@ pipeline::
     v.run_bytecode(bytecode)
     samples = sa.SolverCPU().solve(problem.model())
 
-`cp`, `sa`, `asm` and `verifier` are aliases, not copies: `xquad.cp` *is*
+`cp`, `sa`, `asm` and `checker` are aliases, not copies: `xquad.cp` *is*
 `xqcp`, `xquad.sa` *is* `xqsa`, `xquad.asm` *is* `xqffi.asm` and
-`xquad.verifier` *is* `xqffi.verifier`. An import finder maps every
+`xquad.checker` *is* `xqffi.checker`. An import finder maps every
 dotted import under an alias to its target, so `import xquad.cp` and
 `from xquad.sa.quip import SolverQuip` resolve to the same module
 objects. `types`, `vm` and `program` are this package's own modules.
@@ -55,13 +55,13 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import xqcp as cp
     import xqsa as sa
-    from xqffi import asm, verifier
+    from xqffi import asm, checker
     from xquad import program, types, vm
 
-_ALIASES = {"cp": "xqcp", "sa": "xqsa", "asm": "xqffi.asm", "verifier": "xqffi.verifier"}
+_ALIASES = {"cp": "xqcp", "sa": "xqsa", "asm": "xqffi.asm", "checker": "xqffi.checker"}
 _LAZY = ("types", "vm", "program")
 
-__all__ = ["asm", "cp", "program", "sa", "types", "verifier", "vm"]
+__all__ = ["asm", "checker", "cp", "program", "sa", "types", "vm"]
 
 
 class _AliasLoader:
@@ -78,7 +78,7 @@ class _AliasLoader:
     def exec_module(self, module: ModuleType) -> None:
         # The import system has just set the alias's spec on the target; give it its own back, or
         # `importlib.reload` and `importlib.resources` see a spec with no origin and no real loader.
-        # The PyO3 submodules (`xqffi.asm`, `xqffi.verifier`) have none, so they keep the alias spec
+        # The PyO3 submodules (`xqffi.asm`, `xqffi.checker`) have none, so they keep the alias spec
         # for `find_spec`; `importlib.reload` does not work on them either way.
         if self._target_spec is not None:
             module.__spec__ = self._target_spec

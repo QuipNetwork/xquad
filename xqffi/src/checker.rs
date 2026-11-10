@@ -15,12 +15,12 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! `xqffi.verifier` -- `PyO3` bindings around `xqvm::verifier`.
+//! `xqffi.checker` -- `PyO3` bindings around `xqvm::checker`.
 //!
 //! Two entry points:
 //!
-//! - [`verify`] -- run the default verifier over pre-assembled bytecode.
-//! - [`verify_source`] -- assemble from `.xqasm` source, then verify.
+//! - [`check`] -- run the default checker over pre-assembled bytecode.
+//! - [`check_source`] -- assemble from `.xqasm` source, then check.
 //!
 //! Both raise `ValueError` on the first violation found. The
 //! message begins with the stable variant name
@@ -31,21 +31,21 @@
 //! # Examples (Python)
 //!
 //! ```python
-//! from xqffi.verifier import verify_source
+//! from xqffi.checker import check_source
 //!
-//! verify_source("PUSH 1 HALT")          # returns None
-//! verify_source("NEXT HALT")            # raises ValueError: NoActiveLoop: ...
+//! check_source("PUSH 1 HALT")          # returns None
+//! check_source("NEXT HALT")            # raises ValueError: NoActiveLoop: ...
 //! ```
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use xqasm::assemble_source;
-use xqvm::{Program, verifier};
+use xqvm::{Program, checker};
 
-/// Run the default bytecode verifier over pre-assembled bytecode bytes.
+/// Run the default bytecode checker over pre-assembled bytecode bytes.
 ///
-/// Decodes *bytecode* into a [`Program`] and runs all verification phases
+/// Decodes *bytecode* into a [`Program`] and runs all checker phases
 /// (structural, jump-target, loop-nesting, register type-state, stack depth).
 ///
 /// # Errors
@@ -54,30 +54,30 @@ use xqvm::{Program, verifier};
 /// violation found.  The message starts with the variant name for
 /// programmatic dispatch: ``"<Variant>: <description>"``.
 #[pyfunction]
-fn verify(bytecode: &[u8]) -> PyResult<()> {
+fn check(bytecode: &[u8]) -> PyResult<()> {
     let program = Program::decode(bytecode)
         .map_err(|e| PyValueError::new_err(format!("decode error: {e}")))?;
-    verifier::verify(&program)
+    checker::check(&program)
         .map_err(|e| PyValueError::new_err(format!("{}: {e}", e.variant_name())))
 }
 
-/// Assemble `.xqasm` source and run the default bytecode verifier.
+/// Assemble `.xqasm` source and run the default bytecode checker.
 ///
 /// Equivalent to assembling with ``xqffi.asm.assemble_source`` and then
-/// calling :func:`verify`, but in a single round-trip.
+/// calling :func:`check`, but in a single round-trip.
 ///
 /// # Errors
 ///
-/// Raises ``ValueError`` on assembly failure or any verification violation.
+/// Raises ``ValueError`` on assembly failure or any checker violation.
 #[pyfunction]
-fn verify_source(source: &str) -> PyResult<()> {
+fn check_source(source: &str) -> PyResult<()> {
     let program = assemble_source(source).map_err(|e| PyValueError::new_err(format!("{e}")))?;
-    verifier::verify(&program)
+    checker::check(&program)
         .map_err(|e| PyValueError::new_err(format!("{}: {e}", e.variant_name())))
 }
 
 pub(crate) fn register(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(verify, m)?)?;
-    m.add_function(wrap_pyfunction!(verify_source, m)?)?;
+    m.add_function(wrap_pyfunction!(check, m)?)?;
+    m.add_function(wrap_pyfunction!(check_source, m)?)?;
     Ok(())
 }

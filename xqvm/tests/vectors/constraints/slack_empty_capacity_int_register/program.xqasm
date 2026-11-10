@@ -1,10 +1,10 @@
 ; slack_empty_capacity_int_register: SLACK discriminates both of its
 ; registers even when the capacity is non-positive and nothing is appended.
 ;
-; SLACK carries a `mutate` effect on both registers, and the verifier's
-; static type system depends on it: xqvm/src/verifier/reg_type.rs requires
+; SLACK carries a `mutate` effect on both registers, and the checker's
+; static type system depends on it: xqvm/src/checker/reg_type.rs requires
 ; vec<int> of each, and RegType::Any -- the write type INPUT carries --
-; satisfies that requirement. So this program is verifier-clean and
+; satisfies that requirement. So this program is checker-clean and
 ; therefore admissible to a chain's store_program, and it arrives at SLACK
 ; with two int registers.
 ;
@@ -15,7 +15,7 @@
 ;
 ; The registers come from calldata rather than STOW for the same reason
 ; iter_non_vec_register_empty_slice uses INPUT: it is the shape the
-; verifier admits.
+; checker admits.
 
 PUSH 0
 INPUT r0         ; r0 = 5, an int, not a vec<int>

@@ -272,9 +272,9 @@ Programs exist in two representations. `.xqasm` is the human-readable text assem
 
 File format definitions, assembly syntax, and binary encoding rules: **[ENCODING.md](ENCODING.md)**
 
-## Bytecode Verification
+## Bytecode Checking
 
-Bytecode verification phases, error semantics, composable architecture, and per-opcode stack effects: **[VERIFIER.md](VERIFIER.md)**
+Bytecode checker phases, error semantics, composable architecture, and per-opcode stack effects: **[CHECKER.md](CHECKER.md)**
 
 ## Related Specifications
 

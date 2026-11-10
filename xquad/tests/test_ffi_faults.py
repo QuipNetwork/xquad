@@ -30,7 +30,7 @@ import pytest
 
 import xqffi.vm as ffi
 from xqffi.asm import assemble_source, instruction_count
-from xqffi.verifier import verify
+from xqffi.checker import check
 
 #: The conformance fault vocabulary (`xqvm/tests/vector_suite/vector.rs`, `Fault`),
 #: spelled as the exception classes spell it.
@@ -214,7 +214,7 @@ def test_an_undecodable_program_is_not_a_vm_fault() -> None:
     assert str(excinfo.value) == "decode error: XQBC header is truncated"
 
 
-@pytest.mark.parametrize("decode", [instruction_count, verify], ids=["instruction_count", "verify"])
+@pytest.mark.parametrize("decode", [instruction_count, check], ids=["instruction_count", "check"])
 def test_host_decoders_report_the_display_text(decode: Callable[[bytes], object]) -> None:
     with pytest.raises(ValueError) as excinfo:
         decode(b"\x43")

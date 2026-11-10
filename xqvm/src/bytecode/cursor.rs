@@ -20,7 +20,7 @@
 //! [`Cursor`] decodes exactly as [`InstructionStream`] does -- same offsets,
 //! same errors, the same one-byte advance past a bad instruction -- but
 //! carries no label map and yields no label. The VM's run loop and the
-//! verifier's scan read through it because neither uses labels, and walking
+//! checker's scan read through it because neither uses labels, and walking
 //! through the stream instead costs about 40% more per executed step and
 //! about twice as much per decoded byte (measured on QUI-1511 and QUI-1057).
 //!

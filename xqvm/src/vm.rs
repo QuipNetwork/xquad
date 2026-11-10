@@ -1394,14 +1394,14 @@ impl Vm {
         let end = self.pop(pos)?;
         let start = self.pop(pos)?;
         // The register kind is discriminated before the skip, not after it:
-        // `ITER` carries a `read` effect on `reg` that the verifier's static
+        // `ITER` carries a `read` effect on `reg` that the checker's static
         // type system depends on, and skipping the loop without ever
         // resolving the register discards it. `spec/xqvm/ISA.md`'s `ITER` row
         // orders the steps register-read-before-skip and its error clause has
         // no emptiness carve-out. Returning `SkipLoop` first made
         // `INPUT r0 / PUSH 1 / PUSH 1 / ITER r0 / NEXT / ...` complete and
         // write outputs where 0.3.x aborted with a register-type fault, on a
-        // program the verifier admits because `INPUT` writes `RegType::Any`.
+        // program the checker admits because `INPUT` writes `RegType::Any`.
         self.require_vec(pos, reg)?;
         if start >= end {
             return Ok(StepResult::SkipLoop);
@@ -2156,11 +2156,11 @@ impl Vm {
         let start_index = self.pop(pos)?;
         // Both registers are discriminated before the empty-capacity skip,
         // and before either is mutated. `SLACK` carries a `mutate` effect on
-        // both, and the verifier's static type system depends on it:
-        // `xqvm/src/verifier/reg_type.rs` requires `vec<int>` of each, and
+        // both, and the checker's static type system depends on it:
+        // `xqvm/src/checker/reg_type.rs` requires `vec<int>` of each, and
         // `RegType::Any` -- what `INPUT` writes -- satisfies that, so
         // `INPUT r0 / INPUT r1 / PUSH 0 / PUSH 0 / SLACK r0 r1` is
-        // verifier-clean and reaches here with two ints. Returning on
+        // checker-clean and reaches here with two ints. Returning on
         // `capacity <= 0` before touching either register discarded the
         // effect and halted Ok where the spec requires a fault. Same rule,
         // and same reason, as `ITER`'s register-read-before-skip.

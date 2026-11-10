@@ -250,10 +250,10 @@ verify:python:
         - make -k check-uv-lock
 
 # Fresh-xqffi-cdylib guarantee (QUI-1199). `xquad/__init__.py` eagerly
-# imports `vm`/`asm`/`program`/`verifier`, each doing a top-level `from
+# imports `vm`/`asm`/`program`/`checker`, each doing a top-level `from
 # xqffi.* import <symbol>` that binds nine concrete symbols
 # (assemble_source, disassemble, parse_xqasm, Vm, DEFAULT_STEP_LIMIT,
-# XqmxModel, XqmxSample, verify, verify_source) -- so a bare `import
+# XqmxModel, XqmxSample, check, check_source) -- so a bare `import
 # xquad` genuinely exercises the maturin-built cdylib, not just the
 # pure-Python packages around it. `make -k check-xqffi-fresh` does `uv
 # sync --extra dwave` then that import, asserting the symbols resolve.

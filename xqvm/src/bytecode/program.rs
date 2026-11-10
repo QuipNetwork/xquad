@@ -91,7 +91,7 @@ impl Program {
     /// Wrap raw instruction bytes in a [`Program`], computing the jump table
     /// and slot counts in a single combined pass over the buffer.
     pub fn new(code: Vec<u8>) -> Self {
-        let (jump_table, (input_slots, output_slots), _) = crate::verifier::scan(&code);
+        let (jump_table, (input_slots, output_slots), _) = crate::checker::scan(&code);
         Self {
             code,
             jump_table,

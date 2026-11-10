@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 use crate::Program;
 use crate::bytecode::{Instruction, InstructionStream};
 
-use super::error::VerifierError;
+use super::error::CheckerError;
 use super::phase::Phase;
 use super::scan::stream_err;
 
@@ -34,9 +34,9 @@ use super::scan::stream_err;
 pub struct LoopNestingPhase;
 
 impl Phase for LoopNestingPhase {
-    type Error = VerifierError;
+    type Error = CheckerError;
 
-    fn run(&self, program: &Program) -> Result<(), VerifierError> {
+    fn run(&self, program: &Program) -> Result<(), CheckerError> {
         let mut loop_offsets: Vec<usize> = Vec::new();
         let mut stream = InstructionStream::new(program.code());
 
@@ -50,10 +50,10 @@ impl Phase for LoopNestingPhase {
                     // `ok_or` converts None (empty stack) into a NoActiveLoop error.
                     let _ = loop_offsets
                         .pop()
-                        .ok_or(VerifierError::NoActiveLoop { offset: pos })?;
+                        .ok_or(CheckerError::NoActiveLoop { offset: pos })?;
                 }
                 Instruction::Lidx { .. } | Instruction::LVal { .. } if loop_offsets.is_empty() => {
-                    return Err(VerifierError::NoActiveLoop { offset: pos });
+                    return Err(CheckerError::NoActiveLoop { offset: pos });
                 }
                 _ => {}
             }
@@ -61,7 +61,7 @@ impl Phase for LoopNestingPhase {
 
         // Report the outermost (first-pushed) unmatched loop opener, if any.
         match loop_offsets.first().copied() {
-            Some(outermost) => Err(VerifierError::UnmatchedLoop {
+            Some(outermost) => Err(CheckerError::UnmatchedLoop {
                 offset: outermost,
                 depth: loop_offsets.len(),
             }),

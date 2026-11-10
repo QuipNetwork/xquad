@@ -5,7 +5,7 @@
 ; Both faults are live; SPEC.md's error-precedence rule decides which one is
 ; raised -- exec_at_least's `if k <= 0 || k > n_i64` guard runs before it
 ; reaches reg_mut(model). INPUT writes a register of unknown kind, so
-; the verifier admits this program (QUI-1178 route B).
+; the checker admits this program (QUI-1178 route B).
 
 PUSH 0
 INPUT r0         ; r0 = calldata[0] = 5, an int -- not a model

@@ -19,7 +19,7 @@
 
 Guards three invariants:
 
-1. Every aliased subnamespace (`xquad.asm`, `xquad.verifier`, `xquad.cp`,
+1. Every aliased subnamespace (`xquad.asm`, `xquad.checker`, `xquad.cp`,
    `xquad.sa`) *is* its peer module, through attribute access and dotted
    imports alike, and `xquad.types` re-exports the *identical* symbols
    -- no shadow classes, no forks. `import xquad` alone loads no peer.
@@ -54,20 +54,20 @@ def test_aliases_are_the_peer_modules():
     assert sa is _xqsa
     assert sa.quip is _xqsa_quip
     assert asm is _xqffi.asm
-    assert xquad.verifier is _xqffi.verifier
+    assert xquad.checker is _xqffi.checker
 
 
 def test_dotted_imports_resolve():
     """Each documented dotted import resolves to the peer's objects."""
     import xquad.asm
     import xquad.sa.quip
+    from xquad.checker import check
     from xquad.cp import Problem
     from xquad.sa.quip import SolverQuip
-    from xquad.verifier import verify
 
     assert Problem is _xqcp.Problem
     assert SolverQuip is _xqsa_quip.SolverQuip
-    assert verify is _xqffi.verifier.verify
+    assert check is _xqffi.checker.check
     assert xquad.asm is _xqffi.asm
     assert sys.modules["xquad.sa.quip"] is _xqsa_quip
 
@@ -162,7 +162,7 @@ def test_top_level_namespace():
     assert xquad.cp is cp
     assert xquad.sa is sa
     assert xquad.types is types
-    assert xquad.verifier is _xqffi.verifier
+    assert xquad.checker is _xqffi.checker
     assert hasattr(xquad, "program")
 
 

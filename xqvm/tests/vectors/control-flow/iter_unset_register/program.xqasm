@@ -11,10 +11,10 @@
 ; pins the same ordering for the unset case, which that vector does not
 ; reach because INPUT always writes something.
 ;
-; A verifying host rejects this program statically -- xqvm/src/verifier
+; A checking host rejects this program statically -- xqvm/src/checker
 ; reg_type.rs gives a read of an unset slot ReadUnsetRegister -- so this is
-; a fault the VM raises for a non-verifying embedder and for this harness,
-; which runs bytecode without a verifier pass.
+; a fault the VM raises for a non-checking embedder and for this harness,
+; which runs bytecode without a checker pass.
 
 PUSH 1           ; start_idx
 PUSH 1           ; end_idx -- empty slice

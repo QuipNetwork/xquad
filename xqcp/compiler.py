@@ -1033,7 +1033,7 @@ class _VerifierEmitter:
     """Emits a sample check in place of each of the encoder's constraints.
 
     Every emitter is net-zero on the stack and initialises its accumulator
-    before the loop that feeds it, so the bytecode verifier accepts a
+    before the loop that feeds it, so the bytecode checker accepts a
     check emitted inside a loop body or a branch arm.
     """
 

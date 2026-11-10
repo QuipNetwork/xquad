@@ -25,8 +25,8 @@
 //!   with the `set_calldata` / `set_output_slots` / `run` / `outputs` /
 //!   `stack` surface, the `Domain` / `XqmxModel` / `XqmxSample` model
 //!   types, `triu`, the VM's limits, and one exception class per fault.
-//! - `xqffi.verifier` — bindings around [`xqvm::verifier`]: `verify`
-//!   (bytecode bytes) and `verify_source` (`.xqasm` text).
+//! - `xqffi.checker` — bindings around [`xqvm::checker`]: `check`
+//!   (bytecode bytes) and `check_source` (`.xqasm` text).
 //!
 //! User-facing convenience (`Program`, `Session`, `RunResult`, model/sample
 //! dict conversion) lives in the `xquad` pure-Python umbrella package.
@@ -38,15 +38,15 @@
 use pyo3::prelude::*;
 
 mod asm;
+mod checker;
 mod fault;
-mod verifier;
 mod vm;
 
 /// Module entry point -- built by maturin as `xqffi.xqffi` (the
 /// `module-name` field in `pyproject.toml`), inside the `xqffi` package whose
 /// `python/xqffi/__init__.py` imports it and whose `.pyi` files type it.
 ///
-/// Submodules (`xqffi.asm`, `xqffi.vm`, `xqffi.verifier`) are registered
+/// Submodules (`xqffi.asm`, `xqffi.vm`, `xqffi.checker`) are registered
 /// both as attributes of the parent module *and* in `sys.modules` so
 /// `from xqffi.asm import parse_xqasm` resolves. `add_submodule`
 /// alone only sets the attribute; pyo3's module tree doesn't
@@ -66,10 +66,10 @@ fn xqffi(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_submodule(&vm_module)?;
     sys_modules.set_item("xqffi.vm", &vm_module)?;
 
-    let verifier_module = PyModule::new(py, "xqffi.verifier")?;
-    verifier::register(py, &verifier_module)?;
-    m.add_submodule(&verifier_module)?;
-    sys_modules.set_item("xqffi.verifier", &verifier_module)?;
+    let checker_module = PyModule::new(py, "xqffi.checker")?;
+    checker::register(py, &checker_module)?;
+    m.add_submodule(&checker_module)?;
+    sys_modules.set_item("xqffi.checker", &checker_module)?;
 
     Ok(())
 }

@@ -15,19 +15,19 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Type stubs for `xqffi.verifier`, the bindings around `xqvm::verifier`."""
+"""Type stubs for `xqffi.checker`, the bindings around `xqvm::checker`."""
 
-__all__ = ["verify", "verify_source"]
+__all__ = ["check", "check_source"]
 
-def verify(bytecode: bytes) -> None:
-    """Verify pre-assembled bytecode.
+def check(bytecode: bytes) -> None:
+    """Check pre-assembled bytecode.
 
     Raises `ValueError` if `bytecode` does not decode, or on the first
     violation, with a message of the form `"<Variant>: <description>"`.
     """
 
-def verify_source(source: str) -> None:
-    """Assemble `source`, then verify it.
+def check_source(source: str) -> None:
+    """Assemble `source`, then check it.
 
     Raises `ValueError` on assembly failure or on the first violation.
     """

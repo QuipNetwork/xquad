@@ -1,16 +1,16 @@
 ; iter_non_vec_register_empty_slice: an ITER whose register does not hold a
 ; vec raises even when the slice is empty and the body would not have run.
 ;
-; ITER carries a `read` effect on its register that the verifier's static
+; ITER carries a `read` effect on its register that the checker's static
 ; type system depends on, so skipping the loop without ever resolving the
 ; register discards that effect. spec/xqvm/ISA.md's ITER row orders the
 ; steps register-read-before-skip and its error clause has no emptiness
 ; carve-out.
 ;
 ; The register is filled from calldata rather than by STOW because that is
-; the shape the verifier admits: xqvm/src/verifier/reg_type.rs gives INPUT
+; the shape the checker admits: xqvm/src/checker/reg_type.rs gives INPUT
 ; the write type RegType::Any, which satisfies ITER's static requirement, so
-; this program is verifier-clean and therefore admissible to a chain's
+; this program is checker-clean and therefore admissible to a chain's
 ; store_program. A VM that skips the loop before the type check would halt
 ; with outputs = [7] here instead of faulting (as 0.3.x did).
 

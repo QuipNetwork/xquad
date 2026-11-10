@@ -204,30 +204,30 @@ class CompiledPrograms:
 
 
 # ---------------------------------------------------------------------------
-# Post-compilation verification
+# Post-compilation check
 # ---------------------------------------------------------------------------
 
-# xqcp output programs (not the bytecode verifier)
+# xqcp output programs
 _PROGRAM_LABELS = ("encoder", "verifier", "decoder")
 
 
-def _verify_compiled(programs: CompiledPrograms) -> None:
-    """Run the bytecode verifier on each generated program.
+def _check_compiled(programs: CompiledPrograms) -> None:
+    """Run the bytecode checker on each generated program.
 
-    Silently skips verification if ``xqffi`` is not installed so that
+    Silently skips the check if ``xqffi`` is not installed so that
     xqcp remains usable in source-only environments.
     """
     try:
-        from xqffi.verifier import verify_source
+        from xqffi.checker import check_source
     except ImportError:
         return
 
     for label in _PROGRAM_LABELS:
         source = getattr(programs, label)
         try:
-            verify_source(source)
+            check_source(source)
         except ValueError as exc:
-            raise ValueError(f"{label} verification failed: {exc}") from exc
+            raise ValueError(f"{label} check failed: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -916,16 +916,16 @@ class Problem:
     def compile(self) -> CompiledPrograms:
         """Compile the problem into three .xqasm program strings.
 
-        After generating the three programs, runs the bytecode verifier
+        After generating the three programs, runs the bytecode checker
         (Phase 1 + Phase 2) on each one to catch code-generation bugs at
-        compile time.  The verifier requires ``xqffi``; if that extension is
-        not available the verification step is silently skipped.
+        compile time.  The checker requires ``xqffi``; if that extension is
+        not available the check is silently skipped.
 
         # Errors
 
-        Raises ``ValueError`` if any generated program fails verification,
+        Raises ``ValueError`` if any generated program fails the check,
         with a message of the form
-        ``"<program> verification failed: <VerifierError>"``.
+        ``"<program> check failed: <CheckerError>"``.
         """
         from .compiler import compile_decoder, compile_encoder, compile_verifier
 
@@ -934,5 +934,5 @@ class Problem:
             verifier=compile_verifier(self),
             decoder=compile_decoder(self),
         )
-        _verify_compiled(programs)
+        _check_compiled(programs)
         return programs
