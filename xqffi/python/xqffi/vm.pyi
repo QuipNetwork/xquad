@@ -224,7 +224,12 @@ class Vm:
     ) -> None:
         """Raises the `XqvmError` subclass named for a fault, or `RuntimeError`
         if `bytecode` does not decode. `ValueError` for an unknown `trace` or a
-        `trace_file` without one; `OSError` when `trace_file` cannot be created."""
+        `trace_file` without one; `OSError` when `trace_file` cannot be created.
+
+        On the main thread the run checks for signals about every 100 ms and
+        raises what a handler raises, `KeyboardInterrupt` for Ctrl-C. It stops
+        between two instructions, leaving the state they left, as a fault
+        does; `reset()` clears it."""
 
     def outputs(self) -> list[_Output]: ...
     def outputs_debug(self) -> list[str | None]: ...

@@ -62,6 +62,12 @@ pub struct StepState<'a> {
 /// Implement this trait to receive step-by-step execution state.
 /// The associated [`ENABLED`](Tracer::ENABLED) constant allows the compiler
 /// to eliminate all tracing code when set to `false`.
+///
+/// A tracer can also ask to be polled between instructions, through
+/// [`POLL_INTERVAL`](Tracer::POLL_INTERVAL) and [`poll`](Tracer::poll), so
+/// an embedder can stop a long run from outside the program, for example on
+/// a host signal. Polling is independent of `ENABLED`: a tracer that records
+/// nothing can still poll.
 pub trait Tracer {
     /// Error type for when tracing I/O fails.
     type Error;
@@ -70,12 +76,41 @@ pub trait Tracer {
     /// snapshotting and tracing calls, guaranteeing zero overhead.
     const ENABLED: bool = true;
 
+    /// Metered steps between calls to [`poll`](Tracer::poll); `0`, the
+    /// default, never polls.
+    ///
+    /// The VM polls before the first instruction that would take the steps
+    /// charged since the previous poll (or since the run started) past this
+    /// interval, so an instruction charging many steps can carry the count
+    /// well past it. The boundary shares the step budget's comparison, so
+    /// an instruction between two polls costs what it costs without the
+    /// hook.
+    const POLL_INTERVAL: u64 = 0;
+
     /// Called after each instruction executes, with the resulting state.
     ///
     /// # Errors
     ///
     /// Returns `Self::Error` if the tracer fails to record the step.
     fn on_step(&mut self, state: &StepState<'_>) -> Result<(), Self::Error>;
+
+    /// Called between two instructions, every
+    /// [`POLL_INTERVAL`](Tracer::POLL_INTERVAL) metered steps.
+    ///
+    /// Every instruction before the poll has finished, control flow
+    /// included, and the next one has been decoded but not charged. An error
+    /// stops the run there with
+    /// [`Error::TraceFailed`](crate::Error::TraceFailed) at the offset of
+    /// that next instruction, leaving the stack, registers, outputs and
+    /// counters as the instructions before it left them. The default does
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` to stop the run.
+    fn poll(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 /// A tracer that does nothing. Used as the default for [`Vm::run`](crate::Vm::run).

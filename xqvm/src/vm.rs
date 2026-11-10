@@ -712,7 +712,9 @@ impl Vm {
     /// Execute a [`Program`] with a [`Tracer`].
     ///
     /// Behaves identically to [`run`](Self::run) but invokes `tracer.on_step`
-    /// after every instruction, providing a snapshot of the VM state.
+    /// after every instruction, providing a snapshot of the VM state, and
+    /// `tracer.poll` between instructions every [`Tracer::POLL_INTERVAL`]
+    /// metered steps when that interval is not zero.
     ///
     /// When `T` is [`NoopTracer`], the compiler eliminates all tracing
     /// overhead via dead-code elimination.
@@ -720,7 +722,7 @@ impl Vm {
     /// # Errors
     ///
     /// Returns [`Error`] on any runtime fault, or [`Error::TraceFailed`] if
-    /// the tracer callback returns an error.
+    /// `tracer.on_step` or `tracer.poll` returns an error.
     #[expect(
         clippy::arithmetic_side_effects,
         reason = "`self.steps < self.step_limit` is checked immediately above, so the step counter stops at u64::MAX rather than wrapping (`spec/xqvm/SPEC.md`'s Step budget)"
@@ -734,6 +736,8 @@ impl Vm {
         self.steps = 0;
         self.instructions = 0;
         self.memory_used = 0;
+        let mut next_poll = T::POLL_INTERVAL;
+        let mut base_limit = self.base_limit::<T>(next_poll);
 
         // Probe for the next instruction before charging: the limit bounds
         // instructions executed, so a program that ends -- HALT or end of
@@ -741,7 +745,13 @@ impl Vm {
         // succeeds, and `steps()` never counts the probe: the loop shape is
         // `while pc < len`.
         while let Some(item) = cursor.next_instruction() {
-            self.charge_steps_base()?;
+            // The base charge is checked against `base_limit`, the step
+            // limit lowered to the next poll, so a polling tracer adds no
+            // comparison to an instruction between polls.
+            if !self.try_charge_steps_base(base_limit) {
+                let next_pos = item.as_ref().ok().map(|&(pos, _)| pos);
+                base_limit = self.poll_then_charge_base(tracer, next_pos, &mut next_poll)?;
+            }
             self.instructions += 1;
             let (pos, instr) = item.map_err(Error::from)?;
 
@@ -786,10 +796,9 @@ impl Vm {
                     loop_depth: self.loop_stack.len(),
                 };
 
-                tracer.on_step(&state).map_err(|e| Error::TraceFailed {
-                    pos,
-                    message: format!("{e}"),
-                })?;
+                tracer
+                    .on_step(&state)
+                    .map_err(|e| Self::trace_failed(pos, &e))?;
 
                 result
             } else {
@@ -849,6 +858,51 @@ impl Vm {
         }
 
         Ok(())
+    }
+
+    /// The cold path of a base charge that failed `base_limit`: a poll is
+    /// due, the budget is spent, or both. Returns the next `base_limit`.
+    ///
+    /// The poll runs first, before the instruction at `next_pos` is charged,
+    /// and is skipped when that instruction failed to decode (`None`), since
+    /// the decode error ends the run anyway. The budget's own charge then
+    /// decides exactly as it does without a poll.
+    #[cold]
+    fn poll_then_charge_base<T: Tracer>(
+        &mut self,
+        tracer: &mut T,
+        next_pos: Option<usize>,
+        next_poll: &mut u64,
+    ) -> Result<u64, Error>
+    where
+        T::Error: core::fmt::Display,
+    {
+        if T::POLL_INTERVAL != 0 && self.steps >= *next_poll {
+            if let Some(pos) = next_pos {
+                tracer.poll().map_err(|e| Self::trace_failed(pos, &e))?;
+            }
+            *next_poll = self.steps.saturating_add(T::POLL_INTERVAL);
+        }
+        self.charge_steps_base()?;
+        Ok(self.base_limit::<T>(*next_poll))
+    }
+
+    /// The total [`run_trace`](Self::run_trace) checks a base charge
+    /// against: the step limit, lowered to `next_poll` when `T` polls.
+    fn base_limit<T: Tracer>(&self, next_poll: u64) -> u64 {
+        if T::POLL_INTERVAL == 0 {
+            self.step_limit
+        } else {
+            self.step_limit.min(next_poll)
+        }
+    }
+
+    /// The fault a tracer callback's error becomes, at the instruction `pos`.
+    fn trace_failed(pos: usize, error: &impl core::fmt::Display) -> Error {
+        Error::TraceFailed {
+            pos,
+            message: format!("{error}"),
+        }
     }
 }
 
@@ -926,6 +980,20 @@ impl Vm {
     /// before the instruction is decoded, so it carries no position.
     fn charge_steps_base(&mut self) -> Result<(), Error> {
         self.charge_steps_at(None, metering::BASE_STEPS)
+    }
+
+    /// Charge the base cost if the total stays within `limit`, and report
+    /// whether it did. The run loop's fast path: on `false` nothing was
+    /// charged, and [`charge_steps_base`](Self::charge_steps_base) decides.
+    #[inline]
+    fn try_charge_steps_base(&mut self, limit: u64) -> bool {
+        match self.steps.checked_add(metering::BASE_STEPS) {
+            Some(total) if total <= limit => {
+                self.steps = total;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// The accumulation is exact, for the reason [`charge`](Self::charge)
@@ -3388,6 +3456,128 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    /// Tracer that records nothing and polls every 10 steps, refusing the
+    /// `stop_at`-th poll.
+    struct PollingTracer {
+        polls: u32,
+        stop_at: Option<u32>,
+    }
+
+    impl Tracer for PollingTracer {
+        type Error = String;
+
+        const ENABLED: bool = false;
+        const POLL_INTERVAL: u64 = 10;
+
+        fn on_step(&mut self, _state: &StepState<'_>) -> Result<(), Self::Error> {
+            unreachable!("ENABLED is false")
+        }
+
+        fn poll(&mut self) -> Result<(), Self::Error> {
+            self.polls = self.polls.saturating_add(1);
+            if Some(self.polls) == self.stop_at {
+                Err(format!("stopped at poll {}", self.polls))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    /// `count` `PUSH 1`s, then `HALT`.
+    fn pushes(count: usize) -> crate::bytecode::Program {
+        let mut b = InstructionBuilder::new();
+        for _ in 0..count {
+            let _ = b.emit_push(1);
+        }
+        let _ = b.emit_halt();
+        b.build().unwrap()
+    }
+
+    #[test]
+    fn poll_runs_every_interval_without_tracing() {
+        // 35 one-step pushes reach steps 10, 20 and 30; HALT ends the run
+        // before a fourth poll could fall due.
+        let mut vm = Vm::new();
+        let mut tracer = PollingTracer {
+            polls: 0,
+            stop_at: None,
+        };
+        vm.run_trace(&mut tracer, &pushes(35)).unwrap();
+        assert_eq!(tracer.polls, 3);
+        assert_eq!(vm.stack().len(), 35);
+    }
+
+    #[test]
+    fn poll_error_stops_between_instructions() {
+        let mut vm = Vm::new();
+        let mut tracer = PollingTracer {
+            polls: 0,
+            stop_at: Some(2),
+        };
+        let err = vm.run_trace(&mut tracer, &pushes(35)).unwrap_err();
+        // The second poll falls before the 21st push, at offset 40: `PUSH 1`
+        // encodes in two bytes. Twenty pushes have run; the 21st has not been
+        // charged.
+        assert!(
+            matches!(&err, Error::TraceFailed { pos: 40, message } if message == "stopped at poll 2"),
+            "expected TraceFailed at 40, got {err:?}",
+        );
+        assert_eq!(vm.stack().len(), 20);
+        assert_eq!(vm.instructions(), 20);
+        assert_eq!(vm.steps(), 20);
+    }
+
+    #[test]
+    fn step_limit_below_the_next_poll_still_binds() {
+        // A budget of 15 sits between the first poll (step 10) and the
+        // second (step 20): the run polls once, then faults at the budget
+        // exactly as it would without a polling tracer.
+        let mut vm = Vm::new();
+        let _ = vm.set_step_limit(15);
+        let mut tracer = PollingTracer {
+            polls: 0,
+            stop_at: None,
+        };
+        let err = vm.run_trace(&mut tracer, &pushes(35)).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::StepLimitExceeded {
+                    pos: None,
+                    used: 15,
+                    limit: 15,
+                    ..
+                }
+            ),
+            "expected StepLimitExceeded at 15, got {err:?}",
+        );
+        assert_eq!(tracer.polls, 1);
+        assert_eq!(vm.stack().len(), 15);
+    }
+
+    #[test]
+    fn zero_poll_interval_never_polls() {
+        struct NeverPolled;
+
+        impl Tracer for NeverPolled {
+            type Error = core::convert::Infallible;
+
+            const ENABLED: bool = false;
+
+            fn on_step(&mut self, _state: &StepState<'_>) -> Result<(), Self::Error> {
+                Ok(())
+            }
+
+            fn poll(&mut self) -> Result<(), Self::Error> {
+                unreachable!("POLL_INTERVAL defaults to 0")
+            }
+        }
+
+        let mut vm = Vm::new();
+        vm.run_trace(&mut NeverPolled, &pushes(35)).unwrap();
+        assert_eq!(vm.stack().len(), 35);
     }
 
     #[test]

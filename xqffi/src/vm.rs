@@ -37,16 +37,21 @@
 //! (mapped to `RegVal::VecInt`), an `XqmxModel`, an `XqmxSample`, or
 //! `None`. `outputs()` mirrors the inverse dispatch.
 
+use std::fmt;
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use pyo3::exceptions::{PyMemoryError, PyOSError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 
-use xqvm::{Domain, JsonTracer, Program, RegVal, TextTracer, Vm, XqmxModel, XqmxSample};
+use xqvm::{
+    Domain, JsonTracer, NoopTracer, Program, RegVal, StepState, TextTracer, Tracer, Vm, XqmxModel,
+    XqmxSample,
+};
 
 use crate::fault;
 
@@ -57,6 +62,115 @@ enum TraceFormat {
     Text,
     /// One JSON object per line (JSONL).
     Json,
+}
+
+/// Metered steps between two polls of a run by [`SignalCheck`].
+///
+/// A poll that finds [`SIGNAL_CHECK_PERIOD`] not yet over reads the clock and
+/// returns. A cheap step costs a few nanoseconds in a release build, so 2^14
+/// steps are tens of microseconds of run and that read is lost in the noise.
+const SIGNAL_POLL_STEPS: u64 = 1 << 14;
+
+/// Least run time between two signal checks.
+///
+/// A check attaches to the interpreter, which waits for the GIL whenever
+/// another Python thread holds it: up to the interpreter's switch interval,
+/// 5 ms by default. Spacing checks by wall time rather than by steps bounds
+/// that wait to a fixed share of the run, however fast the build or however
+/// heavy the instructions, and bounds how long a signal waits to be seen.
+const SIGNAL_CHECK_PERIOD: Duration = Duration::from_millis(100);
+
+/// A tracer wrapper that runs Python's signal handlers during a run.
+///
+/// The run loop polls it every [`SIGNAL_POLL_STEPS`] steps; once
+/// [`SIGNAL_CHECK_PERIOD`] has passed since the last check, it attaches to
+/// the interpreter and calls `PyErr_CheckSignals`. A handler that raises
+/// (`KeyboardInterrupt` from the default SIGINT handler) stops the run, and
+/// the exception is kept in `raised` for `Vm.run` to re-raise. Only the
+/// main thread runs signal handlers, so a run on any other thread is never
+/// stopped this way.
+struct SignalCheck<T> {
+    inner: T,
+    last_check: Instant,
+    raised: Option<PyErr>,
+}
+
+impl<T: Tracer> SignalCheck<T> {
+    fn new(inner: T) -> Self {
+        const {
+            assert!(
+                T::POLL_INTERVAL == 0,
+                "SignalCheck takes over polling, so the tracer it wraps must not poll"
+            );
+        }
+        Self {
+            inner,
+            last_check: Instant::now(),
+            raised: None,
+        }
+    }
+}
+
+/// Why a [`SignalCheck`] stopped a run: the wrapped tracer failed, or a
+/// signal handler raised.
+enum CheckError<E> {
+    Trace(E),
+    Signal,
+}
+
+impl<E: fmt::Display> fmt::Display for CheckError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Trace(e) => e.fmt(f),
+            Self::Signal => f.write_str("a signal handler raised"),
+        }
+    }
+}
+
+impl<T: Tracer> Tracer for SignalCheck<T> {
+    type Error = CheckError<T::Error>;
+
+    const ENABLED: bool = T::ENABLED;
+    const POLL_INTERVAL: u64 = SIGNAL_POLL_STEPS;
+
+    fn on_step(&mut self, state: &StepState<'_>) -> Result<(), Self::Error> {
+        self.inner.on_step(state).map_err(CheckError::Trace)
+    }
+
+    fn poll(&mut self) -> Result<(), Self::Error> {
+        if self.last_check.elapsed() < SIGNAL_CHECK_PERIOD {
+            return Ok(());
+        }
+        #[expect(
+            clippy::redundant_closure_for_method_calls,
+            reason = "the method path names one lifetime where `attach` needs a closure over any"
+        )]
+        let checked = Python::attach(|py| py.check_signals());
+        // Taken after the check, so time spent waiting for the GIL does not
+        // count towards the next period.
+        self.last_check = Instant::now();
+        checked.map_err(|e| {
+            self.raised = Some(e);
+            CheckError::Signal
+        })
+    }
+}
+
+/// Run `program` on `vm` with the GIL released, polling for signals.
+///
+/// The exception a signal handler raised wins over the `TraceFailed` it
+/// stopped the run with; any other fault maps to its `XqvmError` subclass.
+fn run_checked<T>(py: Python<'_>, vm: &mut Vm, program: &Program, tracer: T) -> PyResult<()>
+where
+    T: Tracer + Send,
+    T::Error: fmt::Display,
+{
+    let mut check = SignalCheck::new(tracer);
+    let result = py.detach(|| vm.run_trace(&mut check, program));
+    match check.raised {
+        Some(raised) => Err(raised),
+        None => result.map_err(|e| fault::vm_error(&e)),
+    }
 }
 
 /// Python wrapper around [`xqvm::Domain`].
@@ -614,7 +728,16 @@ impl PyVm {
     /// (one JSON object per step). The trace goes to `trace_file` when given,
     /// otherwise to the process's stderr (fd 2, not `sys.stderr`). The Rust
     /// tracers write it directly, so a long run never buffers its trace in
-    /// Python. The GIL is released while the program runs.
+    /// Python.
+    ///
+    /// The GIL is released while the program runs. Called on the main
+    /// thread, the run takes it back about every 100 ms to run Python's
+    /// signal handlers, so Ctrl-C raises `KeyboardInterrupt` here. A run
+    /// stopped that way stops between two instructions: every instruction
+    /// before it finished, control flow included, and the next did not
+    /// start. The stack, registers, outputs, `steps()`, `instructions()` and
+    /// `memory_used()` hold what that point left, as after a fault; the run
+    /// cannot be resumed, and `reset()` clears it for the next one.
     ///
     /// # Errors
     ///
@@ -624,6 +747,8 @@ impl PyVm {
     /// failure (`StackUnderflow`, `ArithmeticOverflow`, `TypeMismatch`,
     /// `StepLimitExceeded`, ...), with the fault's description as its
     /// message. Raises `RuntimeError` when `bytecode` does not decode.
+    /// Raises whatever a signal handler raises during the run:
+    /// `KeyboardInterrupt` for SIGINT under Python's default handler.
     #[pyo3(signature = (bytecode, trace = None, trace_file = None))]
     fn run(
         &mut self,
@@ -647,8 +772,8 @@ impl PyVm {
         };
         let program = Program::decode(bytecode).map_err(|e| fault::decode_error(&e))?;
         let vm = &mut self.inner;
-        let result = match format {
-            None => py.detach(|| vm.run(&program)),
+        match format {
+            None => run_checked(py, vm, &program, NoopTracer),
             Some(format) => {
                 let writer: Box<dyn Write + Send> = match trace_file {
                     Some(path) => Box::new(BufWriter::new(File::create(&path).map_err(|e| {
@@ -656,13 +781,12 @@ impl PyVm {
                     })?)),
                     None => Box::new(BufWriter::new(std::io::stderr())),
                 };
-                py.detach(|| match format {
-                    TraceFormat::Text => vm.run_trace(&mut TextTracer::new(writer), &program),
-                    TraceFormat::Json => vm.run_trace(&mut JsonTracer::new(writer), &program),
-                })
+                match format {
+                    TraceFormat::Text => run_checked(py, vm, &program, TextTracer::new(writer)),
+                    TraceFormat::Json => run_checked(py, vm, &program, JsonTracer::new(writer)),
+                }
             }
-        };
-        result.map_err(|e| fault::vm_error(&e))
+        }
     }
 
     /// Return the current output slots as a `list` of typed Python
