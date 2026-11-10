@@ -35,6 +35,7 @@ cache-keys = [
     { file = "README.md" },
     { file = "Cargo.toml" },
     { file = "src/**/*.rs" },
+    { file = "python/**/*" },
     { file = "../pyproject.toml" },
     { file = "../Cargo.toml" },
     { file = "../Cargo.lock" },
