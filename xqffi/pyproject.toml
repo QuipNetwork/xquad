@@ -26,7 +26,9 @@ strip   = true
 # the default keys are just the packaging files. List every input to the
 # cdylib so a plain `uv sync` / `uv run` rebuilds after a Rust edit in xqffi
 # or the crates it links (`cargo tree -p xqffi`), plus the readme metadata
-# and the root pyproject.toml that carries the build's cargo arguments. uv
+# and the root pyproject.toml that carries the build's cargo arguments. The
+# Python shim and stubs under `python/` are keyed by type, so an edit there
+# reinstalls on the next sync but the bytecode caches beside them do not. uv
 # compares modification times, not content: a tool that restores an old
 # mtime over new content (`cp -p`, `rsync -t`) defeats it.
 [tool.uv]
@@ -35,7 +37,9 @@ cache-keys = [
     { file = "README.md" },
     { file = "Cargo.toml" },
     { file = "src/**/*.rs" },
-    { file = "python/**/*" },
+    { file = "python/**/*.py" },
+    { file = "python/**/*.pyi" },
+    { file = "python/xqffi/py.typed" },
     { file = "../pyproject.toml" },
     { file = "../Cargo.toml" },
     { file = "../Cargo.lock" },
