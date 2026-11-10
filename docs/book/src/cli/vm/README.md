@@ -15,12 +15,6 @@ The XQVM tools sit under `xquad vm`, one per stage of the toolchain:
 | [`xquad vm run`](run.md) | Execute bytecode or assembly, with optional tracing. |
 | [`xquad vm check`](check.md) | Run the bytecode verifier over a program without running it. |
 
-The old top-level names `xquad asm`, `xquad dism`, `xquad run` and `xquad
-verify` still work in this release. Each prints one deprecation warning
-to stderr when it runs and otherwise behaves exactly like its `xquad vm`
-counterpart, so stdout and the exit code are unchanged. They are removed
-in v0.6.0.
-
 ## General usage
 
 ```sh

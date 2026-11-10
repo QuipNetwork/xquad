@@ -17,10 +17,8 @@
 
 """`xquad` command parity with the retired `xqcli` binary, through click's `CliRunner`.
 
-Every case runs under the deprecated top-level names (`asm`, `dism`,
-`run`, `verify`), which keep `xqcli`'s spelling, and again under
-`xquad vm ...`. The Rust tracer writes to fd 2, which `CliRunner` cannot
-see, so the trace cases read it through `capfd`.
+Every case runs under `xquad vm ...`. The Rust tracer writes to fd 2,
+which `CliRunner` cannot see, so the trace cases read it through `capfd`.
 """
 
 from __future__ import annotations
@@ -41,13 +39,12 @@ LOOP_1M = "PUSH 0\nPUSH 1000000\nRANGE\n  LVAL r0\nNEXT\nHALT\n"
 # Source that is not valid XQASM.
 INVALID_SRC = "NOTANOPCODE\n"
 
-OLD = {"asm": ["asm"], "dis": ["dism"], "run": ["run"], "check": ["verify"]}
-NEW = {"asm": ["vm", "asm"], "dis": ["vm", "dis"], "run": ["vm", "run"], "check": ["vm", "check"]}
+VM = {"asm": ["vm", "asm"], "dis": ["vm", "dis"], "run": ["vm", "run"], "check": ["vm", "check"]}
 
 
-@pytest.fixture(params=["old", "vm"])
-def cmd(request: pytest.FixtureRequest) -> dict[str, list[str]]:
-    return OLD if request.param == "old" else NEW
+@pytest.fixture
+def cmd() -> dict[str, list[str]]:
+    return VM
 
 
 def invoke(args: list[str], stdin: bytes | None = None) -> Result:
@@ -310,20 +307,14 @@ def test_check_text_violation_exits_one(tmp_path: Path, cmd: dict[str, list[str]
     assert "NoActiveLoop" in result.stderr
 
 
-# -- aliases --
+# -- removed top-level names --
 
 
-@pytest.mark.parametrize(("old", "new"), [("asm", "asm"), ("dism", "dis"), ("run", "run"), ("verify", "check")])
-def test_alias_warns_on_stderr_and_matches_stdout(tmp_path: Path, old: str, new: str) -> None:
-    src = write(tmp_path, "prog.xqasm", PUSH_42)
-    xqb = write(tmp_path, "prog.xqb", assemble_bytes(tmp_path, PUSH_42))
-    args = {"asm": ["--stdout", str(src)], "dis": [str(xqb)], "run": [str(xqb)], "check": [str(xqb)]}[new]
-    old_result = invoke([old, *args])
-    new_result = invoke(["vm", new, *args])
-    assert old_result.exit_code == new_result.exit_code == 0
-    assert old_result.stdout_bytes == new_result.stdout_bytes
-    warning = f"warning: 'xquad {old}' is deprecated and will be removed in v0.6.0; use 'xquad vm {new}'\n"
-    assert old_result.stderr == warning + new_result.stderr
+@pytest.mark.parametrize("old", ["asm", "dism", "run", "verify"])
+def test_removed_top_level_names_are_usage_errors(old: str) -> None:
+    result = invoke([old])
+    assert result.exit_code == 2
+    assert "No such command" in result.stderr
 
 
 def test_help_lists_only_vm() -> None:
