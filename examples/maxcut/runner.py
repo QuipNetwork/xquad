@@ -19,10 +19,9 @@
 Max-Cut end-to-end XQuad pipeline example.
 
 Build a random weighted complete graph, compile it to XQVM assembly
-via xqcp, run the encoder on the chosen VM (Python reference or
-Rust), sample the resulting QUBO with xqsa's SolverCPU, run the
-verifier and decoder on the sampled solution, and print the decoded
-partition.
+via xqcp, run the encoder on the XQVM, sample the resulting QUBO
+with xqsa's SolverCPU, run the verifier and decoder on the sampled
+solution, and print the decoded partition.
 
 The runner is the showcase: a single file exercises every layer of
 the toolchain. No pre-authored .xqasm files, no JSON inputs — just

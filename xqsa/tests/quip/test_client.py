@@ -767,7 +767,7 @@ def test_default_spec_id_constant() -> None:
 class TestIsingEnergyMilli:
     """The chain-energy canary helper matches the authoritative energy for SPIN."""
 
-    def test_matches_compute_energy_times_milli(self) -> None:
+    def test_matches_model_energy_times_milli(self) -> None:
         """For a SPIN model, ising_energy_milli == model.energy * MILLI_SCALE."""
         model = XqmxModel.spin(2)
         model.set_linear(0, 1)
