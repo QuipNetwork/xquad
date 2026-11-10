@@ -54,7 +54,7 @@ def _require_2d(is_2d: bool, op: str) -> None:
 
     Grid opcodes read the XQMX rows/cols shape, which stays 0x0 unless
     define_model() was given both rows= and cols=.  Without this check the
-    program compiles and verifies clean, then faults at run time with
+    program compiles and passes the checker, then faults at run time with
     InvalidGridDimensions far from the call that caused it.
     """
     if not is_2d:

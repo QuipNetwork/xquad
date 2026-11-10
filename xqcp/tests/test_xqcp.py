@@ -1420,8 +1420,8 @@ class TestDecoderRegisterRemapping:
     so a sample read and a loop variable must be retargeted at those, at any
     depth.  Only ColFindExpr and GetLineExpr used to be remapped, and only at
     the top level, so rowsum/colsum/rowfind and any read nested inside
-    arithmetic emitted the recording-time register and failed decoder
-    verification with ReadUnsetRegister."""
+    arithmetic emitted the recording-time register and failed the
+    decoder's check with ReadUnsetRegister."""
 
     @staticmethod
     def _decode(name: str, grid: bool, value_fn: Callable[[Problem, Any], Any]) -> str:

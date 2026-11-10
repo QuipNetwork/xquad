@@ -355,5 +355,5 @@ Running any of these three programs against real calldata needs a host that
 can construct vectors, models and samples -- the Python `VM`/`Program`
 surfaces [Ways to Use XQuad](../concepts/ways-to-use.md) describes, covered
 in full in [Running Programs](../running/). The CLI's role here is
-static: assemble, disassemble, and verify a program's structure before
+static: assemble, disassemble, and check a program's structure before
 handing it to a host that can supply calldata rich enough to run it.

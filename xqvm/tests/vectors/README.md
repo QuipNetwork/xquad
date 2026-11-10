@@ -64,7 +64,7 @@ the first value, slot 1 the second, and so on. `null` is a slot the host
 fixed but left unset: in range for `INPUT`, and copied into the register as
 unset.
 
-`output_slots` is optional and defaults to 16, matching `xquad run`.
+`output_slots` is optional and defaults to 16, matching `xquad vm run`.
 `step_limit` is optional and defaults to `xqvm::DEFAULT_STEP_LIMIT`
 (10000000); set it only for a vector that exercises the step budget.
 `memory_limit` is optional and defaults to `xqvm::DEFAULT_MEMORY_LIMIT`
