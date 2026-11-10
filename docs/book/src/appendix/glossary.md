@@ -17,6 +17,12 @@ physical qubits standing in for one logical variable are coupled together,
 so they read out as one value rather than breaking apart under the
 problem's own couplings. See [D-Wave QPU](../solving/dwave-qpu.md).
 
+**Checker.** The bytecode checker: static analysis (`xqvm::checker`) that
+checks a program's structure before it runs. Every jump lands on a
+`TARGET`, and every register is read only after it is written. Not the
+verifier program (see the Verifier entry below). See
+[Checker](../xqvm/checker.md).
+
 **Conformance vector.** A fixed test case -- program, calldata, and
 expected outcome, written from the specification -- that the vector suite
 runs on `xqvm` and checks against its recorded expectation. See [Conformance](../embedding/conformance.md).
@@ -108,14 +114,10 @@ the wire format, and resolves jumps against that scan. See
 [Execution](../xqvm/execution.md) and [Builder
 API](../embedding/builder-api.md#labels-and-the-jumptable).
 
-**Verifier.** Two related but distinct things in this book. The **bytecode
-verifier** is static analysis (`xqvm::verifier`) that checks a program's
-structure before it runs: every jump lands on a `TARGET`, and every
-register is read only after it is written. See
-[Verifier](../xqvm/verifier.md). The **verifier program** is one of the
-three programs a problem compiles to: it checks a sample against the
-encoder's constraints and recomputes its energy independently. See
-[Three Programs](../concepts/three-programs.md).
+**Verifier.** The verifier program: one of the three programs a problem
+compiles to. It checks a sample against the encoder's constraints and
+recomputes its energy independently. Not the bytecode checker (see the Checker
+entry above). See [Three Programs](../concepts/three-programs.md).
 
 **XQBC.** The binary wire format: a 15-byte header (magic, version, slot
 counts, code length, checksum) followed by the raw instruction stream. See

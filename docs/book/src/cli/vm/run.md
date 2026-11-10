@@ -29,11 +29,11 @@ xquad vm run [OPTIONS] <FILE>
 | `--trace-format <TRACE_FORMAT>` | `text` | Trace output format: `text` or `json`. Requires `--trace`. |
 | `--trace-file <TRACE_FILE>` | stderr | Write trace output to a file instead of stderr. Requires `--trace`. |
 
-`xquad vm run` does not call the verifier. A program that fails
-verification can still be handed to `run`; some defects (an unset register read, for
+`xquad vm run` does not call the checker. A program that fails
+the check can still be handed to `run`; some defects (an unset register read, for
 example) are also caught by the VM's own runtime checks and abort with a
 runtime error, but others are not. See [`xquad vm check`](check.md) and
-[Verification](../../running/verification.md) for what static verification
+[Verification](../../running/verification.md) for what the static check
 does and does not guarantee.
 
 ## Examples

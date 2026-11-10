@@ -82,7 +82,7 @@ Four Python distributions on **PyPI**:
 
 | Package | Description |
 |---|---|
-| [`xqffi`](xqffi/) | PyO3 FFI bindings for `xqvm` + `xqasm` (`xqffi.vm`, `xqffi.asm`, `xqffi.verifier`) |
+| [`xqffi`](xqffi/) | PyO3 FFI bindings for `xqvm` + `xqasm` (`xqffi.vm`, `xqffi.asm`, `xqffi.checker`) |
 | [`xqcp`](xqcp/) | Constraint-programming DSL that compiles to `.xqasm` |
 | [`xqsa`](xqsa/) | Solver adapters -- CPU/GPU annealers, D-Wave QPU, Quip network |
 | [`xquad`](xquad/) | Umbrella meta-package with interactive `Program` / `Session` / `RunResult` API, and the `xquad` CLI (`xquad vm asm` / `dis` / `run` / `check`) |

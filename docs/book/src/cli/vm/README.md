@@ -1,7 +1,7 @@
 # xquad vm
 
 `xquad vm` is the command group for the XQVM tools: assemble, disassemble,
-run and verify programs. It is part of the `xquad` command-line driver;
+run and check programs. It is part of the `xquad` command-line driver;
 [CLI Reference](../) covers installing the command.
 
 ## Commands
@@ -13,7 +13,7 @@ The XQVM tools sit under `xquad vm`, one per stage of the toolchain:
 | [`xquad vm asm`](asm.md) | Assemble `.xqasm` source into binary bytecode. |
 | [`xquad vm dis`](dis.md) | Disassemble bytecode into a human-readable listing. |
 | [`xquad vm run`](run.md) | Execute bytecode or assembly, with optional tracing. |
-| [`xquad vm check`](check.md) | Run the bytecode verifier over a program without running it. |
+| [`xquad vm check`](check.md) | Run the bytecode checker over a program without running it. |
 
 ## General usage
 
@@ -32,7 +32,7 @@ by default and read `.xqasm` assembly instead when `--text` is passed.
 | Code | Meaning |
 |------|---------|
 | `0` | Success. |
-| `1` | The command ran and failed: an unreadable file, an assembly or decode error, a verifier violation, or a VM fault. |
+| `1` | The command ran and failed: an unreadable file, an assembly or decode error, a checker violation, or a VM fault. |
 | `2` | A usage error: an unknown option, a missing argument, or two options that cannot be combined. |
 
 Errors are one line on stderr, prefixed `Error:` and naming the stage

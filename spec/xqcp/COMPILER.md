@@ -148,7 +148,7 @@ The verifier keeps the encoder's register numbers and claims eight registers abo
 | `base+6` | `LVAL` element |
 | `base+7` | REDUCE shadow counter |
 
-A constraint action is a leaf, so no two checks ever nest and the accumulator and loop registers are safely single-instance. Each is written before it is read inside its own block, so neither the bytecode verifier's type-state phase nor its must-init phase sees a read-before-write, even for a check inside a branch arm.
+A constraint action is a leaf, so no two checks ever nest and the accumulator and loop registers are safely single-instance. Each is written before it is read inside its own block, so neither the bytecode checker's type-state phase nor its must-init phase sees a read-before-write, even for a check inside a branch arm.
 
 ### Model Shape
 
@@ -381,9 +381,9 @@ The default arm (condition `None`) is emitted without condition check or skip lo
 
 ---
 
-## Post-Compilation Verification
+## Post-Compilation Check
 
-If the `xqffi` package is installed, each generated program is run through the Rust bytecode verifier (`xqffi.verifier.verify_source()`) before `compile()` returns. Verification failures raise `ValueError`. If `xqffi` is not installed, verification is silently skipped.
+If the `xqffi` package is installed, each generated program is run through the Rust bytecode checker (`xqffi.checker.check_source()`) before `compile()` returns. A failed check raises `ValueError` (`"<program> check failed: ..."`). If `xqffi` is not installed, the check is silently skipped.
 
 ## Validation Anchors
 

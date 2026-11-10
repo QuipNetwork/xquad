@@ -56,11 +56,11 @@ mkdir -p build
 xquad vm asm add.xqasm -o build/program.xqb
 ```
 
-### Assemble does not run the verifier
+### Assemble does not run the checker
 
 `xquad vm asm` only assembles; it does not check the result with
 [`xquad vm check`](check.md). A source file with no mnemonic errors can
-still fail verification once assembled.
+still fail the check once assembled.
 
 ### Pipe bytecode to another tool
 

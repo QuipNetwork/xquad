@@ -1,24 +1,24 @@
-# Verifier
+# Checker
 
-The verifier performs static analysis over a program before it runs, so
+The checker performs static analysis over a program before it runs, so
 structural and semantic errors are caught at load time rather than partway
 through execution. It runs as a fixed pipeline of phases; each phase makes
 one pass over the program and the pipeline is fail-fast, stopping at the
 first violation any phase finds. A program with two independent defects
 reports only the first one encountered.
 
-The Rust implementation is `xqvm::verifier`, exposed to Python via
-`xqffi.verifier` and re-exported as `xquad.verifier`.
+The Rust implementation is `xqvm::checker`, exposed to Python via
+`xqffi.checker` and re-exported as `xquad.checker`.
 
 This page is the reference: what each phase checks and what each error
 means. For why a specific program was rejected and how to change it, see
 [Verification](../running/verification.md).
 
-## What passing verification guarantees
+## What passing the check guarantees
 
-`Verifier::default()` builds the standard pipeline described below. Calling
+`Checker::default()` builds the standard pipeline described below. Calling
 its `run` method against a program returns `Ok(())` if every phase passes,
-or the first `VerifierError` encountered otherwise. A program that passes is
+or the first `CheckerError` encountered otherwise. A program that passes is
 guaranteed structurally sound: every opcode decodes, every jump lands on a
 real `TARGET`, every loop is balanced, and every register is read only after
 it is written on every reachable path. For the value stack, phase 4 found no
@@ -35,11 +35,11 @@ all ordinary popped stack values, which is why `InvalidAllocation`,
 `InvalidGridDimensions`, `InvalidIntegerK`, `InvalidShift`,
 `ArithmeticOverflow`, `IndexOutOfBounds`, `SampleOutOfDomain`,
 `LoopStackOverflow` and the two budget faults exist only at runtime and
-have no verifier counterpart. `SampleOutOfDomain` is the clearest of them:
+have no checker counterpart. `SampleOutOfDomain` is the clearest of them:
 `SETLINE` on a sample is well-typed whatever it writes, and only the value
 the program computes decides whether the write is in domain.
 That is a boundary rather than a gap: an embedder gets its bound from the
-step and allocation budgets it sets, not from a verification pass.
+step and allocation budgets it sets, not from a checker pass.
 
 ## Pipeline
 
@@ -73,7 +73,7 @@ id greater than or equal to the program's target count is invalid.
 Error: `UndefinedJumpTarget`.
 
 **1c, loop nesting.** `RANGE` and `ITER` each open a loop frame; `NEXT`
-closes one. The verifier rejects `NEXT`, `LVAL`, or `LIDX` reached with no
+closes one. The checker rejects `NEXT`, `LVAL`, or `LIDX` reached with no
 open loop frame, and any loop frame still open at the end of the program
 (reported at the byte offset of the outermost unmatched opener).
 Errors: `NoActiveLoop`, `UnmatchedLoop`.
@@ -109,7 +109,7 @@ what keeps the result the same however many branches meet, and whatever
 order they are in.
 
 `DROP` is a special case worth knowing. At runtime it resets the register to
-`Unset`, and the verifier models that faithfully:
+`Unset`, and the checker models that faithfully:
 `DROP` resets the register's tracked type to `Unset`, so a read after
 `DROP` is rejected as `ReadUnsetRegister` and would also fault at runtime as
 `UnsetRegister`. Unreachable blocks are skipped, so dead code after an
@@ -187,14 +187,14 @@ Errors: `LoopStackImbalance`, `StackDepthMismatch`, `StackUnderflow`,
 | `StackUnderflow` | 4 | Stack depth would go negative at a reachable instruction |
 | `StackOverflowRisk` | 4 | Stack depth would exceed 8,192 at a reachable instruction |
 
-Every `VerifierError` variant carries the byte offset of the offending
+Every `CheckerError` variant carries the byte offset of the offending
 instruction; several (`RegisterTypeMismatch`, `UndefinedJumpTarget`, and
 others) also carry the register number or label id involved, so a
 diagnostic can point at the exact spot in the bytecode.
 
 ## When a program fails
 
-A verifier failure is a load-time rejection: nothing in the program has
+A checker failure is a load-time rejection: nothing in the program has
 executed. `xquad vm check` runs the pipeline from the command line without
 running the program; see [CLI](../cli/vm/). For what to change in your
 source when a specific error fires, see
@@ -203,7 +203,7 @@ from the side of fixing them rather than defining them.
 
 ## Sources
 
-- [`spec/xqvm/VERIFIER.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/VERIFIER.md) is the normative reference, including the full per-opcode stack-effect table.
-- [`xqvm/src/verifier/phase.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/verifier/phase.rs) defines the `Phase` trait and the default pipeline (`CombinedPhase` for 1a-1c, `AllCfgPhases` for 2-4).
-- The individual phase modules live alongside it in [`xqvm/src/verifier/`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm/src/verifier).
-- [`xqvm/src/verifier/error.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/verifier/error.rs) defines `VerifierError` and its display strings, reproduced in the table above.
+- [`spec/xqvm/CHECKER.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/CHECKER.md) is the normative reference, including the full per-opcode stack-effect table.
+- [`xqvm/src/checker/phase.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/checker/phase.rs) defines the `Phase` trait and the default pipeline (`CombinedPhase` for 1a-1c, `AllCfgPhases` for 2-4).
+- The individual phase modules live alongside it in [`xqvm/src/checker/`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm/src/checker).
+- [`xqvm/src/checker/error.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/checker/error.rs) defines `CheckerError` and its display strings, reproduced in the table above.

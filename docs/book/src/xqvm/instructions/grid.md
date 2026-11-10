@@ -45,9 +45,9 @@ grid and nothing ever shrinks a register's size, so a model whose size
 exceeds its extent is the normal state after any of them; a later
 `RESIZE` over a strict subset of the variables is still accepted.
 
-Both checks are runtime checks, not ones the verifier catches statically,
+Both checks are runtime checks, not ones the checker catches statically,
 since grid dimensions are ordinary popped stack values rather than
-something the verifier's dataflow passes track.
+something the checker's dataflow passes track.
 
 The canonical use is encoding a two-index variable directly instead of
 computing flat indices by hand at every access site. A 4-city TSP, for

@@ -1,14 +1,14 @@
 # Verification
 
 `xquad vm check` rejects a program before it runs, printing the first
-structural or semantic problem the bytecode verifier finds. This page takes
-you from that message to a working program. [Verifier](../xqvm/verifier.md)
+structural or semantic problem the bytecode checker finds. This page takes
+you from that message to a working program. [Checker](../xqvm/checker.md)
 is the reference half, covering what each phase checks and what every
 error means. This page does not repeat that; it shows each error actually
 firing and what to change.
 
 `xquad vm check --text file.xqasm` assembles the source in memory and
-verifies the result; `xquad vm check file.xqb` verifies pre-assembled
+checks the result; `xquad vm check file.xqb` checks pre-assembled
 bytecode. Both forms and their exit codes are covered in
 [CLI: check](../cli/vm/check.md); this page assumes you already know how
 to invoke it.
@@ -48,7 +48,7 @@ encoding. Reassemble it.
 program's target count. Text assembly cannot produce this: the assembler
 resolves every `.N` label reference against the labels actually defined in
 the source and refuses to emit a jump to one that does not exist --
-`xqasm::undefined_label`, at assemble time, before the verifier ever runs.
+`xqasm::undefined_label`, at assemble time, before the checker ever runs.
 `UndefinedJumpTarget` is a defense for bytecode assembled some other way,
 or corrupted after assembly: a jump instruction's label-id byte, changed to
 a value the program's target count does not cover, produces:
@@ -218,16 +218,16 @@ Fix: make every arm of a branch leave the same stack depth before it
 rejoins. If only one arm pushes a value, move that push above the branch
 so both arms inherit it.
 
-## What passing verification does not guarantee
+## What passing the check does not guarantee
 
 A pass means every phase's static checks succeeded. It does not mean the
-program runs to completion. [Verifier: what passing verification
-guarantees](../xqvm/verifier.md#what-passing-verification-guarantees) states
+program runs to completion. [Checker: what passing the check
+guarantees](../xqvm/checker.md#what-passing-the-check-guarantees) states
 the precise scope. Treat a pass as "structurally sound," not as "will run
 to completion."
 
-A whole class of faults is outside the verifier's reach: they depend on
-values, and the verifier tracks types and depths rather than values. An
+A whole class of faults is outside the checker's reach: they depend on
+values, and the checker tracks types and depths rather than values. An
 allocator size, a grid extent, a loop bound, a calldata index and every
 arithmetic operand are ordinary popped stack values, so
 `InvalidAllocation`, `InvalidGridDimensions`, `InvalidIntegerK`,
@@ -235,19 +235,18 @@ arithmetic operand are ordinary popped stack values, so
 `LoopStackOverflow`, `StepLimitExceeded` and `MemoryLimitExceeded` are all
 runtime faults with no static counterpart. `SampleOutOfDomain` is the
 clearest case of why: the value written into a sample can arrive from
-calldata, so no amount of static analysis can know it. A verified program
+calldata, so no amount of static analysis can know it. A checked program
 can still raise any of them, and for an embedder that is the point: the
-budgets and the range checks are what bound a program the verifier has
+budgets and the range checks are what bound a program the checker has
 already passed. See [Limits and
 Errors](../xqvm/limits-and-errors.md#vm-runtime-errors).
 
-## The generated verifier program is not the bytecode verifier
+## The generated verifier program is not the bytecode checker
 
-`xquad vm check` and the *verifier program* are two different things that
-share a name by coincidence of vocabulary.
+`xquad vm check` and the *verifier program* are two different things.
 
-`xquad vm check` runs the bytecode verifier described above and in
-[Verifier](../xqvm/verifier.md): a static analysis over any `.xqasm` or
+`xquad vm check` runs the bytecode checker described above and in
+[Checker](../xqvm/checker.md): a static analysis over any `.xqasm` or
 `.xqb` file, checking that the program is well-formed before anything
 executes. It has no idea what problem, if any, the program encodes.
 
@@ -259,10 +258,10 @@ It is an ordinary program like any other: `xquad vm check` can check *it* is
 well-formed, the same as it checks the encoder or the decoder. What the
 verifier program itself does at runtime -- taking a model and a candidate
 sample as calldata and producing `(energy, valid)` -- is domain logic the
-DSL emitted, unrelated to the bytecode verifier's job. Running the
-verifier program does not verify a program in the bytecode-verifier sense,
-and running `xquad vm check` against the verifier program's `.xqasm` text
-does not check whether a sample is a good answer.
+DSL emitted, unrelated to the bytecode checker's job. Running the
+verifier program does not check that a program is well-formed, and running
+`xquad vm check` against the verifier program's `.xqasm` text does not
+check whether a sample is a good answer.
 
 ## What the generated verifier's `valid` flag covers
 
