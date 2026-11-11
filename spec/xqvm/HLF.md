@@ -18,7 +18,7 @@ The consequence is the reason for writing it down: a one-column `ONEHOTR` raises
 
 An expansion is not atomic and does not stage its deltas. Each delta is computed, range-checked, and applied to the model before the next one is computed, in the order the expansion enumerates its terms: the whole linear pass first, in ascending position order over the index list, then the whole quadratic pass, in ascending `(k, m)` order over the pairs with `k < m`. An expansion that raises part-way through leaves the deltas it has already applied standing in the model.
 
-The order is observable whenever an index appears twice in the same `indices` vector, because a repeated index accumulates: the second delta is added on top of the first, and the coefficient that is range-checked is the accumulated result rather than the delta. A size-1 model holding `linear[0] = 7e18`, expanded by `EQUALITY` with `indices = [0, 0]`, `coeffs = [3e9, 1e9]`, `target = 1e9` and `penalty = 1`, raises in the order above and would complete in the reverse one. The reference implementation, `xqvm`, applies deltas in the order stated here.
+The order is observable whenever an index appears twice in the same `indices` vector, because a repeated index accumulates: the second delta is added on top of the first, and the coefficient that is range-checked is the accumulated result rather than the delta. A size-1 model holding `linear[0] = 7e18`, expanded by `EQUALITY` with `indices = [0, 0]`, `coeffs = [3e9, 1e9]`, `target = 1e9` and `penalty = 1`, raises in the order above and would complete in the reverse one. `xqvm` applies deltas in the order stated here.
 
 ### An expansion that would write nothing
 

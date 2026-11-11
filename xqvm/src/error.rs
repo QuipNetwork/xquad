@@ -72,9 +72,10 @@ impl core::fmt::Display for OptionalPos {
 /// This enum is deliberately not `#[non_exhaustive]`. The attribute forces a
 /// wildcard arm on matches in *downstream* crates, and the fault mappings in
 /// `xqvm/tests/vector_suite/vector.rs` and `xqffi/src/fault.rs` depend on not
-/// having one: each maps every variant onto the implementation-neutral
-/// fault identity that `spec/xqvm/SPEC.md` specifies, and being
-/// wildcard-free is what makes adding a variant without extending them a
+/// having one: each maps every variant onto a fault identity -- the
+/// implementation-neutral ones `spec/xqvm/SPEC.md` specifies, plus
+/// `TraceFailed`, which a host tracer raises rather than a program -- and
+/// being wildcard-free is what makes adding a variant without extending them a
 /// compile error rather than a silent degradation to an "unknown" fault --
 /// which is the whole value of those identities being normative. The
 /// `byte_pos` helper below is a third wildcard-free match over this enum,
