@@ -21,7 +21,7 @@
   - [Outputs and Decoding](modelling/outputs-and-decoding.md)
   - [Compiling](modelling/compiling.md)
   - [Running Programs](running/README.md)
-  - [Verification](running/verification.md)
+  - [Checking](running/checking.md)
   - [Solving Overview](solving/README.md)
   - [Local Solvers](solving/local.md)
   - [D-Wave QPU](solving/dwave-qpu.md)

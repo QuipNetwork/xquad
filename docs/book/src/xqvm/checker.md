@@ -12,7 +12,7 @@ The Rust implementation is `xqvm::checker`, exposed to Python via
 
 This page is the reference: what each phase checks and what each error
 means. For why a specific program was rejected and how to change it, see
-[Verification](../running/verification.md).
+[Checking](../running/checking.md).
 
 ## What passing the check guarantees
 
@@ -198,7 +198,7 @@ A checker failure is a load-time rejection: nothing in the program has
 executed. `xquad vm check` runs the pipeline from the command line without
 running the program; see [CLI](../cli/vm/). For what to change in your
 source when a specific error fires, see
-[Verification](../running/verification.md), which covers the same errors
+[Checking](../running/checking.md), which covers the same errors
 from the side of fixing them rather than defining them.
 
 ## Sources

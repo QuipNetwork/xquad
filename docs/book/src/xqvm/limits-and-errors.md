@@ -165,7 +165,7 @@ register type-state; must-init analysis; and stack depth.
 The eleven variants, which phase raises each one, and what each one means
 are catalogued in [Checker's error reference](checker.md#error-reference)
 rather than repeated here, since that page also explains the phase that
-produces each one. See [Verification](../running/verification.md) for how
+produces each one. See [Checking](../running/checking.md) for how
 to fix a rejected program.
 
 ## Substrate pallet fixture limits

@@ -33,7 +33,7 @@ xquad vm run [OPTIONS] <FILE>
 the check can still be handed to `run`; some defects (an unset register read, for
 example) are also caught by the VM's own runtime checks and abort with a
 runtime error, but others are not. See [`xquad vm check`](check.md) and
-[Verification](../../running/verification.md) for what the static check
+[Checking](../../running/checking.md) for what the static check
 does and does not guarantee.
 
 ## Examples

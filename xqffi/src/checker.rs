@@ -46,7 +46,8 @@ use xqvm::{Program, checker};
 /// Run the default bytecode checker over pre-assembled bytecode bytes.
 ///
 /// Decodes *bytecode* into a [`Program`] and runs all checker phases
-/// (structural, jump-target, loop-nesting, register type-state, stack depth).
+/// (structural, jump-target, loop-nesting, register type-state, must-init,
+/// stack depth).
 ///
 /// # Errors
 ///

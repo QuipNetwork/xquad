@@ -28,7 +28,7 @@ depth, in that order, stopping at the first phase that fails. This page
 covers only the command's own behaviour; for what each phase checks and
 what each error means, see that page. For a task-oriented walkthrough of
 fixing a rejected program, see
-[Verification](../../running/verification.md).
+[Checking](../../running/checking.md).
 
 ## A passing program
 

@@ -125,7 +125,7 @@ four assets against a budget of `3` comes back `valid: 0`. Max-3-SAT's
 clauses are objective terms, so nothing in its verifier looks at them and
 a sample satisfying two clauses is as `valid` as one satisfying eight. If
 a rule must hold, declare it as a constraint;
-[Verification](../running/verification.md#what-the-generated-verifiers-valid-flag-covers)
+[Checking](../running/checking.md#what-the-generated-verifiers-valid-flag-covers)
 says what `valid` then covers.
 
 ## Cost in Variables

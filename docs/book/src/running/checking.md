@@ -1,4 +1,4 @@
-# Verification
+# Checking
 
 `xquad vm check` rejects a program before it runs, printing the first
 structural or semantic problem the bytecode checker finds. This page takes

@@ -34,8 +34,8 @@ def check(text: bool, file: Path) -> None:
 
     Reads FILE (binary bytecode, or assembly with --text) and runs every
     checker phase: structural, jump-target, loop-nesting, register
-    type-state and stack depth. Exits 0 on success, 1 on the first
-    violation found.
+    type-state, must-init and stack depth. Exits 0 on success, 1 on the
+    first violation found.
     """
     from xqffi.asm import instruction_count
     from xqffi.checker import check as check_bytecode
