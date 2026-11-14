@@ -56,7 +56,7 @@ use crate::Program;
 use crate::VerifierError;
 use crate::bytecode::InstructionStream;
 use crate::dataflow::analysis::Analysis;
-use crate::dataflow::bytecode::{BlockId, CfgContext, build_cfg};
+use crate::dataflow::bytecode::{BlockId, CfgContext, block_ranges, build_cfg};
 use crate::dataflow::direction::Forward;
 use crate::dataflow::lattice::Lattice;
 use crate::dataflow::solver::solve;
@@ -207,20 +207,7 @@ pub(crate) fn check_uninit_registers_with_cfg(
 ) -> Result<(), VerifierError> {
     let code = program.code();
 
-    let mut starts: Vec<BlockId> = cfg.nodes().to_vec();
-    starts.sort_unstable();
-    let ranges: Vec<(usize, usize)> = starts
-        .iter()
-        .enumerate()
-        .map(|(i, &s)| {
-            #[expect(
-                clippy::arithmetic_side_effects,
-                reason = "`i` is an `enumerate` index into `starts`, so `i + 1` is at most its length"
-            )]
-            let end = starts.get(i + 1).copied().unwrap_or(code.len());
-            (s, end)
-        })
-        .collect();
+    let ranges = block_ranges(cfg, code);
 
     let block_inits: HashMap<BlockId, Vec<(u8, bool)>> = ranges
         .iter()

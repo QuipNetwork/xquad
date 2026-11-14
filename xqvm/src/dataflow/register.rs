@@ -82,7 +82,7 @@ use crate::Program;
 use crate::VerifierError;
 use crate::bytecode::InstructionStream;
 use crate::dataflow::analysis::Analysis;
-use crate::dataflow::bytecode::{BlockId, CfgContext, build_cfg};
+use crate::dataflow::bytecode::{BlockId, CfgContext, block_ranges, build_cfg};
 use crate::dataflow::cfg::Cfg;
 use crate::dataflow::direction::Forward;
 use crate::dataflow::lattice::Lattice;
@@ -203,24 +203,6 @@ fn collect_block_writes(code: &[u8], block_start: usize, block_end: usize) -> Ve
     writes
 }
 
-/// Produce a sorted list of `(block_start, block_end)` pairs from CFG nodes.
-fn block_ranges(cfg: &Cfg<BlockId>, code_len: usize) -> Vec<(usize, usize)> {
-    let mut starts: Vec<BlockId> = cfg.nodes().to_vec();
-    starts.sort_unstable();
-    starts
-        .iter()
-        .enumerate()
-        .map(|(i, &s)| {
-            #[expect(
-                clippy::arithmetic_side_effects,
-                reason = "`i` is an `enumerate` index into `starts`, so `i + 1` is at most its length"
-            )]
-            let end = starts.get(i + 1).copied().unwrap_or(code_len);
-            (s, end)
-        })
-        .collect()
-}
-
 // ---------------------------------------------------------------------------
 // check_register_types
 // ---------------------------------------------------------------------------
@@ -243,7 +225,7 @@ pub(crate) fn check_register_types_with_cfg(
     cfg: &Cfg<BlockId>,
 ) -> Result<(), VerifierError> {
     let code = program.code();
-    let ranges = block_ranges(cfg, code.len());
+    let ranges = block_ranges(cfg, code);
 
     // Pre-compute write sequences for the transfer function.
     let block_writes: HashMap<BlockId, Vec<(u8, RegType)>> = ranges
