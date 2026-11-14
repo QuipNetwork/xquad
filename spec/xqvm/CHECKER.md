@@ -172,12 +172,17 @@ Error: `ReadUnsetRegister`.
 A CFG-based forward analysis over abstract stack depth. Each basic block is
 characterised by a `BlockEffect` (minimum entry depth required and the output
 depth or depth delta at exit). The worklist uses min-meet to propagate the
-most conservative depth to successors.
+most conservative depth to successors. Both the main walk and the separate
+loop-body walk must bound decreasing-cycle work by the number of CFG nodes,
+rather than by the initial stack depth. A decreasing witness with at least
+one edge per CFG node contains a negative cycle and propagates `Underflow`.
+A fixed-depth effect such as `SCLR` starts a new witness: lowering a cycle's
+depth once by clearing it does not imply eventual underflow.
 
 ### Check order
 
-1. **`LoopStackImbalance`** -- detected via a separate one-pass BFS over each
-   loop body (ignoring back-edges). If the exit depth of the `NEXT` block
+1. **`LoopStackImbalance`** -- detected via a separate bounded walk over each
+   loop body (ignoring its structured back-edge and skip-edge). If the exit depth of the `NEXT` block
    differs from the depth at the matching `RANGE`/`ITER` opener, the loop body
    has a non-zero net stack effect.
 
