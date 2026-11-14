@@ -185,6 +185,12 @@ one edge per CFG node contains a negative cycle and propagates `Underflow`.
 A fixed-depth effect such as `SCLR` starts a new witness: lowering a cycle's
 depth once by clearing it does not imply eventual underflow.
 
+The verifier also tracks the peak within every reachable basic block, not
+only its entry and exit. Before the first `SCLR`, the peak is relative to
+the incoming depth; after a clear it is absolute. Later pops or clears do
+not erase either peak. A transient depth above 8,192 is rejected even if
+the block exits empty; exactly 8,192 remains valid.
+
 ### Check order
 
 1. **`LoopStackImbalance`** -- detected via a separate bounded walk over each
