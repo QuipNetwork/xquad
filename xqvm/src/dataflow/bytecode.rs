@@ -271,6 +271,14 @@ pub(crate) fn block_ranges(cfg: &Cfg<BlockId>, code: &[u8]) -> Vec<(usize, usize
 // LoopRegion  (internal)
 // ---------------------------------------------------------------------------
 
+/// Peak depth before the first SCLR is relative to the block input;
+/// every peak after SCLR is absolute. Keep both across subsequent resets.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct BlockPeak {
+    relative: usize,
+    absolute: usize,
+}
+
 /// Pre-built CFG context shared across the three CFG-based checker phases.
 ///
 /// Constructed once by [`build_cfg`] so that the register, uninit, and stack-depth
@@ -280,6 +288,8 @@ pub(crate) struct CfgContext {
     pub(crate) cfg: Cfg<BlockId>,
     /// Abstract stack effect for each basic block.
     pub(crate) effects: HashMap<BlockId, BlockEffect>,
+    /// Internal peak depths, separate from the public entry/exit effect type.
+    pub(crate) peaks: HashMap<BlockId, BlockPeak>,
     /// Loop regions identified during CFG construction.
     pub(crate) loop_regions: Vec<LoopRegion>,
 }
@@ -303,12 +313,12 @@ pub(crate) struct LoopRegion {
 /// Simulate `code[block_start..block_end]` to derive a [`BlockEffect`] and the
 /// [`BlockTerminatorKind`] with the absolute byte offset of the terminator.
 ///
-/// Returns `(effect, kind, terminator_abs_offset)`.
+/// Returns `(effect, kind, terminator_abs_offset, peak)`.
 fn compute_block_effect(
     code: &[u8],
     block_start: usize,
     block_end: usize,
-) -> (BlockEffect, BlockTerminatorKind, usize) {
+) -> (BlockEffect, BlockTerminatorKind, usize, BlockPeak) {
     let default = (
         BlockEffect {
             min_input: 0,
@@ -316,6 +326,7 @@ fn compute_block_effect(
         },
         BlockTerminatorKind::FallThrough,
         block_start,
+        BlockPeak::default(),
     );
 
     let block_code = match code.get(block_start..block_end) {
@@ -329,6 +340,7 @@ fn compute_block_effect(
     let mut min_input: usize = 0;
     let mut fixed: bool = false;
     let mut static_underflow: bool = false;
+    let mut peak = BlockPeak::default();
 
     let mut kind = BlockTerminatorKind::FallThrough;
     let mut term_pos: usize = block_start;
@@ -374,6 +386,12 @@ fn compute_block_effect(
             }
         }
 
+        let nonnegative_depth = usize::try_from(depth).unwrap_or(0);
+        if fixed {
+            peak.absolute = peak.absolute.max(nonnegative_depth);
+        } else {
+            peak.relative = peak.relative.max(nonnegative_depth);
+        }
         let new_kind = terminator_kind(&instr);
 
         if let Some(k) = new_kind {
@@ -391,7 +409,7 @@ fn compute_block_effect(
         OutputKind::Delta(depth)
     };
 
-    (BlockEffect { min_input, output }, kind, term_pos)
+    (BlockEffect { min_input, output }, kind, term_pos, peak)
 }
 
 // ---------------------------------------------------------------------------
@@ -517,6 +535,7 @@ pub(crate) fn build_cfg(code: &[u8], jump_table: &JumpTable) -> Option<CfgContex
     // Pass 2 -- compute effects, build edges, collect loop regions.
     // ------------------------------------------------------------------
     let mut effects: HashMap<BlockId, BlockEffect> = HashMap::new();
+    let mut peaks = HashMap::new();
     let mut cfg_builder = Cfg::builder(0usize, exit_block);
     let mut loop_regions: Vec<LoopRegion> = Vec::new();
 
@@ -527,8 +546,10 @@ pub(crate) fn build_cfg(code: &[u8], jump_table: &JumpTable) -> Option<CfgContex
         )]
         let block_end = leaders_sorted.get(idx + 1).copied().unwrap_or(code.len());
 
-        let (effect, term_kind, term_pos) = compute_block_effect(code, block_start, block_end);
+        let (effect, term_kind, term_pos, peak) =
+            compute_block_effect(code, block_start, block_end);
         let _ = effects.insert(block_start, effect);
+        let _ = peaks.insert(block_start, peak);
 
         match term_kind {
             BlockTerminatorKind::FallThrough => {
@@ -579,6 +600,7 @@ pub(crate) fn build_cfg(code: &[u8], jump_table: &JumpTable) -> Option<CfgContex
     Some(CfgContext {
         cfg: cfg_builder.build(),
         effects,
+        peaks,
         loop_regions,
     })
 }
@@ -684,6 +706,7 @@ fn solve_stack_depth(
 pub(crate) fn check_stack_depth_with_context(
     cfg: &Cfg<BlockId>,
     effects: &HashMap<BlockId, BlockEffect>,
+    peaks: &HashMap<BlockId, BlockPeak>,
     loop_regions: &[LoopRegion],
 ) -> Result<(), CheckerError> {
     let analysis = StackDepthAnalysis { effects };
@@ -794,7 +817,15 @@ pub(crate) fn check_stack_depth_with_context(
         }
     }
 
-    // --- Underflow / overflow scan ---
+    check_depth_bounds(cfg, &result, peaks)
+}
+
+/// Check entry, exit and intra-block depths after higher-priority errors.
+fn check_depth_bounds(
+    cfg: &Cfg<BlockId>,
+    result: &DataFlowResult<BlockId, DepthValue>,
+    peaks: &HashMap<BlockId, BlockPeak>,
+) -> Result<(), CheckerError> {
     for &node in cfg.nodes() {
         let before = result.before(&node).cloned().unwrap_or(DepthValue::Top);
         let after = result.after(&node).cloned().unwrap_or(DepthValue::Top);
@@ -828,6 +859,15 @@ pub(crate) fn check_stack_depth_with_context(
             }
             _ => {}
         }
+        if let (DepthValue::Known(entry), Some(peak)) = (&before, peaks.get(&node)) {
+            let depth = entry.saturating_add(peak.relative).max(peak.absolute);
+            if depth > STACK_LIMIT {
+                return Err(CheckerError::StackOverflowRisk {
+                    offset: node,
+                    depth,
+                });
+            }
+        }
     }
 
     Ok(())
@@ -853,7 +893,7 @@ pub fn check_stack_depth(program: &Program) -> Result<(), CheckerError> {
     let Some(ctx) = build_cfg(code, program.jump_table()) else {
         return Ok(());
     };
-    check_stack_depth_with_context(&ctx.cfg, &ctx.effects, &ctx.loop_regions)
+    check_stack_depth_with_context(&ctx.cfg, &ctx.effects, &ctx.peaks, &ctx.loop_regions)
 }
 
 // ---------------------------------------------------------------------------
