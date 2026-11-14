@@ -73,10 +73,10 @@
 use alloc::vec::Vec;
 
 #[cfg(feature = "std")]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[cfg(not(feature = "std"))]
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 
 use crate::Program;
 use crate::VerifierError;
@@ -148,6 +148,8 @@ pub struct RegTypeAnalysis {
     /// Only registers actually written appear here; unwritten registers carry
     /// their incoming value unchanged through the transfer function.
     block_writes: HashMap<BlockId, Vec<(u8, RegType)>>,
+    /// Reachability is distinct from the lattice top.
+    reachable: HashSet<BlockId>,
 }
 
 impl Analysis for RegTypeAnalysis {
@@ -160,15 +162,9 @@ impl Analysis for RegTypeAnalysis {
     }
 
     fn transfer(&self, node: &BlockId, input: &RegTypeValue) -> RegTypeValue {
-        // A block no path reaches contributes nothing to a join. Its input is
-        // the meet over an empty or equally unreachable predecessor set, which
-        // is `top` -- the same test the replay loop uses to skip it -- and the
-        // boundary node is excluded because its input is the all-`Unset`
-        // boundary value, never `top`. Applying the writes of dead code here
-        // would poison every join it falls through into: the `VECI r0` after
-        // an unconditional `JUMP` would meet with the live `Model` and answer
-        // `Conflict`, rejecting a program whose only fault is unreachable.
-        if input == &RegTypeValue::top() {
+        // A reachable join can have every register at Any. Only actual
+        // dead blocks must contribute the meet identity without writes.
+        if !self.reachable.contains(node) {
             return RegTypeValue::top();
         }
         let mut state = input.clone();
@@ -232,8 +228,8 @@ fn block_ranges(cfg: &Cfg<BlockId>, code_len: usize) -> Vec<(usize, usize)> {
 /// Run the CFG-based forward register type-state analysis using a pre-built CFG.
 ///
 /// Detects [`VerifierError::ReadUnsetRegister`] and
-/// [`VerifierError::RegisterTypeMismatch`] errors.  Unreachable blocks
-/// (entry state equals `[Any; 256]`) are skipped.
+/// [`VerifierError::RegisterTypeMismatch`] errors. Blocks not reachable from program entry are skipped.
+/// A reachable all-Any input is still transferred and replayed.
 ///
 /// Callers running multiple analyses should use this variant with a shared
 /// [`Cfg`] to avoid redundant construction.
@@ -262,10 +258,11 @@ pub(crate) fn check_register_types_with_cfg(
         })
         .collect();
 
-    let analysis = RegTypeAnalysis { block_writes };
+    let analysis = RegTypeAnalysis {
+        block_writes,
+        reachable: cfg.reachable_nodes(),
+    };
     let result = solve(&analysis, cfg);
-
-    let top = RegTypeValue::top();
 
     for &(block_start, block_end) in &ranges {
         let before = result
@@ -273,8 +270,7 @@ pub(crate) fn check_register_types_with_cfg(
             .cloned()
             .unwrap_or_else(RegTypeValue::top);
 
-        // Skip unreachable blocks (entry state = top means no predecessor reached here).
-        if before == top {
+        if !analysis.reachable.contains(&block_start) {
             continue;
         }
 

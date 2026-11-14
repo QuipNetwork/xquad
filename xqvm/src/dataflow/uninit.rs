@@ -47,10 +47,10 @@
 use alloc::vec::Vec;
 
 #[cfg(feature = "std")]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[cfg(not(feature = "std"))]
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 
 use crate::Program;
 use crate::VerifierError;
@@ -130,6 +130,8 @@ pub struct InitAnalysis {
     /// `true` = register is written (any type except `Unset`).
     /// `false` = register is cleared (`DROP`).
     block_inits: HashMap<BlockId, Vec<(u8, bool)>>,
+    /// Reachability is distinct from the lattice top.
+    reachable: HashSet<BlockId>,
 }
 
 impl Analysis for InitAnalysis {
@@ -142,6 +144,9 @@ impl Analysis for InitAnalysis {
     }
 
     fn transfer(&self, node: &BlockId, input: &InitValue) -> InitValue {
+        if !self.reachable.contains(node) {
+            return InitValue::top();
+        }
         let mut state = input.clone();
         if let Some(inits) = self.block_inits.get(node) {
             for &(slot, initialized) in inits {
@@ -186,8 +191,8 @@ fn collect_block_inits(code: &[u8], block_start: usize, block_end: usize) -> Vec
 /// that [`crate::dataflow::register::check_register_types`] misses: a register
 /// written on only one branch of a conditional, then read after the join.
 ///
-/// Unreachable blocks (entry state == `top = [u64::MAX; 4]`) are skipped to
-/// avoid false positives from dead code.
+/// Unreachable blocks are skipped using CFG reachability. An all-initialized
+/// state can be reachable and must still be replayed.
 ///
 /// A `[RegType; 256]` buffer is allocated once per block (not per instruction)
 /// and updated incrementally as writes are observed.
@@ -229,10 +234,11 @@ pub(crate) fn check_uninit_registers_with_cfg(
         })
         .collect();
 
-    let analysis = InitAnalysis { block_inits };
+    let analysis = InitAnalysis {
+        block_inits,
+        reachable: cfg.reachable_nodes(),
+    };
     let result = solve(&analysis, cfg);
-
-    let top = InitValue::top();
 
     for &(block_start, block_end) in &ranges {
         let before = result
@@ -240,7 +246,7 @@ pub(crate) fn check_uninit_registers_with_cfg(
             .cloned()
             .unwrap_or_else(InitValue::top);
 
-        if before == top {
+        if !analysis.reachable.contains(&block_start) {
             continue;
         }
 
