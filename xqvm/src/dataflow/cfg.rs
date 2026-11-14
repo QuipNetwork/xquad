@@ -84,6 +84,23 @@ impl<N: Eq + Hash + Clone> Cfg<N> {
         self.succs.get(node).map(Vec::as_slice).unwrap_or_default()
     }
 
+    /// Nodes reachable from program entry, independent of any analysis value.
+    /// Each node enters the worklist once; every outgoing edge is visited once.
+    pub(crate) fn reachable_nodes(&self) -> HashSet<N> {
+        let mut reachable = HashSet::new();
+        let mut pending = Vec::new();
+        let _ = reachable.insert(self.entry.clone());
+        pending.push(self.entry.clone());
+        while let Some(node) = pending.pop() {
+            for next in self.successors(&node) {
+                if reachable.insert(next.clone()) {
+                    pending.push(next.clone());
+                }
+            }
+        }
+        reachable
+    }
+
     /// Direct predecessors of `node`.  Returns `&[]` if `node` is not in the graph.
     ///
     /// This list only holds edges derived from the instruction stream. The

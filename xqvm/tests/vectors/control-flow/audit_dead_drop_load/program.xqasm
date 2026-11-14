@@ -1,0 +1,9 @@
+; QUIP-16: neither dead block can execute or poison live analysis.
+HALT
+TARGET .0
+DROP r0
+JUMP .1
+TARGET .1
+LOAD r0
+HALT
+JUMP .0 ; dead reference keeps the label in the assembled CFG

@@ -131,8 +131,11 @@ Preconditions enforced:
   also writes `Unset`, and a subsequent `LOAD` or `OUTPUT` faults as
   `UnsetRegister`; the checker models that behaviour faithfully.
 
-Unreachable blocks (entry state equals `[Any; 256]`) are skipped, so dead code
-after unconditional jumps does not produce false positives.
+Reachability is computed by traversing CFG edges from program entry. Dead
+blocks contribute the meet identity without applying writes and are skipped
+by instruction replay. A reachable block whose input happens to equal
+`[Any; 256]` still applies its writes and checks its reads; lattice top does
+not encode reachability.
 
 Errors: `ReadUnsetRegister`, `RegisterTypeMismatch`.
 
@@ -155,7 +158,10 @@ prevents false positives for partial writes across branches; Phase 3 uses
 AND-meet specifically to catch reads after join points where at least one
 incoming path did not write the register.
 
-Unreachable blocks (entry state equals `top`) are skipped.
+The same CFG reachability rule applies here. Dead blocks contribute the
+identity without applying writes and are skipped by replay. Reachable blocks
+are checked even when all 256 registers are initialized, which equals `top`.
+A dead `DROP` cannot make another dead block appear reachable.
 
 Error: `ReadUnsetRegister`.
 
