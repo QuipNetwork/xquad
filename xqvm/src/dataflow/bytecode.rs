@@ -75,7 +75,7 @@ use crate::dataflow::analysis::Analysis;
 use crate::dataflow::cfg::Cfg;
 use crate::dataflow::direction::Forward;
 use crate::dataflow::lattice::Lattice;
-use crate::dataflow::solver::solve;
+use crate::dataflow::solver::DataFlowResult;
 
 /// Maximum integer stack depth permitted by the VM spec.
 const STACK_LIMIT: usize = 8192;
@@ -368,14 +368,15 @@ fn compute_block_effect(
 // simulate_body  (internal)
 // ---------------------------------------------------------------------------
 
-/// One-pass BFS simulation of a loop body for [`LoopStackImbalance`] detection.
+/// Bounded simulation of a loop body for [`LoopStackImbalance`] detection.
 ///
 /// Starting from `body_start` with `entry` depth, propagates through the body
 /// blocks (skipping the back-edge to `body_start` and the skip-edge to
 /// `after_next`).  Returns the depth at the `NEXT` block's output.
 ///
-/// Because back-edges are skipped, each block is visited at most once per
-/// depth-change, so the simulation always terminates.
+/// Arbitrary jumps can still form internal cycles. The same bounded depth
+/// walk used by the main solver detects decreasing cycles without counting
+/// down once per possible stack item.
 ///
 /// [`LoopStackImbalance`]: VerifierError::LoopStackImbalance
 fn simulate_body(
@@ -385,32 +386,18 @@ fn simulate_body(
     effects: &HashMap<BlockId, BlockEffect>,
     cfg: &Cfg<BlockId>,
 ) -> DepthValue {
-    let mut depth_in: HashMap<BlockId, DepthValue> = HashMap::new();
-    let mut worklist: VecDeque<BlockId> = VecDeque::new();
-    let _ = depth_in.insert(body_start, entry);
-    worklist.push_back(body_start);
-
+    let result = walk_depths(
+        effects,
+        cfg,
+        body_start,
+        entry,
+        Some(after_next),
+        &mut || {},
+    );
     let mut exit_depth = DepthValue::Top;
-
-    while let Some(block) = worklist.pop_front() {
-        let d_in = depth_in.get(&block).cloned().unwrap_or(DepthValue::Top);
-        let d_out = apply_effect(d_in, effects.get(&block));
-
-        // A block with a successor == body_start is the NEXT block.
-        if cfg.successors(&block).contains(&body_start) {
-            exit_depth = exit_depth.meet(&d_out);
-        }
-
-        for &succ in cfg.successors(&block) {
-            if succ == body_start || succ == after_next {
-                continue;
-            }
-            let current = depth_in.get(&succ).cloned().unwrap_or(DepthValue::Top);
-            let merged = current.meet(&d_out);
-            if merged != current {
-                let _ = depth_in.insert(succ, merged);
-                worklist.push_back(succ);
-            }
+    for block in cfg.nodes() {
+        if cfg.successors(block).contains(&body_start) {
+            exit_depth = exit_depth.meet(result.after(block).unwrap_or(&DepthValue::Top));
         }
     }
 
@@ -566,6 +553,84 @@ pub(crate) fn build_cfg(code: &[u8], jump_table: &JumpTable) -> Option<CfgContex
     })
 }
 
+/// Bound a minimum-depth walk by CFG path length, not initial stack depth.
+/// A decreasing value whose witness crosses at least N edges has repeated a
+/// node and contains a negative cycle. Its eventual fixed point is Underflow.
+/// A Fixed effect resets the witness: SCLR can lower a cycle's depth once
+/// without making it a negative cycle. Boundary inputs ignore back-edges.
+fn walk_depths(
+    effects: &HashMap<BlockId, BlockEffect>,
+    cfg: &Cfg<BlockId>,
+    boundary: BlockId,
+    entry: DepthValue,
+    skipped: Option<BlockId>,
+    on_visit: &mut impl FnMut(),
+) -> DataFlowResult<BlockId, DepthValue> {
+    let mut before: HashMap<_, _> = cfg
+        .nodes()
+        .iter()
+        .map(|&node| (node, DepthValue::Top))
+        .collect();
+    let mut after = before.clone();
+    let mut witness = HashMap::<BlockId, usize>::new();
+    let mut pending = VecDeque::new();
+    let mut queued = BTreeSet::new();
+    let _ = before.insert(boundary, entry);
+    pending.push_back(boundary);
+    let _ = queued.insert(boundary);
+    while let Some(node) = pending.pop_front() {
+        on_visit();
+        let _ = queued.remove(&node);
+        let input = before.get(&node).cloned().unwrap_or(DepthValue::Top);
+        let effect = effects.get(&node);
+        let mut output = apply_effect(input, effect);
+        let path = if matches!(effect.map(|e| &e.output), Some(OutputKind::Fixed(_))) {
+            0
+        } else {
+            witness.get(&node).copied().unwrap_or(0)
+        };
+        if matches!(output, DepthValue::Known(_)) && path >= cfg.nodes().len() {
+            output = DepthValue::Underflow;
+        }
+        // An accelerated Underflow is a proved fixed point, even if another
+        // predecessor later supplies a shorter finite witness.
+        let output = after.get(&node).unwrap_or(&DepthValue::Top).meet(&output);
+        if after.get(&node) == Some(&output) {
+            continue;
+        }
+        let _ = after.insert(node, output.clone());
+        for &next in cfg.successors(&node) {
+            if next == boundary || Some(next) == skipped {
+                continue;
+            }
+            let current = before.get(&next).unwrap_or(&DepthValue::Top);
+            let merged = current.meet(&output);
+            if &merged != current {
+                let _ = before.insert(next, merged);
+                let _ = witness.insert(next, path.saturating_add(1));
+                if queued.insert(next) {
+                    pending.push_back(next);
+                }
+            }
+        }
+    }
+    DataFlowResult { before, after }
+}
+
+fn solve_stack_depth(
+    analysis: &StackDepthAnalysis<'_>,
+    cfg: &Cfg<BlockId>,
+) -> DataFlowResult<BlockId, DepthValue> {
+    walk_depths(
+        analysis.effects,
+        cfg,
+        *cfg.entry(),
+        DepthValue::Known(0),
+        None,
+        &mut || {},
+    )
+}
+
 // ---------------------------------------------------------------------------
 // check_stack_depth
 // ---------------------------------------------------------------------------
@@ -576,7 +641,7 @@ pub(crate) fn build_cfg(code: &[u8], jump_table: &JumpTable) -> Option<CfgContex
 /// without cloning.  The check order is:
 ///
 /// 1. [`VerifierError::LoopStackImbalance`] -- a loop body has non-zero net
-///    stack effect (detected via a one-pass BFS that ignores back-edges).
+///    stack effect (detected via a bounded walk that ignores structured back-edges).
 /// 2. [`VerifierError::StackDepthMismatch`] -- two incoming edges of a join
 ///    point carry different stack depths.
 /// 3. [`VerifierError::StackUnderflow`] -- a reachable block has insufficient
@@ -592,13 +657,13 @@ pub(crate) fn check_stack_depth_with_context(
     loop_regions: &[LoopRegion],
 ) -> Result<(), VerifierError> {
     let analysis = StackDepthAnalysis { effects };
-    let result = solve(&analysis, cfg);
+    let result = solve_stack_depth(&analysis, cfg);
 
     // --- LoopStackImbalance check (before underflow scan) ---
     //
-    // The worklist analysis uses min-meet on back-edges, which causes
-    // loop-body imbalances to converge rather than diverge.  A separate
-    // one-pass BFS (simulate_body) detects them correctly.
+    // Both minimum-depth walks accelerate negative cycles to Underflow.
+    // The separate body walk retains loop imbalance precedence for finite
+    // entry and exit depths, without spending work proportional to depth.
     for region in loop_regions {
         let entry = result
             .after(&region.opener_block)
@@ -1001,5 +1066,178 @@ mod tests {
         let k = DepthValue::Known(10);
         assert_eq!(DepthValue::Underflow.meet(&k), DepthValue::Underflow);
         assert_eq!(k.meet(&DepthValue::Underflow), DepthValue::Underflow);
+    }
+
+    #[test]
+    fn bounded_depth_walk_matches_small_fixed_points_including_sclr_cycles() {
+        let cfg = Cfg::builder(0, 3)
+            .edge(0, 1)
+            .edge(1, 2)
+            .edge(2, 1)
+            .edge(2, 3)
+            .build();
+        for initial in 0..=32 {
+            for body in [
+                OutputKind::Delta(-1),
+                OutputKind::Delta(0),
+                OutputKind::Delta(1),
+                OutputKind::Fixed(0),
+                OutputKind::Fixed(7),
+            ] {
+                let effects = HashMap::from([
+                    (
+                        0,
+                        BlockEffect {
+                            min_input: 0,
+                            output: OutputKind::Fixed(initial),
+                        },
+                    ),
+                    (
+                        1,
+                        BlockEffect {
+                            min_input: 0,
+                            output: OutputKind::Delta(0),
+                        },
+                    ),
+                    (
+                        2,
+                        BlockEffect {
+                            min_input: usize::from(matches!(body, OutputKind::Delta(-1))),
+                            output: body.clone(),
+                        },
+                    ),
+                    (
+                        3,
+                        BlockEffect {
+                            min_input: 0,
+                            output: OutputKind::Delta(0),
+                        },
+                    ),
+                ]);
+                let analysis = StackDepthAnalysis { effects: &effects };
+                let old = crate::dataflow::solver::solve(&analysis, &cfg);
+                let new = solve_stack_depth(&analysis, &cfg);
+                assert_eq!(new.before, old.before, "initial={initial}, body={body:?}");
+                assert_eq!(new.after, old.after, "initial={initial}, body={body:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn main_and_loop_body_depth_walks_bound_visits_independently_of_depth() {
+        let cfg = Cfg::builder(0, 5)
+            .edge(0, 1)
+            .edge(1, 2)
+            .edge(2, 3)
+            .edge(3, 2)
+            .edge(3, 4)
+            .edge(4, 1)
+            .edge(4, 5)
+            .build();
+        for initial in [10, 8_000, usize::MAX / 2] {
+            let effects = HashMap::from([
+                (
+                    0,
+                    BlockEffect {
+                        min_input: 0,
+                        output: OutputKind::Fixed(initial),
+                    },
+                ),
+                (
+                    1,
+                    BlockEffect {
+                        min_input: 0,
+                        output: OutputKind::Delta(0),
+                    },
+                ),
+                (
+                    2,
+                    BlockEffect {
+                        min_input: 1,
+                        output: OutputKind::Delta(-1),
+                    },
+                ),
+                (
+                    3,
+                    BlockEffect {
+                        min_input: 0,
+                        output: OutputKind::Delta(0),
+                    },
+                ),
+                (
+                    4,
+                    BlockEffect {
+                        min_input: 0,
+                        output: OutputKind::Delta(0),
+                    },
+                ),
+                (
+                    5,
+                    BlockEffect {
+                        min_input: 0,
+                        output: OutputKind::Delta(0),
+                    },
+                ),
+            ]);
+            for (root, entry, skipped) in [
+                (0, DepthValue::Known(0), None),
+                (1, DepthValue::Known(initial), Some(5)),
+            ] {
+                let mut visits = 0usize;
+                let result = walk_depths(&effects, &cfg, root, entry, skipped, &mut || {
+                    visits = visits.saturating_add(1);
+                });
+                assert!(
+                    visits <= 4 * cfg.nodes().len(),
+                    "depth={initial}, visits={visits}"
+                );
+                assert_eq!(result.after(&4), Some(&DepthValue::Underflow));
+            }
+            assert_eq!(
+                simulate_body(1, DepthValue::Known(initial), 5, &effects, &cfg),
+                DepthValue::Underflow
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_depth_walk_matches_branching_fixed_points() {
+        for shape in 0u8..16 {
+            let mut builder = Cfg::builder(0, 4)
+                .edge(0, 1)
+                .edge(1, 2)
+                .edge(2, 3)
+                .edge(3, 4);
+            for (bit, from, to) in [(1, 3, 1), (2, 2, 1), (4, 1, 3), (8, 4, 2)] {
+                if shape & bit != 0 {
+                    builder = builder.edge(from, to);
+                }
+            }
+            let cfg = builder.build();
+            for mut case in 0u16..256 {
+                let mut effects = HashMap::from([(
+                    0,
+                    BlockEffect {
+                        min_input: 0,
+                        output: OutputKind::Fixed(9),
+                    },
+                )]);
+                for node in 1..=4 {
+                    let (min_input, output) = match case % 4 {
+                        0 => (1, OutputKind::Delta(-1)),
+                        1 => (0, OutputKind::Delta(1)),
+                        2 => (0, OutputKind::Fixed(0)),
+                        _ => (0, OutputKind::Fixed(7)),
+                    };
+                    case /= 4;
+                    let _ = effects.insert(node, BlockEffect { min_input, output });
+                }
+                let analysis = StackDepthAnalysis { effects: &effects };
+                let old = crate::dataflow::solver::solve(&analysis, &cfg);
+                let new = solve_stack_depth(&analysis, &cfg);
+                assert_eq!(new.before, old.before, "shape={shape}, effects={effects:?}");
+                assert_eq!(new.after, old.after, "shape={shape}, effects={effects:?}");
+            }
+        }
     }
 }

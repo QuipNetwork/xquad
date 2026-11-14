@@ -1,0 +1,26 @@
+; QUIP-17: arbitrary internal cycles also occur inside structured loops.
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 0
+PUSH 1
+RANGE
+NOP
+TARGET .0
+POP
+JUMP .0
+NEXT
+HALT
