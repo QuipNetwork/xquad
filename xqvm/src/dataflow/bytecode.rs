@@ -223,6 +223,50 @@ enum BlockTerminatorKind {
     Halt,
 }
 
+fn terminator_kind(instr: &Instruction) -> Option<BlockTerminatorKind> {
+    match instr {
+        Instruction::Jump1 { label } => Some(BlockTerminatorKind::Jump {
+            label: u16::from(*label),
+        }),
+        Instruction::Jump2 { label } => Some(BlockTerminatorKind::Jump { label: *label }),
+        Instruction::JumpI1 { label } => Some(BlockTerminatorKind::CondJump {
+            label: u16::from(*label),
+        }),
+        Instruction::JumpI2 { label } => Some(BlockTerminatorKind::CondJump { label: *label }),
+        Instruction::Halt {} => Some(BlockTerminatorKind::Halt),
+        Instruction::Range {} | Instruction::Iter { .. } => Some(BlockTerminatorKind::LoopOpener),
+        Instruction::Next {} => Some(BlockTerminatorKind::LoopCloser),
+        _ => None,
+    }
+}
+
+/// Sorted block ranges, clipped immediately after the first terminator.
+/// Some dead leaders have no CFG edges and therefore are absent from nodes;
+/// bytes up to the next node are not necessarily part of this live block.
+pub(crate) fn block_ranges(cfg: &Cfg<BlockId>, code: &[u8]) -> Vec<(usize, usize)> {
+    let mut starts = cfg.nodes().to_vec();
+    starts.sort_unstable();
+    starts
+        .iter()
+        .enumerate()
+        .map(|(index, &start)| {
+            let limit = starts
+                .get(index.saturating_add(1))
+                .copied()
+                .unwrap_or(code.len());
+            let mut stream = InstructionStream::new(code.get(start..limit).unwrap_or(&[]));
+            let mut end = limit;
+            while let Some(Ok((_, _, instr))) = stream.next_instruction() {
+                if terminator_kind(&instr).is_some() {
+                    end = start.saturating_add(stream.pos());
+                    break;
+                }
+            }
+            (start, end)
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // LoopRegion  (internal)
 // ---------------------------------------------------------------------------
@@ -330,26 +374,12 @@ fn compute_block_effect(
             }
         }
 
-        let new_kind = match &instr {
-            Instruction::Jump1 { label } => Some(BlockTerminatorKind::Jump {
-                label: u16::from(*label),
-            }),
-            Instruction::Jump2 { label } => Some(BlockTerminatorKind::Jump { label: *label }),
-            Instruction::JumpI1 { label } => Some(BlockTerminatorKind::CondJump {
-                label: u16::from(*label),
-            }),
-            Instruction::JumpI2 { label } => Some(BlockTerminatorKind::CondJump { label: *label }),
-            Instruction::Halt {} => Some(BlockTerminatorKind::Halt),
-            Instruction::Range {} | Instruction::Iter { .. } => {
-                Some(BlockTerminatorKind::LoopOpener)
-            }
-            Instruction::Next {} => Some(BlockTerminatorKind::LoopCloser),
-            _ => None,
-        };
+        let new_kind = terminator_kind(&instr);
 
         if let Some(k) = new_kind {
             kind = k;
             term_pos = abs_pos;
+            break;
         }
     }
 

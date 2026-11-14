@@ -1,0 +1,7 @@
+; O3: HALT ends the live range before the dead DROP and LOAD.
+PUSH 1
+STOW r0
+HALT
+DROP r0
+LOAD r0
+HALT

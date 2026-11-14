@@ -87,6 +87,12 @@ Errors: `NoActiveLoop`, `UnmatchedLoop`.
 
 ---
 
+Basic-block transfer and replay stop immediately after the first terminator
+(`JUMP`, `JUMPI`, `RANGE`, `ITER`, `NEXT` or `HALT`), or at the next block
+leader if it comes first. Bytes after a terminator do not become part of the
+preceding block merely because a dead leader has no CFG edge. Dead writes
+cannot initialize a live read, and dead reads cannot reject a live halt.
+
 ## Phase 2 -- Register Type-State (`RegisterTypePhase`)
 
 A CFG-based forward analysis over `[RegType; 256]` (one slot per register).
