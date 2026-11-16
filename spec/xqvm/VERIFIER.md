@@ -197,50 +197,49 @@ Error: `ReadUnsetRegister`.
 
 ## Phase 4 -- Stack Depth (`StackDepthPhase`)
 
-A CFG-based forward analysis over abstract stack depth. Each basic block is
-characterised by a `BlockEffect` (minimum entry depth required and the output
-depth or depth delta at exit). The worklist uses min-meet to propagate the
-most conservative depth to successors. Both the main walk and the separate
-loop-body walk must bound decreasing-cycle work by the number of CFG nodes,
-rather than by the initial stack depth. A decreasing witness with at least
-one edge per CFG node contains a negative cycle and propagates `Underflow`.
-A fixed-depth effect such as `SCLR` starts a new witness: lowering a cycle's
-depth once by clearing it does not imply eventual underflow.
+Each reachable block has one exact entry height. A `BlockEffect` records
+its minimum required input and its exit delta or fixed output. The verifier
+assigns heights on first reach, processes each block once and compares every
+incoming edge with the assigned height. It never iterates minimum depths or
+runs separate loop-body walks.
 
-The verifier also tracks the peak within every reachable basic block, not
-only its entry and exit. Before the first `SCLR`, the peak is relative to
-the incoming depth; after a clear it is absolute. Later pops or clears do
-not erase either peak. A transient depth above 8,192 is rejected even if
-the block exits empty; exactly 8,192 remains valid.
-Using the min-meet entry for this peak is sound because the preceding
-`StackDepthMismatch` check requires equal depths on all reachable incoming
-edges, including loop-body joins and the implicit program-entry edge.
+The verifier tracks the peak within every reachable basic block, not only
+its entry and exit. Before the first `SCLR`, the peak is relative to the
+incoming height; after a clear it is absolute. Later pops or clears do not
+erase either peak. A transient height above 8,192 is rejected even if the
+block exits empty; exactly 8,192 remains valid.
 
-### Check order
+### Deterministic check order
 
-1. **`LoopStackImbalance`** -- detected via a separate bounded walk over each
-   loop body (ignoring its structured back-edge and skip-edge). If the exit depth of the `NEXT` block
-   differs from the depth at the matching `RANGE`/`ITER` opener, the loop body
-   has a non-zero net stack effect.
+The traversal is FIFO, seeded with program entry at height zero. Dense node
+indices follow CFG node insertion order. Successors are examined in CFG
+edge insertion order: conditional jump target before fall-through,
+`RANGE`/`ITER` body before skip, and `NEXT` back-edge before fall-through.
+Neither hash-map iteration nor the order of predecessor sets controls a
+verdict. A node enters the queue only on its first height assignment.
 
-2. **`StackDepthMismatch`** -- after the worklist converges, every join block
-   (2+ incoming edges) is examined. The arrival depths of all reachable
-   incoming edges are collected and compared, program entry contributing
-   depth 0. If any two differ, the stack is in
-   an undefined state at the join point. Blocks are checked in program order
-   (ascending byte offset) for deterministic error reporting.
+For each dequeued block:
 
-   Program entry counts as an incoming edge of the entry block, arriving at
-   depth 0. So a back-edge targeting the entry block makes it a join block with
-   two incoming edges -- entry at depth 0, and the back-edge at whatever depth
-   the loop body leaves -- even though it has only one predecessor *block*.
-   Counting predecessor blocks alone would let `.0: PUSH 1 / JUMP .0 / HALT`
-   verify clean and then overflow the stack at runtime.
+1. Apply its effect; a failed minimum-input check or an intrinsic post-reset
+   underflow reports `StackUnderflow` at the block start.
+2. Check entry height, exit height, then intra-block peak in that order;
+   the first value above 8,192 reports `StackOverflowRisk` at the block start.
+3. Examine outgoing edges in the order above. Assign an unseen successor's
+   height and enqueue it. A different height at an assigned successor
+   reports `StackDepthMismatch`, with the assigned height as `depth_a` and
+   the incoming height as `depth_b`. A conflicting matching `NEXT` back-edge
+   instead reports `LoopStackImbalance`, with its opener offset and the
+   assigned/incoming heights as entry/exit.
 
-3. **`StackUnderflow`** / **`StackOverflowRisk`** -- an instruction whose
-   pops take the depth below 0 is flagged under the
-   [Stack underflow rule](#stack-underflow-rule), and a block whose depth
-   exceeds 8192 is flagged as `StackOverflowRisk`.
+Stop at the first witnessed fault or edge conflict. This replaces the old
+whole-program error-class priority; rejected programs can change diagnostic
+variant or offset. The accepted program set is unchanged.
+
+The implicit program-entry edge always has height zero. Back-edges to entry
+are compared with it, never ignored. A single-block CFG receives the same
+check. Dead blocks, including unreachable leaders and loop openers, are not
+processed. A `SCLR` output is fixed, but its incoming edge heights must still
+agree. Underflow before a reset remains an error.
 
 ### Stack underflow rule
 
@@ -268,15 +267,40 @@ under [Per-Opcode Stack Effects](#per-opcode-stack-effects).
 skip-edge to the block after `NEXT` (empty-loop path). `NEXT` emits a
 back-edge to the loop body start and a fall-through to the post-loop block.
 
-`LoopStackImbalance` is reported before `StackDepthMismatch`, so if a loop is
-imbalanced the depth-mismatch check at the loop header is never reached.
+All these edges participate in exact-height consistency, including the
+post-loop `after_next` block. Arbitrary jumps leaving or re-entering a body
+remain ordinary CFG edges; no lexical confinement rule is added. A matching
+`NEXT` back-edge must restore the body's entry height, which enforces zero
+net effect without a separate body simulation.
 
 ### `SCLR` semantics
 
-`SCLR` resets the abstract depth unconditionally to 0 (`StackEffect::Reset`).
-If the entry depth was N > 0 and the exit depth is 0, this is reported as
-`LoopStackImbalance` if inside a loop, or detected by `StackDepthMismatch` at a
-downstream join if the reset creates a discrepancy.
+`SCLR` resets the abstract depth to zero (`StackEffect::Reset`). It neither
+erases a previous underflow nor exempts a join from equal incoming heights.
+A reset inside a loop can therefore produce a `LoopStackImbalance` when the
+matching `NEXT` edge disagrees with the body's assigned entry height.
+
+### Acceptance equivalence
+
+If the former minimum-depth verifier accepts, every reachable value is
+finite, every reachable incoming edge agrees (including the implicit entry
+edge), and every minimum-input and transient-peak bound holds. These values
+form an exact solution. Induction over first discovery shows that the new
+traversal assigns those same values, including `Fixed`/`SCLR` outputs, so it
+accepts.
+
+Conversely, accepted exact heights satisfy every old min-meet equation.
+Induction over the old worklist shows that no propagated finite value can
+differ, and no negative cycle can produce underflow. For an old body walk
+with a reachable opener, its entry equals the full-CFG body height. Every
+edge it follows preserves the same solution, including escapes and re-entry.
+Removing its root back-edge and `after_next` only removes paths. Any reached
+predecessor of the body start has the body-entry height at its output;
+unreached predecessors contribute `Top`. Thus its loop-effect check cannot
+fail. An unreachable opener seeds only `Top`, and its body cannot fail that
+check either. Exact-height acceptance also preserves the old minimum-input,
+entry/exit bound and O7 peak checks. No assumption about nesting depth or
+loop count is needed in either direction.
 
 Errors: `LoopStackImbalance`, `StackDepthMismatch`, `StackUnderflow`,
 `StackOverflowRisk`.
@@ -304,15 +328,23 @@ analysis uses H = 4 * 256 = 1024; must-init uses H = 256. All bound arithmetic
 is checked. Bytecode CFGs have at most two outgoing edges per node, so at
 N = 2048 their respective limits are 4,196,352 and 1,050,624 visits.
 
-Each stack-depth walk has its own `N * (3 * N + 3)` visit limit, independent
-of initial depth. There is one main walk plus one walk per structured loop;
-these costs must be added. The depth algorithm resets witnesses at fixed
-outputs, accelerates decreasing cycles and preserves absorbing underflow.
+The exact-height checker has a node budget of N and an edge budget of E.
+It assigns each reachable node once and checks each outgoing edge once, so
+these ceilings follow directly from the algorithm. Indexing offsets into
+dense arrays takes `O((N + E) log N)` comparisons; the depth traversal takes
+`O(N + E)` work and space. With N = 2048 and E <= 4096, there are at most
+2048 block transfers and 4096 edge checks, independent of initial height,
+loop count and nesting depth. Budgets detect internal invariant failures;
+they are not a numerical cutoff for rejecting otherwise valid programs.
 
-A visit includes transfer work and incoming-edge folds; materializing the
-result also folds incoming edges. These are visit bounds, not linear-time
-or wall-clock guarantees. Register operations process 256 coordinates, and
-loop-body walks can make total depth work larger than a single walk.
+Upstream verification adds no nesting cap. Loop pairing uses one explicit
+heap stack and one linear instruction scan. Nesting depth D is at most the
+instruction count; its storage is `O(D)`, not a factor multiplying graph
+work. Hosts may impose their own smaller depth limit.
+
+Generic-solver visits still include transfer work and incoming-edge folds;
+materialising its result also folds incoming edges. Its visit bound alone
+is not a whole-program wall-clock guarantee. A callback must terminate.
 
 Exhaustion returns `VerifierError::AnalysisBudgetExceeded` without partial
 facts. It indicates an analysis contract or bound defect, not a valid verdict
@@ -324,6 +356,48 @@ The Rust API change is breaking: callers add the visit limit and handle
 `SolveError`; exhaustive matches on `VerifierError` add the new variant.
 Neither `Analysis` nor `Lattice` requires a new method. `RegType` has no new
 variant, but its `Unset` meet and standalone phase behavior change as above.
+
+---
+
+## Historical minimum-walk oracle
+
+The former algorithm is retained only in tests for equivalence and mutation
+controls. It is not used by default verification or a public depth phase.
+Its per-walk termination proof below does not provide an adequate aggregate
+cost bound: L body walks could cost `(L + 1) * N * (3 * N + 3)` visits plus
+`O(L * N)` setup. The exact-height checker removes those walks entirely.
+
+Partition a FIFO walk into rounds. A round drains exactly the nodes queued
+at its start; later arrivals belong to the next round. Queue membership
+suppresses duplicates, so each round visits at most N nodes. A newly
+improved node is processed no later than the following round.
+
+Treat the boundary output and every reachable `Fixed(k)` output as sources.
+A non-top value reaches every reachable node within N rounds along a simple
+path. A fixed output is then either `Known(k)` or `Underflow`; it can never
+produce a different finite source value. An input below its minimum or an
+already underflowed input makes it absorbing `Underflow`, even for a reset.
+
+For finite propagation, the witness counts edges since the last fixed
+source. A fixed effect resets this count, not an underflow. After N further
+rounds, all walks of fewer than N edges from all activated sources have
+contributed. Competing paths cannot delay this: the domain is totally
+ordered, transfers preserve the minimum, and retaining a smaller input
+cannot hide a smaller output. An accelerated underflow is smaller still.
+This argument includes short walks with repeated nodes, not just simple
+paths; the length limit bounds how many rounds they need.
+
+A later strict finite improvement therefore cannot have a witness shorter
+than N edges. The algorithm accelerates such an improvement to `Underflow`
+before propagation. Underflow then spreads in at most N rounds and cannot
+be reset or replaced by a shorter finite witness. Three additional rounds
+cover processing the endpoint of a witness and draining pending nodes,
+giving `N * (3 * N + 3)` visits.
+
+The boundary input is constant and incoming back-edges to it are ignored.
+A loop-body walk also skips its `after_next` node. Both restrictions remove
+walks from this argument; they cannot add delayed sources or improvements.
+All bound arithmetic is checked, and exhaustion returns the dedicated error.
 
 ---
 

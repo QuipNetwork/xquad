@@ -95,6 +95,7 @@ mod analysis;
 pub mod bytecode;
 mod cfg;
 mod direction;
+mod indexed;
 mod lattice;
 pub mod register;
 mod solver;
