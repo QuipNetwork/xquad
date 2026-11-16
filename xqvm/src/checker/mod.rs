@@ -47,9 +47,9 @@
 //!   read-before-write and type mismatches on all CFG paths.
 //! * [`UninitRegisterPhase`] -- AND-meet at join points; flags registers that
 //!   are definitely unset on at least one incoming path.
-//! * [`StackDepthPhase`] -- min-meet for underflow detection, plus a strict-
-//!   equality pass over each join point's incoming edges (program entry
-//!   included) for [`CheckerError::StackDepthMismatch`].
+//! * [`StackDepthPhase`] -- exact heights in FIFO order, checking local
+//!   effects and each outgoing edge once, including the program-entry edge.
+//!   Conflicts on matching NEXT back-edges report loop imbalance.
 //!
 //! # Quick start
 //!

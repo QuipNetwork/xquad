@@ -151,43 +151,28 @@ for the register order, bounds and cost limitations.
 
 A control-flow-based forward analysis over the abstract depth of the value
 stack. Each basic block is characterised by the minimum depth it needs on
-entry and its effect on exit; the analysis propagates the most conservative
-depth to each successor.
+entry and its effect on exit. The analysis assigns one exact height per
+reachable block and checks every incoming edge for agreement.
 
 Checks run in this order:
 
-1. **Loop stack imbalance.** A separate pass walks each loop body, ignoring
-   the back-edge, and compares the depth at `NEXT` against the depth at the
-   matching `RANGE`/`ITER` opener. A non-zero net effect is an imbalance,
-   reported before anything else in that loop is checked.
-2. **Stack depth mismatch.** After the pass converges, every join block --
-   two or more incoming edges -- has the arrival depths of all its reachable
-   incoming edges compared; any two that differ mean the stack state at that
-   point is not well-defined.
+1. **Local stack faults.** FIFO from program entry checks each block once:
+   minimum input and post-reset underflow first, then entry height, exit
+   height and transient peak against the 8,192 limit.
+2. **Edge consistency.** Successors retain CFG insertion order (jump target
+   before fall-through; loop body before skip; NEXT back-edge before exit).
+   An unseen successor receives its height and enters the queue once. A
+   different incoming height reports `StackDepthMismatch`; a matching NEXT
+   back-edge reports `LoopStackImbalance`. Back-edges to program entry are
+   compared with the implicit zero-height entry edge.
 
-   Program entry counts as an incoming edge of the entry block, arriving at
-   depth 0. So a back-edge targeting the entry block makes it a join block
-   even though it has only one predecessor *block*, and the loop body's exit
-   depth is compared against entry's depth 0.
-3. **Underflow and overflow risk.** A block whose converged depth would
-   fall below zero, or exceed 8,192, is flagged. The block's entry
-   requirement is the lowest depth any of its instructions' pops reaches:
-   each instruction's pops are counted before its pushes, so `PUSH 1 /
-   SWAP` needs one more value than it has, even though `SWAP` leaves the
-   depth unchanged.
-
-`SCLR` resets the abstract depth unconditionally to zero, which the analysis
-treats as a reset rather than a delta. A reset does not undo an underflow
-before it: `SCLR / POP / SCLR / HALT` is rejected, because the `POP` faults
-before the second `SCLR` runs. If the entry depth was `N > 0` and the
-exit depth is `0`, that reset is itself the imbalance: inside a loop it is
-reported directly as `LoopStackImbalance` by check 1, ahead of everything
-else in that loop. Outside a loop, the same reset is only a problem if it
-creates a discrepancy between incoming edges at a join, in which case check 2
-catches it as `StackDepthMismatch`.
-
-Errors: `LoopStackImbalance`, `StackDepthMismatch`, `StackUnderflow`,
-`StackOverflowRisk`.
+The first witnessed fault is reported. This replaces the former global
+error-class priority, so rejected programs can change diagnostic variant or
+offset. Accepted programs are unchanged. Arbitrary loop escapes and re-entry
+remain ordinary CFG edges; there are no separate body walks or new nesting
+limits. Depth work is at most N block transfers and E edge checks after
+indexing the graph. See the normative checker specification for the
+acceptance-equivalence proof and historical minimum-walk oracle.
 
 ## Error reference
 

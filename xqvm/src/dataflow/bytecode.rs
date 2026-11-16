@@ -21,7 +21,7 @@
 //!
 //! 1. Builds a [`Cfg`] of basic blocks (`BlockId = byte offset of first instruction`).
 //! 2. Derives a [`BlockEffect`] for every block (abstract stack effect).
-//! 3. Runs a forward worklist analysis with a [`DepthValue`] lattice.
+//! 3. Assigns exact heights in FIFO order and checks each CFG edge once.
 //! 4. Reports the first [`CheckerError`] found.
 //!
 //! Unlike a linear scan, this analysis follows conditional branches so
@@ -41,24 +41,15 @@
 //! [`Cfg::predecessors`]: program entry itself, arriving at depth 0 (see
 //! [`StackDepthAnalysis::boundary_value`]).
 //!
-//! The join-point mismatch check below must count it, or the entry block is
-//! silently exempted. (The `solve` worklist itself deliberately does not: it
-//! pins the entry input to `boundary_value` unconditionally, which is sound
-//! for every current phase's meet.) That is not hypothetical -- counting only
-//! predecessor *blocks* let `.0: PUSH 1 / JUMP .0 / HALT` check clean and then
-//! overflow the stack at runtime, because a back-edge onto the entry block
-//! leaves it with a single predecessor. Putting any instruction before the
-//! label splits the entry block off and the identical check fires, which is
-//! what gave it away. See the `StackDepthMismatch` check below.
-//!
-//! This is recorded here rather than only in `spec/xqvm/CHECKER.md` because it
-//! is a property of *this* analysis, and the two regression tests in
-//! `checker::tests` are what actually enforce it. The vector runner does not
-//! run the checker, so no conformance vector can pin it.
+//! The exact-height traversal seeds entry at zero and checks every back-edge
+//! against it. This includes single-block CFGs. The public
+//! [`StackDepthAnalysis`] and [`DepthValue`] remain available for custom
+//! generic analyses; the default check does not run their minimum walk.
 
 #[cfg(not(feature = "std"))]
 use alloc::{
     collections::{BTreeSet, VecDeque},
+    vec,
     vec::Vec,
 };
 
@@ -75,6 +66,7 @@ use crate::dataflow::analysis::Analysis;
 use crate::dataflow::cfg::Cfg;
 use crate::dataflow::direction::Forward;
 use crate::dataflow::lattice::Lattice;
+#[cfg(test)]
 use crate::dataflow::solver::DataFlowResult;
 
 /// Maximum integer stack depth permitted by the VM spec.
@@ -299,11 +291,15 @@ pub(crate) struct LoopRegion {
     /// Byte offset of the `RANGE`/`ITER` instruction (for error reporting).
     opener_pos: usize,
     /// Block that contains the `RANGE`/`ITER` terminator.
+    #[cfg(test)]
     opener_block: BlockId,
     /// First block of the loop body (successor of opener via fall-through).
     body_start: BlockId,
     /// First block after the loop (skip-edge target of opener).
+    #[cfg(test)]
     after_next: BlockId,
+    /// Block ending in the matching NEXT, used for conflict diagnostics.
+    closer_block: BlockId,
 }
 
 // ---------------------------------------------------------------------------
@@ -427,6 +423,7 @@ fn compute_block_effect(
 /// down once per possible stack item.
 ///
 /// [`LoopStackImbalance`]: CheckerError::LoopStackImbalance
+#[cfg(test)]
 fn simulate_body(
     body_start: BlockId,
     entry: DepthValue,
@@ -478,7 +475,7 @@ pub(crate) fn build_cfg(code: &[u8], jump_table: &JumpTable) -> Option<CfgContex
     let mut leaders: BTreeSet<usize> = BTreeSet::new();
     let _ = leaders.insert(0);
 
-    let mut opener_info: HashMap<usize, (usize, usize)> = HashMap::new();
+    let mut opener_info: HashMap<usize, (usize, usize, usize)> = HashMap::new();
     let mut next_back: HashMap<usize, usize> = HashMap::new();
     let mut loop_stack: Vec<(usize, usize)> = Vec::new(); // (opener_pos, body_start)
     let mut halt_block: Option<usize> = None;
@@ -511,7 +508,7 @@ pub(crate) fn build_cfg(code: &[u8], jump_table: &JumpTable) -> Option<CfgContex
                 let _ = leaders.insert(after);
                 if let Some((opener_pos, body_start)) = loop_stack.pop() {
                     let _ = next_back.insert(pos, body_start);
-                    let _ = opener_info.insert(opener_pos, (body_start, after));
+                    let _ = opener_info.insert(opener_pos, (body_start, after, pos));
                 }
             }
             Instruction::Halt {} => {
@@ -564,14 +561,23 @@ pub(crate) fn build_cfg(code: &[u8], jump_table: &JumpTable) -> Option<CfgContex
                 }
             }
             BlockTerminatorKind::LoopOpener => {
-                if let Some(&(body_start, after_next)) = opener_info.get(&term_pos) {
+                if let Some(&(body_start, after_next, next_pos)) = opener_info.get(&term_pos) {
+                    let closer_block = leaders_sorted
+                        .partition_point(|&start| start <= next_pos)
+                        .checked_sub(1)
+                        .and_then(|i| leaders_sorted.get(i))
+                        .copied()
+                        .unwrap_or(next_pos);
                     cfg_builder = cfg_builder.edge(block_start, body_start);
                     cfg_builder = cfg_builder.edge(block_start, after_next);
                     loop_regions.push(LoopRegion {
                         opener_pos: term_pos,
+                        #[cfg(test)]
                         opener_block: block_start,
                         body_start,
+                        #[cfg(test)]
                         after_next,
+                        closer_block,
                     });
                 } else {
                     // Unmatched loop opener (shouldn't happen after Phase 1).
@@ -615,6 +621,7 @@ pub(crate) fn build_cfg(code: &[u8], jump_table: &JumpTable) -> Option<CfgContex
 // N further rounds; three extra rounds cover endpoint processing/draining.
 // Skipping boundary/back edges or a selected node only removes walks.
 // Thus N * (3*N + 3) bounds visits, independently for each body walk too.
+#[cfg(test)]
 fn walk_depths(
     effects: &HashMap<BlockId, BlockEffect>,
     cfg: &Cfg<BlockId>,
@@ -683,6 +690,7 @@ fn walk_depths(
     Ok(DataFlowResult { before, after })
 }
 
+#[cfg(test)]
 fn solve_stack_depth(
     analysis: &StackDepthAnalysis<'_>,
     cfg: &Cfg<BlockId>,
@@ -700,6 +708,97 @@ fn solve_stack_depth(
 // check_stack_depth
 // ---------------------------------------------------------------------------
 
+/// Assign one exact height per reachable block, checking every CFG edge.
+///
+/// FIFO from entry, successors in insertion order. Local underflow and
+/// entry/exit/transient overflow checks precede outgoing edge checks.
+/// No node is re-enqueued after its first height assignment.
+pub(crate) fn check_stack_depth_with_context(
+    cfg: &Cfg<BlockId>,
+    effects: &HashMap<BlockId, BlockEffect>,
+    peaks: &HashMap<BlockId, BlockPeak>,
+    loop_regions: &[LoopRegion],
+) -> Result<(), CheckerError> {
+    use super::indexed::IndexedCfg;
+    use super::solver::{SolveError, VisitBudget};
+    let graph = IndexedCfg::new(cfg)?;
+    let count = graph.nodes.len();
+    let mut nodes_budget =
+        VisitBudget::new(u64::try_from(count).map_err(|_| SolveError::BudgetExceeded)?);
+    let mut edges_budget = VisitBudget::new(graph.edges()?);
+    let mut heights = vec![None; count];
+    let mut closers = vec![None; count];
+    for region in loop_regions {
+        let index = graph.index(region.closer_block)?;
+        *closers.get_mut(index).ok_or(SolveError::BudgetExceeded)? =
+            Some((graph.index(region.body_start)?, region.opener_pos));
+    }
+    *heights
+        .get_mut(graph.entry)
+        .ok_or(SolveError::BudgetExceeded)? = Some(0usize);
+    let mut pending = VecDeque::from([graph.entry]);
+    while let Some(index) = pending.pop_front() {
+        nodes_budget.visit()?;
+        #[cfg(test)]
+        super::solver::test_work::visit();
+        let node = *graph.nodes.get(index).ok_or(SolveError::BudgetExceeded)?;
+        let entry = heights
+            .get(index)
+            .copied()
+            .flatten()
+            .ok_or(SolveError::BudgetExceeded)?;
+        let output = match apply_effect(DepthValue::Known(entry), effects.get(&node)) {
+            DepthValue::Known(depth) => depth,
+            DepthValue::Underflow => return Err(CheckerError::StackUnderflow { offset: node }),
+            DepthValue::Top => return Err(SolveError::BudgetExceeded.into()),
+        };
+        let peak = peaks
+            .get(&node)
+            .map_or(entry, |p| entry.saturating_add(p.relative).max(p.absolute));
+        for depth in [entry, output, peak] {
+            if depth > STACK_LIMIT {
+                return Err(CheckerError::StackOverflowRisk {
+                    offset: node,
+                    depth,
+                });
+            }
+        }
+        for &next in graph
+            .successors
+            .get(index)
+            .ok_or(SolveError::BudgetExceeded)?
+        {
+            edges_budget.visit()?;
+            #[cfg(test)]
+            super::solver::test_work::visit();
+            let assigned = heights.get_mut(next).ok_or(SolveError::BudgetExceeded)?;
+            if let Some(previous) = *assigned {
+                if previous != output {
+                    if let Some((body, opener)) = closers.get(index).copied().flatten()
+                        && body == next
+                    {
+                        return Err(CheckerError::LoopStackImbalance {
+                            opener,
+                            entry: previous,
+                            exit: output,
+                        });
+                    }
+                    return Err(CheckerError::StackDepthMismatch {
+                        target_offset: *graph.nodes.get(next).ok_or(SolveError::BudgetExceeded)?,
+                        depth_a: previous,
+                        depth_b: output,
+                    });
+                }
+            } else {
+                *assigned = Some(output);
+                pending.push_back(next);
+            }
+        }
+    }
+    Ok(())
+}
+
+// Kept only as an independent pre-change oracle and mutation target.
 /// Run the CFG-based forward stack-depth analysis using a pre-built [`CfgContext`].
 ///
 /// Consumes `ctx` so that the caller can construct it once and pass it in
@@ -716,7 +815,8 @@ fn solve_stack_depth(
 /// # Errors
 ///
 /// Returns the first [`CheckerError`] found, in the order described above.
-pub(crate) fn check_stack_depth_with_context(
+#[cfg(test)]
+fn legacy_check_stack_depth_with_context(
     cfg: &Cfg<BlockId>,
     effects: &HashMap<BlockId, BlockEffect>,
     peaks: &HashMap<BlockId, BlockPeak>,
@@ -834,6 +934,7 @@ pub(crate) fn check_stack_depth_with_context(
 }
 
 /// Check entry, exit and intra-block depths after higher-priority errors.
+#[cfg(test)]
 fn check_depth_bounds(
     cfg: &Cfg<BlockId>,
     result: &DataFlowResult<BlockId, DepthValue>,
@@ -1033,7 +1134,8 @@ mod tests {
         let p = b.build().unwrap();
         let err = check_stack_depth(&p).unwrap_err();
         // StackDepthMismatch fires before StackUnderflow: depth 0 vs 1 at TARGET.
-        assert_eq!(err.variant_name(), "StackDepthMismatch");
+        // FIFO witnesses the local empty-stack pop before the conflicting edge.
+        assert_eq!(err.variant_name(), "StackUnderflow");
     }
 
     // Both paths must arrive at the join with exactly the same depth.
@@ -1522,5 +1624,168 @@ mod audit_work_bounds {
         assert!(visits > 0 && visits <= limit);
         // The internal unconditional cycle cannot reach the structured NEXT.
         assert_eq!(exit, DepthValue::Top);
+    }
+}
+
+#[cfg(test)]
+mod exact_height_tests {
+    use super::*;
+    use crate::InstructionBuilder;
+    use crate::dataflow::solver::test_work;
+
+    fn spine(loops: usize, spine: usize, tail: usize) -> Program {
+        let mut b = InstructionBuilder::new();
+        let start = (loops > 0).then(|| b.label());
+        let join = b.label();
+        for _ in 0..spine.saturating_add(10) {
+            let _ = b.emit_push(0);
+        }
+        for _ in 0..loops {
+            let _ = b
+                .emit_push(0)
+                .emit_push(1)
+                .emit_range()
+                .emit_jump(start.unwrap())
+                .emit_next();
+        }
+        if let Some(start) = start {
+            let _ = b.place(start).unwrap();
+        }
+        for _ in 0..spine {
+            let _ = b.emit_pop().emit_push(1).emit_jump_if(join);
+        }
+        let _ = b.place(join).unwrap();
+        for _ in 1..tail {
+            let _ = b.emit_target();
+        }
+        let _ = b.emit_halt();
+        b.build().unwrap()
+    }
+
+    fn negative_cycle_tail() -> Program {
+        let mut code = Vec::new();
+        for _ in 0..4096 {
+            code.extend_from_slice(&[0x11, 0]);
+        }
+        for _ in 0..394 {
+            code.extend_from_slice(&[0x11, 0, 0x11, 1, 8, 3, 0, 0, 7]);
+        }
+        code.extend_from_slice(&[0, 2, 0]);
+        code.extend(core::iter::repeat_n(0, 865));
+        code.push(0xff);
+        Program::new(code)
+    }
+
+    fn controls() -> [Program; 4] {
+        // Independent reviewer parameter sets, then the negative-cycle shape
+        // and a quadratic main walk without any structured loops.
+        [
+            spine(300, 550, 550),
+            spine(256, 512, 512),
+            negative_cycle_tail(),
+            spine(0, 1024, 1024),
+        ]
+    }
+
+    #[test]
+    fn all_cost_controls_have_linear_exact_height_work() {
+        for p in controls() {
+            let ctx = build_cfg(p.code(), p.jump_table()).unwrap();
+            let n = ctx.cfg.nodes().len();
+            let edges: usize = ctx
+                .cfg
+                .nodes()
+                .iter()
+                .map(|b| ctx.cfg.successors(b).len())
+                .sum();
+            assert!(n <= 2048 && p.encode().len() <= 65_536);
+            let (result, work) = test_work::measure(n.saturating_add(edges), || {
+                check_stack_depth_with_context(
+                    &ctx.cfg,
+                    &ctx.effects,
+                    &ctx.peaks,
+                    &ctx.loop_regions,
+                )
+            });
+            assert!(result.is_err());
+            assert!(work > 0 && work <= n.saturating_add(edges));
+        }
+    }
+
+    #[test]
+    fn restoring_minimum_walks_fails_the_linear_work_guard() {
+        for p in controls() {
+            let ctx = build_cfg(p.code(), p.jump_table()).unwrap();
+            let n = ctx.cfg.nodes().len();
+            let edges: usize = ctx
+                .cfg
+                .nodes()
+                .iter()
+                .map(|b| ctx.cfg.successors(b).len())
+                .sum();
+            let mutant = std::panic::catch_unwind(|| {
+                test_work::measure(n.saturating_add(edges), || {
+                    legacy_check_stack_depth_with_context(
+                        &ctx.cfg,
+                        &ctx.effects,
+                        &ctx.peaks,
+                        &ctx.loop_regions,
+                    )
+                })
+            });
+            assert!(mutant.is_err(), "old repeated walks must exceed N+E");
+        }
+    }
+
+    #[test]
+    fn deep_upstream_nesting_needs_no_body_walks_or_new_cap() {
+        let mut b = InstructionBuilder::new();
+        for _ in 0..128 {
+            let _ = b.emit_push(0).emit_push(1).emit_range();
+        }
+        for _ in 0..128 {
+            let _ = b.emit_next();
+        }
+        let _ = b.emit_halt();
+        let p = b.build().unwrap();
+        assert!(crate::checker::check(&p).is_ok());
+    }
+
+    #[test]
+    fn exact_height_acceptance_matches_legacy_on_seeded_effect_graphs() {
+        let mut seed = 0x19e7_2026u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for _ in 0..10_000 {
+            let n = usize::try_from(next() % 20).unwrap().saturating_add(2);
+            let mut graph = Cfg::builder(0, n.saturating_sub(1));
+            let mut effects = HashMap::new();
+            for node in 0..n {
+                let a = usize::try_from(next()).unwrap() % n;
+                let b = usize::try_from(next()).unwrap() % n;
+                graph = graph.edge(node, a).edge(node, b);
+                let delta = i32::try_from(next() % 9).unwrap().saturating_sub(4);
+                let output = if next() % 5 == 0 {
+                    OutputKind::Fixed(usize::try_from(next() % 12).unwrap())
+                } else {
+                    OutputKind::Delta(delta)
+                };
+                let min_input = if delta < 0 {
+                    usize::try_from(delta.unsigned_abs()).unwrap()
+                } else {
+                    0
+                };
+                let _ = effects.insert(node, BlockEffect { min_input, output });
+            }
+            let graph = graph.build();
+            let peaks = HashMap::new();
+            let old = legacy_check_stack_depth_with_context(&graph, &effects, &peaks, &[]);
+            let new = check_stack_depth_with_context(&graph, &effects, &peaks, &[]);
+            assert_eq!(old.is_ok(), new.is_ok(), "old={old:?}, new={new:?}");
+        }
     }
 }
