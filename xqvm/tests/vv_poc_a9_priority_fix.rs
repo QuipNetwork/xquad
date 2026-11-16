@@ -15,9 +15,10 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! QUIP-17 handover stack-cycle and error-precedence regressions.
+//! QUIP-17 handover byte programs under deterministic first-witness diagnostics.
 //!
-//! Work bounds are pinned by the private unit tests
+//! Exact-height work is pinned by `all_cost_controls_have_linear_exact_height_work`.
+//! The historical oracle retains the private unit tests
 //! `main_and_loop_body_depth_walks_bound_visits_independently_of_depth`,
 //! `auditor_main_cycle_has_bounded_visits`,
 //! `auditor_loop_cycle_main_walk_has_bounded_visits`, and
@@ -41,7 +42,7 @@ fn error(builder: InstructionBuilder) -> &'static str {
 }
 
 #[test]
-fn structured_loops_take_priority_over_ordinary_joins() {
+fn first_witnessed_edge_conflict_determines_the_diagnostic() {
     let mut b = InstructionBuilder::new();
     let body = b.label();
     b.emit_push(1)
@@ -59,8 +60,8 @@ fn structured_loops_take_priority_over_ordinary_joins() {
         .emit_halt();
     assert_eq!(
         error(b),
-        "LoopStackImbalance",
-        "mixed path into loop opener"
+        "StackDepthMismatch",
+        "mixed path into loop opener is witnessed first"
     );
 
     let mut b = InstructionBuilder::new();
@@ -74,7 +75,7 @@ fn structured_loops_take_priority_over_ordinary_joins() {
         .emit_range()
         .emit_push(1);
     b.place(next).unwrap().emit_next().emit_halt();
-    assert_eq!(error(b), "LoopStackImbalance", "ordinary jump into NEXT");
+    assert_eq!(error(b), "StackDepthMismatch", "ordinary jump into NEXT");
 
     let mut b = InstructionBuilder::new();
     let body = b.label();
@@ -94,7 +95,7 @@ fn structured_loops_take_priority_over_ordinary_joins() {
 }
 
 #[test]
-fn vv_poc_cycle_rejection_is_bounded_without_losing_loop_priority() {
+fn vv_poc_cycle_rejection_is_bounded_with_exact_heights() {
     let mut b = InstructionBuilder::new();
     for _ in 0..8_000 {
         b.emit_push(1);
@@ -140,7 +141,7 @@ fn stack_cycle_vectors_are_rejected() {
         let program = xqasm::assemble_source(source).unwrap();
         assert_eq!(
             checker::check(&program).unwrap_err().variant_name(),
-            "StackUnderflow"
+            "StackDepthMismatch"
         );
     }
 }
