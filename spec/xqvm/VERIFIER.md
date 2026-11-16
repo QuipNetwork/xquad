@@ -285,6 +285,13 @@ Errors: `LoopStackImbalance`, `StackDepthMismatch`, `StackUnderflow`,
 
 ## Deterministic analysis budgets
 
+CFG edges preserve insertion order. A duplicate edge changes neither the
+successor nor predecessor list. Insertion checks the source's successor
+list once and appends both directions only for a new edge; it does not
+search the destination's growing predecessor list. Bytecode blocks have
+at most two successors, so edge deduplication takes at most two comparisons
+per insertion, including graphs where every block targets the same join.
+
 The generic Rust `dataflow::solve(analysis, cfg, max_visits)` returns
 `Result<DataFlowResult<...>, SolveError>`. Every output starts at lattice
 top, including the boundary node. The boundary value seeds only that node's
