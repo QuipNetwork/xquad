@@ -147,6 +147,14 @@ rejects reads after partial writes across branches.
 See the normative [analysis budget contract](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/VERIFIER.md#deterministic-analysis-budgets)
 for the register order, bounds and cost limitations.
 
+The built-in register and must-init phases forward changed coordinates into
+cached incoming facts. Per-block constant writes are summarised once; there
+is no full predecessor fold or block rescan per change. Each of 256 register
+coordinates descends at most four times, and each initialization bit clears
+once. At 2,048 nodes and 4,096 edges, this bounds register edge updates by
+4,194,304 and must-init bit updates by 1,048,576. These operation counts still
+need runtime weight calibration. The public generic solver is unchanged.
+
 ## Phase 4 -- stack depth
 
 A control-flow-based forward analysis over the abstract depth of the value

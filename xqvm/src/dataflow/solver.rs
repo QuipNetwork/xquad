@@ -91,6 +91,7 @@ impl VisitBudget {
 
 /// Initial N visits plus at most H enqueue attempts per outgoing edge.
 /// Checked arithmetic fails closed if the bound cannot be represented.
+#[cfg(test)]
 pub(super) fn visit_limit<N: Eq + Hash + Clone>(
     cfg: &Cfg<N>,
     max_descents: u64,

@@ -82,6 +82,7 @@ use crate::dataflow::bytecode::{BlockId, CfgContext, block_ranges, build_cfg};
 use crate::dataflow::cfg::Cfg;
 use crate::dataflow::direction::Forward;
 use crate::dataflow::lattice::Lattice;
+#[cfg(test)]
 use crate::dataflow::solver::{solve, visit_limit};
 use crate::verifier::reg_type::{RegType, apply_writes, check_reads, write_effect};
 
@@ -114,7 +115,7 @@ impl Lattice for RegTypeValue {
 /// Per-register meet: `Any` is the top element (identity); two concrete types
 /// meet to what they share, which is `Grid` or `AnyVec` for the two related
 /// pairs and `Conflict` for unrelated initialized types. `Unset` is bottom.
-fn meet_reg(a: RegType, b: RegType) -> RegType {
+pub(super) fn meet_reg(a: RegType, b: RegType) -> RegType {
     use RegType as T;
     match (a, b) {
         (T::Any, x) | (x, T::Any) => x,
@@ -237,20 +238,20 @@ pub(crate) fn check_register_types_with_cfg(
         block_writes,
         reachable: cfg.reachable_nodes(),
     };
-    let result = solve(&analysis, cfg, visit_limit(cfg, 4 * 256)?)?;
+    let result = super::sparse::solve(cfg, &analysis.block_writes)?;
 
     for &(block_start, block_end) in &ranges {
         let before = result
-            .before(&block_start)
-            .cloned()
-            .unwrap_or_else(RegTypeValue::top);
+            .before(block_start)
+            .copied()
+            .unwrap_or([RegType::Any; 256]);
 
         if !analysis.reachable.contains(&block_start) {
             continue;
         }
 
         let block_code = code.get(block_start..block_end).unwrap_or(&[]);
-        let mut state = before.0;
+        let mut state = before;
         let mut stream = InstructionStream::new(block_code);
         while let Some(item) = stream.next_instruction() {
             let Ok((rel_pos, _, instr)) = item else { break };
@@ -736,21 +737,16 @@ mod audit_work_bounds {
         .unwrap();
         for program in [original, Program::new(vector.code().to_vec())] {
             let ctx = build_cfg(program.code(), program.jump_table()).unwrap();
-            // This shape has at most one outgoing edge per node. Its OUTPUT
-            // facts are restricted to Any -> Sample at written registers;
-            // the boundary's Unset output is fixed and dead outputs stay Any.
-            // Thus each of 256 coordinates changes at most once: product
-            // lattice height H = 1 + 256. With N initial visits and at most
-            // one enqueue per changed output, visits <= N + 256*N = H*N.
-            // This is a bound for this restricted lattice, not a claim that
-            // the full domain has this smaller height (its general height is 1024).
+            // This fixture changes each coordinate at most once. Count
+            // coordinate events AND outgoing coordinate updates: at most
+            // 256 * (N + E), with E <= N for this particular shape.
             assert!(
                 ctx.cfg
                     .nodes()
                     .iter()
                     .all(|node| ctx.cfg.successors(node).len() <= 1)
             );
-            let height = RegTypeValue::top().0.len().saturating_add(1);
+            let height = RegTypeValue::top().0.len().saturating_mul(2);
             let limit = height.saturating_mul(ctx.cfg.nodes().len());
             let (result, visits) =
                 test_work::measure(limit, || check_register_types_with_cfg(&program, &ctx.cfg));
