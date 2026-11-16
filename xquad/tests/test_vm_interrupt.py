@@ -17,9 +17,10 @@
 
 """A signal stops `xqffi.vm.Vm.run` with the exception its handler raises.
 
-Each case runs in a child process: the program never halts, so a run that
-missed the signal would hang the test session, and the child's timeout turns
-that into a failure instead.
+A handler that returns lets the run go on, and a run on a worker thread is
+never stopped. Each case runs in a child process: the program never halts, so
+a run that missed the signal, or a deadlock, would hang the test session, and
+the child's timeout turns that into a failure instead.
 """
 
 from __future__ import annotations
@@ -109,3 +110,76 @@ def test_signal_stops_an_unbounded_run(tmp_path: Path, delivery: str, handler: s
         lines = Path(trace_file).read_text().splitlines()
         assert len(lines) == report["instructions"]
         assert json.loads(lines[-1])["step"] == report["instructions"]
+
+
+# A run that a signal must not stop: either the handler returns, or the run is
+# on a worker thread, where Python never runs handlers. The program never
+# halts, so the step limit is what ends the run. The limit is sized from a
+# timed calibration run so the run lasts about RUN_S in whatever build xqffi
+# has, which leaves the 0.2 s timer and the 100 ms check period well inside it.
+CHILD_UNSTOPPED = """
+import json, signal, sys, threading, time
+from xqffi.asm import assemble_source
+from xqffi.vm import StepLimitExceeded, Vm
+
+where, run_s = sys.argv[1], float(sys.argv[2])
+program = assemble_source("TARGET .0\\nNOP\\nJUMP .0\\n")
+
+def run_to_limit(limit):
+    vm = Vm()
+    vm.set_step_limit(limit)
+    try:
+        vm.run(program)
+    except StepLimitExceeded:
+        return dict(steps=vm.steps(), ended=time.monotonic())
+    raise AssertionError("the run ended without reaching its step limit")
+
+calibration = 1_000_000
+started = time.monotonic()
+run_to_limit(calibration)
+limit = max(calibration, int(calibration * run_s / (time.monotonic() - started)))
+
+handled = []
+signal.signal(signal.SIGINT, lambda signum, frame: handled.append((threading.current_thread().name, time.monotonic())))
+sent = []
+def deliver():
+    sent.append(time.monotonic())
+    signal.raise_signal(signal.SIGINT)
+threading.Timer(0.2, deliver).start()
+
+result = {}
+if where == "main":
+    result.update(run_to_limit(limit))
+else:
+    worker = threading.Thread(target=lambda: result.update(run_to_limit(limit)), name="worker")
+    worker.start()
+    worker.join()
+print(json.dumps(dict(limit=limit, result=result, sent=sent, handled=handled)))
+"""
+
+#: How long the unstopped run is sized to last.
+RUN_S = 1.0
+
+
+@pytest.mark.parametrize("where", ["main", "worker"])
+def test_signal_does_not_stop_a_run_it_should_not(where: str) -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", CHILD_UNSTOPPED, where, str(RUN_S)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    # The run went on to its step limit rather than stopping at the signal.
+    assert report["result"]["steps"] == report["limit"]
+    # The signal went out while the run was still going, and the handler ran
+    # once, on the main thread.
+    [sent_at] = report["sent"]
+    assert sent_at < report["result"]["ended"]
+    [(thread, handled_at)] = report["handled"]
+    assert thread == "MainThread"
+    if where == "main":
+        # Only the run's own signal check can run a handler before it ends.
+        assert handled_at < report["result"]["ended"]

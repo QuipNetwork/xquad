@@ -86,17 +86,21 @@ const SIGNAL_CHECK_PERIOD: Duration = Duration::from_millis(100);
 /// [`SIGNAL_CHECK_PERIOD`] has passed since the last check, it attaches to
 /// the interpreter and calls `PyErr_CheckSignals`. A handler that raises
 /// (`KeyboardInterrupt` from the default SIGINT handler) stops the run, and
-/// the exception is kept in `raised` for `Vm.run` to re-raise. Only the
-/// main thread runs signal handlers, so a run on any other thread is never
-/// stopped this way.
+/// the exception is kept in `raised` for `Vm.run` to re-raise.
+///
+/// Only Python's main thread runs signal handlers, so a check from any other
+/// thread would take the GIL and find nothing. A run off the main thread
+/// sets `on_main_thread` to `false` and never attaches: no signal stops it,
+/// and parallel runs on worker threads do not contend for the GIL.
 struct SignalCheck<T> {
     inner: T,
+    on_main_thread: bool,
     last_check: Instant,
     raised: Option<PyErr>,
 }
 
 impl<T: Tracer> SignalCheck<T> {
-    fn new(inner: T) -> Self {
+    fn new(inner: T, on_main_thread: bool) -> Self {
         const {
             assert!(
                 T::POLL_INTERVAL == 0,
@@ -105,10 +109,20 @@ impl<T: Tracer> SignalCheck<T> {
         }
         Self {
             inner,
+            on_main_thread,
             last_check: Instant::now(),
             raised: None,
         }
     }
+}
+
+/// Whether the calling thread is Python's main thread, the only one that
+/// runs signal handlers.
+fn on_main_thread(py: Python<'_>) -> PyResult<bool> {
+    let threading = py.import("threading")?;
+    let main = threading.call_method0("main_thread")?;
+    let current = threading.call_method0("current_thread")?;
+    Ok(main.is(&current))
 }
 
 /// Why a [`SignalCheck`] stopped a run: the wrapped tracer failed, or a
@@ -138,7 +152,7 @@ impl<T: Tracer> Tracer for SignalCheck<T> {
     }
 
     fn poll(&mut self) -> Result<(), Self::Error> {
-        if self.last_check.elapsed() < SIGNAL_CHECK_PERIOD {
+        if !self.on_main_thread || self.last_check.elapsed() < SIGNAL_CHECK_PERIOD {
             return Ok(());
         }
         #[expect(
@@ -156,7 +170,8 @@ impl<T: Tracer> Tracer for SignalCheck<T> {
     }
 }
 
-/// Run `program` on `vm` with the GIL released, polling for signals.
+/// Run `program` on `vm` with the GIL released, polling for signals when
+/// called from Python's main thread.
 ///
 /// The exception a signal handler raised wins over the `TraceFailed` it
 /// stopped the run with; any other fault maps to its `XqvmError` subclass.
@@ -165,7 +180,7 @@ where
     T: Tracer + Send,
     T::Error: fmt::Display,
 {
-    let mut check = SignalCheck::new(tracer);
+    let mut check = SignalCheck::new(tracer, on_main_thread(py)?);
     let result = py.detach(|| vm.run_trace(&mut check, program));
     match check.raised {
         Some(raised) => Err(raised),
@@ -732,12 +747,14 @@ impl PyVm {
     ///
     /// The GIL is released while the program runs. Called on the main
     /// thread, the run takes it back about every 100 ms to run Python's
-    /// signal handlers, so Ctrl-C raises `KeyboardInterrupt` here. A run
-    /// stopped that way stops between two instructions: every instruction
-    /// before it finished, control flow included, and the next did not
-    /// start. The stack, registers, outputs, `steps()`, `instructions()` and
-    /// `memory_used()` hold what that point left, as after a fault; the run
-    /// cannot be resumed, and `reset()` clears it for the next one.
+    /// signal handlers, so Ctrl-C raises `KeyboardInterrupt` here. On any
+    /// other thread it does not take the GIL back before the run ends, and
+    /// no signal stops it. A run stopped by a signal stops between two
+    /// instructions: every instruction before it finished, control flow
+    /// included, and the next did not start. The stack, registers, outputs,
+    /// `steps()`, `instructions()` and `memory_used()` hold what that point
+    /// left, as after a fault; the run cannot be resumed, and `reset()`
+    /// clears it for the next one.
     ///
     /// # Errors
     ///
