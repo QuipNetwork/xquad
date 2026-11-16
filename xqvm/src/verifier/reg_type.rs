@@ -27,7 +27,8 @@ use super::error::VerifierError;
 /// cannot be determined statically (e.g. written by `INPUT` or `LVAL`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RegType {
-    /// Register has never been written (default state).
+    /// Possibly unwritten on at least one path; the absorbing lattice bottom.
+    /// At program entry all registers start in this state.
     #[default]
     Unset,
     /// Holds an `i64` integer.

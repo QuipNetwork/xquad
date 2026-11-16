@@ -38,20 +38,20 @@ use crate::dataflow::lattice::Lattice;
 ///
 /// # Examples
 ///
-/// A forward constant-zero check (toy example):
+/// A forward zero-witness analysis (toy example):
 ///
 /// ```rust
 /// use xqvm::dataflow::{Analysis, Forward, Lattice};
 ///
 /// #[derive(Clone, PartialEq, Eq)]
-/// enum Zeroness { MaybeNonZero, DefinitelyZero }
+/// enum Zeroness { NoZeroSeen, ZeroSeen }
 ///
 /// impl Lattice for Zeroness {
-///     fn top() -> Self { Self::MaybeNonZero }
+///     fn top() -> Self { Self::NoZeroSeen }
 ///     fn meet(&self, other: &Self) -> Self {
 ///         match (self, other) {
-///             (Self::DefinitelyZero, Self::DefinitelyZero) => Self::DefinitelyZero,
-///             _ => Self::MaybeNonZero,
+///             (Self::NoZeroSeen, x) | (x, Self::NoZeroSeen) => x.clone(),
+///             _ => Self::ZeroSeen,
 ///         }
 ///     }
 /// }
@@ -63,7 +63,7 @@ use crate::dataflow::lattice::Lattice;
 ///     type Node  = u32;
 ///     type Dir   = Forward;
 ///
-///     fn boundary_value(&self) -> Zeroness { Zeroness::DefinitelyZero }
+///     fn boundary_value(&self) -> Zeroness { Zeroness::ZeroSeen }
 ///
 ///     fn transfer(&self, _node: &u32, input: &Zeroness) -> Zeroness {
 ///         input.clone()
@@ -81,7 +81,7 @@ pub trait Analysis {
     /// [`Backward`](crate::dataflow::Backward).
     type Dir: Direction;
 
-    /// The value injected at the boundary node before the fixed-point iteration.
+    /// The input supplied whenever the boundary node is evaluated.
     ///
     /// For forward analyses this seeds the CFG entry; for backward analyses the
     /// CFG exit.

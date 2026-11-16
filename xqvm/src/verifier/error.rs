@@ -19,14 +19,19 @@ use thiserror::Error;
 
 /// Errors produced by the pre-execution bytecode verifier.
 ///
-/// Each variant carries the byte offset of the offending instruction so that
-/// diagnostics can highlight the exact location in the bytecode stream.
+/// Bytecode errors carry their offending location. Analysis budget exhaustion
+/// instead indicates a broken internal convergence contract without one offset.
 #[derive(Debug, Error)]
 #[expect(
     missing_docs,
     reason = "error variants are documented via their #[error(...)] display strings"
 )]
 pub enum VerifierError {
+    /// A built-in analysis exceeded its proven deterministic work bound.
+    /// This indicates an analysis defect, not invalid user bytecode.
+    #[error("verifier analysis work budget exhausted")]
+    AnalysisBudgetExceeded,
+
     /// A jump instruction references a `TARGET` label id that does not exist
     /// in the program's jump table.
     #[error(
@@ -60,8 +65,8 @@ pub enum VerifierError {
     #[error("unknown opcode {byte:#04x} at byte {offset:#06x}")]
     BadOpcode { offset: usize, byte: u8 },
 
-    /// An instruction tried to read a register that has never been written.
-    #[error("register r{reg} read at byte {offset:#06x} before being written")]
+    /// A register read is not preceded by a write on every reachable path.
+    #[error("register r{reg} read at byte {offset:#06x} before being written on every path")]
     ReadUnsetRegister { offset: usize, reg: u8 },
 
     /// An instruction found a register holding the wrong type.
@@ -119,6 +124,7 @@ impl VerifierError {
     /// to match expected errors without coupling to the `Display` format.
     pub fn variant_name(&self) -> &'static str {
         match self {
+            Self::AnalysisBudgetExceeded => "AnalysisBudgetExceeded",
             Self::UndefinedJumpTarget { .. } => "UndefinedJumpTarget",
             Self::NoActiveLoop { .. } => "NoActiveLoop",
             Self::UnmatchedLoop { .. } => "UnmatchedLoop",

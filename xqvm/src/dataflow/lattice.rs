@@ -15,7 +15,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-/// A bounded join-semilattice over the data-flow value domain.
+/// A meet-semilattice with a greatest element over the data-flow value domain.
 ///
 /// Every data-flow value type must implement this trait.  The solver uses
 /// `top()` to initialise all nodes and `meet` to combine values arriving
@@ -30,8 +30,9 @@
 /// - **Idempotence**: `a.meet(a) == a`
 /// - **Identity**: `top().meet(a) == a`
 ///
-/// Violation of these laws will cause the worklist solver to diverge or
-/// produce incorrect results.
+/// Violation can exhaust the solver budget or produce incorrect results.
+/// Transfers must additionally be monotone and the caller must justify a
+/// finite visit bound.
 ///
 /// # Examples
 ///
@@ -61,8 +62,9 @@ pub trait Lattice: Eq + Clone {
 
     /// The meet (confluence) operator.
     ///
-    /// For a may-analysis this is the union (join / least upper bound).
-    /// For a must-analysis this is the intersection (greatest lower bound).
+    /// This is a greatest lower bound in the analysis order. A may-analysis
+    /// can use union under reverse inclusion; a must-analysis can use
+    /// intersection under inclusion.
     #[must_use]
     fn meet(&self, other: &Self) -> Self;
 }
