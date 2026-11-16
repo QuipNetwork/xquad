@@ -1115,9 +1115,8 @@ mod tests {
     //
     // The linear scan walks: 1 → JUMPI1 (depth 0) → PUSH1 (depth 1) → TARGET (1)
     // → POP (0) → HALT.  It misses that the taken path arrives with depth 0 != 1.
-    // The CFG analysis detects the mismatch (StackDepthMismatch), which is the
-    // root cause of what the linear scan would have eventually reported as
-    // StackUnderflow on the POP instruction.
+    // FIFO visits the taken path first and reports StackUnderflow on its POP.
+    // The fall-through height would also conflict at the join.
 
     #[test]
     fn cond_branch_depth_mismatch_caught() {
@@ -1133,7 +1132,6 @@ mod tests {
             .emit_halt();
         let p = b.build().unwrap();
         let err = check_stack_depth(&p).unwrap_err();
-        // StackDepthMismatch fires before StackUnderflow: depth 0 vs 1 at TARGET.
         // FIFO witnesses the local empty-stack pop before the conflicting edge.
         assert_eq!(err.variant_name(), "StackUnderflow");
     }
@@ -1676,14 +1674,23 @@ mod exact_height_tests {
         Program::new(code)
     }
 
-    fn controls() -> [Program; 4] {
-        // Independent reviewer parameter sets, then the negative-cycle shape
-        // and a quadratic main walk without any structured loops.
+    fn kimi_exact_spine() -> Program {
+        // Raw reviewer bytes, L=256/k=512/m=512. SHA-256:
+        // 3ffb4e71c2b6b99a3e41cc9e642302335f90611ae995160b63a41e45d6891522
+        let code = include_bytes!("../../tests/fixtures/kimi-spine-control.bin");
+        assert_eq!(code.len(), 5889);
+        Program::new(code.to_vec())
+    }
+
+    fn controls() -> [Program; 5] {
+        // Claude's spine; spine shape, L=256/k=512/m=512 parameters;
+        // negative-cycle and loop-free shapes; then Kimi's exact raw bytes.
         [
             spine(300, 550, 550),
             spine(256, 512, 512),
             negative_cycle_tail(),
             spine(0, 1024, 1024),
+            kimi_exact_spine(),
         ]
     }
 
