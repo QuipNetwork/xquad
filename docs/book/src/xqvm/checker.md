@@ -86,17 +86,13 @@ slot to a concrete type (`Int`, `VecInt`, `VecXqmx`, `Model`, `Sample`) or to
 `Any`; an instruction that reads a register is checked against what that
 instruction requires.
 
-At a join point -- two or more incoming control-flow paths -- the
-per-register meet is permissive: disagreeing types, including a register
-unset on one path and `Int` on the other, resolve to `Any` rather than an
-immediate error. That permissiveness avoids false positives for a register
-written on only one branch of a conditional; Phase 3 is what actually
-catches that case. Reading an `Unset` register is rejected, and so is a type
-mismatch, for example reading a `Model` register where an instruction
-requires `Int`.
+At a join point, a register unwritten on any incoming path remains
+possibly unset. Reading it is rejected. `Any` is the meet identity, while
+`Unset` is absorbing. This makes register propagation monotone and bounded.
+The standalone type-state phase now also catches partial writes across
+branches; the default pipeline already rejected them in the must-init phase.
 
-A join is held back from that permissiveness, because `Any` satisfies every
-requirement. Joining a model with a sample gives `model or sample`, and
+Joining a model with a sample gives `model or sample`, and
 joining the two vector types gives `vec<int> or vec<xqmx>`; each satisfies
 only what its two members have in common -- the grid operations and the
 linear coefficient trio for the first, `ITER` and `VECLEN` for the second.
@@ -123,11 +119,33 @@ A control-flow-based forward analysis using an AND-meet over a bitmap of
 which registers are definitely initialised. At program entry every register
 is un-written. At a join point, a register's bit is cleared unless every
 incoming path wrote it -- so a register written on only one branch of a
-conditional is flagged as possibly-unset at any read after the join, even
-though Phase 2's permissive meet let the same register pass its type check.
+conditional is flagged as possibly-unset at any read after the join, including
+when used independently of Phase 2.
 Unreachable blocks are skipped.
 
 Error: `ReadUnsetRegister`.
+
+## Migrating custom data-flow analyses
+
+`dataflow::solve` now takes a third argument, `max_visits`, and returns
+`Result<DataFlowResult<...>, SolveError>`. Supply a justified bound using
+checked arithmetic and handle `SolveError::BudgetExceeded`; do not retry
+without a bound. `N + H * E` visits suffice for N nodes, E edges and at most
+H strict output descents per node under a monotone transfer.
+
+All outputs start at top. The boundary value supplies the boundary input;
+its output is the result of its transfer. Backward results follow program
+order even when entry and exit refer to the same node.
+
+Exhaustive matches on `CheckerError` must handle `AnalysisBudgetExceeded`.
+Built-in analyses derive their bounds internally. Exhaustion reports an
+analysis defect and provides no partial facts or byte offset. The default
+pipeline can report a missing write earlier than before, changing diagnostic
+variant or offset on an invalid program. Standalone `RegisterTypePhase` now
+rejects reads after partial writes across branches.
+
+See the normative [analysis budget contract](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/CHECKER.md#deterministic-analysis-budgets)
+for the register order, bounds and cost limitations.
 
 ## Phase 4 -- stack depth
 

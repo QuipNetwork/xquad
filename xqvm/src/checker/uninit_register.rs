@@ -27,13 +27,13 @@ use super::phase::Phase;
 /// initialization state (`bool`).  A register is considered definitely
 /// initialized only if it is written on **every** path to the read site.
 ///
-/// This catches the case [`RegisterTypePhase`](super::register_type::RegisterTypePhase)
-/// misses: a register written on only one branch of a conditional, then read
-/// after the join.  The type-state pass uses a permissive `Any`-meet at join
-/// points; this pass uses AND-meet so partial initialization is flagged.
+/// This agrees with the initialization projection of
+/// [`RegisterTypePhase`](super::register_type::RegisterTypePhase), and can
+/// also be used independently in a custom pipeline.
 ///
-/// Unreachable blocks are skipped.  Only [`CheckerError::ReadUnsetRegister`]
-/// is emitted; type mismatches are handled by [`super::register_type::RegisterTypePhase`].
+/// Unreachable blocks are skipped. Missing writes emit
+/// [`CheckerError::ReadUnsetRegister`]; work budget exhaustion emits
+/// [`CheckerError::AnalysisBudgetExceeded`].
 pub struct UninitRegisterPhase;
 
 impl Phase for UninitRegisterPhase {

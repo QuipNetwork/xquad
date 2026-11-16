@@ -20,12 +20,10 @@
 //! The main entry point is [`check_uninit_registers`], which catches reads of
 //! registers that are not definitely initialized on all paths to the read site.
 //!
-//! This complements [`crate::dataflow::register`]: the type-state pass uses a
-//! permissive `Any`-meet so that registers written on only one branch of a
-//! conditional do not produce false positives at the join.  As a consequence,
-//! it misses the case where a register is genuinely uninitialized on the taken
-//! path.  This pass uses AND-meet instead, so a register must be written on
-//! **every** predecessor path to be considered initialized.
+//! This agrees with the initialization projection of
+//! [`crate::dataflow::register`]: a register must be written on **every**
+//! predecessor path to be considered initialized. It remains independently
+//! usable in custom pipelines.
 //!
 //! # Lattice
 //!
@@ -60,7 +58,7 @@ use crate::dataflow::analysis::Analysis;
 use crate::dataflow::bytecode::{BlockId, CfgContext, block_ranges, build_cfg};
 use crate::dataflow::direction::Forward;
 use crate::dataflow::lattice::Lattice;
-use crate::dataflow::solver::solve;
+use crate::dataflow::solver::{solve, visit_limit};
 
 // ---------------------------------------------------------------------------
 // InitValue lattice
@@ -225,7 +223,7 @@ pub(crate) fn check_uninit_registers_with_cfg(
         block_inits,
         reachable: cfg.reachable_nodes(),
     };
-    let result = solve(&analysis, cfg);
+    let result = solve(&analysis, cfg, visit_limit(cfg, 256)?)?;
 
     for &(block_start, block_end) in &ranges {
         let before = result
@@ -344,7 +342,7 @@ mod tests {
 
     // The key case this pass adds: register written on only the fall-through
     // path, then read after the join.  The type-state pass misses this because
-    // meet(Unset, Int) = Any (permissive).  This pass uses AND-meet:
+    // Both the type-state meet and this AND-meet preserve a missing write:
     // meet(false, true) = false, so the read is correctly flagged.
     //
     // Layout: JumpI1(0); STOW r0; TARGET(0): LOAD r0; HALT

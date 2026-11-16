@@ -120,12 +120,32 @@ types, `meet(meet(Model, Sample), Int)` is `Any` while
 `meet(Model, meet(Sample, Int))` is `Model`, and one branch of an unrelated
 type reopens the bypass the pair rows close.
 
-`Unset` is the exception: `meet(Unset, T) = Any`, which avoids false positives
-for a register written on only one branch of a conditional. That row is not a
-way back in, because the must-init pass (Phase 3) rejects every read of a
-register left unset on any path. Its cost is that the row is not associative,
-so a join mixing an unwritten branch with two related types can be rejected by
-either phase depending on edge order. Both outcomes reject.
+`Unset` is the absorbing bottom: `meet(Unset, T) = Unset`, including
+when `T` is `Any`. It means possibly unwritten on at least one incoming
+path. The descending cover relations over all ten values are:
+
+- `Any` covers `Int`, `Model`, `Sample`, `VecInt` and `VecXqmx`.
+- `Model` and `Sample` cover `Grid`.
+- `VecInt` and `VecXqmx` cover `AnyVec`.
+- `Int`, `Grid` and `AnyVec` cover `Conflict`.
+- `Conflict` covers `Unset`.
+
+The meet is the greatest lower bound in this order. Equal values stay
+unchanged; `Any` is identity; `Unset` absorbs; the two related families
+meet at their shared lower bound; all remaining initialized pairs share
+only `Conflict`. These cases cover every pair. In particular, associativity
+also holds for joins containing `Unset`.
+
+An individual register can descend strictly at most four times. A transfer
+replaces written coordinates with constants and carries all other coordinates
+unchanged, so it is monotone in this order. Dead blocks always return top.
+
+Register analysis could fail to terminate on some CFGs with the former
+`meet(Unset, T) = Any` rule. The absorbing rule also makes the standalone
+`RegisterTypePhase` stricter: a read after a partial write is rejected here.
+In the default pipeline the must-init phase already rejected such reads.
+Diagnostic phase, error variant and offset may change when a program has
+multiple errors; they are not compatibility guarantees between releases.
 
 Preconditions enforced:
 
@@ -159,10 +179,12 @@ value is `[0; 4]`; the lattice top is `[u64::MAX; 4]` (identity for AND-meet).
 At join points: `meet(a, b) = a & b`. A register written on only one branch
 has its bit cleared at the join, so subsequent reads are flagged.
 
-This phase complements Phase 2: Phase 2 uses a permissive `Any`-meet that
-prevents false positives for partial writes across branches; Phase 3 uses
-AND-meet specifically to catch reads after join points where at least one
-incoming path did not write the register.
+The initialization projection of Phase 2 maps `Unset` to false and every
+other type to true. It preserves meet (AND), entry, dead-block top, and
+all writes: `DROP` clears its bit and every other register write sets it.
+Both phases use the same CFG, reachability, block ranges and write effects.
+This phase therefore agrees on possible missing writes and remains available
+independently in custom pipelines.
 
 The same CFG reachability rule applies here. Dead blocks contribute the
 identity without applying writes and are skipped by replay. Reachable blocks
@@ -261,10 +283,48 @@ Errors: `LoopStackImbalance`, `StackDepthMismatch`, `StackUnderflow`,
 
 ---
 
+## Deterministic analysis budgets
+
+The generic Rust `dataflow::solve(analysis, cfg, max_visits)` returns
+`Result<DataFlowResult<...>, SolveError>`. Every output starts at lattice
+top, including the boundary node. The boundary value seeds only that node's
+input before its transfer runs. This applies in both flow directions.
+
+For N nodes, E edges and at most H strict descents per output, the FIFO
+worklist visits at most `N + H * E` nodes: N initial visits, then at most H
+enqueue attempts per edge. Duplicate pending nodes are suppressed. Register
+analysis uses H = 4 * 256 = 1024; must-init uses H = 256. All bound arithmetic
+is checked. Bytecode CFGs have at most two outgoing edges per node, so at
+N = 2048 their respective limits are 4,196,352 and 1,050,624 visits.
+
+Each stack-depth walk has its own `N * (3 * N + 3)` visit limit, independent
+of initial depth. There is one main walk plus one walk per structured loop;
+these costs must be added. The depth algorithm resets witnesses at fixed
+outputs, accelerates decreasing cycles and preserves absorbing underflow.
+
+A visit includes transfer work and incoming-edge folds; materializing the
+result also folds incoming edges. These are visit bounds, not linear-time
+or wall-clock guarantees. Register operations process 256 coordinates, and
+loop-body walks can make total depth work larger than a single walk.
+
+Exhaustion returns `CheckerError::AnalysisBudgetExceeded` without partial
+facts. It indicates an analysis contract or bound defect, not a valid verdict
+about the program; callers must refuse admission and investigate. No retry
+through an unbounded solver is provided. Custom analyses must supply their
+own justified bound; a transfer callback itself must also terminate.
+
+The Rust API change is breaking: callers add the visit limit and handle
+`SolveError`; exhaustive matches on `CheckerError` add the new variant.
+Neither `Analysis` nor `Lattice` requires a new method. `RegType` has no new
+variant, but its `Unset` meet and standalone phase behavior change as above.
+
+---
+
 ## Error Variants
 
 | Variant | Phase | Description |
 |---------|-------|-------------|
+| `AnalysisBudgetExceeded` | 2--4 | Derived analysis work bound exhausted; no byte offset |
 | `TruncatedInstruction` | 1a | Instruction stream ends mid-operand |
 | `BadOpcode` | 1a | Opcode byte does not map to a known instruction |
 | `UndefinedJumpTarget` | 1b | Jump references label id >= target count |

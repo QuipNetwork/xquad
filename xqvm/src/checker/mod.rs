@@ -43,7 +43,7 @@
 //! `scan`. The remaining phases each build a control-flow graph and run a
 //! forward worklist analysis:
 //!
-//! * [`RegisterTypePhase`] -- permissive Any-meet at join points; catches
+//! * [`RegisterTypePhase`] -- greatest-lower-bound meet with absorbing Unset; catches
 //!   read-before-write and type mismatches on all CFG paths.
 //! * [`UninitRegisterPhase`] -- AND-meet at join points; flags registers that
 //!   are definitely unset on at least one incoming path.
