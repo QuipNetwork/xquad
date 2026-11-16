@@ -16,13 +16,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! QUIP-17 handover stack-cycle and error-precedence regressions.
+//!
+//! Work bounds are pinned by the private unit tests
+//! `main_and_loop_body_depth_walks_bound_visits_independently_of_depth`,
+//! `auditor_main_cycle_has_bounded_visits`,
+//! `auditor_loop_cycle_main_walk_has_bounded_visits`, and
+//! `auditor_loop_body_cycle_has_bounded_visits`.
 
 #![expect(
     unused_results,
     reason = "handover builder chains intentionally discard fluent results"
 )]
 
-use std::time::{Duration, Instant};
 use xqvm::{Instruction, InstructionBuilder, checker, dataflow::check_stack_depth};
 
 #[expect(
@@ -102,14 +107,8 @@ fn vv_poc_cycle_rejection_is_bounded_without_losing_loop_priority() {
     b.emit_pop().emit_jump(cycle).emit_halt();
     let program = b.build().unwrap();
     assert_eq!(program.encode().len(), 17_020);
-    let started = Instant::now();
     let result = checker::check(&program);
-    let elapsed = started.elapsed();
     assert!(result.is_err());
-    assert!(
-        elapsed <= Duration::from_secs(2),
-        "cycle checking took {elapsed:?}"
-    );
 }
 
 #[test]
@@ -129,12 +128,7 @@ fn internal_loop_body_cycle_is_bounded_too() {
     }
     b.emit_pop().emit_jump(cycle).emit_next().emit_halt();
     let program = b.build().unwrap();
-    let started = Instant::now();
     assert!(checker::check(&program).is_err());
-    assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "loop-body walk exceeded the timeout"
-    );
 }
 
 #[test]

@@ -520,3 +520,54 @@ mod tests {
         assert!(check_register_types(&p).is_ok());
     }
 }
+
+// QUIP-02/16 auditor shape; copied unchanged into the instrumented base control.
+#[cfg(test)]
+mod audit_work_bounds {
+    use super::*;
+    use crate::dataflow::solver::test_work;
+    use crate::{Instruction, InstructionBuilder, Register};
+
+    #[test]
+    fn all_register_cycle_obeys_lattice_visit_bound() {
+        let mut builder = InstructionBuilder::new();
+        let _ = builder.emit(Instruction::Nop {});
+        let cycle = builder.label();
+        let _ = builder.place(cycle).unwrap().emit(Instruction::Target {});
+        for slot in 0..=u8::MAX {
+            let _ = builder.emit(Instruction::Bsmx {
+                reg: Register(slot),
+            });
+        }
+        let _ = builder.emit_jump(cycle).emit_halt();
+        let original = builder.build().unwrap();
+        let vector = xqasm::assemble_source(include_str!(
+            "../../tests/vectors/control-flow/audit_all_registers_cycle/program.xqasm"
+        ))
+        .unwrap();
+        for program in [original, Program::new(vector.code().to_vec())] {
+            let ctx = build_cfg(program.code(), program.jump_table()).unwrap();
+            // This shape has at most one outgoing edge per node. Its OUTPUT
+            // facts are restricted to Any -> Sample at written registers;
+            // the boundary's Unset output is fixed and dead outputs stay Any.
+            // Thus each of 256 coordinates changes at most once: product
+            // lattice height H = 1 + 256. With N initial visits and at most
+            // one enqueue per changed output, visits <= N + 256*N = H*N.
+            // This is a bound for this restricted lattice, not a claim that
+            // the full RegType domain (including Unset joins) is monotone.
+            assert!(
+                ctx.cfg
+                    .nodes()
+                    .iter()
+                    .all(|node| ctx.cfg.successors(node).len() <= 1)
+            );
+            let height = RegTypeValue::top().0.len().saturating_add(1);
+            let limit = height.saturating_mul(ctx.cfg.nodes().len());
+            let (result, visits) =
+                test_work::measure(limit, || check_register_types_with_cfg(&program, &ctx.cfg));
+            assert!(visits > 0 && visits <= limit);
+            // Type analysis converges; the whole checker rejects stack use.
+            assert!(result.is_ok());
+        }
+    }
+}

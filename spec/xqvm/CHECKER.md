@@ -190,6 +190,9 @@ only its entry and exit. Before the first `SCLR`, the peak is relative to
 the incoming depth; after a clear it is absolute. Later pops or clears do
 not erase either peak. A transient depth above 8,192 is rejected even if
 the block exits empty; exactly 8,192 remains valid.
+Using the min-meet entry for this peak is sound because the preceding
+`StackDepthMismatch` check requires equal depths on all reachable incoming
+edges, including loop-body joins and the implicit program-entry edge.
 
 ### Check order
 
