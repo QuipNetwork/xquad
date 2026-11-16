@@ -323,10 +323,55 @@ input before its transfer runs. This applies in both flow directions.
 
 For N nodes, E edges and at most H strict descents per output, the FIFO
 worklist visits at most `N + H * E` nodes: N initial visits, then at most H
-enqueue attempts per edge. Duplicate pending nodes are suppressed. Register
-analysis uses H = 4 * 256 = 1024; must-init uses H = 256. All bound arithmetic
-is checked. Bytecode CFGs have at most two outgoing edges per node, so at
-N = 2048 their respective limits are 4,196,352 and 1,050,624 visits.
+enqueue attempts per edge. Duplicate pending nodes are suppressed. This is
+the public generic solver's scheduling bound, not the built-in sparse
+algorithm's whole-work bound. All bound arithmetic is checked.
+
+### Sparse built-in register and must-init propagation
+
+Each block's register transfer independently overwrites some coordinates
+with constants and leaves the rest unchanged. Decode the writes once and
+retain the last write to each coordinate for transfer purposes; replay still
+checks every original instruction in order. Reachability is computed
+separately, and dead blocks never apply writes. A reachable all-top block
+still applies its constant writes.
+
+The built-ins cache incoming facts and propagate only changed output
+coordinates. `meet(old contribution, new contribution) = new contribution`
+when outputs descend, so meeting a new contribution into the cached input
+is exactly the same as folding all current predecessors. The boundary's
+incoming facts remain constant; incoming back-edges never overwrite them.
+A written coordinate has a fixed output and needs no transfer on later
+input changes. An unwritten coordinate copies its changed input with
+constant scalar work. The generic `Analysis`, `Lattice` and `solve` APIs and
+their backward behavior are unchanged.
+
+Dense indices follow CFG insertion order. Initialise reachable nodes in that
+order and coordinates from 0 through 255. Outputs start at top and only
+strict descents enter a FIFO of `(node, coordinate)` pairs. At most one pair
+is pending for a given coordinate; a pending pair reads the latest output.
+Forward changed values to successors in CFG insertion order. Final error
+replay remains in ascending byte offset and instruction order.
+
+A register coordinate descends at most four times; an initialization bit
+clears at most once. With R = 256, register propagation performs at most
+`4 * R * N` constant-work coordinate events and `4 * R * E` coordinate edge
+updates. Must-init uses at most `R * N` events and `R * E` bit updates; its
+AND meet is applied only to a changed bit. These bounds include initial
+output descents and hold for coalesced pending updates as well. Separate
+checked budgets enforce event and edge-update ceilings. There is no full
+256-coordinate transfer or predecessor refold per event.
+
+At N = 2048 and E = 4096, the register ceilings are 2,097,152 events and
+4,194,304 edge updates; must-init ceilings are 524,288 events and 1,048,576
+bit updates. Initialising and materialising facts adds `O(R * N)` work,
+write extraction/replay adds `O(B)`, and dense graph indexing adds
+`O((N + E) log N)`. No term multiplies edge updates by R again or rescans a
+long block on each incoming change. Dictionary accesses in CFG/context
+construction remain separate from these exact scalar-operation counts;
+these are not reference-machine weight or wall-clock guarantees.
+
+### Exact-height depth work
 
 The exact-height checker has a node budget of N and an edge budget of E.
 It assigns each reachable node once and checks each outgoing edge once, so

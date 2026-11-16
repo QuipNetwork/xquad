@@ -58,7 +58,6 @@ use crate::dataflow::analysis::Analysis;
 use crate::dataflow::bytecode::{BlockId, CfgContext, block_ranges, build_cfg};
 use crate::dataflow::direction::Forward;
 use crate::dataflow::lattice::Lattice;
-use crate::dataflow::solver::{solve, visit_limit};
 
 // ---------------------------------------------------------------------------
 // InitValue lattice
@@ -79,13 +78,6 @@ use crate::dataflow::solver::{solve, visit_limit};
 pub struct InitValue([u64; 4]);
 
 impl InitValue {
-    /// Whether register `slot` is definitely initialized.
-    pub(crate) fn is_init(&self, slot: u8) -> bool {
-        let word = usize::from(slot) / 64;
-        let bit = u32::from(slot & 63);
-        self.0.get(word).is_some_and(|&w| (w >> bit) & 1 == 1)
-    }
-
     /// Mark register `slot` as definitely initialized.
     pub(crate) fn set_init(&mut self, slot: u8) {
         let word = usize::from(slot) / 64;
@@ -223,13 +215,10 @@ pub(crate) fn check_uninit_registers_with_cfg(
         block_inits,
         reachable: cfg.reachable_nodes(),
     };
-    let result = solve(&analysis, cfg, visit_limit(cfg, 256)?)?;
+    let result = super::sparse::solve(cfg, &analysis.block_inits)?;
 
     for &(block_start, block_end) in &ranges {
-        let before = result
-            .before(&block_start)
-            .cloned()
-            .unwrap_or_else(InitValue::top);
+        let before = result.before(block_start).copied().unwrap_or([true; 256]);
 
         if !analysis.reachable.contains(&block_start) {
             continue;
@@ -239,7 +228,7 @@ pub(crate) fn check_uninit_registers_with_cfg(
         // then update it incrementally as writes are encountered.
         let mut regs = [RegType::Any; 256];
         for slot in 0u8..=255 {
-            if !before.is_init(slot)
+            if !before.get(usize::from(slot)).copied().unwrap_or(true)
                 && let Some(e) = regs.get_mut(usize::from(slot))
             {
                 *e = RegType::Unset;

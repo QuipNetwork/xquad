@@ -99,6 +99,7 @@ mod indexed;
 mod lattice;
 pub mod register;
 mod solver;
+mod sparse;
 pub mod uninit;
 
 #[cfg(test)]
