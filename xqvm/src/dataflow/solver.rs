@@ -116,6 +116,8 @@ where
     // Fixed-point iteration.
     // ------------------------------------------------------------------
     while let Some(node) = worklist.pop_front() {
+        #[cfg(test)]
+        test_work::visit();
         let _ = in_worklist.remove(&node);
 
         // Compute the input: meet of all incoming states.
@@ -189,4 +191,42 @@ where
     }
 
     DataFlowResult { before, after }
+}
+
+/// Scoped, thread-local instrumentation of the actual production worklists.
+/// Absent from non-test builds, including the public solver signature.
+#[cfg(test)]
+pub(super) mod test_work {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static BUDGET: Cell<Option<(usize, usize)>> = const { Cell::new(None) };
+    }
+
+    struct Reset;
+
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            BUDGET.set(None);
+        }
+    }
+
+    pub(in crate::dataflow) fn visit() {
+        if let Some((limit, visits)) = BUDGET.get() {
+            assert!(visits < limit, "worklist visit budget exceeded: {limit}");
+            BUDGET.set(Some((limit, visits.saturating_add(1))));
+        }
+    }
+
+    pub(in crate::dataflow) fn measure<R>(limit: usize, run: impl FnOnce() -> R) -> (R, usize) {
+        assert!(BUDGET.get().is_none(), "worklist budgets must not nest");
+        BUDGET.set(Some((limit, 0)));
+        let _reset = Reset;
+        let result = run();
+        let visits = BUDGET
+            .get()
+            .expect("budget stays installed until scope exit")
+            .1;
+        (result, visits)
+    }
 }

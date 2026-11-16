@@ -434,14 +434,7 @@ fn simulate_body(
     effects: &HashMap<BlockId, BlockEffect>,
     cfg: &Cfg<BlockId>,
 ) -> DepthValue {
-    let result = walk_depths(
-        effects,
-        cfg,
-        body_start,
-        entry,
-        Some(after_next),
-        &mut || {},
-    );
+    let result = walk_depths(effects, cfg, body_start, entry, Some(after_next));
     let mut exit_depth = DepthValue::Top;
     for block in cfg.nodes() {
         if cfg.successors(block).contains(&body_start) {
@@ -616,7 +609,6 @@ fn walk_depths(
     boundary: BlockId,
     entry: DepthValue,
     skipped: Option<BlockId>,
-    on_visit: &mut impl FnMut(),
 ) -> DataFlowResult<BlockId, DepthValue> {
     let mut before: HashMap<_, _> = cfg
         .nodes()
@@ -631,7 +623,8 @@ fn walk_depths(
     pending.push_back(boundary);
     let _ = queued.insert(boundary);
     while let Some(node) = pending.pop_front() {
-        on_visit();
+        #[cfg(test)]
+        super::solver::test_work::visit();
         let _ = queued.remove(&node);
         let input = before.get(&node).cloned().unwrap_or(DepthValue::Top);
         let effect = effects.get(&node);
@@ -679,7 +672,6 @@ fn solve_stack_depth(
         *cfg.entry(),
         DepthValue::Known(0),
         None,
-        &mut || {},
     )
 }
 
@@ -860,6 +852,23 @@ fn check_depth_bounds(
             _ => {}
         }
         if let (DepthValue::Known(entry), Some(peak)) = (&before, peaks.get(&node)) {
+            // The sole caller runs the complete StackDepthMismatch scan first,
+            // including loop-body nodes. simulate_body never checks peaks.
+            // Equal reachable incoming depths make this min-meet entry exact,
+            // so adding the relative peak also bounds every incoming path.
+            debug_assert!(
+                cfg.predecessors(&node).iter().all(|predecessor| {
+                    match result.after(predecessor) {
+                        Some(DepthValue::Known(depth)) => depth == entry,
+                        _ => true,
+                    }
+                }),
+                "peak checking requires equal-depth joins"
+            );
+            debug_assert!(
+                node != *cfg.entry() || *entry == 0,
+                "peak checking includes the implicit program-entry edge"
+            );
             let depth = entry.saturating_add(peak.relative).max(peak.absolute);
             if depth > STACK_LIMIT {
                 return Err(VerifierError::StackOverflowRisk {
@@ -1253,10 +1262,10 @@ mod tests {
                 (0, DepthValue::Known(0), None),
                 (1, DepthValue::Known(initial), Some(5)),
             ] {
-                let mut visits = 0usize;
-                let result = walk_depths(&effects, &cfg, root, entry, skipped, &mut || {
-                    visits = visits.saturating_add(1);
-                });
+                let (result, visits) =
+                    super::super::solver::test_work::measure(4 * cfg.nodes().len(), || {
+                        walk_depths(&effects, &cfg, root, entry, skipped)
+                    });
                 assert!(
                     visits <= 4 * cfg.nodes().len(),
                     "depth={initial}, visits={visits}"
@@ -1309,5 +1318,89 @@ mod tests {
                 assert_eq!(new.after, old.after, "shape={shape}, effects={effects:?}");
             }
         }
+    }
+}
+
+// QUIP-17 auditor shapes; copied unchanged into the instrumented base control.
+#[cfg(test)]
+mod audit_work_bounds {
+    use super::*;
+    use crate::dataflow::solver::test_work;
+    use crate::{Instruction, InstructionBuilder};
+
+    fn auditor_cycle(in_loop: bool) -> Program {
+        let mut builder = InstructionBuilder::new();
+        for _ in 0..8_000 {
+            let _ = builder.emit_push(1);
+        }
+        if in_loop {
+            let _ = builder
+                .emit_push(0)
+                .emit_push(1)
+                .emit_range()
+                .emit(Instruction::Nop {});
+        }
+        let cycle = builder.label();
+        let _ = builder.place(cycle).unwrap();
+        for _ in 0..1_000 {
+            let _ = builder.emit(Instruction::Target {});
+        }
+        let _ = builder.emit_pop().emit_jump(cycle);
+        if in_loop {
+            let _ = builder.emit_next();
+        }
+        let _ = builder.emit_halt();
+        builder.build().unwrap()
+    }
+
+    fn assert_auditor_main_bound(in_loop: bool) {
+        let program = auditor_cycle(in_loop);
+        if !in_loop {
+            assert_eq!(program.encode().len(), 17_020);
+        }
+        let ctx = build_cfg(program.code(), program.jump_table()).unwrap();
+        let analysis = StackDepthAnalysis {
+            effects: &ctx.effects,
+        };
+        // Same four-visits-per-node ceiling as the synthetic regression:
+        // initial propagation, cycle witness, underflow, and draining.
+        // Neither the 8,000-entry depth nor the 1,000-node cycle grants
+        // an extra factor of work. Budget failure is synchronous.
+        let limit = ctx.cfg.nodes().len().saturating_mul(4);
+        let (result, visits) = test_work::measure(limit, || solve_stack_depth(&analysis, &ctx.cfg));
+        assert!(visits > 0 && visits <= limit);
+        assert!(result.after.values().any(|v| *v == DepthValue::Underflow));
+    }
+
+    #[test]
+    fn auditor_main_cycle_has_bounded_visits() {
+        assert_auditor_main_bound(false);
+    }
+
+    #[test]
+    fn auditor_loop_cycle_main_walk_has_bounded_visits() {
+        assert_auditor_main_bound(true);
+    }
+
+    #[test]
+    fn auditor_loop_body_cycle_has_bounded_visits() {
+        let program = auditor_cycle(true);
+        let ctx = build_cfg(program.code(), program.jump_table()).unwrap();
+        let region = ctx.loop_regions.first().unwrap();
+        let entry = apply_effect(DepthValue::Known(0), ctx.effects.get(&region.opener_block));
+        assert_eq!(entry, DepthValue::Known(8_000));
+        let limit = ctx.cfg.nodes().len().saturating_mul(4);
+        let (exit, visits) = test_work::measure(limit, || {
+            simulate_body(
+                region.body_start,
+                entry,
+                region.after_next,
+                &ctx.effects,
+                &ctx.cfg,
+            )
+        });
+        assert!(visits > 0 && visits <= limit);
+        // The internal unconditional cycle cannot reach the structured NEXT.
+        assert_eq!(exit, DepthValue::Top);
     }
 }

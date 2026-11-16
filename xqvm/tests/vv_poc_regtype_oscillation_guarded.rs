@@ -15,14 +15,17 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! QUIP-02 guarded register-type convergence regressions.
+//! QUIP-02/16 register-type convergence regressions.
+//!
+//! The work bound is pinned by the private unit test
+//! `all_register_cycle_obeys_lattice_visit_bound`, which instruments the
+//! production solver with a synchronous, test-only iteration ceiling.
 
 #![expect(
     clippy::unwrap_used,
     reason = "test setup and expected rejection assertions"
 )]
 
-use std::{sync::mpsc, time::Duration};
 use xqvm::{Instruction, InstructionBuilder, Program, Register, verifier};
 
 fn cyclic_program(registers: u16) -> Program {
@@ -53,18 +56,6 @@ fn all_registers_written_returns() {
         "vectors/control-flow/audit_all_registers_cycle/program.xqasm"
     ))
     .unwrap();
-    let (sender, receiver) = mpsc::channel();
-    let _ = std::thread::spawn(move || {
-        let _ = sender.send((verifier::verify(&program), verifier::verify(&vector)));
-    });
-    match receiver.recv_timeout(Duration::from_secs(2)) {
-        Ok((original, vector)) => {
-            assert!(original.is_err());
-            assert!(vector.is_err());
-        }
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            panic!("register-type solver did not terminate");
-        }
-        Err(mpsc::RecvTimeoutError::Disconnected) => panic!("verifier worker disconnected"),
-    }
+    assert!(verifier::verify(&program).is_err());
+    assert!(verifier::verify(&vector).is_err());
 }
