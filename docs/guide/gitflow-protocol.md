@@ -198,7 +198,9 @@ happens. Pre-freeze snapshots are what betas are for.
 
 1. Cut `release/vX.Y.Z` from its line -- `main` for a patch, `dev` for a minor.
    The source line freezes.
-2. Set the version and regenerate the lockfiles:
+2. Push it. `release:prepare` sets the version, regenerates the lockfiles,
+   pushes `chore: bump workspace to X.Y.Z`, and opens the draft release merge
+   request into `main`. A manual bump still works, and CI then skips its own:
 
    ```sh
    make set-version VERSION=X.Y.Z
@@ -211,8 +213,8 @@ happens. Pre-freeze snapshots are what betas are for.
    throwaway branch off the release branch, the version set to `X.Y.Z-rcN`,
    the tag, and the branch discarded. The release branch stays at `X.Y.Z`.
    Only fixes land on it; a feature arriving here is the rule being broken.
-4. Open the merge request into `main` with the `release` template and merge it
-   without squashing. `release:auto-tag` pushes `vX.Y.Z` and the tag pipeline
+4. Merge the release merge request `release:prepare` opened, without
+   squashing. `release:auto-tag` pushes `vX.Y.Z` and the tag pipeline
    publishes.
 5. Reopen `main` at the next patch `-dev` version, by pushing the bump
    straight to `main`:
