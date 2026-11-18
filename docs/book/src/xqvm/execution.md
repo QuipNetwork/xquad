@@ -143,6 +143,14 @@ Two built-in tracer implementations are provided:
 When tracing is disabled (`NoopTracer`), the tracer code is eliminated by dead
 code optimisation, adding zero overhead to execution.
 
+A tracer can also ask to be polled between instructions. Its `POLL_INTERVAL`
+names a number of metered steps, and the VM calls its `poll` method each time
+that many have been charged, before the next instruction is charged. An error
+from `poll` stops the run with `TraceFailed`; the Python bindings stop a run on
+Ctrl-C this way. The poll boundary shares the step budget's comparison, so the
+instructions between two polls cost what they cost without one. The default
+interval, `0`, never polls.
+
 ## Error Handling
 
 Runtime errors carry the byte offset (`pos`) of the faulting instruction,

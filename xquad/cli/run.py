@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import signal
 import threading
@@ -61,6 +62,21 @@ def _calldata(ctx: click.Context, param: click.Parameter, value: tuple[str, ...]
     if out_of_range := [n for n in ints if n not in _I64]:
         raise click.BadParameter(f"{out_of_range[0]} does not fit in a 64-bit signed integer")
     return ints
+
+
+def _die_of_sigint() -> None:
+    """End the process by SIGINT, as an uncaught Ctrl-C ends a Python script.
+
+    Click would report the interrupt as "Aborted!" and exit status 1, which
+    the command's exit codes reserve for a run that failed; a calling shell
+    loop or make only stops when its child died of the signal. Returns where
+    that cannot be done, off the main thread or off POSIX, and the caller
+    re-raises the interrupt.
+    """
+    if os.name != "posix" or threading.current_thread() is not threading.main_thread():
+        return
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    os.kill(os.getpid(), signal.SIGINT)
 
 
 @click.command()
@@ -140,23 +156,15 @@ def run(
         vm.set_step_limit(step_limit)
     if memory_limit is not None:
         vm.set_memory_limit(memory_limit)
-    # The VM runs with the GIL released and never returns to Python's SIGINT handler, so Ctrl-C
-    # would be ignored until the run ended; the default action kills the process, as xqcli did.
-    # Only Python's own handler is swapped: an inherited ignore stays, and off the main thread
-    # signal.signal would raise.
-    sigint = signal.getsignal(signal.SIGINT)
-    swap = sigint is signal.default_int_handler and threading.current_thread() is threading.main_thread()
-    if swap:
-        signal.signal(signal.SIGINT, signal.SIG_DFL)
     try:
         vm.run(bytecode, trace=(trace_format or "text") if trace else None, trace_file=trace_file)
     except OSError as e:
         raise click.ClickException(str(e)) from e
     except RuntimeError as e:
         raise click.ClickException(f"run failed: {e}") from e
-    finally:
-        if swap:
-            signal.signal(signal.SIGINT, sigint)
+    except KeyboardInterrupt:
+        _die_of_sigint()
+        raise
 
     slots = [(i, v) for i, v in enumerate(vm.outputs_debug()) if v is not None]
     if slots:
