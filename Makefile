@@ -623,7 +623,9 @@ test-miri: deps-miri
 # `test:quip` job (.gitlab/ci/test.yml). This job runs everywhere, so it must
 # deselect them or they would run unconfigured in CI.
 # The real quip-cpu-sa binary tests (quip_cpu) are deselected too; run them on
-# their own with `-m quip_cpu` and XQSA_QUIP_CPU_SA set.
+# their own with `-m quip_cpu` and XQSA_QUIP_CPU_SA set. The GPU parity suite
+# (xqsa/tests/test_gpu_parity.py) runs under `-m metal` or `-m cuda` and needs
+# XQSA_QUIP_<METAL|CUDA>_<SA|GIBBS|MSA> naming each binary; unset, it skips.
 test-py: deps-py
 	uv run --no-sync pytest xqcp/tests xqsa/tests xquad/tests scripts/tests -m "not cuda and not qpu and not metal and not quip and not quip_cpu"
 

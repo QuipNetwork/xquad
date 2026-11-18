@@ -25,6 +25,7 @@ sent. The ``quip_cpu`` tests run the real quip-cpu-sa binary named by
 
 from __future__ import annotations
 
+import inspect
 import itertools
 import json
 import os
@@ -43,7 +44,7 @@ from xqsa.errors import (
     SolverProtocolError,
     SolverUnavailableError,
 )
-from xqsa.solvers import SolverCPU
+from xqsa.solvers import SolverCPU, SolverGPU
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the stub binary relies on a shebang")
 
@@ -197,6 +198,69 @@ class TestConstruction:
         with pytest.raises(SolverUnavailableError, match="cannot start") as excinfo:
             BinaryImplementation(tmp_path / "absent")
         assert excinfo.value.exit_code is None
+
+
+class TestSolverGPUBinary:
+    """SolverGPU._binary, the private GPU constructor on a CUDA or Metal binary (QUI-1648)."""
+
+    @pytest.mark.parametrize("engine", ["cuda", "metal"])
+    @pytest.mark.parametrize("algorithm", ["sa", "gibbs", "msa"])
+    def test_records_engine_and_algorithm(self, tmp_path: Path, engine: str, algorithm: str) -> None:
+        caps = QUIP_CPU_SA_CAPS | {"backend": engine, "algorithm": algorithm}
+        solver = SolverGPU._binary(make_stub(tmp_path, caps=caps), engine=engine, algorithm=algorithm, num_reads=4)
+        result = solver.solve(_model())
+        assert result.metadata["params"]["engine"] == engine
+        assert result.metadata["params"]["algorithm"] == algorithm
+        assert result.metadata["reads"] == 4
+        assert result.energy == _model().energy(result.sample)
+
+    @pytest.mark.parametrize(("engine", "schedule"), [("cuda", "linear"), ("metal", "geometric")])
+    def test_schedule_defaults_per_engine(self, tmp_path: Path, engine: str, schedule: str) -> None:
+        caps = QUIP_CPU_SA_CAPS | {"backend": engine}
+        result = SolverGPU._binary(make_stub(tmp_path, caps=caps), engine=engine).solve(_model())
+        assert result.metadata["params"]["beta_schedule_type"] == schedule
+        assert _request(tmp_path).get("beta_schedule_type", "geometric") == schedule
+
+    def test_schedule_defaults_match_the_kernels(self) -> None:
+        """The binary path's defaults are the in-process kernels', checked without a GPU."""
+        from xqsa.inprocess.cuda import InProcessCuda
+        from xqsa.inprocess.metal import InProcessMetal
+        from xqsa.solvers import _GPU_DEFAULT_SCHEDULE
+
+        for engine, kernel in (("cuda", InProcessCuda), ("metal", InProcessMetal)):
+            default = inspect.signature(kernel.__init__).parameters["beta_schedule_type"].default
+            assert _GPU_DEFAULT_SCHEDULE[engine] == default
+
+    def test_linear_without_the_feature_is_refused_at_construction(self, tmp_path: Path) -> None:
+        caps = QUIP_CPU_SA_CAPS | {"backend": "cuda", "features": ["streaming"]}
+        with pytest.raises(SolverUnavailableError, match="does not advertise linear-schedule"):
+            SolverGPU._binary(make_stub(tmp_path, caps=caps), engine="cuda")
+        assert SolverGPU._binary(make_stub(tmp_path, caps=caps), engine="cuda", beta_schedule_type="geometric")
+
+    def test_schedule_default_can_be_overridden(self, tmp_path: Path) -> None:
+        caps = QUIP_CPU_SA_CAPS | {"backend": "cuda"}
+        solver = SolverGPU._binary(make_stub(tmp_path, caps=caps), engine="cuda", beta_schedule_type="geometric")
+        solver.solve(_model())
+        assert "beta_schedule_type" not in _request(tmp_path)
+
+    def test_backend_must_match_engine(self, tmp_path: Path) -> None:
+        caps = QUIP_CPU_SA_CAPS | {"backend": "cuda"}
+        with pytest.raises(SolverUnavailableError, match="runs backend 'cuda', not engine 'metal'"):
+            SolverGPU._binary(make_stub(tmp_path, caps=caps), engine="metal")
+
+    def test_missing_backend_is_a_mismatch(self, tmp_path: Path) -> None:
+        caps = {k: v for k, v in QUIP_CPU_SA_CAPS.items() if k != "backend"}
+        with pytest.raises(SolverUnavailableError, match="runs backend None"):
+            SolverGPU._binary(make_stub(tmp_path, caps=caps), engine="metal")
+
+    def test_unknown_engine_is_refused_before_the_binary_starts(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="Unsupported engine 'rocm'"):
+            SolverGPU._binary(tmp_path / "absent", engine="rocm")
+
+    def test_algorithm_must_match_the_binary(self, tmp_path: Path) -> None:
+        caps = QUIP_CPU_SA_CAPS | {"backend": "metal"}
+        with pytest.raises(SolverUnavailableError, match="runs algorithm 'sa', not 'gibbs'"):
+            SolverGPU._binary(make_stub(tmp_path, caps=caps), engine="metal", algorithm="gibbs")
 
 
 class TestWire:

@@ -47,9 +47,16 @@ from functools import partial
 from typing import Any
 
 from .binary import BinaryImplementation
+from .errors import SolverUnavailableError
 from .inprocess.cpu import InProcessCPU
 from .quip import SolverQuip
 from .solver import Implementation, Solver
+
+# SolverGPU's engines, which are also the solver-core backend names of their binaries.
+_GPU_ENGINES = ("cuda", "metal")
+# Each engine's default beta schedule (spec/xqsa/SOLVERS.md). CUDA's linear
+# default reproduces its historical in-kernel ramp.
+_GPU_DEFAULT_SCHEDULE = {"cuda": "linear", "metal": "geometric"}
 
 
 class SolverCPU(Solver):
@@ -118,8 +125,38 @@ class SolverGPU(Solver):
         elif engine == "metal":
             from .inprocess.metal import InProcessMetal as impl
         else:
-            raise ValueError(f"Unsupported engine {engine!r}. Supported: ['cuda', 'metal']")
+            raise ValueError(f"Unsupported engine {engine!r}. Supported: {list(_GPU_ENGINES)}")
         super().__init__(impl(algorithm=algorithm, **params), engine=engine, algorithm=algorithm)
+
+    @classmethod
+    def _binary(cls, path: str | os.PathLike[str], *, engine: str, algorithm: str = "sa", **params: Any) -> SolverGPU:
+        """Build a SolverGPU on a CUDA or Metal solver-core binary. Private: tests only until QUI-1648.
+
+        ``beta_schedule_type`` defaults per engine as the in-process kernels
+        do: ``"linear"`` on CUDA, ``"geometric"`` on Metal.
+
+        Raises:
+            ValueError: if ``engine`` is not supported, before the binary is started.
+            SolverUnavailableError: if the binary is unusable, its advertised
+                ``backend`` is not ``engine``, or the constructor's schedule is
+                linear and the binary does not advertise ``linear-schedule``.
+        """
+        if engine not in _GPU_ENGINES:
+            raise ValueError(f"Unsupported engine {engine!r}. Supported: {list(_GPU_ENGINES)}")
+        params.setdefault("beta_schedule_type", _GPU_DEFAULT_SCHEDULE[engine])
+        impl = BinaryImplementation(path, algorithm=algorithm, **params)
+        caps = impl.capabilities
+        if caps.get("backend") != engine:
+            raise SolverUnavailableError(
+                impl.path, detail=f"runs backend {caps.get('backend')!r}, not engine {engine!r}"
+            )
+        # Checked here and not only per solve: CUDA defaults to linear, so a binary
+        # without it would otherwise refuse every default solve as if the model were at fault.
+        if params["beta_schedule_type"] == "linear" and "linear-schedule" not in caps.get("features", []):
+            raise SolverUnavailableError(impl.path, detail="does not advertise linear-schedule, the schedule requested")
+        self = cls.__new__(cls)
+        Solver.__init__(self, impl, engine=engine, algorithm=algorithm)
+        return self
 
 
 class SolverDWave(Solver):
