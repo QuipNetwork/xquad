@@ -1223,10 +1223,9 @@ fn energy_spin_ising_all_minus_one() {
 
 #[test]
 fn energy_rejects_model_in_sample_slot() {
-    // Both slots hold a Model; ENERGY must reject because xq-py requires
-    // the second register to hold an XQMX in SAMPLE mode (which xq-rs
-    // models as RegVal::Sample). The shortcut that allowed Model-as-sample
-    // was removed in QUI-410.
+    // Both slots hold a Model; ENERGY must reject because `spec/xqvm/ISA.md`
+    // (`ENERGY`) requires a Sample in the second register. The shortcut that
+    // allowed Model-as-sample was removed in QUI-410.
     let err = run_err(|b| {
         b.emit_push(2).emit_bqmx(Register(0));
         b.emit_push(2).emit_bqmx(Register(1));
@@ -1356,10 +1355,9 @@ fn idx_triu_checks_its_intermediate_product() {
 fn idx_triu_does_not_require_ordered_operands() {
     // The mnemonic's doc string claimed `(i <= j)` as a caller precondition
     // long after the handler started swapping the pair itself, in the opcode
-    // table, in `opcodes.yaml` (then under `conformance/`) and on two
-    // generated pages that ship with the crate. Neither ordering is a
-    // precondition, and negative operands are admissible: the consuming
-    // opcode bounds-checks the index.
+    // table, in `opcodes.yaml` and on two generated pages that ship with the
+    // crate. Neither ordering is a precondition, and negative operands are
+    // admissible: the consuming opcode bounds-checks the index.
     let ordered = run(|b| {
         b.emit_push(1).emit_push(3).emit_idx_triu().emit_halt();
     });
@@ -1452,9 +1450,7 @@ fn zero_step_limit_executes_nothing() {
 #[test]
 fn a_zero_step_limit_completes_an_empty_program() {
     // The other half of the exact-limit rule: zero steps is enough for a
-    // program that needs zero steps. The success case is pinned here rather
-    // than as a conformance vector because `xquad/tests/test_step_parity.py`
-    // asserts `rust_steps > 0` for every vector it replays.
+    // program that needs zero steps.
     let bytecode = InstructionBuilder::new().build().expect("builder build");
 
     let mut vm = Vm::new();

@@ -14,7 +14,7 @@ that belongs in `xqcp`, `xqsa`, the `xquad` API or a helper library, and it
 never enters the ISA at all.
 
 This page is the reader-facing summary of that rule. All six clauses are
-specified where a third implementation reads them: clause 1 in
+specified where another implementation reads them: clause 1 in
 `spec/xqvm/SPEC.md`'s Type System, which makes checked arithmetic normative
 with no implementation-defined alternative; clause 2 in the same file's
 Determinism section, which states that an instruction's result is a

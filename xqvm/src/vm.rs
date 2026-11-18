@@ -77,7 +77,7 @@ pub(crate) enum LoopKind {
 
 /// Storage for the slice copied by `ITER`.
 ///
-/// Vecs in xq-rs hold either `Int` or `Model` elements, so the loop frame
+/// Vecs hold either `Int` or `Model` elements, so the loop frame
 /// carries one of two parallel buffers rather than a `Vec<RegVal>` (which
 /// would force `RegVal::default()` placeholders into every slot).
 #[derive(Debug)]
@@ -1948,9 +1948,9 @@ impl Vm {
         if !(0..64).contains(&b) {
             return Err(Error::InvalidShift { pos, amount: b });
         }
-        // Arithmetic (sign-preserving) right shift, matching xq-py: the sign
-        // bit is replicated, so negative values stay negative and `i64::MIN >> 1`
-        // halves the magnitude rather than overflowing.
+        // Arithmetic (sign-preserving) right shift, per `spec/xqvm/ISA.md`
+        // (`SHR`): the sign bit is replicated, so negative values stay negative
+        // and `i64::MIN >> 1` halves the magnitude rather than overflowing.
         self.push_stack(a >> b, pos)?;
         Ok(StepResult::Continue)
     }
@@ -2943,12 +2943,10 @@ impl Vm {
         model: Register,
         sample: Register,
     ) -> Result<StepResult, Error> {
-        // Per `spec/xqvm/SPEC.md` (`ENERGY`) and the xq-py reference
-        // (`compute_energy` in `xqvm/core/xqmx.py`), the model register must
-        // hold a Model and the sample register must hold a Sample. A Model
-        // passed in the sample slot is rejected -- that "model-as-sample"
-        // shortcut existed only in xq-rs and produced different programs
-        // from xq-py for the same source.
+        // Per `spec/xqvm/ISA.md` (`ENERGY`), the model register must hold a
+        // Model and the sample register must hold a Sample; a Model passed in
+        // the sample slot is rejected. `spec/xqvm/HLF.md` (`ENERGY`
+        // Computation) gives the formula.
         //
         // Both halves of this are O(model): the sample is copied out of its
         // register and every coefficient is accumulated. Charge for both
