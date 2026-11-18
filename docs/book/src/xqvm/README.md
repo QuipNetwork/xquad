@@ -3,7 +3,7 @@
 XQVM is the virtual machine at the core of XQuad: a stack-based interpreter
 with a 256-slot register file that executes compiled quadratic-optimisation
 programs. This section is the reference for that machine -- its execution
-model, assembly language, instruction set, binary format, and verifier. For
+model, assembly language, instruction set, binary format, and checker. For
 what a QUBO/Ising model is and why you would want one, start at
 [Concepts](../concepts/) instead; this section assumes you already
 have a program, or want to write one directly in `.xqasm`, and want to know
@@ -48,7 +48,7 @@ add.xqasm` skips the separate assembly step and runs the source directly.
   category.
 - **[Opcode Reference](opcodes.md)** -- the generated opcode table.
 - **[Bytecode Format](bytecode-format.md)** -- the `.xqb` wire format.
-- **[Verifier](verifier.md)** -- what the pre-execution verifier checks.
+- **[Checker](checker.md)** -- what the pre-execution checker checks.
 - **[CLI](../cli/vm/)** -- `xquad vm`, the XQVM commands.
 - **[Limits and Errors](limits-and-errors.md)** -- fixed and configurable
-  limits, and every runtime and verifier error.
+  limits, and every runtime and checker error.

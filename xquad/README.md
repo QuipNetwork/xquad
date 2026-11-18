@@ -78,7 +78,7 @@ So `isinstance` works whether the caller imported directly from the peer or via 
 | `xquad.vm` | first-party | `VM` wrapper over the Rust interpreter: assembles source, keeps calldata and limits across runs |
 | `xquad.types` | re-exports `xqffi.vm` | `Domain`, `XqmxModel`, `XqmxSample`, `triu`, `XqvmError` and its faults, VM limits |
 | `xquad.asm` | is `xqffi.asm` | `parse_xqasm`, `assemble_source`, `disassemble` |
-| `xquad.verifier` | is `xqffi.verifier` | `verify`, `verify_source` |
+| `xquad.checker` | is `xqffi.checker` | `check`, `check_source` |
 | `xquad.cp` | is `xqcp` | DSL -- `Problem`, `Types`, expression builders |
 | `xquad.sa` | is `xqsa` | Solvers -- `SolverCPU`, `Solver` |
 

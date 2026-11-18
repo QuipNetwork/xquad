@@ -46,7 +46,7 @@ the new command on `PATH`.
 
 | Group | Description |
 |-------|-------------|
-| [`xquad vm`](vm/) | Assemble, disassemble, run and verify XQVM programs. |
+| [`xquad vm`](vm/) | Assemble, disassemble, run and check XQVM programs. |
 | [`xquad quip`](quip/) | Accounts and job orders on a Quip network. Needs the `quip` extra. |
 
 ```sh

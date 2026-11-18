@@ -7,7 +7,7 @@ is the full coverage for three of them: `xquad.program`, and the two VM
 wrappers underneath and alongside it. For writing a problem with the `xqcp`
 DSL, see
 [Modelling](../modelling/). For what `xquad vm check` checks and how
-to fix a rejected program, see [Verification](verification.md).
+to fix a rejected program, see [Checking](checking.md).
 
 All three surfaces run the same Rust `xqvm` interpreter, and every example
 on this page runs as shown.
@@ -335,7 +335,7 @@ sample violates the capacity constraint and `valid` comes back `0`.
 sample's feasibility, so the two outputs answer different questions. Swap
 in `[1, 1, 0, 0, 0, 0, 0, 0]` -- items 0 and 1, weighing `5` -- and the same
 run gives `(-5507, 1)`.
-[Verification](verification.md#what-the-generated-verifiers-valid-flag-covers)
+[Checking](checking.md#what-the-generated-verifiers-valid-flag-covers)
 says what `valid` covers.
 
 The verifier takes the encoder's calldata because it replays the encoder to

@@ -475,10 +475,10 @@ fn a_step_budget_exactly_at_the_cap_is_accepted() {
 ///
 /// This is the regression test for deriving the slot count from
 /// `program.output_slots()`. That byte is a saturating count of `OUTPUT`
-/// *instructions* (`xqvm/src/verifier/scan.rs`), so the program below
+/// *instructions* (`xqvm/src/checker/scan.rs`), so the program below
 /// records 1 while legitimately writing slots 0 and 1. Sizing the output
 /// vec from it turned the slot-1 write into `OutputIndex` and so into
-/// `ExecutionFailed`, rejecting a program the VM and the verifier both
+/// `ExecutionFailed`, rejecting a program the VM and the checker both
 /// accept. `spec/xqvm/ENCODING.md` states that neither header count may be
 /// used to pre-size a slot array.
 #[test]

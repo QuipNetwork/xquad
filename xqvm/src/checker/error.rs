@@ -17,7 +17,7 @@
 
 use thiserror::Error;
 
-/// Errors produced by the pre-execution bytecode verifier.
+/// Errors produced by the pre-execution bytecode checker.
 ///
 /// Each variant carries the byte offset of the offending instruction so that
 /// diagnostics can highlight the exact location in the bytecode stream.
@@ -26,7 +26,7 @@ use thiserror::Error;
     missing_docs,
     reason = "error variants are documented via their #[error(...)] display strings"
 )]
-pub enum VerifierError {
+pub enum CheckerError {
     /// A jump instruction references a `TARGET` label id that does not exist
     /// in the program's jump table.
     #[error(
@@ -78,7 +78,7 @@ pub enum VerifierError {
     /// An instruction needs as many values as it pops, checked before any
     /// of its pushes are counted, so an opcode that both pops and pushes
     /// (e.g. `IDXGRID`: pop 3, push 1) is held to its full pop count. See
-    /// "Stack underflow rule" under Phase 4 in `spec/xqvm/VERIFIER.md`.
+    /// "Stack underflow rule" under Phase 4 in `spec/xqvm/CHECKER.md`.
     #[error("stack underflow at byte {offset:#06x}")]
     StackUnderflow { offset: usize },
 
@@ -114,7 +114,7 @@ pub enum VerifierError {
     },
 }
 
-impl VerifierError {
+impl CheckerError {
     /// A stable string tag for each variant used by the conformance harness
     /// to match expected errors without coupling to the `Display` format.
     pub fn variant_name(&self) -> &'static str {

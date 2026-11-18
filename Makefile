@@ -743,7 +743,7 @@ test-metal:
 # Asserts the xqffi cdylib xquad actually loads is fresh: sync it from
 # current Rust sources, then prove by runtime import that the result
 # still satisfies the Python surface. `xquad/__init__.py` eagerly imports
-# `asm`, `program`, `verifier` and `vm`, each doing a top-level `from
+# `asm`, `program`, `checker` and `vm`, each doing a top-level `from
 # xqffi.* import <symbol>`, so a bare `import xquad` genuinely exercises
 # the compiled extension and binds nine concrete symbols across those
 # four submodules. If any of them fails to resolve, the cdylib xqffi
@@ -787,7 +787,7 @@ check-xqffi-fresh:
 		"import xquad; \
 		syms = [xquad.asm.assemble_source, xquad.asm.disassemble, xquad.asm.parse_xqasm, \
 		xquad.program.Vm, xquad.vm.DEFAULT_STEP_LIMIT, xquad.program.XqmxModel, \
-		xquad.program.XqmxSample, xquad.verifier.verify, xquad.verifier.verify_source]; \
+		xquad.program.XqmxSample, xquad.checker.check, xquad.checker.check_source]; \
 		assert all(s is not None for s in syms), 'xqffi symbol failed to resolve'; \
 		print(f'xqffi fresh: {len(syms)} symbols resolved')"
 

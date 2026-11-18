@@ -18,15 +18,12 @@
 """The `xquad` command.
 
 `xquad vm asm|dis|run|check` are the XQVM tools; `xquad quip ...` manages
-Quip accounts and order receipts. The old top-level names
-`xquad asm|dism|run|verify` stay as hidden aliases that warn on stderr
-until v0.6.0. Each command module imports only `click` at module level
-and its backing package inside the command, so `xquad --help` stays fast.
+Quip accounts and order receipts. Each command module imports only
+`click` at module level and its backing package inside the command, so
+`xquad --help` stays fast.
 """
 
 from __future__ import annotations
-
-from typing import Any
 
 import click
 
@@ -55,28 +52,3 @@ for _command in (asm, dis, run, check):
     vm.add_command(_command)
 
 main.add_command(quip)
-
-
-def _deprecated_alias(old: str, command: click.Command) -> click.Command:
-    """A hidden top-level `xquad <old>` that warns, then runs `xquad vm <command>`."""
-
-    def callback(**kwargs: Any) -> Any:
-        click.echo(
-            f"warning: 'xquad {old}' is deprecated and will be removed in v0.6.0; use 'xquad vm {command.name}'",
-            err=True,
-        )
-        assert command.callback is not None
-        return command.callback(**kwargs)
-
-    return click.Command(
-        old,
-        callback=callback,
-        params=command.params,
-        help=command.help,
-        hidden=True,
-    )
-
-
-# Removed in v0.6.0.
-for _old, _command in (("asm", asm), ("dism", dis), ("run", run), ("verify", check)):
-    main.add_command(_deprecated_alias(_old, _command))

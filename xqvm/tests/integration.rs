@@ -733,7 +733,7 @@ fn iter_skips_an_inverted_range() {
 
 #[test]
 fn iter_resolves_its_register_before_it_skips() {
-    // `ITER` carries a `read` effect on its register that the verifier's
+    // `ITER` carries a `read` effect on its register that the checker's
     // static type system depends on, so an empty slice does not excuse the
     // VM from resolving the register: an `ITER` whose register does not hold
     // a vec raises whether or not the body would have run. Returning

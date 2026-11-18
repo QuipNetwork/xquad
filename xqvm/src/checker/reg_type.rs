@@ -18,7 +18,7 @@
 use crate::Register;
 use crate::bytecode::Instruction;
 
-use super::error::VerifierError;
+use super::error::CheckerError;
 
 /// Static type tag used during register type-state analysis.
 ///
@@ -53,12 +53,12 @@ pub enum RegType {
     /// paths.
     Conflict,
     /// Set to an unknown type (e.g. after `INPUT` or `LVAL`). Satisfies any
-    /// read requirement so the verifier does not emit false positives.
+    /// read requirement so the checker does not emit false positives.
     Any,
 }
 
 impl RegType {
-    /// Human-readable name used in [`VerifierError`] messages.
+    /// Human-readable name used in [`CheckerError`] messages.
     pub fn type_name(self) -> &'static str {
         match self {
             Self::Unset => "unset",
@@ -85,7 +85,7 @@ impl RegType {
     /// intersection of what its two members match. That is the whole point
     /// of having them: a join of `Model` and `Sample` that collapsed to
     /// `Any` would satisfy `Model`, and a program could reach `SETQUAD`
-    /// with a sample without the verifier objecting (QUI-1160).
+    /// with a sample without the checker objecting (QUI-1160).
     /// [`Conflict`](Self::Conflict) is the same rule for a pair that shares
     /// nothing: the intersection is `NonUnset` alone.
     pub(crate) fn satisfies(self, req: RegTypeReq) -> bool {
@@ -153,13 +153,13 @@ impl RegTypeReq {
     }
 }
 
-/// Check that `slot` satisfies `req`; emit the appropriate [`VerifierError`].
+/// Check that `slot` satisfies `req`; emit the appropriate [`CheckerError`].
 pub(crate) fn check_reg(
     offset: usize,
     slot: u8,
     req: RegTypeReq,
     regs: &[RegType; 256],
-) -> Result<(), VerifierError> {
+) -> Result<(), CheckerError> {
     // slot is u8 (0–255) and regs has exactly 256 elements, so get() never returns None.
     debug_assert!(
         usize::from(slot) < regs.len(),
@@ -167,10 +167,10 @@ pub(crate) fn check_reg(
     );
     let current = regs.get(usize::from(slot)).copied().unwrap_or_default();
     if current == RegType::Unset {
-        return Err(VerifierError::ReadUnsetRegister { offset, reg: slot });
+        return Err(CheckerError::ReadUnsetRegister { offset, reg: slot });
     }
     if !current.satisfies(req) {
-        return Err(VerifierError::RegisterTypeMismatch {
+        return Err(CheckerError::RegisterTypeMismatch {
             offset,
             reg: slot,
             expected: req.type_name(),
@@ -185,7 +185,7 @@ pub(crate) fn check_reads(
     pos: usize,
     instr: &Instruction,
     regs: &[RegType; 256],
-) -> Result<(), VerifierError> {
+) -> Result<(), CheckerError> {
     use RegTypeReq as R;
     match instr {
         // Register I/O
@@ -223,7 +223,7 @@ pub(crate) fn check_reads(
         // the same addressable surface, which is what `spec/xqvm/ISA.md`
         // states and what the VM has done since QUI-454 and QUI-461. This rule was the lone dissenter until QUI-1168: it
         // rejected every program that wrote into a sample, which made the
-        // sample-domain check unreachable through a verified program.
+        // sample-domain check unreachable through a checked program.
         Instruction::GetLine { reg }
         | Instruction::SetLine { reg }
         | Instruction::AddLine { reg }

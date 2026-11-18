@@ -33,9 +33,9 @@ assert vm.outputs() == [42]
 
 `parse_xqasm(str)` -> wire dict; `assemble_source(str)` -> raw bytes; `disassemble(bytes)` -> human-readable listing; `instruction_count(bytes)` -> instruction count.
 
-### `xqffi.verifier` -- static verification
+### `xqffi.checker` -- static checking
 
-`verify(bytes)` and `verify_source(str)` run the pre-execution verifier: every jump lands on a `TARGET`, every register is read after it is written, and stack depth balances. Both return `None` on success and raise `ValueError` on a rejected program. See [Verifier](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/xqvm/verifier.md).
+`check(bytes)` and `check_source(str)` run the pre-execution checker: every jump lands on a `TARGET`, every register is read after it is written, and stack depth balances. Both return `None` on success and raise `ValueError` on a rejected program. See [Checker](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/xqvm/checker.md).
 
 ## Interactive / multi-run API
 

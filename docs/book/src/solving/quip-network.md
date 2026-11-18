@@ -643,7 +643,6 @@ v0.6.0:
 | `QuipUnconfirmedError` | v0.4.5 | `QuipSubmitIncompleteError` | No longer raised; warns on import from `xqsa.quip` |
 | Loading a pickled `unconfirmed` order | v0.4.5 | None | Orders pickled by 0.4.3 or 0.4.4 in that state still load, warn, and are never sent again; look up the extrinsic the warning names |
 | `xqsa.quip.signing.SIGNED_EXTENSIONS` | v0.4.5 | None | The signed-extension order now comes from the runtime metadata |
-| The top-level commands `xquad asm`, `dism`, `run` and `verify` | v0.4.5 | `xquad vm asm`, `dis`, `run` and `check` | Print a warning line to stderr rather than a `DeprecationWarning`; see [xquad vm](../cli/vm/) |
 
 `solve()` is not deprecated, and neither is a typed `resolution=` on
 `solve()`. The strict paths refuse what the deprecated ones accept:

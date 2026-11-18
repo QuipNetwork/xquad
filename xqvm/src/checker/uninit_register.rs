@@ -18,7 +18,7 @@
 use crate::Program;
 use crate::dataflow::uninit::check_uninit_registers;
 
-use super::error::VerifierError;
+use super::error::CheckerError;
 use super::phase::Phase;
 
 /// CFG-based forward must-init phase.
@@ -32,14 +32,14 @@ use super::phase::Phase;
 /// after the join.  The type-state pass uses a permissive `Any`-meet at join
 /// points; this pass uses AND-meet so partial initialization is flagged.
 ///
-/// Unreachable blocks are skipped.  Only [`VerifierError::ReadUnsetRegister`]
+/// Unreachable blocks are skipped.  Only [`CheckerError::ReadUnsetRegister`]
 /// is emitted; type mismatches are handled by [`super::register_type::RegisterTypePhase`].
 pub struct UninitRegisterPhase;
 
 impl Phase for UninitRegisterPhase {
-    type Error = VerifierError;
+    type Error = CheckerError;
 
-    fn run(&self, program: &Program) -> Result<(), VerifierError> {
+    fn run(&self, program: &Program) -> Result<(), CheckerError> {
         check_uninit_registers(program)
     }
 }

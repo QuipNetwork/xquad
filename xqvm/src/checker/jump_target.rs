@@ -18,7 +18,7 @@
 use crate::Program;
 use crate::bytecode::{Instruction, InstructionStream};
 
-use super::error::VerifierError;
+use super::error::CheckerError;
 use super::phase::Phase;
 use super::scan::stream_err;
 
@@ -30,9 +30,9 @@ use super::scan::stream_err;
 pub struct JumpTargetPhase;
 
 impl Phase for JumpTargetPhase {
-    type Error = VerifierError;
+    type Error = CheckerError;
 
-    fn run(&self, program: &Program) -> Result<(), VerifierError> {
+    fn run(&self, program: &Program) -> Result<(), CheckerError> {
         let target_count = program.jump_table().len();
         let mut stream = InstructionStream::new(program.code());
 
@@ -42,7 +42,7 @@ impl Phase for JumpTargetPhase {
                 Instruction::Jump1 { label } | Instruction::JumpI1 { label }
                     if usize::from(label) >= target_count =>
                 {
-                    return Err(VerifierError::UndefinedJumpTarget {
+                    return Err(CheckerError::UndefinedJumpTarget {
                         offset: pos,
                         label: u16::from(label),
                         target_count,
@@ -51,7 +51,7 @@ impl Phase for JumpTargetPhase {
                 Instruction::Jump2 { label } | Instruction::JumpI2 { label }
                     if usize::from(label) >= target_count =>
                 {
-                    return Err(VerifierError::UndefinedJumpTarget {
+                    return Err(CheckerError::UndefinedJumpTarget {
                         offset: pos,
                         label,
                         target_count,

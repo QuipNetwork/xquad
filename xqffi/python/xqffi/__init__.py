@@ -18,11 +18,11 @@
 """Python bindings for the XQuad Rust runtime.
 
 The compiled extension (`xqffi.xqffi`) registers three submodules,
-`xqffi.asm`, `xqffi.vm` and `xqffi.verifier`, in `sys.modules` when it is
+`xqffi.asm`, `xqffi.vm` and `xqffi.checker`, in `sys.modules` when it is
 imported; this package imports it and re-exports them. Type stubs for each
 submodule sit beside this file.
 """
 
-from .xqffi import asm, verifier, vm
+from .xqffi import asm, checker, vm
 
-__all__ = ["asm", "verifier", "vm"]
+__all__ = ["asm", "checker", "vm"]

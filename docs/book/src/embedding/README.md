@@ -24,7 +24,7 @@ hand with [`InstructionBuilder`](builder-api.md).
 - **Bytecode** -- the opcode table, `Instruction`, `Register`,
   `InstructionBuilder`, `Program`, and the wire codec.
 - **Interpreter core** -- `Vm`, `Error`, `RegVal`, `XqmxModel` /
-  `XqmxSample`, the bytecode verifier, and the `Tracer` trait with its
+  `XqmxSample`, the bytecode checker, and the `Tracer` trait with its
   no-op implementation.
 
 The `std` feature, enabled by default, adds three things a `no_std`

@@ -15,23 +15,23 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Verifier-clean sweep over conformance vectors and example fixtures.
+//! Checker-clean sweep over conformance vectors and example fixtures.
 //!
 //! A program the VM runs to completion without a runtime error must also
-//! verify clean: the verifier's whole purpose is to reject, ahead of time,
+//! check clean: the checker's whole purpose is to reject, ahead of time,
 //! only programs that would misbehave at runtime. So every conformance
 //! vector whose `expected.json` does NOT describe a runtime error, plus a
 //! handful of hand-picked fixture programs the example runners and xqcp
-//! tests compile against, is asserted here to pass `xqvm::verifier::verify`
-//! cleanly. This sweep is the over-tightening signal a verifier change
-//! needs: it fails the moment a verifier change starts rejecting programs
+//! tests compile against, is asserted here to pass `xqvm::checker::check`
+//! cleanly. This sweep is the over-tightening signal a checker change
+//! needs: it fails the moment a checker change starts rejecting programs
 //! that are in fact valid, long before that regression would otherwise
 //! surface as a mysterious conformance or example-smoke failure.
 //!
 //! The sweep has no exclusions. It carried two until QUI-1168, both there
 //! because `RegisterTypePhase` required a model register for
 //! `GETLINE`/`SETLINE`/`ADDLINE` while the runtime and `spec/xqvm/ISA.md`
-//! both accepted a sample. That was a defect in the verifier rather than
+//! both accepted a sample. That was a defect in the checker rather than
 //! deliberate strictness, and fixing it retired the exclusions with it.
 
 #![expect(
@@ -45,7 +45,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use xqasm::assemble_source;
-use xqvm::verifier::verify;
+use xqvm::checker::check;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -60,17 +60,17 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Assemble `source` and run the verifier over it, folding either an
-/// assembly failure or a verifier rejection into a single `path`-tagged
+/// Assemble `source` and run the checker over it, folding either an
+/// assembly failure or a checker rejection into a single `path`-tagged
 /// error string.
-fn verify_source(path: &Path, source: &str) -> Result<(), String> {
+fn check_source(path: &Path, source: &str) -> Result<(), String> {
     let program = assemble_source(source)
         .map_err(|err| format!("{}: failed to assemble: {err}", path.display()))?;
-    verify(&program).map_err(|err| format!("{}: {err}", path.display()))
+    check(&program).map_err(|err| format!("{}: {err}", path.display()))
 }
 
 /// Does `expected.json` describe a runtime error? A vector's program is
-/// only expected to verify clean when it does not.
+/// only expected to check clean when it does not.
 fn expects_runtime_error(expected_path: &Path) -> bool {
     let text = fs::read_to_string(expected_path)
         .unwrap_or_else(|err| panic!("cannot read {}: {err}", expected_path.display()));
@@ -129,7 +129,7 @@ fn clean_vector_dirs(vectors_root: &Path) -> (Vec<PathBuf>, usize) {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn verify_vectors() {
+fn check_vectors() {
     let root = repo_root();
     let vectors_root = root.join("xqvm").join("tests").join("vectors");
 
@@ -149,7 +149,7 @@ fn verify_vectors() {
     );
     assert!(
         !clean_dirs.is_empty(),
-        "expected to find verify-clean conformance vectors under {}",
+        "expected to find check-clean conformance vectors under {}",
         vectors_root.display()
     );
 
@@ -159,7 +159,7 @@ fn verify_vectors() {
         let program_path = dir.join("program.xqasm");
         let source = fs::read_to_string(&program_path)
             .unwrap_or_else(|err| panic!("cannot read {}: {err}", program_path.display()));
-        if let Err(err) = verify_source(&program_path, &source) {
+        if let Err(err) = check_source(&program_path, &source) {
             failures.push(err);
         }
         swept += 1;
@@ -185,7 +185,7 @@ fn verify_vectors() {
         );
         let source = fs::read_to_string(path)
             .unwrap_or_else(|err| panic!("cannot read {}: {err}", path.display()));
-        if let Err(err) = verify_source(path, &source) {
+        if let Err(err) = check_source(path, &source) {
             failures.push(err);
         }
         swept += 1;
@@ -193,13 +193,13 @@ fn verify_vectors() {
 
     assert!(
         failures.is_empty(),
-        "{} of {swept} programs failed to verify clean:\n{}",
+        "{} of {swept} programs failed to check clean:\n{}",
         failures.len(),
         failures.join("\n")
     );
 
     println!(
-        "verify_vectors: {swept} programs verified clean ({} of {walked} conformance \
+        "check_vectors: {swept} programs checked clean ({} of {walked} conformance \
          vectors, plus {} fixture programs)",
         clean_dirs.len(),
         fixture_paths.len()

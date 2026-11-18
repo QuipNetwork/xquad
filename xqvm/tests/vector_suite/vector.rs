@@ -49,13 +49,13 @@ pub(crate) struct Inputs {
     /// space and move the `CallDataIndex` bound.
     #[serde(default)]
     pub(crate) calldata: Vec<Option<i64>>,
-    /// Number of output slots; defaults to 16 to match `xquad run`.
+    /// Number of output slots; defaults to 16 to match `xquad vm run`.
     #[serde(default = "default_output_slots")]
     pub(crate) output_slots: usize,
     /// Step budget for the run.
     ///
     /// Set it only for a vector that exercises the budget; every other
-    /// vector runs under the same default `xquad run` uses.
+    /// vector runs under the same default `xquad vm run` uses.
     #[serde(default = "default_step_limit")]
     pub(crate) step_limit: u64,
     /// Allocation budget in bytes for the run.
@@ -74,7 +74,7 @@ const fn default_output_slots() -> usize {
 /// The step budget for a vector that does not name one.
 ///
 /// Is `xqvm::DEFAULT_STEP_LIMIT`, rather than a literal restating it, so a
-/// vector that is not about the budget behaves exactly as `xquad run`
+/// vector that is not about the budget behaves exactly as `xquad vm run`
 /// would and cannot drift from the VM it is testing.
 const fn default_step_limit() -> u64 {
     xqvm::DEFAULT_STEP_LIMIT

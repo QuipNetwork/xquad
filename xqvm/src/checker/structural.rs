@@ -18,21 +18,21 @@
 use crate::Program;
 use crate::bytecode::InstructionStream;
 
-use super::error::VerifierError;
+use super::error::CheckerError;
 use super::phase::Phase;
 use super::scan::stream_err;
 
 /// Checks that every byte in the instruction stream decodes without error.
 ///
-/// Catches [`VerifierError::TruncatedInstruction`] and
-/// [`VerifierError::BadOpcode`]. This phase should run first so subsequent
+/// Catches [`CheckerError::TruncatedInstruction`] and
+/// [`CheckerError::BadOpcode`]. This phase should run first so subsequent
 /// phases can safely iterate the stream without re-checking decode errors.
 pub struct StructuralPhase;
 
 impl Phase for StructuralPhase {
-    type Error = VerifierError;
+    type Error = CheckerError;
 
-    fn run(&self, program: &Program) -> Result<(), VerifierError> {
+    fn run(&self, program: &Program) -> Result<(), CheckerError> {
         let mut stream = InstructionStream::new(program.code());
         while let Some(item) = stream.next_instruction() {
             let _ = item.map_err(|e| stream_err(&e))?;

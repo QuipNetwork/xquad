@@ -90,21 +90,21 @@ instruction stream. With the bar above there is no denied set for such a
 scan to find, and an allowlist would be code that has to be revisited on
 every addition to the instruction set, silently rejecting valid programs
 until someone remembers to update it. The static half of enforcement is the
-verifier, which checks properties of the program rather than membership of
+checker, which checks properties of the program rather than membership of
 its opcodes.
 
 ## Where the bar is enforced
 
 | Layer | Runs | Enforces |
 |---|---|---|
-| Static | `xqvm::verifier::verify` at program submission | Structural integrity, jump targets, loop balance, register type-state, must-init, stack depth |
+| Static | `xqvm::checker::check` at program submission | Structural integrity, jump targets, loop balance, register type-state, must-init, stack depth |
 | Runtime | `Vm::set_memory_limit` before execution | The allocation budget, charged before each allocation |
 | Runtime | `Vm::set_step_limit` before execution | The step budget, charged before each unit of work |
 | Weight | The extrinsic's declared and refunded weight | The block's share of the above |
 
 The static layer is what makes a rejection cheap: a program that cannot run
 correctly is refused before it consumes execution weight. The runtime layer
-is what makes admission safe: the verifier does not bound allocation or
+is what makes admission safe: the checker does not bound allocation or
 running time, and cannot, because both depend on values computed at
 runtime. Neither layer substitutes for the other.
 
@@ -225,13 +225,13 @@ copy per live register beyond what `ITER` paid for. Bounded by the 256-slot
 register file, so a constant factor rather than an unbounded obligation,
 but one a memory bound has to include.
 
-**The reference integration does not verify.** The fixture takes both
+**The reference integration does not check.** The fixture takes both
 budgets from the caller and bounds them with `MaxStepLimit` and
 `MaxMemoryLimit`, which is the shape a real pallet needs, so the runtime
 layer of the boundary is now exercised end to end. The static layer is not:
-it never calls `xqvm::verifier::verify` -- it decodes and runs, so every
+it never calls `xqvm::checker::check` -- it decodes and runs, so every
 static check is skipped and the faults those checks would have caught
-surface at runtime as `ExecutionFailed`. Running the verifier on chain is
+surface at runtime as `ExecutionFailed`. Running the checker on chain is
 QUI-1055; pricing the budgets into a benchmarked weight rather than the
 fixed placeholder is QUI-1012.
 

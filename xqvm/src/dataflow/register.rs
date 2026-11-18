@@ -67,7 +67,7 @@
 //! unwritten branch with two related types can be rejected by either phase
 //! depending on edge order. Both outcomes reject.
 //!
-//! [`UninitRegisterPhase`]: crate::verifier::UninitRegisterPhase
+//! [`UninitRegisterPhase`]: crate::checker::UninitRegisterPhase
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
@@ -78,16 +78,16 @@ use std::collections::HashMap;
 #[cfg(not(feature = "std"))]
 use hashbrown::HashMap;
 
+use crate::CheckerError;
 use crate::Program;
-use crate::VerifierError;
 use crate::bytecode::InstructionStream;
+use crate::checker::reg_type::{RegType, apply_writes, check_reads, write_effect};
 use crate::dataflow::analysis::Analysis;
 use crate::dataflow::bytecode::{BlockId, CfgContext, build_cfg};
 use crate::dataflow::cfg::Cfg;
 use crate::dataflow::direction::Forward;
 use crate::dataflow::lattice::Lattice;
 use crate::dataflow::solver::solve;
-use crate::verifier::reg_type::{RegType, apply_writes, check_reads, write_effect};
 
 // ---------------------------------------------------------------------------
 // RegTypeValue lattice
@@ -231,8 +231,8 @@ fn block_ranges(cfg: &Cfg<BlockId>, code_len: usize) -> Vec<(usize, usize)> {
 
 /// Run the CFG-based forward register type-state analysis using a pre-built CFG.
 ///
-/// Detects [`VerifierError::ReadUnsetRegister`] and
-/// [`VerifierError::RegisterTypeMismatch`] errors.  Unreachable blocks
+/// Detects [`CheckerError::ReadUnsetRegister`] and
+/// [`CheckerError::RegisterTypeMismatch`] errors.  Unreachable blocks
 /// (entry state equals `[Any; 256]`) are skipped.
 ///
 /// Callers running multiple analyses should use this variant with a shared
@@ -240,12 +240,12 @@ fn block_ranges(cfg: &Cfg<BlockId>, code_len: usize) -> Vec<(usize, usize)> {
 ///
 /// # Errors
 ///
-/// Returns the first [`VerifierError`] found in program order across reachable
+/// Returns the first [`CheckerError`] found in program order across reachable
 /// blocks.
 pub(crate) fn check_register_types_with_cfg(
     program: &Program,
     cfg: &Cfg<BlockId>,
-) -> Result<(), VerifierError> {
+) -> Result<(), CheckerError> {
     let code = program.code();
     let ranges = block_ranges(cfg, code.len());
 
@@ -303,9 +303,9 @@ pub(crate) fn check_register_types_with_cfg(
 ///
 /// # Errors
 ///
-/// Returns the first [`VerifierError`] found in program order across reachable
+/// Returns the first [`CheckerError`] found in program order across reachable
 /// blocks.
-pub fn check_register_types(program: &Program) -> Result<(), VerifierError> {
+pub fn check_register_types(program: &Program) -> Result<(), CheckerError> {
     let code = program.code();
     if code.is_empty() {
         return Ok(());

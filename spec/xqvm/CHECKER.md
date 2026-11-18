@@ -1,36 +1,36 @@
-# XQVM Bytecode Verifier
+# XQVM Bytecode Checker
 
-A bytecode verifier performs static analysis over a program before execution.
+A bytecode checker performs static analysis over a program before execution.
 It catches structural and semantic errors without running the program, enabling
 early rejection at load time or at the blockchain submission boundary.
 
-The Rust implementation is `xqvm::verifier` (exposed via `xqffi.verifier` and
-`xquad.verifier` Python bindings).
+The Rust implementation is `xqvm::checker` (exposed via `xqffi.checker` and
+`xquad.checker` Python bindings).
 
 ---
 
 ## Architecture
 
-Verification is structured as composable [`Phase`] implementations. Each phase
+Checking is structured as composable [`Phase`] implementations. Each phase
 performs one focused pass over a [`Program`] and maps failures to a
-[`VerifierError`]. A [`Verifier`] runs phases sequentially, stopping at the
+[`CheckerError`]. A [`Checker`] runs phases sequentially, stopping at the
 first failure.
 
-Verification bounds what a program can do structurally -- reachable jump
+Checking bounds what a program can do structurally -- reachable jump
 targets, well-typed registers, a balanced stack -- it does not predict what
 a run will cost. A program's step count, like its memory allocation, is
 data-dependent: it depends on values that only exist once calldata is bound
 and the program actually runs (loop trip counts, vector lengths, the sizes
-of models a program builds for itself), none of which the verifier's static
-analysis has access to. A program can therefore pass verification and still
+of models a program builds for itself), none of which the checker's static
+analysis has access to. A program can therefore pass the check and still
 exhaust the step budget (`StepLimitExceeded`, see `spec/xqvm/METERING.md`)
 or the allocation budget (`MemoryLimitExceeded`) at runtime; catching either
-is the step limit's and the memory limit's job, not the verifier's.
+is the step limit's and the memory limit's job, not the checker's.
 
 The `scan` function is the shared kernel for Phase 1: it makes one linear pass
 over the instruction bytes, builds the jump table, and returns the first
 structural, jump-target, or loop-nesting violation. `Program::new` calls it to
-populate the jump table (ignoring any error); `Verifier::default` calls it once
+populate the jump table (ignoring any error); `Checker::default` calls it once
 per invocation rather than three separate stream passes.
 
 Phases 2--4 each build a control-flow graph (CFG) of basic blocks and run a
@@ -38,7 +38,7 @@ forward worklist analysis to track per-block state. The CFG correctly handles
 unreachable code, conditional branches, and loop back-edges, allowing errors
 that a linear scan would miss to be detected.
 
-### Default pipeline (`Verifier::default`)
+### Default pipeline (`Checker::default`)
 
 | Order | Phase | Struct | What it checks |
 |-------|-------|--------|----------------|
@@ -50,7 +50,7 @@ that a linear scan would miss to be detected.
 | 4 | Stack depth | `StackDepthPhase` | CFG-based stack underflow/overflow, loop balance, join-point depth mismatch |
 
 Phases 1a--1c share the `scan` kernel and run as one combined pass. Custom
-pipelines are supported via `Verifier::new().with_phase(p)`.
+pipelines are supported via `Checker::new().with_phase(p)`.
 
 ---
 
@@ -77,7 +77,7 @@ Error: `UndefinedJumpTarget`.
 ### 1c: Loop nesting
 
 `RANGE` and `ITER` instructions each open a loop frame; `NEXT` closes one. The
-verifier tracks nesting depth and rejects:
+checker tracks nesting depth and rejects:
 
 - `NEXT`, `LVAL`, or `LIDX` reached with no open loop frame.
 - Any loop frame still open at the end of the program, reported at the byte
@@ -105,7 +105,7 @@ intersection of what its members satisfy, neither `Model`, `Sample` nor
 `VecInt` on its own. Every other pair of types meets to `Conflict`, which
 satisfies `NonUnset` and nothing else. Without these rows a program could
 allocate a model on one branch and a sample on the other, join, and reach
-`SETQUAD` with a sample while verifying clean (QUI-1160).
+`SETQUAD` with a sample while checking clean (QUI-1160).
 
 `Conflict` rather than `Any` for unrelated types is also what makes the meet
 associative, so a join of three or more predecessors does not depend on the
@@ -129,7 +129,7 @@ Preconditions enforced:
 - The `DROP` instruction resets a register to `Unset` in the type-state model --
   a subsequent read is rejected as `ReadUnsetRegister`. At VM runtime `DROP`
   also writes `Unset`, and a subsequent `LOAD` or `OUTPUT` faults as
-  `UnsetRegister`; the verifier models that behaviour faithfully.
+  `UnsetRegister`; the checker models that behaviour faithfully.
 
 Unreachable blocks (entry state equals `[Any; 256]`) are skipped, so dead code
 after unconditional jumps does not produce false positives.
@@ -187,7 +187,7 @@ most conservative depth to successors.
    two incoming edges -- entry at depth 0, and the back-edge at whatever depth
    the loop body leaves -- even though it has only one predecessor *block*.
    Counting predecessor blocks alone would let `.0: PUSH 1 / JUMP .0 / HALT`
-   verify clean and then overflow the stack at runtime.
+   check clean and then overflow the stack at runtime.
 
 3. **`StackUnderflow`** / **`StackOverflowRisk`** -- an instruction whose
    pops take the depth below 0 is flagged under the

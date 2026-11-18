@@ -18,7 +18,7 @@
 use crate::Program;
 use crate::dataflow::register::check_register_types;
 
-use super::error::VerifierError;
+use super::error::CheckerError;
 use super::phase::Phase;
 
 /// CFG-based forward register type-state phase.
@@ -39,9 +39,9 @@ use super::phase::Phase;
 pub struct RegisterTypePhase;
 
 impl Phase for RegisterTypePhase {
-    type Error = VerifierError;
+    type Error = CheckerError;
 
-    fn run(&self, program: &Program) -> Result<(), VerifierError> {
+    fn run(&self, program: &Program) -> Result<(), CheckerError> {
         check_register_types(program)
     }
 }

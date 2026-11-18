@@ -333,8 +333,8 @@ was produced. From there, the `xquad` CLI static-inspects a single program
 without needing a Python host at all: `xquad vm asm` and `xquad vm dis`
 round-trip a `.xqasm` file to bytecode and back to a readable listing, and
 `xquad vm check` runs the same structural, jump-target, loop-nesting,
-register type-state and stack-depth checks `problem.compile()` already runs
-automatically through `xqffi` when that package is installed. See
+register type-state, must-init and stack-depth checks `problem.compile()`
+already runs automatically through `xqffi` when that package is installed. See
 [CLI](../cli/) for the full command reference; nothing about
 compiling changes it.
 
@@ -355,5 +355,5 @@ Running any of these three programs against real calldata needs a host that
 can construct vectors, models and samples -- the Python `VM`/`Program`
 surfaces [Ways to Use XQuad](../concepts/ways-to-use.md) describes, covered
 in full in [Running Programs](../running/). The CLI's role here is
-static: assemble, disassemble, and verify a program's structure before
+static: assemble, disassemble, and check a program's structure before
 handing it to a host that can supply calldata rich enough to run it.

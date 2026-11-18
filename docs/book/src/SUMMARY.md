@@ -21,7 +21,7 @@
   - [Outputs and Decoding](modelling/outputs-and-decoding.md)
   - [Compiling](modelling/compiling.md)
   - [Running Programs](running/README.md)
-  - [Verification](running/verification.md)
+  - [Checking](running/checking.md)
   - [Solving Overview](solving/README.md)
   - [Local Solvers](solving/local.md)
   - [D-Wave QPU](solving/dwave-qpu.md)
@@ -89,7 +89,7 @@
     - [Energy Evaluation](xqvm/instructions/energy.md)
   - [Opcode Reference](xqvm/opcodes.md)
   - [Bytecode Format](xqvm/bytecode-format.md)
-  - [Verifier](xqvm/verifier.md)
+  - [Checker](xqvm/checker.md)
   - [Limits and Errors](xqvm/limits-and-errors.md)
 
 - [Embedding and Internals](embedding/README.md)

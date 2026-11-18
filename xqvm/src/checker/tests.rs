@@ -20,16 +20,16 @@ use std::collections::BTreeSet;
 use crate::bytecode::codec;
 use crate::{Instruction, InstructionBuilder, InstructionStream, JumpTable, Program, Register};
 
-use super::error::VerifierError;
+use super::check;
+use super::error::CheckerError;
 use super::jump_target::JumpTargetPhase;
 use super::loop_nesting::LoopNestingPhase;
-use super::phase::{Phase, Verifier};
+use super::phase::{Checker, Phase};
 use super::register_type::RegisterTypePhase;
 use super::scan;
 use super::scan::stream_err;
 use super::stack_depth::StackDepthPhase;
 use super::structural::StructuralPhase;
-use super::verify;
 
 fn bytes(instrs: &[Instruction]) -> Vec<u8> {
     instrs.iter().flat_map(codec::encode).collect()
@@ -175,7 +175,7 @@ fn nested_loops_outer_unmatched() {
     // Outermost opener is at offset 0.
     assert!(matches!(
         err,
-        VerifierError::UnmatchedLoop {
+        CheckerError::UnmatchedLoop {
             offset: 0,
             depth: 1
         }
@@ -280,7 +280,7 @@ fn reg_type_bsmx_then_getline_ok() {
 #[test]
 fn reg_type_bsmx_then_setline_ok() {
     // SETLINE assigns a sample variable. The value's domain is a run-time
-    // quantity the VM checks; the verifier only settles the register kind.
+    // quantity the VM checks; the checker only settles the register kind.
     let code = bytes(&[
         Instruction::Push1 { val: [4] },
         Instruction::Bsmx { reg: Register(0) },
@@ -639,33 +639,33 @@ fn reg_type_resize_accepts_model_or_sample() {
     assert!(RegisterTypePhase.run(&Program::new(code_sample)).is_ok());
 }
 
-// --- Verifier composition ---
+// --- Checker composition ---
 
 #[test]
-fn default_verifier_passes_valid_program() {
+fn default_checker_passes_valid_program() {
     let mut b = InstructionBuilder::new();
     let _ = b.emit_push(10).emit_push(32).emit_add().emit_halt();
-    assert!(verify(&b.build().unwrap()).is_ok());
+    assert!(check(&b.build().unwrap()).is_ok());
 }
 
 #[test]
-fn custom_verifier_only_jump_phase() {
+fn custom_checker_only_jump_phase() {
     // An unmatched RANGE is not caught if LoopNestingPhase is not included.
     let code = bytes(&[Instruction::Range {}, Instruction::Halt {}]);
-    let result = Verifier::new()
+    let result = Checker::new()
         .with_phase(JumpTargetPhase)
         .run(&Program::new(code));
     assert!(
         result.is_ok(),
-        "jump-only verifier should not catch loop errors"
+        "jump-only checker should not catch loop errors"
     );
 }
 
 #[test]
-fn custom_verifier_structural_then_loop() {
+fn custom_checker_structural_then_loop() {
     // A bad opcode is caught by StructuralPhase before LoopNestingPhase runs.
     let prog = Program::new(vec![0x0D]);
-    let err = Verifier::new()
+    let err = Checker::new()
         .with_phase(StructuralPhase)
         .with_phase(LoopNestingPhase)
         .run(&prog)
@@ -697,7 +697,7 @@ fn stack_depth_mismatch_on_back_edge_to_entry_block() {
     // .0: PUSH 1; JUMP .0; HALT
     //
     // The loop grows the stack by one per iteration and overflows at runtime.
-    // It used to verify clean: the entry block's only *predecessor block* is
+    // It used to check clean: the entry block's only *predecessor block* is
     // itself, so the join check skipped it. Program entry is an implicit
     // incoming edge at depth 0, and counting it makes this the same
     // disagreement the conditional-join test above catches.
@@ -710,7 +710,7 @@ fn stack_depth_mismatch_on_back_edge_to_entry_block() {
         .emit_jump(top)
         .emit_halt();
     let err = StackDepthPhase.run(&b.build().unwrap()).unwrap_err();
-    let VerifierError::StackDepthMismatch {
+    let CheckerError::StackDepthMismatch {
         target_offset,
         depth_a,
         depth_b,
@@ -753,7 +753,7 @@ fn stack_depth_mismatch_on_entry_block_with_two_explicit_predecessors() {
         .emit_push(5)
         .emit_jump(top);
     let err = StackDepthPhase.run(&b.build().unwrap()).unwrap_err();
-    let VerifierError::StackDepthMismatch {
+    let CheckerError::StackDepthMismatch {
         target_offset,
         depth_a,
         depth_b,
@@ -769,7 +769,7 @@ fn stack_depth_mismatch_on_entry_block_with_two_explicit_predecessors() {
 #[test]
 fn balanced_back_edge_to_entry_block_is_accepted() {
     // The counterpart: a loop whose body leaves the stack as it found it must
-    // still verify, so the implicit entry edge does not reject honest programs.
+    // still check clean, so the implicit entry edge does not reject honest programs.
     //
     // .0: PUSH 1; POP; JUMP .0; HALT  -- net zero per iteration.
     let mut b = InstructionBuilder::new();
@@ -803,7 +803,7 @@ fn sclr_back_edge_to_entry_block_is_rejected() {
         .emit_jump(top)
         .emit_halt();
     let err = StackDepthPhase.run(&b.build().unwrap()).unwrap_err();
-    let VerifierError::StackDepthMismatch {
+    let CheckerError::StackDepthMismatch {
         target_offset,
         depth_a,
         depth_b,
@@ -859,8 +859,8 @@ fn stack_effect_underflow_on_swap_with_one_value() {
     assert_eq!(err.variant_name(), "StackUnderflow");
     // The full pipeline, which the CLI and the chain run, rejects it too.
     assert!(matches!(
-        verify(&program),
-        Err(VerifierError::StackUnderflow { .. })
+        check(&program),
+        Err(CheckerError::StackUnderflow { .. })
     ));
 }
 
@@ -874,7 +874,7 @@ fn stack_effect_underflow_on_copy_of_empty_stack() {
 
 #[test]
 fn stack_effect_underflow_on_idxgrid_with_two_operands() {
-    // The example spec/xqvm/VERIFIER.md uses: IDXGRID pops three.
+    // The example spec/xqvm/CHECKER.md uses: IDXGRID pops three.
     let code = bytes(&[
         Instruction::Push1 { val: [1] },
         Instruction::Push1 { val: [2] },
@@ -958,17 +958,17 @@ macro_rules! all_default_instructions {
 /// conditional jumps are left out: their programs need a matching `NEXT`
 /// or `TARGET`, and the plain pop-only case is already covered above.
 ///
-/// The verifier reads its pop counts from the opcode table, and the build
+/// The checker reads its pop counts from the opcode table, and the build
 /// checks the table against `opcodes.yaml`, so neither check reaches what
 /// the VM actually pops. Each program is therefore also run: one short, the
-/// VM must underflow (an overstated count would make the verifier reject
+/// VM must underflow (an overstated count would make the checker reject
 /// valid programs); at exactly the count it must not (an understated one
 /// would make it accept programs that fault on every run). The VM pops
 /// before it resolves a register, so the underflow comes first even where
 /// the zeroed operands would fault later. Where the exact run completes,
 /// the stack it leaves is the push count. An opcode that pops nothing is
 /// run on an empty stack for the same push-count check: a push count that
-/// is too high would let the verifier accept a later pop that underflows.
+/// is too high would let the checker accept a later pop that underflows.
 #[test]
 fn every_popping_opcode_needs_its_full_pop_count() {
     let with = |instr: Instruction, values: u8| {
@@ -985,7 +985,7 @@ fn every_popping_opcode_needs_its_full_pop_count() {
             continue;
         };
         // An opcode that pops nothing cannot underflow, but its push count
-        // still decides the depth the verifier assumes after it.
+        // still decides the depth the checker assumes after it.
         let Some(one_short) = pops.checked_sub(1) else {
             let mut vm = crate::Vm::new();
             if vm.run(&with(instr, 0)).is_ok() {
@@ -1015,14 +1015,14 @@ fn every_popping_opcode_needs_its_full_pop_count() {
         }
         let short = StackDepthPhase.run(&with(instr, one_short));
         assert!(
-            matches!(short, Err(VerifierError::StackUnderflow { .. })),
+            matches!(short, Err(CheckerError::StackUnderflow { .. })),
             "{}: {one_short} values for {pops} pops should underflow, got {short:?}",
             instr.mnemonic()
         );
         let exact = StackDepthPhase.run(&with(instr, pops));
         assert!(
             exact.is_ok(),
-            "{}: {pops} values for {pops} pops should verify, got {exact:?}",
+            "{}: {pops} values for {pops} pops should check clean, got {exact:?}",
             instr.mnemonic()
         );
 
@@ -1048,7 +1048,7 @@ fn every_popping_opcode_needs_its_full_pop_count() {
         }
     }
     // Every opcode that both pops and pushes went through the loop above;
-    // spec/xqvm/VERIFIER.md's per-opcode table lists the same forty.
+    // spec/xqvm/CHECKER.md's per-opcode table lists the same forty.
     assert_eq!(pop_and_push.len(), 40, "{pop_and_push:?}");
     // Of the opcodes that pop nothing and push, only the PUSHn family runs
     // to completion on zeroed operands; LOAD, VECLEN and ENERGY stop at an
@@ -1207,11 +1207,11 @@ fn stack_effect_on_all_variants_does_not_panic() {
 
 /// `scan` as a walk over an [`InstructionStream`], kept verbatim as the
 /// oracle for `scan_matches_the_stream_walk`.
-fn scan_via_stream(code: &[u8]) -> (JumpTable, (u8, u8), Option<VerifierError>) {
+fn scan_via_stream(code: &[u8]) -> (JumpTable, (u8, u8), Option<CheckerError>) {
     let mut targets: Vec<usize> = Vec::new();
     let mut loop_offsets: Vec<usize> = Vec::new();
     let mut jump_refs: Vec<(usize, u16)> = Vec::new();
-    let mut first_error: Option<VerifierError> = None;
+    let mut first_error: Option<CheckerError> = None;
     let mut input_slots: u8 = 0;
     let mut output_slots: u8 = 0;
 
@@ -1231,10 +1231,10 @@ fn scan_via_stream(code: &[u8]) -> (JumpTable, (u8, u8), Option<VerifierError>) 
             Instruction::Output { .. } => output_slots = output_slots.saturating_add(1),
             Instruction::Range {} | Instruction::Iter { .. } => loop_offsets.push(pos),
             Instruction::Next {} if first_error.is_none() && loop_offsets.pop().is_none() => {
-                first_error = Some(VerifierError::NoActiveLoop { offset: pos });
+                first_error = Some(CheckerError::NoActiveLoop { offset: pos });
             }
             Instruction::Lidx { .. } | Instruction::LVal { .. } if loop_offsets.is_empty() => {
-                let _ = first_error.get_or_insert(VerifierError::NoActiveLoop { offset: pos });
+                let _ = first_error.get_or_insert(CheckerError::NoActiveLoop { offset: pos });
             }
             Instruction::Jump1 { label } | Instruction::JumpI1 { label } => {
                 jump_refs.push((pos, u16::from(label)));
@@ -1250,7 +1250,7 @@ fn scan_via_stream(code: &[u8]) -> (JumpTable, (u8, u8), Option<VerifierError>) 
     if first_error.is_none()
         && let Some(&outermost) = loop_offsets.first()
     {
-        first_error = Some(VerifierError::UnmatchedLoop {
+        first_error = Some(CheckerError::UnmatchedLoop {
             offset: outermost,
             depth: loop_offsets.len(),
         });
@@ -1263,7 +1263,7 @@ fn scan_via_stream(code: &[u8]) -> (JumpTable, (u8, u8), Option<VerifierError>) 
         let target_count = jump_table.len();
         for (offset, label) in jump_refs {
             if usize::from(label) >= target_count {
-                first_error = Some(VerifierError::UndefinedJumpTarget {
+                first_error = Some(CheckerError::UndefinedJumpTarget {
                     offset,
                     label,
                     target_count,
@@ -1333,10 +1333,7 @@ fn scan_matches_the_stream_walk() {
     }
     // The generator has to reach every outcome `scan` can report, or the
     // comparison above proves less than it appears to.
-    assert!(
-        clean > 100,
-        "only {clean} generated programs verified clean"
-    );
+    assert!(clean > 100, "only {clean} generated programs checked clean");
     for variant in [
         "BadOpcode",
         "TruncatedInstruction",
@@ -1356,7 +1353,7 @@ fn scan_reports_a_truncated_last_instruction_at_its_opcode() {
     // NOP, then PUSH2 (0x12) with one of its two operand bytes.
     let (_, _, err) = scan(&[0xF0, 0x12, 0x00]);
     assert!(
-        matches!(err, Some(VerifierError::TruncatedInstruction { offset: 1 })),
+        matches!(err, Some(CheckerError::TruncatedInstruction { offset: 1 })),
         "got {err:?}"
     );
 }
