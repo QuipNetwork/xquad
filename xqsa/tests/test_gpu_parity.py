@@ -195,13 +195,20 @@ class TestArbitraryModels:
         Binary only. XQSA's kernels derive their automatic beta range from the largest
         coefficient, (1e-06, 1e-04) here, so the unit-field spins stay near random at the
         coldest beta: the Metal gibbs kernel ends at -400002 with seed 42. The binaries
-        reach the ground state.
+        reach the ground state, or refuse it before spawning when the largest field is
+        above their advertised limit: CUDA msa advertises 16777215 milli.
         """
         model = XqmxModel.spin(8)
         fields = [1 if i % 2 else 100_000 for i in range(8)]
         for i, h in enumerate(fields):
             model.set_linear(i, h if i % 4 < 2 else -h)
-        assert target.binary().solve(model).energy == -sum(fields)
+        solver = target.binary()
+        if _fits(solver._impl.capabilities, nodes=8, edges=0, degree=0, field_milli=1000 * max(fields)):
+            assert solver.solve(model).energy == -sum(fields)
+        else:
+            with pytest.raises(ModelRejectedError) as excinfo:
+                solver.solve(model)
+            assert excinfo.value.exit_code is None
 
     def test_same_topology_at_1x_and_1000x(self, target: Target, solver_kind: str) -> None:
         """Scaling every coupling by 1000 scales the ground energy and moves no ground state."""
