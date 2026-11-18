@@ -615,8 +615,15 @@ release:prepare:
     # workspace's own lock entries; nothing is built, so there is no
     # target/ worth restoring.
     cache: []
+    # Protected refs only. The job runs the branch's own make, uv and
+    # maturin with GITLAB_API_TOKEN in its environment, so it must run
+    # only where pushing is limited to Maintainers: `release/*` is a
+    # protected pattern (RELEASING.md, one-time setup). A branch named
+    # like a release that slipped past that pattern gets no run rather
+    # than the token. Marking GITLAB_API_TOKEN itself as a protected
+    # variable closes the same gap for every other job.
     rules:
-        - if: $CI_COMMIT_BRANCH =~ /^release\/v\d+\.\d+\.\d+$/ && ($CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "web")
+        - if: $CI_COMMIT_REF_PROTECTED == "true" && $CI_COMMIT_BRANCH =~ /^release\/v\d+\.\d+\.\d+$/ && ($CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "web")
           when: on_success
     variables:
         GITLAB_TOKEN: "${GITLAB_API_TOKEN}"
