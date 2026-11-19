@@ -116,7 +116,11 @@ Before cutting a tag:
    allowed to create: Maintainers. This restricts who can push tags
    manually and ensures the CI-created tag is protected.
 2. **Settings → CI/CD → Variables** -- add `GITLAB_API_TOKEN` (project
-   access token, `api` scope, masked). `write_repository` is the minimum
+   access token, `api` scope, protected, masked and hidden). Protected is
+   the setting that matters: `release:prepare` runs the release branch's
+   own scripts with this token, and a protected variable is only given
+   to pipelines on protected refs, never to one on an unprotected
+   branch. `write_repository` is the minimum
    needed to push tags; full `api` is simpler to configure. Used by
    `release:auto-tag` to look up the merged MR and push the tag, and by
    `release:prepare` to push the version bump and open the release MR,

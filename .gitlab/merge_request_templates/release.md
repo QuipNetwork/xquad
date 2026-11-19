@@ -2,8 +2,9 @@
 
 <!-- release:prepare opens this merge request when `release/vX.Y.Z` is
      pushed: it fills in the version, ticks the release type and requests
-     review from both maintainers. Opening one by hand instead, replace
-     X.Y.Z with the version, tick the type and add both reviewers. -->
+     review from both maintainers. Opening one by hand instead, put the
+     version in place of every placeholder, tick the type and add both
+     reviewers. -->
 
 ## Release Type
 
