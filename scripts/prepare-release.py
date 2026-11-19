@@ -298,8 +298,15 @@ def bot_identity(api: Api, server_host: str) -> Identity:
 
 
 def open_merge_requests(api: Api, project: str, branch: str) -> list[dict[str, Any]]:
-    """The merge requests open from `branch`, into any target."""
-    return api.get(f"projects/{project}/merge_requests", {"state": "opened", "source_branch": branch})
+    """The merge requests open from `branch` in `project` itself, into any target.
+
+    The API's `source_branch` filter also matches merge requests opened
+    from a fork's branch of the same name. One of those is not the
+    release, so it is left out here: otherwise a fork's `release/vX.Y.Z`
+    would be reported as the release merge request and ours never opened.
+    """
+    found = api.get(f"projects/{project}/merge_requests", {"state": "opened", "source_branch": branch})
+    return [mr for mr in found if mr["source_project_id"] == int(project)]
 
 
 def reviewer_ids(api: Api, usernames: list[str]) -> list[int]:

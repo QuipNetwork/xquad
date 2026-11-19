@@ -129,7 +129,7 @@ class FakeGitLab:
             raise pr.ApiError(409, "POST", path, '{"message":["Another open merge request already exists"]}')
         if self.conflict_without_merge_request:
             raise pr.ApiError(409, "POST", path, '{"message":["conflict"]}')
-        created = {**body, "web_url": f"https://gitlab.example/mr/{len(self.created) + 1}"}
+        created = {**body, "source_project_id": 1, "web_url": f"https://gitlab.example/mr/{len(self.created) + 1}"}
         self.created.append(created)
         self.merge_requests.append(created)
         return created
@@ -305,16 +305,38 @@ def test_a_rejected_push_onto_an_unbumped_tip_fails(tmp_path: Path) -> None:
 def test_losing_the_race_to_open_the_merge_request_passes(tmp_path: Path) -> None:
     repo = Repo(tmp_path, "release/v0.6.0", "0.6.0")
     api = FakeGitLab()
-    api.lose_race_with = {"source_branch": "release/v0.6.0", "web_url": "https://gitlab.example/mr/other"}
+    api.lose_race_with = {
+        "source_branch": "release/v0.6.0",
+        "source_project_id": 1,
+        "web_url": "https://gitlab.example/mr/other",
+    }
 
     assert repo.prepare(api) == "https://gitlab.example/mr/other"
     assert api.created == []
 
 
+def test_a_merge_request_from_a_fork_is_not_the_release(tmp_path: Path) -> None:
+    """GitLab's source_branch filter matches a fork's branch of the same name too."""
+    repo = Repo(tmp_path, "release/v0.6.0", "0.6.0")
+    api = FakeGitLab()
+    api.merge_requests.append(
+        {"source_branch": "release/v0.6.0", "source_project_id": 2, "web_url": "https://gitlab.example/mr/fork"}
+    )
+
+    url = repo.prepare(api)
+
+    assert [mr["web_url"] for mr in api.created] == [url]
+    assert url != "https://gitlab.example/mr/fork"
+
+
 def test_a_conflict_with_no_merge_request_behind_it_fails(tmp_path: Path) -> None:
+    """A fork's merge request from the same branch name does not explain the 409."""
     repo = Repo(tmp_path, "release/v0.6.0", "0.6.0")
     api = FakeGitLab()
     api.conflict_without_merge_request = True
+    api.merge_requests.append(
+        {"source_branch": "release/v0.6.0", "source_project_id": 2, "web_url": "https://gitlab.example/mr/fork"}
+    )
 
     with pytest.raises(pr.ApiError, match="409"):
         repo.prepare(api)
