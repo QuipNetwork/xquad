@@ -63,6 +63,7 @@ make fmt-check-py     # ruff format --check
 make lint-py          # ruff check across all Python packages
 make test-py          # pytest xqcp/tests xqsa/tests xquad/tests scripts/tests
 make check-uv-lock     # uv lock --check -- fails if uv.lock is stale against pyproject.toml
+make regen-uv-lock     # uv lock with the pinned UV_VERSION; never a plain `uv lock`
 make check-xqffi-fresh # uv sync --extra dwave + import xquad -- asserts the xqffi cdylib is
                        # fresh; mutates .venv/, re-run `make deps-py` afterwards
 make check-stubs      # mypy stubtest + fault docstrings -- the xqffi .pyi stubs match the built module
@@ -94,7 +95,7 @@ make check-release-notes                    # regression guard: every release re
 
 # Versions and branches (docs/guide/gitflow-protocol.md is normative)
 make list-version-sites                     # every place a release version is written
-make set-version VERSION=0.4.1-dev          # write them all; then cargo check && uv lock
+make set-version VERSION=0.4.1-dev          # write them all; then cargo check && make regen-uv-lock
 make check-branch-containment               # last release tag in dev, origin/main in release/* (no-op elsewhere)
 ```
 

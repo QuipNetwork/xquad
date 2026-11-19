@@ -173,8 +173,12 @@ git fetch origin && git switch -c release/vX.Y.Z origin/main   # or origin/dev
 #    peer pin including xquad's optional-dependencies, and the pallet
 #    fixture's lock entry.
 make set-version VERSION=X.Y.Z
-#    Then regenerate: `cargo check` (Cargo.lock) and `uv lock` (uv.lock).
-#    `uv lock` is not optional bookkeeping here -- `make check-uv-lock`
+#    Then regenerate: `cargo check` (Cargo.lock), then
+#    `make regen-uv-lock` (uv.lock), which runs the pinned uv from the
+#    Makefile's UV_VERSION. Not a plain `uv lock`: a newer local uv
+#    rewrites uv.lock to a newer lock revision, and CI's uv reads that
+#    as current, so nothing catches it. Regenerating uv.lock is not
+#    optional bookkeeping here -- `make check-uv-lock`
 #    (`uv lock --check`) runs in `verify:python` and `preflight-py` and
 #    fails the moment uv.lock is stale against any pyproject.toml, so a
 #    version bump that forgets it fails CI on this branch rather than
