@@ -81,6 +81,7 @@
 //! ```
 
 mod error;
+mod jump_span;
 mod jump_target;
 mod loop_nesting;
 mod phase;
@@ -99,6 +100,7 @@ mod tests;
 // ---------------------------------------------------------------------------
 
 pub use error::CheckerError;
+pub use jump_span::JumpSpanPhase;
 pub use jump_target::JumpTargetPhase;
 pub use loop_nesting::LoopNestingPhase;
 pub use phase::{Checker, Phase};
