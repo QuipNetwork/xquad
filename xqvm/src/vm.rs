@@ -2950,7 +2950,7 @@ impl Vm {
         // shortcut existed only in xq-rs and produced different programs
         // from xq-py for the same source.
         //
-        // Both halves of this are O(model): the sample is copied out of its
+        // Both halves of this are O(model): the sample is read from its
         // register and every coefficient is accumulated. Charge for both
         // before either happens, or a program can buy an arbitrarily large
         // model walk for one step (QUI-1056).
