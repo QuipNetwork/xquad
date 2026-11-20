@@ -51,6 +51,9 @@ cd "${REPO_ROOT}"
 
 echo ">> uv sync --extra ${extra}"
 uv sync --extra "${extra}"
+# A reused runner build directory can hold an install whose extension
+# `git clean` deleted; see the script for why uv does not notice.
+bash scripts/ensure-xqffi.sh --extra "${extra}"
 
 # Both `uv run` calls below pass `--no-sync`, so they run in the
 # environment the sync above wrote, extra included, with no second resolve.

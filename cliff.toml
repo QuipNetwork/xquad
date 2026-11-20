@@ -19,8 +19,8 @@ header = """
 All notable changes to the XQuad toolchain are recorded here. The
 format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning is [SemVer](https://semver.org/) across both the Rust
-crates and the Python distributions (single version string across the
-whole workspace).
+crates and the `xquad` Python distribution (single version string across
+the whole workspace).
 
 """
 

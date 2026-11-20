@@ -50,13 +50,15 @@ tree beside the package's shim and stubs. A Python edit anywhere takes effect
 straight away. A Rust edit is rebuilt by the next `uv sync` or `uv run`,
 because the root `pyproject.toml` lists the Rust inputs as uv `cache-keys`.
 The build runs `cargo --locked` from the root `pyproject.toml`'s
-`config-settings`.
+`config-settings-package`, which uv reads from 0.8.1. An older uv warns that it
+failed to parse `pyproject.toml` and builds without `--locked`.
 
 The compiled extension is the one thing in the tree uv does not track. If it
 goes while `.venv/` stays -- a `git clean -fdX` that spares `.venv/`, say --
 `uv sync` reports nothing to do and `import xqffi` fails with
-`No module named 'xqffi.xqffi'`. `make deps-py` notices and reinstalls the
-project; by hand, run:
+`No module named 'xqffi.xqffi'`. `make deps-py`, and every make target that
+runs its own `uv sync`, notices through `scripts/ensure-xqffi.sh` and
+reinstalls the project; by hand, run:
 
 ```sh
 uv sync --reinstall-package xquad
@@ -78,7 +80,7 @@ re-resolved:
   quietly resolving a different dependency set. That covers the wrappers as
   well as `cargo` itself: `cargo deny --locked check`, the maturin
   build `uv sync` runs for the project (the root `pyproject.toml` passes
-  `--locked` through `config-settings`, so a drifted lock fails
+  `--locked` through `config-settings-package`, so a drifted lock fails
   `make deps-py` rather than being resolved around), the `maturin build
   --locked` calls in `scripts/python-dists.sh` that produce the wheels
   `release:pypi` uploads, and `wasm-pack test`, which forwards trailing

@@ -7,11 +7,15 @@
 # Sourced by scripts/python-dists.sh (which builds, verifies and publishes
 # it) and scripts/smoke-wheels.sh (which opens, installs and imports what
 # that produced), so the two cannot disagree about what the wheel holds.
+# scripts/check-readme-length.sh reads PACKAGES too, for its scope.
 # The smoke test is the guard QUI-1020 added; a package missing from its
 # list is a package with no guard at all, and nothing would say so.
 #
-# Adding or renaming an import package is a one-line edit here and in the
-# root pyproject.toml's `python-packages`, nowhere else.
+# Adding or renaming an import package also touches the root
+# pyproject.toml (`python-packages`, ruff's `known-first-party`, pytest's
+# `testpaths`), the test-py path list in the Makefile, which overrides
+# `testpaths`, and, for a package the content guard names, the required
+# members in scripts/python-dists.sh.
 #
 # Not standalone: `source` it, don't execute it directly.
 

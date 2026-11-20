@@ -45,7 +45,7 @@ lint-python: fmt-check-py lint-py
 #
 # fmt-check-toml lives here rather than in lint-rust or lint-python. The
 # repo's TOML spans Cargo.toml (workspace root and every crate),
-# every Python package's pyproject.toml, deny.toml and cliff.toml, so it
+# the root pyproject.toml, deny.toml and cliff.toml, so it
 # has no single-language home. taplo is an acknowledged outlier in a
 # policy phase -- it is formatting, not policy -- but this phase is the
 # only one that compiles nothing, and pairing a two-second TOML check
@@ -171,9 +171,9 @@ check-version-sites:
 list-version-sites:
 	$(VERPY) scripts/check-version-sites.py --list
 
-# Writes every site in that list to VERSION, each in its own ecosystem's
-# spelling -- SemVer in the Cargo manifests, PEP 440 in the Python ones, so
-# `0.4.1-dev` lands as `0.4.1-dev` in one and `0.4.1.dev0` in the other.
+# Writes every site in that list to VERSION, in its Cargo spelling
+# (`0.4.1-dev`). No site carries the PEP 440 form: the wheel's
+# `0.4.1.dev0` comes from maturin's conversion of xqffi/Cargo.toml.
 #
 # The lockfiles are not version sites and do not move on their own. Follow
 # with `cargo check`, `make regen-uv-lock`, and `cargo update -p xqvm
@@ -181,7 +181,7 @@ list-version-sites:
 # same three.
 #
 # Every back-merge conflicts on these sites by construction, so the
-# resolution is this one command rather than 23 hand edits.
+# resolution is this one command rather than one hand edit per site.
 #   make set-version VERSION=0.4.1-dev
 set-version:
 	$(VERPY) scripts/check-version-sites.py --set "$(VERSION)"
@@ -330,8 +330,8 @@ preflight-docs: check-docs-generated check-docs-handwritten
 preflight-policy: lint-policy
 
 # Stays OUT of the plain preflight aggregate below, on purpose, matching
-# test-miri and the hardware tiers: check-release builds four
-# distributions and installs them into a throwaway venv, on top of the
+# test-miri and the hardware tiers: check-release builds the xquad
+# distribution and installs it into a throwaway venv, on top of the
 # workspace-wide cargo publish dry-run, so hanging it off preflight-rs
 # or the default `make preflight` would be an unwelcome surprise for a
 # contributor who just wants the fast local loop. Run it explicitly
@@ -428,12 +428,14 @@ deps-wasm:
 # the tree, which no cache-key tracks (a key on it would rebuild on
 # every sync). So after a `git clean` that spares .venv/, uv sees
 # unchanged inputs, reports nothing to do, and `import xqffi` fails
-# with `No module named 'xqffi.xqffi'`. The check below reinstalls
-# the project when the extension is missing; by hand the fix is
-# `uv sync --reinstall-package xquad`.
+# with `No module named 'xqffi.xqffi'`. scripts/ensure-xqffi.sh
+# reinstalls the project when the extension is missing, and every
+# target here that runs its own `uv sync` calls it next; by hand the
+# fix is `uv sync --reinstall-package xquad`.
 #
 # That build runs `cargo --locked --profile dev` (the root
-# pyproject.toml's `config-settings`, which explains the profile).
+# pyproject.toml's `config-settings-package`, which explains the
+# profile).
 # `--locked` is the same contract every other resolving cargo
 # invocation in this file carries (see CONTRIBUTING.md, "Dependencies
 # and Lockfiles"). It is worth naming here because deps-py is the
@@ -443,10 +445,7 @@ deps-wasm:
 # `cargo check` and commit the result.
 deps-py:
 	uv sync
-	@if ! ls xqffi/xqffi.*.so >/dev/null 2>&1; then \
-		echo "xqffi/xqffi.*.so is missing; reinstalling the xquad project"; \
-		uv sync --reinstall-package xquad; \
-	fi
+	@bash scripts/ensure-xqffi.sh
 
 # Point git at the repo-tracked .githooks/ directory so the pre-commit
 # hook runs on every commit. Run once per clone; bypass ad hoc with
@@ -695,6 +694,7 @@ test-quip: test-quip-sign test-quip-e2e
 #      wrote, with no second resolve.
 test-quip-sign:
 	uv sync --extra quip
+	@bash scripts/ensure-xqffi.sh --extra quip
 	uv run --no-sync pytest xqsa/tests/quip/test_signing.py -m quip
 
 # Live Quip Network devnet end-to-end tests for SolverQuip
@@ -721,6 +721,7 @@ test-quip-e2e:
 		exit 2; \
 	fi
 	uv sync --extra quip
+	@bash scripts/ensure-xqffi.sh --extra quip
 	QUIP_RPC_URL="$(QUIP_RPC_URL)" QUIP_FAUCET_URL="$(QUIP_FAUCET_URL)" \
 		uv run --no-sync pytest xqsa/tests/quip/test_live.py -m quip -v -rs
 
@@ -802,6 +803,7 @@ test-metal:
 # the rest of local dev expects.
 check-xqffi-fresh:
 	uv sync --extra dwave
+	@bash scripts/ensure-xqffi.sh --extra dwave
 	uv run --no-sync python -c \
 		"import xquad; \
 		syms = [xquad.asm.assemble_source, xquad.asm.disassemble, xquad.asm.parse_xqasm, \

@@ -94,7 +94,11 @@ strip = true
 # Lockfiles"). Set here, not as `locked = true` under `[tool.maturin]`: that
 # table drives every build, including one from the sdist, whose pruned
 # workspace no longer matches its Cargo.lock, so `--locked` would refuse it.
-# Only uv reads `[tool.uv]`.
+# Only uv reads `[tool.uv]`. Keyed on `xquad` (`config-settings-package`,
+# uv 0.8.1 and later), not the global `config-settings`: uv passes global
+# settings to every build backend it runs, and a dependency built from
+# source rejects them -- NumPy's meson-python fails on `Unknown option
+# "build-args"`.
 #
 # `--profile dev` keeps the build `maturin develop` used to give: overflow
 # checks and `debug_assert!`s stay on for test-py, parity and example
@@ -109,7 +113,8 @@ strip = true
 # compares modification times, not content: a tool that restores an old
 # mtime over new content (`cp -p`, `rsync -t`) defeats it. The built
 # xqffi/xqffi.*.so is deliberately not a key: the build rewrites it, so
-# every sync would rebuild. `make deps-py` covers a deleted extension.
+# every sync would rebuild. scripts/ensure-xqffi.sh covers a deleted
+# extension.
 #
 # `exclude-newer-package` exempts certifi from any `exclude-newer` cooldown a
 # machine sets in its own uv config, as the macOS Metal runner does. The quip
@@ -117,7 +122,7 @@ strip = true
 # cooldown, and uv resolves every extra of the project, so without this
 # exemption a cooldown fails `uv sync` for any extra.
 [tool.uv]
-config-settings = { build-args = "--locked --profile dev" }
+config-settings-package = { xquad = { build-args = "--locked --profile dev" } }
 cache-keys = [
     { file = "pyproject.toml" },
     { file = "README.md" },

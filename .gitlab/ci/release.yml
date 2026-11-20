@@ -288,11 +288,11 @@ release:crates:
 #
 #   - abi3 wheel for linux-x86_64 (cargo-zigbuild, manylinux2014)
 #   - abi3 wheel for linux-aarch64 (cargo-zigbuild, manylinux2014)
-#
-# Both link through zig against glibc 2.17, so their tags do not follow
-# the build image's glibc (QUI-2177). `pip install xquad` still needs
-# glibc 2.28, the floor numpy sets.
 #   - sdist (universal source fallback)
+#
+# Both wheels link through zig against glibc 2.17, so their tags do not
+# follow the build image's glibc (QUI-2177). `pip install xquad` still
+# needs glibc 2.27, the floor of the numpy wheels it resolves.
 #
 # macOS and Windows wheels are out of scope; those platforms fall back
 # to building from the sdist with a local Rust toolchain.

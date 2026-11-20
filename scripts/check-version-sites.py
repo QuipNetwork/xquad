@@ -67,9 +67,10 @@
 # What runs when
 # --------------
 # The tag comparison is gated on a tag being present, so merge request and
-# branch pipelines are unaffected. The two table sweeps run always: they
-# compare no versions, they assert the table still describes the tree, and
-# they exist so that a crate added in September is caught on that merge
+# branch pipelines are unaffected. The table sweep and the no-version
+# assertions run always: they compare no versions, they assert the table
+# still describes the tree, and they exist so that a crate added in
+# September is caught on that merge
 # request rather than at tag time in November.
 #
 # With no tag at all, one assertion still runs, and only on the two

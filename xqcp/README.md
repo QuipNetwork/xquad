@@ -90,7 +90,7 @@ are listed in the
 
 - [`xqffi`](https://gitlab.com/quip.network/xquad/-/tree/main/xqffi) -- pyo3 FFI bindings to the Rust runtime, which assembles, checks and runs the compiled programs.
 - [`xqsa`](https://gitlab.com/quip.network/xquad/-/tree/main/xqsa) -- solver adapters for the models this package builds.
-- [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) -- umbrella meta-package.
+- [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) -- the API layer and the `xquad` CLI; the one PyPI distribution, which also ships this package.
 
 ## License
 

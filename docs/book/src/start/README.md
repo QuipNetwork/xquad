@@ -9,9 +9,8 @@ from here with a real run.
 
 The [root README's Install section](https://gitlab.com/quip.network/xquad/-/blob/main/README.md#install)
 is the canonical install reference for both ecosystems this project ships
-into -- prebuilt wheel platforms, the Rust toolchain required to build the
-`xqffi` extension from source, and installing individual Python packages
-instead of the umbrella.
+into -- prebuilt wheel platforms and the Rust toolchain required to build the
+`xqffi` extension from source.
 
 Install XQuad into a project environment first: a virtual environment,
 or a `uv` project.

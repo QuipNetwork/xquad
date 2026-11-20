@@ -31,8 +31,8 @@ the tree as committed is self-consistent. They deliberately assert on
 otherwise every release MR would have to edit this file, which is exactly
 the drift the single site table exists to prevent.
 
-The pure functions (PEP 440 canonicalisation, SemVer validation, PEP 508
-splitting) are imported and tested in-process instead. They carry the
+The pure functions (PEP 440 canonicalisation, SemVer validation, PEP 503
+name normalisation) are imported and tested in-process instead. They carry the
 "two spellings, one version" rule, so they earn table-driven cases rather
 than a process launch each.
 """

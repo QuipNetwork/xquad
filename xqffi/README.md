@@ -61,7 +61,7 @@ assert dict(result.outputs) == {0: 42}
 
 - [`xqcp`](https://gitlab.com/quip.network/xquad/-/tree/main/xqcp) -- constraint programming DSL that compiles to `.xqasm`.
 - [`xqsa`](https://gitlab.com/quip.network/xquad/-/tree/main/xqsa) -- solver adapters: CPU/GPU annealers, D-Wave QPU, Quip network.
-- [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) -- umbrella meta-package with the interactive API.
+- [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) -- the interactive API and the `xquad` CLI; the one PyPI distribution, which also ships this package.
 - [Running Programs](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/running/README.md) -- full tour.
 
 ## License

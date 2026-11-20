@@ -185,12 +185,12 @@ make set-version VERSION=X.Y.Z
 #    `make regen-uv-lock` (uv.lock), which runs the pinned uv from the
 #    Makefile's UV_VERSION. Not a plain `uv lock`: a newer local uv
 #    rewrites uv.lock to a newer lock revision, and CI's uv reads that
-#    as current, so nothing catches it. Regenerating uv.lock is not
-#    optional bookkeeping here -- `make check-uv-lock`
-#    (`uv lock --check`) runs in `verify:python` and `preflight-py` and
-#    fails the moment uv.lock is stale against any pyproject.toml, so a
-#    version bump that forgets it fails CI on this branch rather than
-#    drifting silently. Also run `cargo update -p xqvm
+#    as current, so nothing catches it. A plain version bump leaves
+#    uv.lock unchanged, since the root project's version is dynamic and
+#    uv records none; the step matters when a dependency or the uv pin
+#    moved, and `make check-uv-lock` (`uv lock --check`, in
+#    `verify:python` and `preflight-py`) fails when uv.lock is stale
+#    against pyproject.toml. Also run `cargo update -p xqvm
 #    --manifest-path fixtures/pallet-xqvm/Cargo.toml` (standalone
 #    workspace with its own lock, which check-uv-lock does not reach).
 #    That one is enforced too, but by a different guard: the fixture

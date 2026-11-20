@@ -82,7 +82,7 @@ this package follows it, and any divergence here is a bug.
 
 - [`xqffi`](https://gitlab.com/quip.network/xquad/-/tree/main/xqffi) -- pyo3 FFI bindings to the Rust runtime, including the `XqmxModel` and `XqmxSample` types the solvers take and return.
 - [`xqcp`](https://gitlab.com/quip.network/xquad/-/tree/main/xqcp) -- constraint-programming DSL that compiles to models this package can sample.
-- [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) -- umbrella meta-package.
+- [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) -- the API layer and the `xquad` CLI; the one PyPI distribution, which also ships this package.
 - [Running Programs](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/running/README.md) -- end-to-end tour.
 
 ## License
