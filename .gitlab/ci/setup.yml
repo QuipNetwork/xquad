@@ -220,7 +220,12 @@
         # build. A plain `pip3 install ziglang` lands in the system
         # python, which is NOT the python3 on PATH here, so
         # cargo-zigbuild can't find it.
-        - uv tool install maturin --with-requirements /dev/null --with ziglang
+        #
+        # Both pinned: the release wheels' platform tags and glibc floor
+        # come from what these two do, so a new upstream release must not
+        # change them unreviewed. The versions quip-validator builds the
+        # quip-signer wheels with (its ci-toolchain.Dockerfile).
+        - uv tool install maturin==1.16.0 --with-requirements /dev/null --with ziglang==0.17.1
         # twine >=6.1 added preliminary OIDC trusted-publishing support;
         # earlier versions fall back to an interactive prompt when no
         # token env is present, which hangs the CI.
@@ -228,14 +233,14 @@
         - export PATH="${HOME}/.local/share/uv/tools/maturin/bin:${HOME}/.local/share/uv/tools/twine/bin:${PATH}"
         - maturin --version
         - twine --version
-        # cargo-zigbuild drives the aarch64 cross-build (zig as the
+        # cargo-zigbuild drives both Linux wheel builds (zig as the
         # linker; zig itself comes from the ziglang package installed
         # above). Pinned in scripts/cargo-tools.lock and installed via
         # the pinned install-cargo-tools.sh (binstall, cached) instead
         # of a bare `cargo install` that recompiles from source every
         # run.
         - bash scripts/install-cargo-tools.sh --only cargo-zigbuild
-        - rustup target add aarch64-unknown-linux-gnu
+        - rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
     apk:
         - apk add --no-cache ${APK_PACKAGES}
 

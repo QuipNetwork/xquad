@@ -111,9 +111,19 @@ publish_pkg() {
 
 # --- build -----------------------------------------------------------------
 # Three artefacts, all from the root pyproject.toml, all into dist/:
-#   1. abi3 wheel for linux-x86_64 (native build on CI runner)
+#   1. abi3 wheel for linux-x86_64 (cross-compiled via cargo-zigbuild)
 #   2. abi3 wheel for linux-aarch64 (cross-compiled via cargo-zigbuild)
 #   3. sdist (universal source fallback for macOS/Windows/other)
+# plus, in check mode on a host that is not Linux, a wheel for that host
+# (below), which only the smoke test reads.
+#
+# Both Linux wheels link through zig against glibc 2.17 and carry the
+# manylinux2014 tag (QUI-2177). A native build takes its glibc floor from
+# the build image instead: on rust:1.99.0-trixie that is manylinux_2_34,
+# so the floor would move every time the image did. With the tag named,
+# maturin's audit fails the build if the library needs a newer glibc
+# symbol than 2.17, and the guard after the builds checks the tags the
+# wheels actually carry.
 #
 # `maturin publish` has no OIDC support (no --trusted-publishing flag);
 # it only accepts --username/--password. Split build from upload so the
@@ -125,11 +135,22 @@ publish_pkg() {
 rm -rf dist
 mkdir -p dist
 
-# 1. Native abi3 wheel (abi3 tag comes from pyo3's abi3-py313 feature)
-maturin build --locked --release --out dist
+# 1-2. Linux abi3 wheels (abi3 tag comes from pyo3's abi3-py313 feature)
+maturin build --locked --release --out dist \
+    --target x86_64-unknown-linux-gnu --zig --compatibility manylinux2014
+maturin build --locked --release --out dist \
+    --target aarch64-unknown-linux-gnu --zig --compatibility manylinux2014
 
-# 2. Cross-compiled aarch64 abi3 wheel via zig linker
-maturin build --locked --release --out dist --target aarch64-unknown-linux-gnu --zig
+# A host wheel for the smoke test, on a host that is not Linux. Neither
+# Linux wheel installs on macOS, and the smoke test installs with the
+# index off so the copy on PyPI cannot shadow the build, so without this a
+# local `make check-release` there has nothing to install. Check mode
+# only: publish mode runs on the Linux release image and uploads exactly
+# what the tag guard below approves. The guard skips this wheel, as it
+# skips every wheel that is not for Linux.
+if [[ "${mode}" == "check" && "$(uname -s)" != "Linux" ]]; then
+    maturin build --locked --release --out dist
+fi
 
 # 3. sdist (universal source fallback)
 #
@@ -138,7 +159,7 @@ maturin build --locked --release --out dist --target aarch64-unknown-linux-gnu -
 # does re-resolve -- it shells out to `cargo metadata`, which rewrites a
 # stale Cargo.lock in place. The ordering is what covers it. This script
 # is `set -euo pipefail` and sdist runs LAST, so a lock that would have
-# to change has already hard-failed at step 1's `maturin build
+# to change has already hard-failed at the first `maturin build
 # --locked` and the run never reaches here. Moving sdist ahead of the
 # builds, or dropping `--locked` from them, reopens the gap silently:
 # the wheels uploaded to PyPI would be built from a re-resolved
@@ -146,6 +167,46 @@ maturin build --locked --release --out dist --target aarch64-unknown-linux-gnu -
 maturin sdist --out dist
 
 # --- verify ----------------------------------------------------------------
+
+# Platform-tag guard, ported from quip-validator's scripts/python-dists.sh.
+# `twine check` validates metadata only and never reads a platform tag, so
+# a wheel tagged plain `linux_x86_64` passes it and is then rejected at
+# upload time. A bare manylinux match is not enough either: a native build
+# is tagged with whatever glibc floor its symbols need, so the floor would
+# drift with the image and the check would still pass. Assert the exact
+# tags instead, and that both are present. Only Linux wheels are judged;
+# other platforms are skipped, not rejected, so adding macOS wheels
+# (QUI-2174) needs no change here.
+check_wheel_tags() {
+    local expected_tags=(
+        "manylinux2014_x86_64.manylinux_2_17_x86_64"
+        "manylinux2014_aarch64.manylinux_2_17_aarch64"
+    )
+    local whl tag matched
+    for whl in dist/*.whl; do
+        case "${whl##*/}" in
+            *manylinux* | *musllinux* | *linux_*) ;;
+            *) continue ;;
+        esac
+        matched=""
+        for tag in "${expected_tags[@]}"; do
+            [[ "${whl}" == *"-${tag}.whl" ]] && matched=1
+        done
+        if [[ -z "${matched}" ]]; then
+            echo "ERROR: ${whl##*/} does not carry one of the expected platform tags: ${expected_tags[*]}." >&2
+            echo "       The glibc floor moved or the build fell back to a native link; keep --zig --compatibility manylinux2014 on every Linux wheel build." >&2
+            exit 1
+        fi
+    done
+    for tag in "${expected_tags[@]}"; do
+        if ! compgen -G "dist/*-${tag}.whl" >/dev/null; then
+            echo "ERROR: no wheel with platform tag ${tag} in dist/; expected: ${expected_tags[*]}." >&2
+            exit 1
+        fi
+    done
+}
+
+check_wheel_tags
 
 # Wheel-content guard (QUI-792, ported from quip-validator's
 # scripts/python-dists.sh). A wheel is a zip; `twine check` validates

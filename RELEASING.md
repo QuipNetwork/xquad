@@ -98,18 +98,20 @@ Before cutting a tag:
    `release:validate` runs in CI, so it needs the same tooling that
    `.gitlab/ci/setup.yml` installs for that job:
 
-       uv tool install maturin --with ziglang
+       uv tool install maturin==1.16.0 --with ziglang==0.17.1
        uv tool install 'twine>=6.1'
        bash scripts/install-cargo-tools.sh --only cargo-zigbuild
-       rustup target add aarch64-unknown-linux-gnu
+       rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
        export PATH="${HOME}/.local/share/uv/tools/maturin/bin:${PATH}"
 
-   The `PATH` export is not optional. One of the three cdylib artefacts
-   is an aarch64 wheel cross-compiled with zig as the linker, and
+   The `PATH` export is not optional. Both Linux wheels are
+   cross-compiled with zig as the linker, and
    `cargo-zigbuild` locates zig by running `python3 -m ziglang`, so the
    `python3` first on `PATH` has to be maturin's own venv python, which
    is where `--with ziglang` put the package. Without it the run fails
-   at `Failed to find zig`, after the native wheel has already built.
+   at `Failed to find zig` on the first wheel. On a host that is not
+   Linux the run also builds a wheel for that host, which the smoke test
+   installs; it is never uploaded.
 
 ## Cutting a release
 
