@@ -2978,14 +2978,22 @@ impl Vm {
             }
         };
         self.charge_steps(pos, model_eval_steps(widen(sample_len), widen(terms)))?;
-        let sample_values: Vec<i64> = match self.reg(sample) {
-            RegVal::Sample(s) => s.values.clone(),
-            _ => unreachable!("sample register type checked above"),
+        // Both registers were type-checked above, and a register cannot hold two
+        // types at once, so `model` and `sample` are distinct slots and these two
+        // shared borrows of `self` coexist. Computing the energy from the
+        // borrowed sample values avoids cloning the whole sample -- an allocation
+        // the step budget never charged for and that the VM's `memory_used` meter
+        // could not see (W1-013). The borrows end before `push_stack` takes
+        // `&mut self`.
+        let energy = {
+            let RegVal::Model(m) = self.reg(model) else {
+                unreachable!("model register type checked above")
+            };
+            let RegVal::Sample(s) = self.reg(sample) else {
+                unreachable!("sample register type checked above")
+            };
+            m.checked_energy(&s.values).map_err(at_pos(pos))?
         };
-        let RegVal::Model(m) = self.reg(model) else {
-            unreachable!("model register type checked above")
-        };
-        let energy = m.checked_energy(&sample_values).map_err(at_pos(pos))?;
         self.push_stack(energy, pos)?;
         Ok(StepResult::Continue)
     }
