@@ -104,9 +104,9 @@
 # sequence end to end:
 #
 #   1. `uv sync --extra <solver>` for the solver-specific optional deps
-#      declared in xqsa/pyproject.toml (cuda / dwave / metal).
+#      declared in the root pyproject.toml (cuda / dwave / metal).
 #      The sync also rebuilds xqffi's cdylib from the Rust sources in this
-#      commit, because xqffi/pyproject.toml lists them as uv `cache-keys`.
+#      commit, because the root pyproject.toml lists them as uv `cache-keys`.
 #      Before QUI-1824 it did not: uv reinstalled xqffi from its cached
 #      build, and that is how all three jobs went red on main in August
 #      2026 (QUI-1191) -- pytest collection died on `cannot import name

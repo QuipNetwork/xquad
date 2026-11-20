@@ -53,7 +53,7 @@
 #   * `cargo update --workspace --locked` -- fails when Cargo.lock still
 #     names the old workspace versions.
 #   * `uv lock --check`, which must come after Cargo.lock: uv asks
-#     maturin for xqffi's metadata, and maturin runs `cargo metadata
+#     maturin for the xquad project's metadata, and maturin runs `cargo metadata
 #     --locked`.
 #
 # Standard library only. The Makefile runs repository scripts under

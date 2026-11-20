@@ -7,23 +7,6 @@ requires-python = ">=3.13"
 [options.exclude-newer-package]
 certifi = false
 
-[manifest]
-members = [
-    "xqcp",
-    "xqffi",
-    "xqsa",
-    "xquad",
-]
-
-[manifest.dependency-groups]
-dev = [
-    { name = "maturin", specifier = ">=1.7,<2" },
-    { name = "pytest", specifier = ">=8" },
-    { name = "pyyaml", specifier = ">=6" },
-    { name = "ruff", specifier = ">=0.7" },
-    { name = "scalecodec", specifier = ">=1.2,<2" },
-]
-
 [[package]]
 name = "annotated-types"
 version = "0.7.0"
@@ -1573,27 +1556,11 @@ wheels = [
 ]
 
 [[package]]
-name = "xqcp"
-version = "0.6.0.dev0"
-source = { editable = "xqcp" }
+name = "xquad"
+source = { editable = "." }
 dependencies = [
-    { name = "xqffi" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "xqffi", directory = "xqffi" }]
-
-[[package]]
-name = "xqffi"
-source = { directory = "xqffi" }
-
-[[package]]
-name = "xqsa"
-version = "0.6.0.dev0"
-source = { editable = "xqsa" }
-dependencies = [
+    { name = "click" },
     { name = "dwave-samplers" },
-    { name = "xqffi" },
 ]
 
 [package.optional-dependencies]
@@ -1615,9 +1582,19 @@ quip = [
     { name = "websocket-client" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "maturin" },
+    { name = "pytest" },
+    { name = "pyyaml" },
+    { name = "ruff" },
+    { name = "scalecodec" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "certifi", marker = "extra == 'quip'", specifier = ">=2026.10.19" },
+    { name = "click", specifier = ">=8.2" },
     { name = "cupy-cuda12x", marker = "extra == 'cuda'", specifier = ">=13.0" },
     { name = "dwave-samplers", specifier = ">=1.0" },
     { name = "dwave-system", marker = "extra == 'dwave'", specifier = ">=1.0" },
@@ -1627,47 +1604,17 @@ requires-dist = [
     { name = "quip-signer", marker = "extra == 'quip'", specifier = ">=0.3.0,<0.4" },
     { name = "substrate-interface", marker = "extra == 'quip'", specifier = ">=1.8.0,<2" },
     { name = "websocket-client", marker = "extra == 'quip'", specifier = ">=0.57.0,<2" },
-    { name = "xqffi", directory = "xqffi" },
 ]
 provides-extras = ["cuda", "dwave", "metal", "quip"]
 
-[[package]]
-name = "xquad"
-version = "0.6.0.dev0"
-source = { editable = "xquad" }
-dependencies = [
-    { name = "click" },
-    { name = "xqcp" },
-    { name = "xqffi" },
-    { name = "xqsa" },
+[package.metadata.requires-dev]
+dev = [
+    { name = "maturin", specifier = ">=1.7,<2" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "pyyaml", specifier = ">=6" },
+    { name = "ruff", specifier = ">=0.7" },
+    { name = "scalecodec", specifier = ">=1.2,<2" },
 ]
-
-[package.optional-dependencies]
-cuda = [
-    { name = "xqsa", extra = ["cuda"] },
-]
-dwave = [
-    { name = "xqsa", extra = ["dwave"] },
-]
-metal = [
-    { name = "xqsa", extra = ["metal"] },
-]
-quip = [
-    { name = "xqsa", extra = ["quip"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "click", specifier = ">=8.2" },
-    { name = "xqcp", editable = "xqcp" },
-    { name = "xqffi", directory = "xqffi" },
-    { name = "xqsa", editable = "xqsa" },
-    { name = "xqsa", extras = ["cuda"], marker = "extra == 'cuda'", editable = "xqsa" },
-    { name = "xqsa", extras = ["dwave"], marker = "extra == 'dwave'", editable = "xqsa" },
-    { name = "xqsa", extras = ["metal"], marker = "extra == 'metal'", editable = "xqsa" },
-    { name = "xqsa", extras = ["quip"], marker = "extra == 'quip'", editable = "xqsa" },
-]
-provides-extras = ["cuda", "dwave", "metal", "quip"]
 
 [[package]]
 name = "xxhash"

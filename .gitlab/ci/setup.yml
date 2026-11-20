@@ -189,9 +189,9 @@
         - '[ -n "${VALE_VERSION}" ] || { echo "vale: could not read VALE_VERSION from Makefile" >&2; exit 1; }'
         - curl -fsSL --retry 3 --retry-all-errors -o /tmp/vale.tar.gz "https://github.com/errata-ai/vale/releases/download/v${VALE_VERSION}/vale_${VALE_VERSION}_Linux_64-bit.tar.gz"
         - tar -xzf /tmp/vale.tar.gz -C /usr/local/bin vale
-    # uv on PATH plus a full workspace sync -- installs xqcp/xqsa/xquad
-    # editable into .venv/ and xqffi as a wheel built through maturin
-    # (xqffi is a uv workspace member).
+    # uv on PATH plus a full project sync -- installs the root xquad
+    # project (xqffi, xqcp, xqsa, xquad) editable into .venv/, with
+    # xqffi's extension built through maturin.
     uv-sync:
         - !reference [.fragments, uv]
         - uv sync
@@ -302,12 +302,12 @@
               - .cargo/bin/
           policy: pull
 
-# uv plus a full workspace sync. Consumers need the built xqffi extension,
+# uv plus a full project sync. Consumers need the built xqffi extension,
 # not just a linter -- e.g. running the Python test suite or the example
 # smoke run.
 #
-# `uv sync` builds xqffi's cdylib through maturin (xqffi is a uv workspace
-# member), so every consumer here also pays a Rust compile -- the cargo
+# `uv sync` builds xqffi's cdylib through maturin (the root project is a
+# maturin build), so every consumer here also pays a Rust compile -- the cargo
 # cache entries below are just as live as they are for `.rust`. Before
 # QUI-1001 Phase C2, this template's cache *replaced* the default cargo
 # cache with only the uv entry, so that compile ran from scratch on every
@@ -352,7 +352,7 @@
               - .uv-cache/
               - .venv/
 
-# uv on PATH, workspace NOT synced. For jobs that need only a Python
+# uv on PATH, project NOT synced. For jobs that need only a Python
 # interpreter plus a small, separately-pinned set of packages (`uvx
 # <tool>@<version>`, or `uv run --no-project --with <dep>`), not the full
 # maturin-built xqffi cdylib. The `uvx` key prefix keeps this cache from

@@ -40,7 +40,7 @@ CUDA solver's representation:
 
 Requires the optional ``metal`` extra::
 
-    pip install xqsa[metal]
+    pip install xquad[metal]
 """
 
 from __future__ import annotations
@@ -305,7 +305,7 @@ class InProcessMetal(Implementation):
         try:
             import Metal as _metal
         except ImportError as exc:
-            raise ImportError("Metal is not installed. Install xqsa with: pip install xqsa[metal]") from exc
+            raise ImportError("Metal is not installed. Install xquad with: pip install xquad[metal]") from exc
 
         device = _metal.MTLCreateSystemDefaultDevice()
         if device is None:

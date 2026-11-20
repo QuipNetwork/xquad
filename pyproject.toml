@@ -1,36 +1,140 @@
-# xquad repo root pyproject.
+# xquad repo root pyproject: the `xquad` project, the one PyPI distribution.
 #
-# Declares the uv workspace spanning every Python package in the repo
-# (xqffi, xqcp, xqsa, xquad) plus the dev tools used to lint
-# and test them. No buildable project of its own — `uv sync` installs
-# workspace members in editable mode into a shared `.venv/`.
+# maturin builds one wheel from the whole repo: the `xqffi` extension
+# (compiled from xqffi/Cargo.toml) with its shim and type stubs in xqffi/,
+# and the pure-Python packages xqcp, xqsa and xquad. The version is not
+# written here: maturin reads it from xqffi/Cargo.toml (`dynamic`), the one
+# version site the wheel takes.
 #
-# Per-package pyproject.toml files under each member directory carry the
-# actual project metadata, dependency lists, and build backend.
+# `uv sync` installs this project editable into `.venv/`: a `.pth` puts the
+# repo root on sys.path, and maturin builds the extension into
+# xqffi/xqffi.*.so in the tree. The install has to be editable: with
+# xqffi/__init__.py at the repo root, Python run from the root imports the
+# source tree ahead of site-packages, so a non-editable xqffi would be
+# shadowed by a copy with no extension beside it.
 
-[tool.uv.workspace]
-members = [ "xqffi", "xqcp", "xqsa", "xquad" ]
+[build-system]
+requires      = [ "maturin>=1.7,<2" ]
+build-backend = "maturin"
 
-# Build xqffi with `cargo --locked` when uv builds it for the workspace, the
-# contract every resolving cargo call carries (CONTRIBUTING.md,
-# "Dependencies and Lockfiles"). Set here, not as `locked = true` under
-# xqffi's `[tool.maturin]`: that table ships in the sdist, whose pruned
-# workspace no longer matches its Cargo.lock, so `--locked` would refuse
-# every build from the sdist.
+[project]
+name            = "xquad"
+description     = "XQuad toolchain: xqffi, xqcp, xqsa and the xquad command"
+readme          = "README.md"
+requires-python = ">=3.13"
+license         = { text = "AGPL-3.0-or-later" }
+dynamic         = [ "version" ]
+dependencies    = [ "dwave-samplers>=1.0", "click>=8.2" ]
+
+[project.scripts]
+xquad = "xquad.cli:main"
+
+# `quip-signer` is the hybrid sr25519 + FN-DSA-512 (Falcon-512) signing
+# extension. Linux installs resolve a manylinux wheel; macOS and Windows build
+# it from the sdist with a local Rust toolchain (the same policy as xquad's own
+# native packages). SolverQuip lazy-imports it, so `import xqsa` and every other
+# solver stay healthy without this extra. Pin `>=0.3.0,<0.4`: 0.3.0 is the first
+# release carrying the H4 suite, and the old `>=0.2.2` accepted H3 and H4 alike.
+# The ceiling matters as much as the floor. `quip-signer` is pre-1.0, so a minor
+# bump may carry another suite change, and nothing here would catch it: the
+# envelope self-check in `xqsa.quip.signing.build_signed_extrinsic` verifies
+# through the same installed binding that produced it, so a suite change keeping
+# the same byte lengths self-verifies locally and is rejected only by the chain.
+# `certifi` arrives through substrate-interface anyway; it is listed because
+# `xqsa.quip.metadata.connect` imports it directly for the wss:// CA default,
+# used on a macOS Python whose trust store is empty (RPC and faucet alike);
+# an https:// RPC goes through requests, which uses it on every platform.
+# The floor is the first certifi without the emSign ECC Root CA - G3, dropped
+# after eMudhra revoked eight Global TLS intermediates in October 2026.
+# The substrate-interface floor is the first release with `iface.transport`,
+# which the read recovery in `xqsa.quip.metadata` reconnects through. That module
+# also imports `websocket` directly, so `websocket-client` is listed, at the range
+# substrate-interface itself requires.
+[project.optional-dependencies]
+cuda = [ "cupy-cuda12x>=13.0", "nvidia-cuda-nvrtc-cu12", "nvidia-cuda-runtime-cu12" ]
+dwave = [ "dwave-system>=1.0" ]
+metal = [ "pyobjc-framework-Metal>=11.0; sys_platform == 'darwin'" ]
+quip = [
+    "substrate-interface>=1.8.0,<2",
+    "websocket-client>=0.57.0,<2",
+    "quip-signer>=0.3.0,<0.4",
+    "certifi>=2026.10.19",
+]
+
+# Mixed layout: the extension builds as `xqffi/xqffi.*.so` beside the package
+# shim and the submodule type stubs in xqffi/. A pure-Rust layout ships only
+# one `.pyi`, which cannot describe `xqffi.vm` and its siblings.
+#
+# `python-source = "."` makes the repo root the Python source, so the excludes
+# keep everything but package code out of the wheel. Each one is wheel-only:
+# an exclude without `format` also applies to the sdist, which then loses the
+# Cargo manifests, Rust sources and this file and cannot build. Bytecode
+# caches a local test run leaves beside the packages stay out of both.
+[tool.maturin]
+manifest-path = "xqffi/Cargo.toml"
+module-name = "xqffi.xqffi"
+python-source = "."
+python-packages = [ "xqcp", "xqsa", "xquad" ]
+exclude = [
+    { path = "**/__pycache__/**", format = [ "sdist", "wheel" ] },
+    { path = "**/tests/**", format = "wheel" },
+    { path = "**/*.rs", format = "wheel" },
+    { path = "**/Cargo.toml", format = "wheel" },
+    { path = "**/pyproject.toml", format = "wheel" },
+    { path = "**/README.md", format = "wheel" },
+    # Agent instructions, never package content. CLAUDE.md is gitignored today
+    # so it cannot reach the wheel, but the exclude survives a .gitignore edit.
+    { path = "**/AGENTS.md", format = "wheel" },
+    { path = "**/CLAUDE.md", format = "wheel" },
+]
+strip = true
+
+# Build with `cargo --locked` when uv builds the project, the contract every
+# resolving cargo call carries (CONTRIBUTING.md, "Dependencies and
+# Lockfiles"). Set here, not as `locked = true` under `[tool.maturin]`: that
+# table drives every build, including one from the sdist, whose pruned
+# workspace no longer matches its Cargo.lock, so `--locked` would refuse it.
+# Only uv reads `[tool.uv]`.
 #
 # `--profile dev` keeps the build `maturin develop` used to give: overflow
 # checks and `debug_assert!`s stay on for test-py, parity and example
 # smoke, and a Rust edit costs an unoptimized rebuild. Without it the
 # PEP 517 build defaults to release.
 #
+# uv rebuilds the project only when one of its cache keys changes, and the
+# default keys are just the packaging files. List every input to the cdylib
+# so a plain `uv sync` / `uv run` rebuilds after a Rust edit in xqffi or the
+# crates it links (`cargo tree -p xqffi`), plus the readme metadata. Python
+# sources need no key: the install is editable, so an edit is live. uv
+# compares modification times, not content: a tool that restores an old
+# mtime over new content (`cp -p`, `rsync -t`) defeats it. The built
+# xqffi/xqffi.*.so is deliberately not a key: the build rewrites it, so
+# every sync would rebuild. `make deps-py` covers a deleted extension.
+#
 # `exclude-newer-package` exempts certifi from any `exclude-newer` cooldown a
 # machine sets in its own uv config, as the macOS Metal runner does. The quip
-# extra's certifi floor (xqsa/pyproject.toml) is a security fix that can be
-# younger than such a cooldown, and uv resolves every extra of the workspace,
-# so without this exemption a cooldown fails `uv sync` for any extra.
+# extra's certifi floor is a security fix that can be younger than such a
+# cooldown, and uv resolves every extra of the project, so without this
+# exemption a cooldown fails `uv sync` for any extra.
 [tool.uv]
-config-settings-package = { xqffi = { build-args = "--locked --profile dev" } }
-exclude-newer-package   = { certifi = false }
+config-settings = { build-args = "--locked --profile dev" }
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "README.md" },
+    { file = "Cargo.toml" },
+    { file = "Cargo.lock" },
+    { file = "rust-toolchain.toml" },
+    { file = ".cargo/config.toml" },
+    { file = "xqffi/Cargo.toml" },
+    { file = "xqffi/src/**/*.rs" },
+    { file = "xqvm/Cargo.toml" },
+    { file = "xqvm/build.rs" },
+    { file = "xqvm/src/**/*.rs" },
+    { file = "xqvm/opcodes.yaml" },
+    { file = "xqasm/Cargo.toml" },
+    { file = "xqasm/src/**/*" },
+]
+exclude-newer-package = { certifi = false }
 
 [dependency-groups]
 dev = [
@@ -43,7 +147,7 @@ dev = [
 ]
 
 # ---------------------------------------------------------------------------
-# Ruff — applies to every Python package in the workspace.
+# Ruff — applies to every Python package in the repo.
 # ---------------------------------------------------------------------------
 
 [tool.ruff]

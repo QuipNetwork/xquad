@@ -489,7 +489,7 @@ class TestSolverDWave:
         monkeypatch.setenv("DWAVE_API_TOKEN", "test-token")
         monkeypatch.setitem(sys.modules, "dwave", None)
         monkeypatch.setitem(sys.modules, "dwave.system", None)
-        with pytest.raises(ImportError, match="pip install xqsa"):
+        with pytest.raises(ImportError, match="pip install xquad"):
             SolverDWave()
 
 
@@ -720,7 +720,7 @@ class TestSolverGPUCudaMocked:
     def test_missing_cupy_raises(self, monkeypatch) -> None:
         """ImportError with install hint when cupy is not installed."""
         monkeypatch.setitem(sys.modules, "cupy", None)
-        with pytest.raises(ImportError, match="pip install xqsa"):
+        with pytest.raises(ImportError, match="pip install xquad"):
             _Solver = _cuda
 
             _Solver()
@@ -1702,7 +1702,7 @@ class TestSolverGPUMetalMocked:
     def test_missing_metal_raises(self, monkeypatch) -> None:
         """ImportError with install hint when Metal is not installed."""
         monkeypatch.setitem(sys.modules, "Metal", None)
-        with pytest.raises(ImportError, match="pip install xqsa"):
+        with pytest.raises(ImportError, match="pip install xquad"):
             _Solver = _metal
 
             _Solver()
