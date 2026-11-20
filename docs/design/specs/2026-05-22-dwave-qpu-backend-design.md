@@ -90,7 +90,7 @@ so that importing `xqsa` without the `[dwave]` extra installed does not raise
 `ImportError`. The error is raised lazily with a clear message:
 
 ```
-dwave-system is not installed. Install xqsa with: pip install xqsa[dwave]
+dwave-system is not installed. Install xquad with: pip install xquad[dwave]
 ```
 
 ## Dependencies

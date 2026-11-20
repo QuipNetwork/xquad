@@ -10,8 +10,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 XQuad is a hardware-agnostic toolchain for expressing and running quadratic
 optimization problems (QUBO / Ising / integer) across quantum annealers and
-classical solvers. It ships as two Rust crates plus four Python distributions
-built around a single virtual-machine specification.
+classical solvers. It ships as two Rust crates plus one Python distribution,
+`xquad`, built around a single virtual-machine specification.
 
 Think of it as **LLVM for quadratic models** -- a common intermediate
 representation that lets you write a problem once and retarget it to any
@@ -50,7 +50,7 @@ uv tool install 'xquad[quip]'    # with the xquad quip commands
 
 On macOS, a user install (`pip install --user`, or pip falling back to one) puts the `xquad` command in `~/Library/Python/3.x/bin`, which is not on `PATH`; `python -m xquad` runs the same command without it.
 
-The `xquad` package is the umbrella: the full pipeline and the `xquad` command. To pick individual pieces instead, install `xqffi`, `xqcp` and `xqsa` (FFI bindings, DSL, solvers). Prebuilt wheels are available for Linux x86_64 and aarch64 (CPython >= 3.13). On macOS and Windows, pip builds the `xqffi` Rust extension from source -- this requires a [Rust toolchain](https://rustup.rs/) (>= 1.85).
+`xquad` is the only distribution: one install carries the full pipeline, the `xquad` command, and the `xqffi`, `xqcp` and `xqsa` packages (FFI bindings, DSL, solvers), which import under their own names. Up to 0.5 those three were separate PyPI distributions; from 0.6 they ship only inside `xquad`. Prebuilt wheels are available for Linux x86_64 and aarch64 (CPython >= 3.13, glibc >= 2.28). On macOS and Windows, pip builds the `xqffi` Rust extension from source -- this requires a [Rust toolchain](https://rustup.rs/) (>= 1.85).
 
 ### GPU/QPU support
 
@@ -78,18 +78,18 @@ Two Rust crates on **crates.io**:
 | [`xqvm`](xqvm/) | X-Quadratic Virtual Machine interpreter, bytecode codec, opcode table (`no_std + alloc`) |
 | [`xqasm`](xqasm/) | `.xqasm` text-format assembler |
 
-Four Python distributions on **PyPI**:
+One Python distribution on **PyPI**, `xquad`, carrying four packages:
 
 | Package | Description |
 |---|---|
 | [`xqffi`](xqffi/) | PyO3 FFI bindings for `xqvm` + `xqasm` (`xqffi.vm`, `xqffi.asm`, `xqffi.checker`) |
 | [`xqcp`](xqcp/) | Constraint-programming DSL that compiles to `.xqasm` |
 | [`xqsa`](xqsa/) | Solver adapters -- CPU/GPU annealers, D-Wave QPU, Quip network |
-| [`xquad`](xquad/) | Umbrella meta-package with interactive `Program` / `Session` / `RunResult` API, and the `xquad` CLI (`xquad vm asm` / `dis` / `run` / `check`) |
+| [`xquad`](xquad/) | Umbrella package with interactive `Program` / `Session` / `RunResult` API, and the `xquad` CLI (`xquad vm asm` / `dis` / `run` / `check`) |
 
 The one Rust package without a crates.io artefact is the `xqffi` pyo3
-crate itself -- it ships as the `xqffi` PyPI wheel rather than a reusable
-Rust library.
+crate itself -- it ships compiled inside the `xquad` wheel rather than as a
+reusable Rust library.
 
 ## Quick start
 
@@ -211,8 +211,8 @@ make deps                                                          # dev tools
 make xquad
 ```
 
-This syncs the Python workspace (`xqcp`, `xqsa`, `xqffi`, `xquad`) into
-`.venv/`, builds the `xqffi` pyo3 extension via maturin,
+This installs the root `xquad` project (`xqffi`, `xqcp`, `xqsa`, `xquad`)
+editable into `.venv/`, builds the `xqffi` pyo3 extension via maturin,
 puts the repo root on `sys.path` so scripts anywhere in the repo can
 `import xqcp` / `xqsa` / `xqffi` / `xquad` naturally, and
 installs the `xquad` command into `.venv/bin/`, run with `uv run xquad`.

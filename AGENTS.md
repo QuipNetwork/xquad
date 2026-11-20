@@ -35,7 +35,7 @@ make preflight         # preflight-rs + preflight-py + preflight-docs + prefligh
 make preflight-rs      # fmt, clippy, rustdoc, deny (root + pallet fixture), unit/integration/doc tests + vectors, coverage report, wasm, pallet fixture
 make preflight-py      # taplo, ruff format + lint, pytest, example smoke, uv.lock freshness, xqffi stubs
 make preflight-docs    # generated-doc freshness + docs drift + README length + prose (needs vale)
-make preflight-release # crate packaging dry-run + four Python dists (needs maturin/twine/uv; not in `preflight`)
+make preflight-release # crate packaging dry-run + the xquad Python dist (needs maturin/twine/uv/zig; not in `preflight`)
 
 # Rust
 make fmt              # cargo fmt + taplo fmt + ruff format
@@ -57,7 +57,7 @@ cargo nextest run --workspace -E 'test(my_test_name)'
 cargo test --workspace my_test_name
 
 # Python
-make deps-py          # uv sync: xqcp/xqsa/xquad editable, xqffi as a wheel from current Rust
+make deps-py          # uv sync: the root xquad project editable, xqffi's .so built from current Rust
 make fmt-py           # ruff format across all Python packages
 make fmt-check-py     # ruff format --check
 make lint-py          # ruff check across all Python packages
@@ -67,7 +67,7 @@ make regen-uv-lock     # uv lock with the pinned UV_VERSION; never a plain `uv l
 make check-xqffi-fresh # uv sync --extra dwave + import xquad -- asserts the xqffi cdylib is
                        # fresh; mutates .venv/, re-run `make deps-py` afterwards
 make check-stubs      # mypy stubtest + fault docstrings -- the xqffi .pyi stubs match the built module
-make repl             # Python REPL with xqffi + workspace packages
+make repl             # Python REPL with xqffi, xqcp, xqsa and xquad importable
 
 # Conformance and examples
 make test-rust        # test-unit-rs + test-integ-rs + test-doc + conformance-coverage (CI test:rust)
@@ -299,18 +299,20 @@ Control flow, stack/register I/O, arithmetic (including `SQR`, `ABS`, `INC`, `DE
 
 ### Dependencies & Environment
 
-- **Dependencies:** manage via each package's `pyproject.toml`. The repo-root `pyproject.toml` hosts the `uv` workspace declaration and dev-tool pins (maturin, pytest, pyyaml, ruff); the xqcp / xqsa / xqffi / xquad members carry their own. Never modify the dev-dep pins without explicit user approval.
-- **Virtual environment:** always use the workspace `.venv/` managed by `uv sync`. Never install packages globally or create ad-hoc venvs. Invoke scripts and tests through the `make` targets or `uv run`, which picks up the workspace packages without a manual activation step. `xqffi/pyproject.toml` lists the cdylib's Rust inputs as uv `cache-keys`, so any `uv sync` or `uv run` rebuilds `xqffi` after a Rust edit in `xqffi`, `xqvm` or `xqasm`; uv compares modification times, so a copy that keeps an old mtime over new content is not seen. `xqffi` installs as a regular wheel (`editable = false` in the members' `[tool.uv.sources]`), so its compiled extension lives in the installed package, not the source tree, and a cached build always carries it; an edit under `xqffi/python/` takes effect on the next sync. The make targets pass `--no-sync` to skip a second resolve after their own sync. For an extra, `uv sync --extra <name>`, then `uv run ...`; `uv run` keeps an installed extra, but a plain `uv sync`, including the one in `make deps-py` and `make test-py`, removes it again.
-- **Setup:** `make deps-py` runs `uv sync`, which builds `xqffi` through maturin with `cargo --locked` (the root `pyproject.toml`'s `config-settings-package`). The `xqcp`, `xqsa` and `xquad` editable installs carry `dev-mode-dirs = [".."]`, which puts the repo root on `sys.path`. Re-run after pulls that touch Rust sources or workspace deps.
+- **Dependencies:** manage via the repo-root `pyproject.toml`, the one Python project. It is the `xquad` distribution, built by maturin: `[project]` carries the dependencies and extras of all four packages, `[tool.maturin]` what goes into the wheel, and `[dependency-groups]` the dev-tool pins (maturin, pytest, pyyaml, ruff). There is no per-package `pyproject.toml`. Never modify the dev-dep pins without explicit user approval.
+- **Virtual environment:** always use the repo's `.venv/` managed by `uv sync`. Never install packages globally or create ad-hoc venvs. Invoke scripts and tests through the `make` targets or `uv run`, which picks up the packages without a manual activation step. The project installs editable, so a Python edit anywhere (including the `xqffi` shim and `.pyi` stubs in `xqffi/`) is live with no reinstall. The root `pyproject.toml` lists the cdylib's Rust inputs as uv `cache-keys`, so any `uv sync` or `uv run` rebuilds `xqffi` after a Rust edit in `xqffi`, `xqvm` or `xqasm`; uv compares modification times, so a copy that keeps an old mtime over new content is not seen. maturin writes the compiled extension to `xqffi/xqffi.*.so` in the tree (gitignored); if it is deleted while `.venv/` stays, `uv sync` sees nothing to do and `import xqffi` fails, so `make deps-py` reinstalls the project when the file is missing (`uv sync --reinstall-package xquad` by hand). It cannot be a non-editable install: with `xqffi/__init__.py` at the repo root, Python run from the root imports the source tree ahead of site-packages. The make targets pass `--no-sync` to skip a second resolve after their own sync. For an extra, `uv sync --extra <name>`, then `uv run ...`; `uv run` keeps an installed extra, but a plain `uv sync`, including the one in `make deps-py` and `make test-py`, removes it again.
+- **Setup:** `make deps-py` runs `uv sync`, which builds `xqffi` through maturin with `cargo --locked` (the root `pyproject.toml`'s `config-settings`). The editable install's `.pth` puts the repo root on `sys.path`. Re-run after pulls that touch Rust sources or Python deps.
 
 ### Package Map
+
+All four ship in the one `xquad` PyPI distribution (`pip install xquad`); none is published on its own.
 
 | Package | Path | Role |
 | --- | --- | --- |
 | `xqcp` | `xqcp/` | High-level constraint programming DSL compiling to XQVM assembly |
 | `xqsa` | `xqsa/` | Solver adapters for XQMX models (dwave-samplers; pluggable solver interface) |
-| `xqffi` | `xqffi/` | PyO3 FFI bindings (maturin-built); also a Rust crate |
-| `xquad` | `xquad/` | Umbrella meta-package aliasing xqffi, xqcp, xqsa under one namespace; the `xquad` CLI (`xquad vm` asm, dis, run, check) |
+| `xqffi` | `xqffi/` | PyO3 FFI bindings (maturin-built); the directory is both the Rust crate and the Python package (shim, `.pyi` stubs, built `.so`) |
+| `xquad` | `xquad/` | Umbrella package aliasing xqffi, xqcp, xqsa under one namespace; the `xquad` CLI (`xquad vm` asm, dis, run, check) |
 
 ### Testing
 

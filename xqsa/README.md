@@ -5,23 +5,26 @@ toolchain. One interface, five backends:
 
 | Solver | Class | Where it solves | Install |
 |---|---|---|---|
-| CPU simulated annealing | `SolverCPU` | Locally, on the CPU | `pip install xqsa` |
-| D-Wave Advantage QPU | `SolverDWave` | D-Wave Leap cloud | `pip install xqsa[dwave]` |
-| CUDA GPU simulated annealing | `SolverGPU(engine="cuda")` | Locally, NVIDIA GPU | `pip install xqsa[cuda]` |
-| Metal GPU SA / Gibbs | `SolverGPU(engine="metal")` | Locally, Apple GPU (macOS) | `pip install xqsa[metal]` |
-| Quip network (on-chain mempool) | `SolverQuip` | Quip network | `pip install xqsa[quip]` |
+| CPU simulated annealing | `SolverCPU` | Locally, on the CPU | `pip install xquad` |
+| D-Wave Advantage QPU | `SolverDWave` | D-Wave Leap cloud | `pip install xquad[dwave]` |
+| CUDA GPU simulated annealing | `SolverGPU(engine="cuda")` | Locally, NVIDIA GPU | `pip install xquad[cuda]` |
+| Metal GPU SA / Gibbs | `SolverGPU(engine="metal")` | Locally, Apple GPU (macOS) | `pip install xquad[metal]` |
+| Quip network (on-chain mempool) | `SolverQuip` | Quip network | `pip install xquad[quip]` |
 
 ## Install
 
+`xqsa` ships inside the `xquad` distribution, which carries its extras:
+
 ```sh
-pip install xqsa               # CPU simulated annealing only
-pip install xqsa[dwave]        # add D-Wave QPU support
-pip install xqsa[cuda]         # add CUDA GPU support
-pip install xqsa[metal]        # add Metal GPU support
-pip install xqsa[quip]         # add Quip network support
+pip install xquad               # CPU simulated annealing only
+pip install xquad[dwave]        # add D-Wave QPU support
+pip install xquad[cuda]         # add CUDA GPU support
+pip install xquad[metal]        # add Metal GPU support
+pip install xquad[quip]         # add Quip network support
 ```
 
-Extras are composable: `pip install "xqsa[cuda,dwave]"`.
+Extras are composable: `pip install "xquad[cuda,dwave]"`. The package imports
+as `xqsa`, and `xquad.sa` re-exports it.
 
 ## A complete example
 

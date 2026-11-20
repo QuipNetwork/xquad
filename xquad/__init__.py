@@ -40,8 +40,8 @@ objects. `types`, `vm` and `program` are this package's own modules.
 
 Nothing loads until it is first used: `import xquad` imports none of
 the peer packages, which keeps the `xquad` command's startup short.
-Users wanting a subset can still `pip install xqffi xqcp xqsa`
-individually; `pip install xquad` is the convenience path.
+All four packages ship in the one `xquad` distribution
+(`pip install xquad`).
 """
 
 from __future__ import annotations

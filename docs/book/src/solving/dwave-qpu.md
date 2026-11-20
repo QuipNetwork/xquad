@@ -12,7 +12,7 @@ it, so nothing on this page was run.
 Requires the `[dwave]` extra:
 
 ```sh
-pip install xqsa[dwave]
+pip install xquad[dwave]
 ```
 
 `SolverDWave()` resolves an API token from the `token=` constructor

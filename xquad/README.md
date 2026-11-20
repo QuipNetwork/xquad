@@ -1,6 +1,6 @@
 # xquad -- Primary user-facing package for the XQuad toolchain
 
-`xquad` is the Python distribution most users should install. It provides the interactive `Program` / `Session` / `RunResult` API, a `VM` wrapper over the Rust interpreter, and re-exports the lower-level peer packages (`xqffi`, `xqcp`, `xqsa`) under a single namespace.
+`xquad` is the Python distribution to install, and the only one XQuad publishes. It provides the interactive `Program` / `Session` / `RunResult` API, a `VM` wrapper over the Rust interpreter, and re-exports the lower-level packages (`xqffi`, `xqcp`, `xqsa`) under a single namespace.
 
 ## Install
 
@@ -8,9 +8,9 @@
 pip install xquad
 ```
 
-Pulls `xqffi`, `xqcp`, and `xqsa` as runtime dependencies.
-Peer installs stay valid (`pip install xqffi xqcp xqsa`) if you only
-need a subset.
+The one wheel carries `xqffi`, `xqcp` and `xqsa` as well, importable
+under their own names. Up to 0.5 they were separate distributions; from
+0.6 they are not published on their own.
 
 ## Interactive usage
 

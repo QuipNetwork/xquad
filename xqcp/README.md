@@ -7,9 +7,13 @@ for what those three are and why there are three.
 
 ## Install
 
+`xqcp` ships inside the `xquad` distribution:
+
 ```sh
-pip install xqcp
+pip install xquad
 ```
+
+It imports as `xqcp`, and `xquad.cp` re-exports it.
 
 ## A complete example
 

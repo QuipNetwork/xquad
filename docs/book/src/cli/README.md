@@ -32,8 +32,9 @@ More generally, if your shell reports `xquad: command not found`, the
 script directory of that Python environment is not on `PATH`, and
 `python -m xquad --help` works in its place.
 
-From a checkout of this repository, `make xquad` syncs the workspace
-virtual environment, and `uv run xquad` runs the command from it.
+From a checkout of this repository, `make xquad` installs the project
+into the repository's virtual environment, and `uv run xquad` runs the
+command from it.
 
 The command used to be a Rust binary from the `xqcli` crate, installed
 with `cargo install`. That crate is retired. If you installed it, run

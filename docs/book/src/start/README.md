@@ -54,7 +54,7 @@ Every `uv run python examples/...` command in this book, including on
 the next page, runs against a checkout of this repository -- the
 examples are not part of any published package, so `pip install` above
 does not put them on disk. Get one and set up the
-Python workspace once:
+Python project once:
 
 ```sh
 git clone https://gitlab.com/quip.network/xquad.git
@@ -65,7 +65,8 @@ make deps-py
 `make deps-py` needs [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
 and a [Rust toolchain](https://rustup.rs/), which builds the `xqffi`
 extension from source. It
-syncs the Python workspace and wires up cross-package imports, so
+installs the repository's `xquad` project editable, with the repository
+root on `sys.path`, so
 `uv run python examples/<name>/runner.py` then works from the repository
 root -- the same command every example and cookbook page in this book
 uses.
@@ -75,8 +76,8 @@ uses.
 The base install runs CPU simulated annealing only, through `xqsa`'s
 `cpu` backend. Every other solver -- a local GPU or a real D-Wave
 QPU -- needs an extra on top, and the extra needs hardware or credentials
-this page cannot install for you. `xqsa/pyproject.toml` defines the
-extras, and `xquad/pyproject.toml` forwards to the ones it re-exports:
+this page cannot install for you. The `xquad` distribution defines four
+extras, in the repository's root `pyproject.toml`:
 
 - `cuda` -- `cupy-cuda12x>=13.0`, `nvidia-cuda-nvrtc-cu12`, and
   `nvidia-cuda-runtime-cu12`, for a local NVIDIA GPU.
@@ -91,22 +92,20 @@ extras, and `xquad/pyproject.toml` forwards to the ones it re-exports:
   configured signer; see [Quip Network](../solving/quip-network.md) for
   what that solver does.
 
-`xqcp` and `xqffi` define no optional dependencies at all.
-
 The only extra this page can fully specify is `[dwave]`: it needs a D-Wave
 Leap account and a `DWAVE_API_TOKEN`, and `dwave ping` confirms both. A
 local GPU (`[cuda]` or `[metal]`) is another option; see [Local
 Solvers](../solving/local.md#driver-prerequisites) for those two extras
 and their driver checks.
 
-`pip install "xquad[cuda]"`, `xquad[metal]`, `xquad[dwave]`, and
-`xquad[quip]` each forward to the matching `xqsa` extra, and extras are
-composable: `pip install "xquad[cuda,dwave]"`.
+Install one with `pip install "xquad[cuda]"`, `xquad[metal]`,
+`xquad[dwave]` or `xquad[quip]`; extras are composable:
+`pip install "xquad[cuda,dwave]"`.
 
 A missing extra does not break the base install: `import xqsa` never
 fails just because an optional extra is absent. Only constructing the
 solver class that needs it does, raising `ImportError` with a
-`pip install xqsa[...]` hint naming the extra to add.
+`pip install xquad[...]` hint naming the extra to add.
 
 Per-solver parameters, driver-level troubleshooting, and what a QPU
 result contains that a CPU one does not are covered in
