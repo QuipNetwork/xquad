@@ -92,8 +92,10 @@ re-resolved:
   `pyproject.toml`, rather than the `uv sync` behaviour of quietly rewriting
   it. It runs in `make preflight-py` and in CI's `verify:python`.
 
-If either check fails, regenerate the lock (`cargo check`, `uv lock`) and
-commit the result with the change that caused it.
+If either check fails, regenerate the lock (`cargo check`,
+`make regen-uv-lock`) and commit the result with the change that caused it.
+`make regen-uv-lock` runs the pinned uv; a plain `uv lock` with a newer uv
+rewrites `uv.lock` to a lock revision CI's uv does not flag.
 
 Tool-version pins live in the Makefile rather than in CI configuration.
 `RUFF_VERSION` and `UV_VERSION` are each read out of the Makefile with `sed`,

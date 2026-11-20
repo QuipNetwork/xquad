@@ -775,7 +775,7 @@ def do_set(root: Path, version: str) -> int:
         return 2
 
     print(f"set {len(SITES)} version sites to {body} (Cargo) / {pep440} (PEP 440)")
-    print("regenerate the lockfiles: cargo check; uv lock;")
+    print("regenerate the lockfiles: cargo check; make regen-uv-lock;")
     print("  cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml")
     return 0
 
@@ -851,7 +851,7 @@ def check_branch(root: Path, branch: str) -> int:
         "",
         "To fix:",
         f"  make set-version VERSION={reopen or '<next>-dev'}",
-        "  cargo check && uv lock",
+        "  cargo check && make regen-uv-lock",
         "  cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml",
     )
     return 1
@@ -892,7 +892,7 @@ def check_tag(root: Path, tag: str) -> int:
         "registry allows an unpublish.",
         "",
         "To fix: bump every site above, regenerate the lockfiles (cargo check;",
-        "uv lock; cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml),",
+        "make regen-uv-lock; cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml),",
         "then delete the tag and re-cut it.",
         "  make list-version-sites",
         f"  make check-version-sites TAG={tag}",

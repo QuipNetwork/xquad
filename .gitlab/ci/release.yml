@@ -1,8 +1,11 @@
 # Release pipeline -- publishes the xquad toolchain to crates.io and
 # PyPI on every tag of the form `v<digit>...`.
 #
-# Five jobs, chained by `needs:`:
+# Six jobs. Four are chained by `needs:`, and two stand alone:
 #
+#   release:prepare    push to release/vX.Y.Z -- bumps the version if
+#                      the branch is not at it yet, then opens the draft
+#                      release MR into main.
 #   release:validate  runs on every pipeline (no `rules:` at all), and
 #                      validates crate packaging plus the four Python
 #                      distributions before anything is published.
@@ -22,7 +25,9 @@
 #
 # Chain: release:validate -> release:crates -> release:pypi ->
 # release:notes (the last link only on a non-rc tag).
-# release:auto-tag is standalone -- `needs: []`, so it
+# release:prepare and release:auto-tag are standalone. release:prepare
+# is covered beside its own definition, at the end of this file.
+# release:auto-tag carries `needs: []`, so it
 # starts at t=0 and waits on nothing, including release:validate in its
 # own stage. It fires on the push that merges a release MR, and the tag
 # it pushes is what triggers the other four jobs on a fresh, tag
@@ -53,11 +58,15 @@
 # only job this environment (and its four id_tokens) applies to;
 # release:validate runs on every ref and must not acquire it.
 #
-# Release MR flow (QUI-580):
+# Release MR flow (QUI-580, QUI-2216):
 #
-#   1. Open a branch named `release/vX.Y.Z` with the version bump.
-#   2. Create an MR using the "release" template; both @kleczkowski
-#      and @meganathanmanish must approve (2 approvals required).
+#   1. Push a branch named `release/vX.Y.Z`. `release:prepare` bumps it
+#      to X.Y.Z if nobody has yet, and opens a draft MR from the
+#      "release" template, authored by the GITLAB_API_TOKEN bot with
+#      both maintainers as reviewers.
+#   2. Both @kleczkowski and @meganathanmanish approve. The project
+#      rule asks for one approval; both is the release convention, and
+#      the bot being the author is what lets both give one.
 #   3. Merge -> `release:auto-tag` fires on main, looks up the merged
 #      MR via the GitLab API, and pushes tag `vX.Y.Z` via glab.
 #   4. The tag push triggers the rest of this pipeline as normal.
@@ -146,13 +155,14 @@ variables:
 # hardware suite just proved broken.
 release:validate:
     stage: release
+    tags: [docker, amd64]
     needs:
         - job: dependency-gate
           optional: true
         - !reference [.needs-gates, verify-test-and-hardware]
     # dependencies: [] on every job in this file whose `needs:` names
-    # other jobs; release:auto-tag is the one exception, since its
-    # `needs: []` already downloads nothing. Without it, GitLab
+    # other jobs; release:auto-tag and release:prepare are the
+    # exceptions, since `needs: []` already downloads nothing. Without it, GitLab
     # downloads every prior stage's artifacts by default; this job's
     # predecessor, the old tag-only release:validate, was seen
     # downloading docs/book/build/ from docs:build before running a
@@ -260,6 +270,7 @@ release:validate:
 # argument for the split.
 release:crates:
     stage: release
+    tags: [docker, amd64]
     needs:
         - job: dependency-gate
           optional: true
@@ -288,6 +299,7 @@ release:crates:
 # to building from the sdist with a local Rust toolchain.
 release:pypi:
     stage: release
+    tags: [docker, amd64]
     needs:
         - job: dependency-gate
           optional: true
@@ -370,6 +382,7 @@ release:pypi:
 # not error if the release already exists).
 release:notes:
     stage: release
+    tags: [docker, amd64]
     # Runs after release:pypi so the GitLab Release page goes up only
     # once artefacts are live on crates.io and PyPI (QUI-496).
     needs:
@@ -471,10 +484,11 @@ release:notes:
 release:auto-tag:
     extends: .alpine
     stage: release
-    # `needs: []` -- start at t=0, gated by `rules:` alone. This is the
-    # only job in this file that does not wait on something, and the
-    # two reasons are worth keeping straight because they pull in
-    # opposite directions.
+    tags: [docker, amd64]
+    # `needs: []` -- start at t=0, gated by `rules:` alone. This and
+    # release:prepare are the jobs in this file that wait on nothing,
+    # and this one's two reasons are worth keeping straight because they
+    # pull in opposite directions.
     #
     # It is what makes `interruptible: false` below mean anything.
     # GitLab's default auto-cancel policy
@@ -512,9 +526,9 @@ release:auto-tag:
     # is a release-path job and belongs with its neighbours in this
     # file. Do not read the stage as an ordering claim.
     #
-    # No `dependencies: []` here, unlike every other job in this file:
-    # `needs:` governs artifact download once present, and `needs: []`
-    # already means "download nothing".
+    # No `dependencies: []` here, unlike the jobs whose `needs:` names
+    # others: `needs:` governs artifact download once present, and
+    # `needs: []` already means "download nothing".
     needs: []
     timeout: 10m
     # See the `needs: []` note above -- the two settings only work as a
@@ -553,3 +567,77 @@ release:auto-tag:
         GITLAB_TOKEN: "${GITLAB_API_TOKEN}"
     script:
         - bash scripts/auto-tag-release.sh
+
+# ---------------------------------------------------------------------------
+# Prepare job (release-branch-push-triggered, release MR flow)
+# ---------------------------------------------------------------------------
+
+# QUI-2216. Fires on a push to `release/vX.Y.Z` and does what cutting a
+# release used to ask of a maintainer by hand: if the branch is not at
+# X.Y.Z with current lockfiles, it runs `make set-version`, regenerates
+# Cargo.lock and uv.lock, and pushes `chore: bump workspace to X.Y.Z`;
+# then, if no merge request is open from the branch, it opens a draft
+# one into main from the release template. scripts/prepare-release.py
+# has the steps and why each is idempotent: a re-run, a bump pushed by
+# hand first, and two runs racing all end with one bump and one MR.
+#
+# The MR's author is the GITLAB_API_TOKEN bot (the same project access
+# token release:auto-tag uses, with api and write_repository). GitLab
+# blocks an author's own approval, so a release a maintainer opened
+# could only be approved by the other one; with the bot as the author,
+# both can approve. The bump is pushed with the same token over HTTPS,
+# because CI_JOB_TOKEN cannot push. When the token expires, this job
+# fails along with release:auto-tag.
+#
+# Branch pipelines only, never merge request pipelines. A branch
+# pipeline runs only while no MR is open from the branch (the root
+# `workflow:`), which is exactly the window this job has work in: once
+# the MR is open, a push is a fix landing on the release, and the
+# release is the MR's to judge. It also keeps a second bump from
+# landing after the approvals, which reset on push. `web` is admitted
+# so a maintainer can start it from "Run pipeline" if the push pipeline
+# was lost. A retry reruns it against the pipeline's own, possibly
+# outdated, commit; the script then finds its push rejected and checks
+# the branch's real tip instead.
+#
+# Not `ci.skip` on the bump commit: the pipeline that commit starts is
+# the one that checks it, and its own run of this job finds nothing to
+# bump and the MR already open (or opens it, if it wins the race).
+release:prepare:
+    stage: release
+    # `needs: []` and `interruptible: false` for release:auto-tag's
+    # reasons: the bump push starts a new pipeline on this branch, and
+    # under the default auto-cancel policy that pipeline would cancel
+    # this one mid-run -- after the bump is pushed but before the MR is
+    # open -- unless this job is non-interruptible and already running.
+    # The cost: once it has started, nothing in this pipeline is
+    # cancelled, so the unbumped commit's pipeline runs to the end. It
+    # is the first push of a release branch, once per release.
+    needs: []
+    interruptible: false
+    timeout: 20m
+    # cargo needs only the registry index to check and rewrite the
+    # workspace's own lock entries; nothing is built, so there is no
+    # target/ worth restoring.
+    cache: []
+    # Protected refs only. The job runs the branch's own make, uv and
+    # maturin with GITLAB_API_TOKEN in its environment, so it must run
+    # only where pushing is limited to Maintainers: `release/*` is a
+    # protected pattern (RELEASING.md, one-time setup). A branch named
+    # like a release that slipped past that pattern gets no run rather
+    # than the token. Marking GITLAB_API_TOKEN itself as a protected
+    # variable closes the same gap for every other job.
+    rules:
+        - if: $CI_COMMIT_REF_PROTECTED == "true" && $CI_COMMIT_BRANCH =~ /^release\/v\d+\.\d+\.\d+$/ && ($CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "web")
+          when: on_success
+    variables:
+        GITLAB_TOKEN: "${GITLAB_API_TOKEN}"
+        # GitLab usernames requested as reviewers on the release MR.
+        RELEASE_REVIEWERS: "kleczkowski meganathanmanish"
+    before_script:
+        # uv runs the script (stdlib only, as every repository script
+        # does through VERPY) and `uv lock`; the pinned default image
+        # supplies cargo, git and make.
+        - !reference [.fragments, uv]
+    script:
+        - uv run --no-project --isolated --python 3.13 python scripts/prepare-release.py

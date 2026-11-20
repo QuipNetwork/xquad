@@ -116,9 +116,17 @@ Before cutting a tag:
    allowed to create: Maintainers. This restricts who can push tags
    manually and ensures the CI-created tag is protected.
 2. **Settings → CI/CD → Variables** -- add `GITLAB_API_TOKEN` (project
-   access token, `api` scope, masked). `write_repository` is the minimum
-   needed to push tags; full `api` is simpler to configure. Used only by
-   `release:auto-tag` to look up the merged MR and push the tag.
+   access token, `api` scope, protected, masked and hidden). Protected is
+   the setting that matters: `release:prepare` runs the release branch's
+   own scripts with this token, and a protected variable is only given
+   to pipelines on protected refs, never to one on an unprotected
+   branch. `write_repository` is the minimum
+   needed to push tags; full `api` is simpler to configure. Used by
+   `release:auto-tag` to look up the merged MR and push the tag, and by
+   `release:prepare` to push the version bump and open the release MR,
+   which needs both `api` and `write_repository`. Its bot user must be
+   a Maintainer, so it can push to `release/*`. The token expires on
+   2027-06-02, and from then on both jobs fail until it is replaced.
 3. **Settings → Repository → Protected branches** -- protect `main`
    (push: the code owners in `.gitlab/CODEOWNERS`, named one by one;
    merge: Maintainers), `dev` and `release/*` (push and merge:
@@ -152,11 +160,14 @@ not restated here.
 ```sh
 # 1. Create a release branch from its line: origin/main for a patch,
 #    origin/dev for a minor. The branch name must match release/vX.Y.Z
-#    exactly -- the CI auto-tag job matches the merge SHA against the MR
-#    API to find this branch name.
+#    exactly -- release:prepare reads the version from it, and the CI
+#    auto-tag job matches the merge SHA against the MR API to find it.
 git fetch origin && git switch -c release/vX.Y.Z origin/main   # or origin/dev
 
-# 2. Set every version site, then regenerate the lockfiles.
+# 2. Optional: bump by hand. release:prepare makes this commit on the
+#    first push when it is missing, so a cut is steps 1 and 3. Made
+#    here instead, it is the same change, and CI finds nothing to bump.
+#    Set every version site, then regenerate the lockfiles.
 #    `make set-version` writes all of them, each in its own ecosystem's
 #    spelling; `make list-version-sites` prints them. That list lives in
 #    scripts/check-version-sites.py and is not repeated here, so the
@@ -166,8 +177,12 @@ git fetch origin && git switch -c release/vX.Y.Z origin/main   # or origin/dev
 #    peer pin including xquad's optional-dependencies, and the pallet
 #    fixture's lock entry.
 make set-version VERSION=X.Y.Z
-#    Then regenerate: `cargo check` (Cargo.lock) and `uv lock` (uv.lock).
-#    `uv lock` is not optional bookkeeping here -- `make check-uv-lock`
+#    Then regenerate: `cargo check` (Cargo.lock), then
+#    `make regen-uv-lock` (uv.lock), which runs the pinned uv from the
+#    Makefile's UV_VERSION. Not a plain `uv lock`: a newer local uv
+#    rewrites uv.lock to a newer lock revision, and CI's uv reads that
+#    as current, so nothing catches it. Regenerating uv.lock is not
+#    optional bookkeeping here -- `make check-uv-lock`
 #    (`uv lock --check`) runs in `verify:python` and `preflight-py` and
 #    fails the moment uv.lock is stale against any pyproject.toml, so a
 #    version bump that forgets it fails CI on this branch rather than
@@ -199,13 +214,32 @@ git commit -s -am "chore: bump workspace to X.Y.Z"
 #    Cargo wants SemVer (`0.4.0-dev`, `0.3.0-rc1`), Python wants PEP 440
 #    (`0.4.0.dev0`, `0.3.0rc1`). One version number, two spellings.
 
-# 3. Push and open an MR using the "release" template.
+# 3. Push. CI bumps the branch if step 2 was skipped, and opens the MR.
 git push -u origin release/vX.Y.Z
 ```
 
-Open the MR with the `release` template and tick the release type:
-patch from `main` or minor from `dev`. Title it `release: vX.Y.Z`. The
-title is checked against the commit grammar twice: by the title pattern
+The push starts `release:prepare` (`.gitlab/ci/release.yml`; the steps
+are in `scripts/prepare-release.py`). If the branch is not at X.Y.Z with
+current lockfiles, it runs `make set-version VERSION=X.Y.Z`, regenerates
+`Cargo.lock` and `uv.lock`, and pushes `chore: bump workspace to X.Y.Z`,
+signed off by the `GITLAB_API_TOKEN` bot. It never force-pushes: if the
+branch moved meanwhile, it checks the new tip, and passes only if that
+tip already carries a bump. Then, if no merge request is open from the
+branch, it opens a draft into `main` from the `release` template, with
+the version filled in, the release type ticked from the version (Patch
+when Z > 0, Minor when Z is 0), and both maintainers as reviewers.
+
+The bump commit's own pipeline runs `release:prepare` again, finds
+nothing to bump, and finds the MR open. Re-running the job, or bumping by
+hand before CI does, also ends with one bump commit and one MR. The job
+runs only on branch pipelines, which exist only while no MR is open from
+the branch, so an MR opened by hand first is left as it is; add both
+reviewers to it yourself. Once the job has started, the unbumped
+commit's pipeline is not cancelled by the bump's, and runs to the end.
+
+`release:prepare` titles the MR `Draft: release: vX.Y.Z`; take the
+`Draft:` prefix off when the release is ready to merge. The title is
+checked against the commit grammar twice: by the title pattern
 on the merge request form, and by `verify:policy` through
 `scripts/check-mr-title.sh`. `release` is a type in
 `scripts/commit-grammar.sh`, and git-cliff drops it.
@@ -222,11 +256,21 @@ fixed since it was cut. A minor release branch cut from a `dev` that is
 missing a back-merge fails here, and the fix is to back-merge `main`
 into it.
 
-Open the MR targeting `main`. It needs the project's one approval; the
-template's `/assign_reviewer` puts both @kleczkowski and
-@meganathanmanish on it, and review from both is expected of a release
-rather than enforced -- a two-of-two pool cannot be enforced while an
-author cannot approve their own merge request.
+The MR targets `main`, and its author is the `GITLAB_API_TOKEN` bot, so
+both @kleczkowski and @meganathanmanish can approve it. GitLab blocks an
+author's own approval, which is why a release a maintainer opened could
+only ever be approved by the other one. The project rule asks for one
+approval; a release gets both by convention -- the last box under
+"Checked by a person" in the template, checked before merging. No rule
+enforces it, because a two-approval rule on `main` would also apply to
+every patch merge request before 1.0. Approvals reset on push, so they
+are given after the bump has landed.
+
+The template splits its checklist in two. Boxes under "Checked by CI"
+name the job that proves them, and are ticked from that job's result.
+Boxes under "Checked by a person" are judgements or actions at merge
+time, and an agent never ticks them. The "Release notes preview" slot
+takes the output of `make changelog-release VERSION=vX.Y.Z`.
 
 **Merge it without squashing.** A squashed release loses every commit
 behind it -- a minor loses everything from `dev`, a patch the fixes

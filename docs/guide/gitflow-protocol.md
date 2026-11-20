@@ -198,11 +198,13 @@ happens. Pre-freeze snapshots are what betas are for.
 
 1. Cut `release/vX.Y.Z` from its line -- `main` for a patch, `dev` for a minor.
    The source line freezes.
-2. Set the version and regenerate the lockfiles:
+2. Push it. `release:prepare` sets the version, regenerates the lockfiles,
+   pushes `chore: bump workspace to X.Y.Z`, and opens the draft release merge
+   request into `main`. A manual bump still works, and CI then skips its own:
 
    ```sh
    make set-version VERSION=X.Y.Z
-   cargo check && uv lock
+   cargo check && make regen-uv-lock
    cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml
    git commit -sam "chore: bump workspace to X.Y.Z"
    ```
@@ -211,8 +213,8 @@ happens. Pre-freeze snapshots are what betas are for.
    throwaway branch off the release branch, the version set to `X.Y.Z-rcN`,
    the tag, and the branch discarded. The release branch stays at `X.Y.Z`.
    Only fixes land on it; a feature arriving here is the rule being broken.
-4. Open the merge request into `main` with the `release` template and merge it
-   without squashing. `release:auto-tag` pushes `vX.Y.Z` and the tag pipeline
+4. Merge the release merge request `release:prepare` opened, without
+   squashing. `release:auto-tag` pushes `vX.Y.Z` and the tag pipeline
    publishes.
 5. Reopen `main` at the next patch `-dev` version, by pushing the bump
    straight to `main`:
@@ -220,7 +222,7 @@ happens. Pre-freeze snapshots are what betas are for.
    ```sh
    git switch -c reopen origin/main                 # local only, never pushed
    make set-version VERSION=X.Y.(Z+1)-dev
-   cargo check && uv lock
+   cargo check && make regen-uv-lock
    cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml
    git commit -sam "chore: reopen main at X.Y.(Z+1)-dev"
    git push origin HEAD:main
@@ -251,7 +253,7 @@ A beta is cut on a throwaway branch, tagged, and never merged:
 ```sh
 git switch -c beta/v0.5.0-beta1 origin/dev     # or origin/main, for a 0.4.x beta
 make set-version VERSION=0.5.0-beta1
-cargo check && uv lock
+cargo check && make regen-uv-lock
 cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml
 git commit -sam "chore: cut 0.5.0-beta1"
 git tag v0.5.0-beta1 && git push origin v0.5.0-beta1
@@ -293,7 +295,7 @@ whatever still conflicts is a real conflict:
 git fetch origin
 git switch -c backmerge/vX.Y.Z origin/main       # local only, never pushed
 make set-version VERSION=0.5.0-dev               # dev's version, not main's
-cargo check && uv lock
+cargo check && make regen-uv-lock
 cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml
 git commit -sam "chore: carry dev's version into the vX.Y.Z back-merge"
 
@@ -307,7 +309,7 @@ Everything else `main` changed in those manifests -- a new dependency, a
 changed constraint -- merges in normally, because only the version lines were
 taken out of play. If `Cargo.lock` or `uv.lock` still conflicts, both sides
 changed dependencies: resolve the manifests, take either lockfile, and
-regenerate it with `cargo check` and `uv lock`.
+regenerate it with `cargo check` and `make regen-uv-lock`.
 
 Before 1.0 expect real conflicts. `main` is a working line carrying every
 non-breaking feature and fix, not a line that only receives releases, so the

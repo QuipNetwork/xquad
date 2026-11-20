@@ -43,6 +43,7 @@
 # check to the slowest job in the pipeline.
 verify:rust:
     stage: verify
+    tags: [docker, amd64]
     extends: .rust
     needs:
         - job: dependency-gate
@@ -322,6 +323,7 @@ verify:python:
 # does not carry into the next run.
 verify:xqffi:
     stage: verify
+    tags: [docker, amd64]
     needs:
         - job: dependency-gate
           optional: true

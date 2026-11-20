@@ -9,7 +9,7 @@
         check-branch-containment check-main-direct-push \
         deps deps-miri deps-py deps-wasm \
         install-hooks \
-        lint lint-clippy lint-doc lint-deny-rs lint-deny-fixture lint-py check-uv-lock \
+        lint lint-clippy lint-doc lint-deny-rs lint-deny-fixture lint-py check-uv-lock regen-uv-lock \
         fmt fmt-rs fmt-toml fmt-check fmt-check-rs fmt-check-toml fmt-py fmt-check-py \
         test test-unit-rs test-integ-rs test-doc test-miri test-py test-wasm test-substrate-fixture \
         test-quip test-quip-sign test-quip-e2e check-xqffi-fresh check-stubs \
@@ -176,8 +176,9 @@ list-version-sites:
 # `0.4.1-dev` lands as `0.4.1-dev` in one and `0.4.1.dev0` in the other.
 #
 # The lockfiles are not version sites and do not move on their own. Follow
-# with `cargo check`, `uv lock`, and `cargo update -p xqvm --manifest-path
-# fixtures/pallet-xqvm/Cargo.toml`; the target prints the same three.
+# with `cargo check`, `make regen-uv-lock`, and `cargo update -p xqvm
+# --manifest-path fixtures/pallet-xqvm/Cargo.toml`; the target prints the
+# same three.
 #
 # Every back-merge conflicts on these sites by construction, so the
 # resolution is this one command rather than 23 hand edits.
@@ -502,11 +503,12 @@ VALE_VERSION := 3.15.1
 # this Makefile-as-source-of-truth pattern is the real in-repo precedent.
 # 0.11.7 is the version the reference developer machine runs today.
 #
-# Unlike RUFF_VERSION, this pin binds CI only. `uvx ruff@$(RUFF_VERSION)`
-# installs ruff on the local side too, but nothing can install uv through
-# uv, so a contributor runs whatever uv is on their PATH. check-uv-lock
-# warns when that differs from this value -- see its comment for why a
-# warning rather than a gate.
+# Locally a contributor runs whatever uv is on their PATH, and only one
+# target pins it: regen-uv-lock writes uv.lock through
+# `uvx uv@$(UV_VERSION)`, because a newer uv rewrites the lock to a newer
+# revision that CI's uv then reads as current. check-uv-lock reads the
+# lock with the PATH uv and warns when that differs from this value --
+# see its comment for why a warning rather than a gate.
 UV_VERSION := 0.11.7
 
 fmt: fmt-rs fmt-toml fmt-py
@@ -591,9 +593,22 @@ check-uv-lock:
 	@have="$$(uv --version 2>/dev/null | awk '{print $$2}')"; \
 	if [ -n "$${have}" ] && [ "$${have}" != "$(UV_VERSION)" ]; then \
 		echo "warning: local uv $${have} != pinned $(UV_VERSION) (Makefile UV_VERSION, installed by CI);" >&2; \
-		echo "         a uv.lock disagreement with CI may be a resolver difference, not a stale lock" >&2; \
+		echo "         a uv.lock disagreement with CI may be a resolver difference, not a stale lock;" >&2; \
+		echo "         regenerate it with \`make regen-uv-lock\`, which runs the pinned uv" >&2; \
 	fi
 	uv lock --check
+
+# Regenerates uv.lock with the pinned uv rather than the one on PATH. A
+# newer uv writes a newer lock revision: a local 0.13.5 moved uv.lock from
+# revision 3 to 5 during the v0.5.2 cut. CI's uv reads that lock as
+# current, so the change is never caught and never undone. uv is
+# published on PyPI, so `uvx` fetches and runs the pin like any other
+# tool. Every documented `uv lock` step (version bumps, back-merges,
+# lockfile conflicts) goes through this target. Run it after `cargo
+# check`: uv asks maturin for xqffi's metadata, and maturin reads
+# Cargo.lock with `--locked`.
+regen-uv-lock:
+	uvx uv@$(UV_VERSION) lock
 
 # -- Tests ------------------------------------------------------------------
 

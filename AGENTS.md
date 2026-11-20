@@ -63,6 +63,7 @@ make fmt-check-py     # ruff format --check
 make lint-py          # ruff check across all Python packages
 make test-py          # pytest xqcp/tests xqsa/tests xquad/tests scripts/tests
 make check-uv-lock     # uv lock --check -- fails if uv.lock is stale against pyproject.toml
+make regen-uv-lock     # uv lock with the pinned UV_VERSION; never a plain `uv lock`
 make check-xqffi-fresh # uv sync --extra dwave + import xquad -- asserts the xqffi cdylib is
                        # fresh; mutates .venv/, re-run `make deps-py` afterwards
 make check-stubs      # mypy stubtest + fault docstrings -- the xqffi .pyi stubs match the built module
@@ -94,7 +95,7 @@ make check-release-notes                    # regression guard: every release re
 
 # Versions and branches (docs/guide/gitflow-protocol.md is normative)
 make list-version-sites                     # every place a release version is written
-make set-version VERSION=0.4.1-dev          # write them all; then cargo check && uv lock
+make set-version VERSION=0.4.1-dev          # write them all; then cargo check && make regen-uv-lock
 make check-branch-containment               # last release tag in dev, origin/main in release/* (no-op elsewhere)
 ```
 
@@ -136,7 +137,7 @@ Two long-lived branches. [`docs/guide/gitflow-protocol.md`](docs/guide/gitflow-p
 
 Route every change by one question: **does it break?** Before 1.0 the minor is the breaking bump, so "is this a fix?" is the wrong question -- a non-breaking feature goes to `main` and a breaking fix goes to `dev`. A breaking change branches from `dev`, targets `dev`, and carries `!` in its merge request title and commit subjects. Everything else branches from and targets `main`. There is no `hotfix/` branch before 1.0. Branch names stay `feature/qui-<id>` on either line; the target is set on the merge request, not in the name.
 
-When opening a merge request, answer the **Compatibility** block in `.gitlab/merge_request_templates/default.md` -- GitLab auto-populates that template, and its answer decides the target branch, so it has to match the branch chosen on the form. Leaving it blank means an unrouted change. A non-breaking claim needs two or three lines naming what the change touched and why a consumer pinned to the current minor can take it without editing their code. Releases use `release.md` instead (`glab mr create --template release`).
+When opening a merge request, answer the **Compatibility** block in `.gitlab/merge_request_templates/default.md` -- GitLab auto-populates that template, and its answer decides the target branch, so it has to match the branch chosen on the form. Leaving it blank means an unrouted change. A non-breaking claim needs two or three lines naming what the change touched and why a consumer pinned to the current minor can take it without editing their code. Releases use `release.md` instead, and `release:prepare` opens that merge request from CI when a `release/vX.Y.Z` branch is pushed. An agent may fill its "Checked by CI" boxes from the jobs they name, and never ticks a box under "Checked by a person".
 
 Nothing is squashed on merge. The one exception is post-1.0 `hotfix/*` into `main`.
 
