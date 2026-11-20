@@ -197,8 +197,8 @@
         - uv sync
     # uv + maturin + twine + cargo-zigbuild for the Python publishing
     # path (release:validate, release:pypi). Stays on the pinned default
-    # image so cargo is available for maturin's cdylib
-    # build; uv provides the wheel builder for the pure-Python peers.
+    # image so cargo is available for maturin's cdylib build; uv runs the
+    # smoke test's throwaway venv.
     python-publish:
         # Must come first: this is what puts ${CARGO_HOME}/bin on PATH,
         # which is what makes the `command -v cargo-zigbuild`

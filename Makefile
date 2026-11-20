@@ -249,9 +249,10 @@ check-crate-publish:
 
 # Needs maturin, twine and uv on PATH -- the same kind of prerequisite
 # note the hardware tiers below give for a CUDA device, a D-Wave QPU
-# token or a Metal-capable Mac. Builds the four distributions, runs
-# twine check, and smoke-installs each into a throwaway venv via
-# scripts/smoke-wheels.sh (wired into python-dists.sh's verify phase).
+# token or a Metal-capable Mac. Builds the xquad wheels and sdist, checks
+# the wheel contents, runs twine check, and smoke-installs the wheel into
+# a throwaway venv via scripts/smoke-wheels.sh (wired into
+# python-dists.sh's verify phase).
 check-python-dists:
 	bash scripts/python-dists.sh check
 
@@ -285,7 +286,7 @@ check-release: check-version-sites check-crate-publish check-python-dists
 # (test-quip*, test-cuda, test-qpu, test-metal), which need a real
 # device, token or devnet and are driven by hand or a dedicated runner,
 # and preflight-release (below), which needs maturin/twine/uv and builds
-# four distributions into a throwaway venv on top of a full-verify
+# the xquad distribution into a throwaway venv on top of a full-verify
 # workspace packaging dry-run.
 preflight-rs: lint-rust lint-deny-rs lint-deny-fixture test-rust test-wasm test-substrate-fixture
 
