@@ -159,10 +159,10 @@ which disassembles the program and points at the failing instruction.
 Produced by `xqvm::verifier::VerifierError`
 ([`xqvm/src/verifier/error.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/verifier/error.rs))
 before a program runs, by the four-phase pipeline described in
-[Verifier](verifier.md): structural, jump-target and loop-nesting checks;
-register type-state; must-init analysis; and stack depth.
+[Verifier](verifier.md): structural, jump-target, loop-nesting and
+jump-span checks; register type-state; must-init analysis; and stack depth.
 
-The eleven variants, which phase raises each one, and what each one means
+The variants, which phase raises each one, and what each one means
 are catalogued in [Verifier's error reference](verifier.md#error-reference)
 rather than repeated here, since that page also explains the phase that
 produces each one. See [Verification](../running/verification.md) for how

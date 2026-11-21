@@ -45,16 +45,18 @@ that a linear scan would miss to be detected.
 | 1a | Structural | `StructuralPhase` | Truncated bytes, unknown opcodes |
 | 1b | Jump target | `JumpTargetPhase` | Jump label >= target count |
 | 1c | Loop nesting | `LoopNestingPhase` | Loop open/close balance, loop-context reads |
+| 1d | Jump span | `JumpSpanPhase` | Jump target in a different loop body from the jump |
 | 2 | Register type-state | `RegisterTypePhase` | CFG-based read-before-write, register type mismatches |
 | 3 | Must-init | `UninitRegisterPhase` | CFG AND-meet: registers uninit on at least one path |
 | 4 | Stack depth | `StackDepthPhase` | CFG-based stack underflow/overflow, loop balance, join-point depth mismatch |
 
-Phases 1a--1c share the `scan` kernel and run as one combined pass. Custom
-pipelines are supported via `Verifier::new().with_phase(p)`.
+Phases 1a--1c share the `scan` kernel and run as one combined pass; 1d is a
+second lexical pass over the same bytes. Custom pipelines are supported via
+`Verifier::new().with_phase(p)`.
 
 ---
 
-## Phase 1 -- Structural, Jump-Target, Loop-Nesting
+## Phase 1 -- Structural, Jump-Target, Loop-Nesting, Jump-Span
 
 ### 1a: Structural
 
@@ -84,6 +86,32 @@ verifier tracks nesting depth and rejects:
   offset of the outermost unmatched opener.
 
 Errors: `NoActiveLoop`, `UnmatchedLoop`.
+
+### 1d: Jump span
+
+Every program position has a *body*: the innermost lexical loop body that
+encloses it, by `RANGE`/`ITER`..`NEXT` pairing. A `RANGE` or `ITER`
+instruction belongs to the *enclosing* body; its matching `NEXT` belongs to
+the *inner* body it closes. A `JUMP1`, `JUMPI1`, `JUMP2`, or `JUMPI2` whose
+target lies in a different body from the jump itself is rejected -- whether
+it jumps into a loop, out of one, or into a sibling loop.
+
+Why this is enough: with no cross-body jumps, the runtime loop stack equals
+the lexical nesting at every pc (a skipped loop resynchronizes by a lexical
+scan), so a jump that stays within one body cannot change the active loop
+set between source and target. A cross-body jump would let the VM carry a
+loop stack the lexical structure does not predict, which the other phases
+assume it does. The rule deliberately also rejects break/continue style
+exits; the toolchain (`xqcp`) never emits them as raw cross-body jumps, and
+its "if inside a loop" and "loop inside an if" output stays within one body.
+Reachability is not consulted.
+
+The phase runs as its own lexical pass after the combined Phase 1 scan.
+Its memory is proportional to the number of loop boundaries and jumps, not
+to the number of instructions.
+
+Error: `JumpAcrossLoopBoundary` (carries the jump's and the target's byte
+offsets).
 
 ---
 
@@ -456,6 +484,7 @@ All bound arithmetic is checked, and exhaustion returns the dedicated error.
 | `UndefinedJumpTarget` | 1b | Jump references label id >= target count |
 | `NoActiveLoop` | 1c | `NEXT`, `LVAL`, or `LIDX` with no open loop frame |
 | `UnmatchedLoop` | 1c | Loop frame still open at end of program |
+| `JumpAcrossLoopBoundary` | 1d | Jump target lies in a different loop body from the jump |
 | `ReadUnsetRegister` | 2 or 3 | Register read before any write (or before write on all paths) |
 | `RegisterTypeMismatch` | 2 | Register holds wrong type for the instruction |
 | `LoopStackImbalance` | 4 | Loop body entry depth != exit depth |

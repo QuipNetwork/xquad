@@ -48,19 +48,21 @@ step and allocation budgets it sets, not from a verification pass.
 | 1a | Structural | Truncated instruction bytes, unknown opcodes |
 | 1b | Jump target | A jump label id at or past the program's target count |
 | 1c | Loop nesting | `RANGE`/`ITER`/`NEXT` balance, loop-only instructions used outside a loop |
+| 1d | Jump span | A jump whose target lies in a different loop body from the jump |
 | 2 | Register type-state | Control-flow-based read-before-write and register type checks |
 | 3 | Must-init | Control-flow AND-meet analysis: a register read that is unset on at least one incoming path |
 | 4 | Stack depth | Control-flow-based stack underflow, overflow risk, and join-point depth mismatches |
 
 Phases 1a-1c share one linear scan over the instruction bytes -- the same
 scan that produces the program's id-to-offset lookup for `TARGET` labels
-(see [Bytecode Format](bytecode-format.md)). Phases 2 through 4 share one
+(see [Bytecode Format](bytecode-format.md)). Phase 1d is a second lexical
+pass. Phases 2 through 4 share one
 control-flow graph of basic blocks, built once, and each runs its own
 forward worklist analysis over it. The control-flow graph correctly accounts for unreachable code,
 conditional branches, and loop back-edges, catching errors that a purely
 linear scan would miss.
 
-## Phase 1 -- structural, jump target, loop nesting
+## Phase 1 -- structural, jump target, loop nesting, jump span
 
 **1a, structural.** Every byte in the instruction stream must decode to a
 known opcode with the correct number of operand bytes. An unrecognised
@@ -77,6 +79,16 @@ closes one. The verifier rejects `NEXT`, `LVAL`, or `LIDX` reached with no
 open loop frame, and any loop frame still open at the end of the program
 (reported at the byte offset of the outermost unmatched opener).
 Errors: `NoActiveLoop`, `UnmatchedLoop`.
+
+**1d, jump span.** Every position belongs to the innermost loop body that
+encloses it: a `RANGE` or `ITER` belongs to the enclosing body, and its
+matching `NEXT` to the inner body it closes. A jump whose target lies in a
+different body from the jump itself -- into a loop, out of one, or into a
+sibling loop -- is rejected. With no such jumps the VM's loop stack always
+matches the program's lexical nesting, which the later phases rely on.
+Jumps that stay within one body, such as `xqcp`'s "if inside a loop" and
+"loop inside an if", are unaffected.
+Error: `JumpAcrossLoopBoundary`.
 
 ## Phase 2 -- register type-state
 
@@ -191,6 +203,7 @@ acceptance-equivalence proof and historical minimum-walk oracle.
 | `UndefinedJumpTarget` | 1b | A jump references a label id at or past the program's target count |
 | `NoActiveLoop` | 1c | `NEXT`, `LVAL`, or `LIDX` reached with no open loop frame |
 | `UnmatchedLoop` | 1c | A loop frame is still open at the end of the program |
+| `JumpAcrossLoopBoundary` | 1d | A jump's target lies in a different loop body from the jump |
 | `ReadUnsetRegister` | 2 or 3 | A register is read before it is written, or before it is written on every path |
 | `RegisterTypeMismatch` | 2 | A register holds a different `RegVal` variant than the instruction expects |
 | `LoopStackImbalance` | 4 | A loop body's entry and exit stack depths differ |
