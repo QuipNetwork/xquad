@@ -367,6 +367,46 @@ fn differential_malformed_streams() {
     }
 }
 
+/// Real compiler output (X R8 item 5): `xqcp`-compiled encoder, verifier and
+/// decoder programs for a conditional inside a loop, a loop inside a
+/// conditional, and a conditional inside a loop whose arm itself loops (its
+/// decoder jumps over a whole inner loop, within the outer body). Regenerate
+/// with `tests/xqcp_fixtures/generate.py`. Every program must be accepted by
+/// both the baseline and the production checker.
+#[test]
+fn xqcp_compiled_control_flow_still_checks_clean() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/xqcp_fixtures");
+    let mut checked = 0usize;
+    for entry in std::fs::read_dir(&dir)
+        .expect("xqcp fixtures directory")
+        .flatten()
+    {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "xqasm") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("read fixture");
+        let program = xqasm::assemble_source(&source)
+            .unwrap_or_else(|e| panic!("{} does not assemble: {e}", path.display()));
+        assert!(
+            baseline(&program).is_ok(),
+            "baseline rejects compiler output {}",
+            path.display()
+        );
+        assert!(
+            candidate(&program).is_ok(),
+            "the production checker rejects compiler output {}: {:?}",
+            path.display(),
+            candidate(&program)
+        );
+        checked += 1;
+    }
+    assert_eq!(
+        checked, 9,
+        "expected 3 shapes x (encoder, verifier, decoder)"
+    );
+}
+
 #[test]
 fn differential_zero_new_rejections_of_compiler_output() {
     // Every assembled compiler-output vector the baseline accepts, the candidate
