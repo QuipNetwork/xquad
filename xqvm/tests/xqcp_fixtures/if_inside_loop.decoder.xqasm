@@ -1,0 +1,29 @@
+; === Inputs ===
+PUSH 0
+INPUT r0
+PUSH 1
+INPUT r1  ; n
+
+; === Decode ===
+VECI r2  ; selected
+PUSH 0
+LOAD r1
+RANGE
+  LVAL r10
+  LOAD r10
+  GETLINE r0
+  PUSH 1
+  EQ
+  NOT
+  JUMPI .1
+    LOAD r10
+    VECPUSH r2
+    JUMP .0
+  TARGET .1
+  TARGET .0
+NEXT
+
+; === Output ===
+PUSH 0
+OUTPUT r2
+HALT
