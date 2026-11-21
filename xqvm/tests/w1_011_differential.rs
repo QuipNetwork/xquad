@@ -32,12 +32,13 @@
 //!   - a baseline-accepted program with a cross-body jump is rejected, with
 //!     `JumpAcrossLoopBoundary` (no false negatives, no false positives).
 //!
-//! `has_cross_body_jump` is an independent reimplementation of the body-pairing
-//! definition (not a call into the phase); the constructed auditor cases pin the
-//! definition itself against a program whose cross-body status is known by
-//! construction.
-
-use std::collections::BTreeMap;
+//! Two sources of truth sit beside the verifier. The independent one is the
+//! construction flag `is_cross` of the stack-neutral generator below: each
+//! program's cross-body status is known because the generator placed the jump.
+//! `has_cross_body_jump` is a second, differently formulated oracle (loop
+//! bodies as byte-offset intervals, compared by containment; see its doc), not
+//! a copy of `jump_span.rs`; the generator checks it against `is_cross`, and the
+//! corpora use it where no construction truth exists.
 
 use xqvm::Program;
 use xqvm::bytecode::{Instruction, InstructionStream};
@@ -67,58 +68,61 @@ fn candidate(program: &Program) -> Result<(), VerifierError> {
     xqvm::verifier::verify(program)
 }
 
-/// Independent oracle: does the program contain a jump whose target lies in a
-/// different lexical loop body? A `RANGE`/`ITER` belongs to the enclosing body
-/// and opens a fresh inner body; a `NEXT` belongs to the inner body it closes.
+/// Oracle: does the program contain a jump whose target lies in a different
+/// loop body? Formulated independently of `jump_span.rs`, which mints a body id
+/// per loop during one stack scan and compares ids. Here each loop is an
+/// INTERVAL of byte offsets: its body runs from just after the `RANGE`/`ITER`
+/// to the matching `NEXT` inclusive -- so the opening instruction belongs to the
+/// enclosing body and the `NEXT` to the body it closes -- and an unclosed loop
+/// runs to the end of the code. A position's loop context is the set of loop
+/// intervals containing it, and a jump is cross-body exactly when its own
+/// position and its target's position have different contexts. A malformed
+/// stream (undecodable instruction) is not classified.
 fn has_cross_body_jump(program: &Program) -> bool {
-    let table = program.jump_table();
-    let mut body_of: BTreeMap<usize, u32> = BTreeMap::new();
+    let mut positions: Vec<usize> = Vec::new();
+    let mut opens: Vec<usize> = Vec::new();
+    let mut loops: Vec<(usize, usize)> = Vec::new();
     let mut jumps: Vec<(usize, u16)> = Vec::new();
-    let mut current: u32 = 0;
-    let mut next_id: u32 = 1;
-    let mut stack: Vec<u32> = Vec::new();
-
     let mut stream = InstructionStream::new(program.code());
     while let Some(item) = stream.next_instruction() {
         let Ok((pos, _label, instr)) = item else {
-            // Malformed stream: nothing meaningful to classify.
             return false;
         };
+        positions.push(pos);
         match instr {
-            Instruction::Range {} | Instruction::Iter { .. } => {
-                let _ = body_of.insert(pos, current);
-                stack.push(current);
-                current = next_id;
-                next_id += 1;
-            }
+            Instruction::Range {} | Instruction::Iter { .. } => opens.push(pos),
+            // A NEXT with no open loop closes nothing and lies in no interval.
             Instruction::Next {} => {
-                let _ = body_of.insert(pos, current);
-                current = stack.pop().unwrap_or(0);
+                if let Some(start) = opens.pop() {
+                    loops.push((start, pos));
+                }
             }
             Instruction::Jump1 { label } | Instruction::JumpI1 { label } => {
-                let _ = body_of.insert(pos, current);
                 jumps.push((pos, u16::from(label)));
             }
             Instruction::Jump2 { label } | Instruction::JumpI2 { label } => {
-                let _ = body_of.insert(pos, current);
                 jumps.push((pos, label));
             }
-            _ => {
-                let _ = body_of.insert(pos, current);
-            }
+            _ => {}
         }
     }
-    for (pos, label) in jumps {
-        let Some(target) = table.get(label) else {
-            continue;
-        };
-        let jump_body = body_of.get(&pos).copied().unwrap_or(0);
-        let target_body = body_of.get(&target).copied().unwrap_or(0);
-        if jump_body != target_body {
-            return true;
-        }
-    }
-    false
+    let end = positions.last().copied().unwrap_or(0);
+    loops.extend(opens.into_iter().map(|start| (start, end)));
+    let context = |at: usize| -> Vec<(usize, usize)> {
+        let mut inside: Vec<(usize, usize)> = loops
+            .iter()
+            .copied()
+            .filter(|&(start, close)| start < at && at <= close)
+            .collect();
+        inside.sort_unstable();
+        inside
+    };
+    let table = program.jump_table();
+    jumps.into_iter().any(|(pos, label)| {
+        table
+            .get(label)
+            .is_some_and(|target| context(pos) != context(target))
+    })
 }
 
 /// Check the three differential invariants for one program. Returns true if the
@@ -296,22 +300,46 @@ fn differential_constructed_auditor_cases_are_rejected() {
     }
 }
 
+/// Accept->reject changes the 10k seeded corpus must produce. Measured: 331
+/// changes among 966 baseline-accepted programs at this seed (claude's R8
+/// count, reproduced here); the floor sits just under it so the corpus cannot
+/// silently stop exercising the rule.
+const SEEDED_CHANGE_FLOOR: usize = 300;
+
 #[test]
+#[expect(
+    clippy::print_stdout,
+    reason = "the differential prints its change list for review (run with --nocapture)"
+)]
 fn differential_seeded_structured_corpus() {
     // 10k seeded structured CFGs. Every program must satisfy the three
-    // invariants; the auditor family guarantees the accept->reject case is
-    // exercised, so here we only require the invariants to hold.
+    // invariants, and the corpus must actually exercise the rule.
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
-    let mut changes = 0usize;
+    let (mut accepted, mut changes) = (0usize, 0usize);
+    let mut examples: Vec<String> = Vec::new();
     for _ in 0..10_000 {
         let code = gen_structured(&mut rng);
-        if check_one(code, "seeded") {
+        if baseline(&Program::new(code.clone())).is_ok() {
+            accepted += 1;
+        }
+        if check_one(code.clone(), "seeded") {
             changes += 1;
+            if examples.len() < 5 {
+                examples.push(hex(&code));
+            }
         }
     }
-    // Not asserted to be non-zero (depth-matched cross-body jumps are rare in
-    // random structured code); the auditor cases cover the positive direction.
-    let _ = changes;
+    println!(
+        "W1-011 seeded corpus: 10000 programs, {accepted} baseline-accepted, \
+         {changes} accept->reject (JumpAcrossLoopBoundary)"
+    );
+    for example in &examples {
+        println!("  {example}");
+    }
+    assert!(
+        changes >= SEEDED_CHANGE_FLOOR,
+        "only {changes} accept->reject changes in the seeded corpus (floor {SEEDED_CHANGE_FLOOR})"
+    );
 }
 
 #[test]
@@ -620,7 +648,8 @@ fn differential_stack_neutral_jumps_hard_minimums() {
         if baseline(&program).is_err() {
             continue; // only baseline-accepted programs exercise the accept->reject claim
         }
-        // Construction truth must agree with the independent oracle.
+        // The construction flag is the independent truth; the interval oracle
+        // must agree with it.
         assert_eq!(
             jp.is_cross,
             has_cross_body_jump(&program),
