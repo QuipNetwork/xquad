@@ -285,6 +285,29 @@ fn jump_span_rejects_the_auditor_poc_noactiveloop_variant() {
     assert_eq!(err.variant_name(), "JumpAcrossLoopBoundary");
 }
 
+/// Boundary semantics of the transition lookup, pinned with explicit jump
+/// tables (`Program::from_parts`) so the target can be a loop instruction
+/// itself rather than a TARGET: a `RANGE` belongs to the enclosing body and its
+/// `NEXT` to the inner body it closes.
+#[test]
+fn jump_span_places_range_in_the_enclosing_body_and_next_in_the_inner() {
+    // 0 JUMP1 .0; 2 PUSH1 0; 4 PUSH1 1; 6 RANGE; 7 NEXT; 8 HALT
+    let code = vec![0x01, 0x00, 0x11, 0x00, 0x11, 0x01, 0x08, 0x07, 0xFF];
+    let to_range = Program::from_parts(code.clone(), JumpTable::new(vec![6]));
+    assert!(
+        JumpSpanPhase.run(&to_range).is_ok(),
+        "RANGE is in the top-level body"
+    );
+    let to_next = Program::from_parts(code, JumpTable::new(vec![7]));
+    assert!(
+        matches!(
+            JumpSpanPhase.run(&to_next),
+            Err(CheckerError::JumpAcrossLoopBoundary { pos: 0, target: 7 })
+        ),
+        "NEXT is in the loop body"
+    );
+}
+
 #[test]
 fn jump_span_pairs_bodies_by_lexical_nesting() {
     // Two sibling loops: a jump in the first loop's body to a TARGET in the
