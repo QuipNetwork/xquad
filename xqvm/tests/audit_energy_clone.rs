@@ -24,6 +24,11 @@
 //! high-water but not in `memory_used`. Sizing the sample large makes that
 //! clone the dominant allocation, so the test fails on the base (clone present)
 //! and passes once the clone is removed.
+//!
+//! This file must stay a single-test binary. The counting allocator is
+//! process-wide, so a second test running on another thread would add its own
+//! allocations to the measured high-water and make the assertion flaky. Put
+//! further allocator-sensitive tests in their own `tests/*.rs` file.
 
 #![expect(
     unsafe_code,

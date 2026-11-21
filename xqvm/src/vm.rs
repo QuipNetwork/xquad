@@ -2978,12 +2978,13 @@ impl Vm {
             }
         };
         self.charge_steps(pos, model_eval_steps(widen(sample_len), widen(terms)))?;
-        // Both registers were type-checked above, and a register cannot hold two
-        // types at once, so `model` and `sample` are distinct slots and these two
-        // shared borrows of `self` coexist. Computing the energy from the
-        // borrowed sample values avoids cloning the whole sample -- an allocation
-        // the step budget never charged for and that the VM's `memory_used` meter
-        // could not see (W1-013). The borrows end before `push_stack` takes
+        // Two shared borrows of `self` coexist whether or not the registers are
+        // the same slot; the distinct-type requirement exists for the type
+        // checks above (a register cannot be both a model and a sample), not for
+        // the borrow checker. Computing the energy from the borrowed sample
+        // values avoids cloning the whole sample -- an allocation the step
+        // budget never charged for and that the VM's `memory_used` meter could
+        // not see (W1-013). The borrows end before `push_stack` takes
         // `&mut self`.
         let energy = {
             let RegVal::Model(m) = self.reg(model) else {
