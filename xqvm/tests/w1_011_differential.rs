@@ -18,9 +18,10 @@
 //! W1-011 differential (finding 011).
 //!
 //! The cross-body-jump rule is a single extra checker phase, `JumpSpanPhase`,
-//! inserted after the loop-nesting check. This compares a baseline checker (the
-//! pinned 4a31c96 phases, no `JumpSpanPhase`) against the candidate (the same
-//! phases plus `JumpSpanPhase`) over a seeded corpus of structured programs,
+//! registered in `Checker::default()`. This compares a baseline checker (the
+//! pinned 4a31c96 phases, no `JumpSpanPhase`) against the candidate -- the
+//! production `xqvm::checker::check`, so the phase must really be registered
+//! there -- over a seeded corpus of structured programs,
 //! malformed byte streams, the constructed auditor reproduction, and the
 //! checked-in compiler-output vectors.
 //!
@@ -41,8 +42,8 @@ use std::collections::BTreeMap;
 use xqvm::Program;
 use xqvm::bytecode::{Instruction, InstructionStream};
 use xqvm::checker::{
-    Checker, CheckerError, JumpSpanPhase, JumpTargetPhase, LoopNestingPhase, RegisterTypePhase,
-    StackDepthPhase, StructuralPhase, UninitRegisterPhase,
+    Checker, CheckerError, JumpTargetPhase, LoopNestingPhase, RegisterTypePhase, StackDepthPhase,
+    StructuralPhase, UninitRegisterPhase,
 };
 
 /// The pinned 4a31c96 phase set, without the cross-body rule.
@@ -57,17 +58,13 @@ fn baseline(program: &Program) -> Result<(), CheckerError> {
         .run(program)
 }
 
-/// The same phases, plus `JumpSpanPhase` after the loop-nesting check.
+/// The production checker: `xqvm::checker::check`, i.e. `Checker::default()`.
+/// Running the candidate through the default pipeline (rather than through a
+/// hand-built list that includes `JumpSpanPhase`) is what proves the phase is
+/// actually registered there: if it were dropped from `Checker::default()`,
+/// every accept->reject expectation below would fail.
 fn candidate(program: &Program) -> Result<(), CheckerError> {
-    Checker::new()
-        .with_phase(StructuralPhase)
-        .with_phase(JumpTargetPhase)
-        .with_phase(LoopNestingPhase)
-        .with_phase(JumpSpanPhase)
-        .with_phase(RegisterTypePhase)
-        .with_phase(UninitRegisterPhase)
-        .with_phase(StackDepthPhase)
-        .run(program)
+    xqvm::checker::check(program)
 }
 
 /// Independent oracle: does the program contain a jump whose target lies in a
@@ -197,6 +194,26 @@ fn auditor_poc(loop_a_count: [u8; 2]) -> Vec<u8> {
         0x07, // NEXT
         0xFF, // HALT
     ]
+}
+
+/// The phase is registered in production (X R8 item 2): the auditor reproduction goes
+/// through `xqvm::checker::check` -- the entry point the pallet and the
+/// `xqffi` bindings call -- and must be rejected with `JumpAcrossLoopBoundary`.
+/// Removing `.with_phase(JumpSpanPhase)` from `Checker::default()` turns this
+/// red, as it does the differential tests that use the same entry point.
+#[test]
+fn auditor_poc_is_rejected_by_the_production_checker() {
+    for count in [[0x23, 0x28], [0x00, 0x01], [0x00, 0x00]] {
+        let program = Program::new(auditor_poc(count));
+        assert!(
+            matches!(
+                xqvm::checker::check(&program),
+                Err(CheckerError::JumpAcrossLoopBoundary { .. })
+            ),
+            "PoC with loop A count {count:02x?}: expected JumpAcrossLoopBoundary, got {:?}",
+            xqvm::checker::check(&program)
+        );
+    }
 }
 
 /// Seeded xorshift64 PRNG; deterministic so the corpus is reproducible.
