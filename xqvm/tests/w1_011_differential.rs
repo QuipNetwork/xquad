@@ -355,3 +355,319 @@ fn differential_zero_new_rejections_of_compiler_output() {
     }
     assert!(checked > 0, "no compiler-output vectors were checked");
 }
+
+// --- Deliberately stack-neutral jump generator (architect R8 pre-finding) ---
+//
+// Builds baseline-valid loop programs and inserts a single jump whose source and
+// target sit at the same (depth-0) block boundary, so the jump is stack-neutral
+// by construction and the baseline stack-depth check cannot reject it for a
+// depth reason. Loop bodies all sit at base depth 0: `PUSH1 0; PUSH1 1; RANGE`
+// pushes two and RANGE pops two (fixed(2,0)); NEXT/TARGET/JUMP are fixed(0,0);
+// JUMPI pops its condition (fixed(1,0)) after a matching PUSH1. The jump's body
+// and the target's body are recorded during construction, so `is_cross` is known
+// truth, independent of the verifier.
+
+/// Builds depth-0-boundary loop programs with a recorded body id per TARGET.
+struct Builder {
+    code: Vec<u8>,
+    targets: Vec<u32>, // label index -> body id of the TARGET
+    open: Vec<u32>,
+    next_body: u32,
+    current: u32,
+}
+
+impl Builder {
+    fn new() -> Self {
+        Self {
+            code: Vec::new(),
+            targets: Vec::new(),
+            open: Vec::new(),
+            next_body: 1,
+            current: 0,
+        }
+    }
+    fn nop(&mut self) {
+        self.code.push(0xF0);
+    }
+    /// Emit a TARGET in the current body; returns its label index.
+    fn target(&mut self) -> u8 {
+        let label = u8::try_from(self.targets.len()).unwrap_or(u8::MAX);
+        self.targets.push(self.current);
+        self.code.push(0x00);
+        label
+    }
+    fn open_loop(&mut self) {
+        self.code.extend_from_slice(&[0x11, 0x00, 0x11, 0x01, 0x08]); // PUSH1 0; PUSH1 1; RANGE
+        self.open.push(self.current);
+        self.current = self.next_body;
+        self.next_body += 1;
+    }
+    fn close_loop(&mut self) {
+        self.code.push(0x07); // NEXT
+        if let Some(parent) = self.open.pop() {
+            self.current = parent;
+        }
+    }
+    /// Emit a jump to `label` in the current body; returns the jump's body id.
+    fn jump(&mut self, label: u8, cond: bool) -> u32 {
+        let body = self.current;
+        if cond {
+            self.code.extend_from_slice(&[0x11, 0x01, 0x02, label]); // PUSH1 1; JUMPI1 label
+        } else {
+            self.code.extend_from_slice(&[0x01, label]); // JUMP1 label
+        }
+        body
+    }
+    fn finish(mut self) -> Vec<u8> {
+        while !self.open.is_empty() {
+            self.close_loop();
+        }
+        self.code.push(0xFF); // HALT
+        self.code
+    }
+}
+
+/// One generated jump program: its bytes, a category label, and the
+/// construction-truth cross-body flag.
+struct JumpProgram {
+    code: Vec<u8>,
+    category: &'static str,
+    is_cross: bool,
+}
+
+/// Produce a stack-neutral jump program. `seed` selects the category and small
+/// structural variations (nesting depth, filler, forward/backward, JUMP/JUMPI).
+#[expect(
+    clippy::too_many_lines,
+    reason = "one match arm per jump category keeps the whole generator readable in one place"
+)]
+fn gen_jump_program(seed: u64) -> JumpProgram {
+    let mut r = Rng(seed ^ 0xD1B5_4A32_D192_ED03);
+    let cond = r.next() & 1 == 0;
+    let depth = 1 + (r.next() % 4); // 1..4 nesting levels
+    let fill = r.next() % 3;
+    let mut b = Builder::new();
+    let add_fill = |b: &mut Builder, r: &mut Rng| {
+        for _ in 0..(r.next() % (fill + 1)) {
+            b.nop();
+        }
+    };
+
+    match r.next() % 6 {
+        0 => {
+            // nested_inner (the auditor shape, generalized to `depth` levels):
+            // a jump in the outermost loop body targets a TARGET in the
+            // innermost loop body. Forward (jump before the target).
+            b.open_loop();
+            add_fill(&mut b, &mut r);
+            let jb = b.jump(0, cond); // in outer body, label 0 (first target, below)
+            for _ in 1..depth {
+                b.open_loop();
+            }
+            add_fill(&mut b, &mut r);
+            let _ = b.target(); // label 0, innermost body
+            for _ in 0..depth {
+                b.close_loop();
+            }
+            let target_body = b.targets.first().copied().unwrap_or(0);
+            JumpProgram {
+                code: b.finish(),
+                category: "nested_inner",
+                is_cross: jb != target_body,
+            }
+        }
+        1 => {
+            // into_loop: a top-level jump targets a TARGET inside a loop body.
+            let jb = b.jump(0, cond); // body 0 (top level)
+            b.open_loop();
+            add_fill(&mut b, &mut r);
+            let _ = b.target(); // label 0, loop body
+            b.close_loop();
+            let target_body = b.targets.first().copied().unwrap_or(0);
+            JumpProgram {
+                code: b.finish(),
+                category: "into_loop",
+                is_cross: jb != target_body,
+            }
+        }
+        2 => {
+            // out_of_loop: a jump in a loop body targets a TARGET at top level,
+            // placed after the loop (forward).
+            b.open_loop();
+            add_fill(&mut b, &mut r);
+            let jb = b.jump(0, cond); // in loop body, label 0 (below)
+            b.close_loop();
+            let _ = b.target(); // label 0, top level
+            let target_body = b.targets.first().copied().unwrap_or(0);
+            JumpProgram {
+                code: b.finish(),
+                category: "out_of_loop",
+                is_cross: jb != target_body,
+            }
+        }
+        3 => {
+            // sibling: a jump in loop A's body targets a TARGET in loop B's body.
+            b.open_loop(); // A
+            add_fill(&mut b, &mut r);
+            let jb = b.jump(0, cond); // in A, label 0 (below)
+            b.close_loop(); // close A
+            b.open_loop(); // B
+            let _ = b.target(); // label 0, B
+            b.close_loop();
+            let target_body = b.targets.first().copied().unwrap_or(0);
+            JumpProgram {
+                code: b.finish(),
+                category: "sibling",
+                is_cross: jb != target_body,
+            }
+        }
+        4 => {
+            // to_next: a jump in the outer body targets a TARGET placed right
+            // before the inner loop's NEXT (the finding's exact shape).
+            b.open_loop(); // outer
+            add_fill(&mut b, &mut r);
+            let jb = b.jump(0, cond);
+            b.open_loop(); // inner
+            let _ = b.target(); // label 0, inner body, just before NEXT
+            b.close_loop(); // inner NEXT
+            b.close_loop(); // outer NEXT
+            let target_body = b.targets.first().copied().unwrap_or(0);
+            JumpProgram {
+                code: b.finish(),
+                category: "to_next",
+                is_cross: jb != target_body,
+            }
+        }
+        _ => {
+            // intra_body: a jump to a TARGET in the SAME body. Nest `depth`
+            // loops; the jump and target share the innermost body. Backward
+            // (target before the jump) when `fill` is even, else forward.
+            for _ in 0..depth {
+                b.open_loop();
+            }
+            let backward = fill.is_multiple_of(2);
+            if backward {
+                let _ = b.target(); // label 0, innermost body
+                add_fill(&mut b, &mut r);
+                let jb = b.jump(0, cond);
+                let target_body = b.targets.first().copied().unwrap_or(0);
+                for _ in 0..depth {
+                    b.close_loop();
+                }
+                return JumpProgram {
+                    code: b.finish(),
+                    category: "intra_body",
+                    is_cross: jb != target_body,
+                };
+            }
+            let jb = b.jump(0, cond);
+            add_fill(&mut b, &mut r);
+            let _ = b.target(); // label 0, innermost body
+            let target_body = b.targets.first().copied().unwrap_or(0);
+            for _ in 0..depth {
+                b.close_loop();
+            }
+            JumpProgram {
+                code: b.finish(),
+                category: "intra_body",
+                is_cross: jb != target_body,
+            }
+        }
+    }
+}
+
+#[test]
+#[expect(
+    clippy::print_stdout,
+    reason = "the differential prints its change-list summary for review (run with --nocapture)"
+)]
+fn differential_stack_neutral_jumps_hard_minimums() {
+    use std::collections::BTreeMap;
+
+    let mut rng = Rng(0xC0FF_EE12_3456_789A);
+    // accepted-by-baseline counts, by (category, is_cross).
+    let mut by_cat: BTreeMap<(&'static str, bool), usize> = BTreeMap::new();
+    let mut cross_accepted = 0usize;
+    let mut intra_accepted = 0usize;
+    let mut cross_examples: Vec<String> = Vec::new();
+    let mut intra_examples: Vec<String> = Vec::new();
+
+    // Generate until both hard minimums are comfortably met, bounded so a
+    // regression that stops producing accepted cross-body jumps fails loudly.
+    for i in 0..200_000u64 {
+        if cross_accepted >= 1_000 && intra_accepted >= 1_000 {
+            break;
+        }
+        let jp = gen_jump_program(rng.next() ^ i);
+        let program = Program::new(jp.code.clone());
+        if baseline(&program).is_err() {
+            continue; // only baseline-accepted programs exercise the accept->reject claim
+        }
+        // Construction truth must agree with the independent oracle.
+        assert_eq!(
+            jp.is_cross,
+            has_cross_body_jump(&program),
+            "{}: construction cross-body flag disagrees with the oracle: {}",
+            jp.category,
+            hex(&jp.code)
+        );
+        let cand = candidate(&program);
+        if jp.is_cross {
+            assert_eq!(
+                cand.as_ref().err().map(VerifierError::variant_name),
+                Some("JumpAcrossLoopBoundary"),
+                "{}: baseline-accepted cross-body jump not rejected: {}",
+                jp.category,
+                hex(&jp.code)
+            );
+            cross_accepted += 1;
+            if cross_examples.len() < 5 {
+                cross_examples.push(format!("{}: {}", jp.category, hex(&jp.code)));
+            }
+        } else {
+            assert!(
+                cand.is_ok(),
+                "{}: baseline-accepted intra-body jump wrongly rejected: {} ({:?})",
+                jp.category,
+                hex(&jp.code),
+                cand
+            );
+            intra_accepted += 1;
+            if intra_examples.len() < 5 {
+                intra_examples.push(format!("{}: {}", jp.category, hex(&jp.code)));
+            }
+        }
+        *by_cat.entry((jp.category, jp.is_cross)).or_default() += 1;
+    }
+
+    println!("W1-011 differential change list (baseline-accepted jump programs):");
+    for ((cat, cross), n) in &by_cat {
+        println!("  {cat:<12} cross={cross:<5} count={n}");
+    }
+    println!("first cross-body examples:");
+    for e in &cross_examples {
+        println!("  {e}");
+    }
+    println!("first intra-body examples:");
+    for e in &intra_examples {
+        println!("  {e}");
+    }
+
+    assert!(
+        cross_accepted >= 1_000,
+        "only {cross_accepted} baseline-accepted depth-matched cross-body jumps (need >= 1000)"
+    );
+    assert!(
+        intra_accepted >= 1_000,
+        "only {intra_accepted} baseline-accepted intra-body jumps (need >= 1000)"
+    );
+}
+
+use core::fmt::Write as _;
+fn hex(code: &[u8]) -> String {
+    code.iter()
+        .fold(String::with_capacity(code.len() * 2), |mut s, byte| {
+            let _ = write!(s, "{byte:02x}");
+            s
+        })
+}
