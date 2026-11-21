@@ -15,8 +15,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! W1-014 regression vectors (finding 014): the verifier must skip a dead block
-//! that ends in `HALT` after an unconditional jump, in both directions.
+//! W1-014 regression vectors (finding 014): the verifier must skip dead code --
+//! a block after an unconditional jump or after `HALT` -- in both directions.
 //!
 //! O3 already fixes this at the pinned base; these vectors pin both directions
 //! so a regression is caught. No verifier code change rides with them.
@@ -49,15 +49,20 @@ fn dead_block_write_does_not_initialize_a_live_read() {
 }
 
 /// Direction 2 (former false reject): a valid program whose only unset read is
-/// inside a dead block skipped after an unconditional jump must verify.
+/// inside a dead block after `HALT` must verify. The dead block unsets the
+/// register itself before reading it, so the read is unset only on the dead
+/// path: the pre-O3 verifier (3c68010) merged that block into the live
+/// analysis and rejected this program with `ReadUnsetRegister { offset: 7,
+/// reg: 0 }`; it is accepted now that dead blocks are skipped.
 #[test]
 fn unset_read_inside_a_skipped_dead_block_is_not_rejected() {
-    // 0x00 JUMP1 .0   (01 00)   -> TARGET at 0x05, skipping the dead block
-    // 0x02 LOAD r5    (0A 05)   dead: unset read, but unreachable
-    // 0x04 HALT       (FF)      dead block ends here
-    // 0x05 TARGET .0  (00)
-    // 0x06 HALT       (FF)      reachable, valid
-    let code = vec![0x01, 0x00, 0x0A, 0x05, 0xFF, 0x00, 0xFF];
+    // 0x00 PUSH1 1    (11 01)
+    // 0x02 STOW r0    (0B 00)   r0 is set on the live path
+    // 0x04 HALT       (FF)      exit; everything after is dead
+    // 0x05 DROP r0    (0C 00)   dead: unsets r0
+    // 0x07 LOAD r0    (0A 00)   dead: reads the unset r0
+    // 0x09 HALT       (FF)
+    let code = vec![0x11, 0x01, 0x0B, 0x00, 0xFF, 0x0C, 0x00, 0x0A, 0x00, 0xFF];
     assert!(
         verify(&Program::new(code)).is_ok(),
         "a dead-code unset read must be skipped, not rejected"
