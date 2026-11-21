@@ -97,6 +97,30 @@ means a `with problem.range(...)` block (see
 before the DSL closed it correctly -- check the generated `.xqasm` for the
 loop in question.
 
+**`JumpAcrossLoopBoundary`** -- a jump's target lies in a different loop
+body from the jump itself: into a loop, out of one, or into a sibling loop.
+A `RANGE`/`ITER` belongs to the body around it; its `NEXT` belongs to the
+loop body it closes:
+
+```asm
+PUSH 0
+PUSH 3
+RANGE
+JUMP .0
+NEXT
+TARGET .0
+HALT
+```
+
+```
+Error: check failed: JumpAcrossLoopBoundary: jump at byte 0x0005 crosses a loop-body boundary to a target at byte 0x0008
+```
+
+Fix: keep every jump and its `TARGET` inside the same loop body. To skip
+the rest of an iteration, jump to a `TARGET` placed just before that loop's
+`NEXT`, which is in the same body. `xqcp` never emits a cross-body jump;
+seeing this in compiler output is a compiler bug.
+
 ### Register errors
 
 **`ReadUnsetRegister`** -- a register is read before anything writes it, or

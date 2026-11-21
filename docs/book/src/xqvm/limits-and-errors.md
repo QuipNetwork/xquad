@@ -160,8 +160,8 @@ which disassembles the program and points at the failing instruction.
 Produced by `xqvm::checker::CheckerError`
 ([`xqvm/src/checker/error.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/checker/error.rs))
 before a program runs, by the four-phase pipeline described in
-[Checker](checker.md): structural, jump-target and loop-nesting checks;
-register type-state; must-init analysis; and stack depth.
+[Checker](checker.md): structural, jump-target, loop-nesting and
+jump-span checks; register type-state; must-init analysis; and stack depth.
 
 The variants, which phase raises each one, and what each one means
 are catalogued in [Checker's error reference](checker.md#error-reference)
