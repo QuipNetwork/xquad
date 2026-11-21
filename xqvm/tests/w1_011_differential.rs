@@ -538,7 +538,66 @@ fn gen_jump_program(seed: u64) -> JumpProgram {
         }
     };
 
-    match r.next() % 6 {
+    match r.next() % 9 {
+        6 => {
+            // over_loop_fwd: inside 1..3 outer loops (total nesting 2..4), a
+            // jump forward over a whole inner loop to a TARGET in the same
+            // outer body -- xqcp's "if inside a loop whose arm loops". Intra-
+            // body: the inner loop's NEXT returns to the outer body.
+            let outer = 1 + (r.next() % 3);
+            for _ in 0..outer {
+                b.open_loop();
+            }
+            let jb = b.jump(0, cond);
+            b.open_loop();
+            add_fill(&mut b, &mut r);
+            b.close_loop();
+            let _ = b.target();
+            let target_body = b.targets.first().copied().unwrap_or(0);
+            JumpProgram {
+                code: b.finish(),
+                category: "over_loop_fwd",
+                is_cross: jb != target_body,
+            }
+        }
+        7 => {
+            // over_loop_back: the same, jumping backward over the inner loop.
+            let outer = 1 + (r.next() % 3);
+            for _ in 0..outer {
+                b.open_loop();
+            }
+            let _ = b.target();
+            b.open_loop();
+            add_fill(&mut b, &mut r);
+            b.close_loop();
+            let jb = b.jump(0, cond);
+            let target_body = b.targets.first().copied().unwrap_or(0);
+            JumpProgram {
+                code: b.finish(),
+                category: "over_loop_back",
+                is_cross: jb != target_body,
+            }
+        }
+        8 => {
+            // top_over_loop: a top-level jump forward over a 1..3-deep loop nest
+            // to a top-level TARGET.
+            let nest = 1 + (r.next() % 3);
+            let jb = b.jump(0, cond);
+            for _ in 0..nest {
+                b.open_loop();
+            }
+            add_fill(&mut b, &mut r);
+            for _ in 0..nest {
+                b.close_loop();
+            }
+            let _ = b.target();
+            let target_body = b.targets.first().copied().unwrap_or(0);
+            JumpProgram {
+                code: b.finish(),
+                category: "top_over_loop",
+                is_cross: jb != target_body,
+            }
+        }
         0 => {
             // nested_inner (the auditor shape, generalized to `depth` levels):
             // a jump in the outermost loop body targets a TARGET in the
@@ -674,13 +733,17 @@ fn differential_stack_neutral_jumps_hard_minimums() {
     let mut by_cat: BTreeMap<(&'static str, bool), usize> = BTreeMap::new();
     let mut cross_accepted = 0usize;
     let mut intra_accepted = 0usize;
+    // Intra-body jumps with a whole loop between jump and target: the shape a
+    // NEXT that resets to top level (instead of the enclosing body) would
+    // wrongly reject.
+    let mut over_loop_accepted = 0usize;
     let mut cross_examples: Vec<String> = Vec::new();
     let mut intra_examples: Vec<String> = Vec::new();
 
     // Generate until both hard minimums are comfortably met, bounded so a
     // regression that stops producing accepted cross-body jumps fails loudly.
     for i in 0..200_000u64 {
-        if cross_accepted >= 1_000 && intra_accepted >= 1_000 {
+        if cross_accepted >= 1_000 && intra_accepted >= 1_000 && over_loop_accepted >= 500 {
             break;
         }
         let jp = gen_jump_program(rng.next() ^ i);
@@ -719,6 +782,14 @@ fn differential_stack_neutral_jumps_hard_minimums() {
                 cand
             );
             intra_accepted += 1;
+            if jp.category.contains("over_loop") {
+                assert!(
+                    !jp.is_cross,
+                    "{}: over_loop shapes are intra-body",
+                    jp.category
+                );
+                over_loop_accepted += 1;
+            }
             if intra_examples.len() < 5 {
                 intra_examples.push(format!("{}: {}", jp.category, hex(&jp.code)));
             }
@@ -746,6 +817,10 @@ fn differential_stack_neutral_jumps_hard_minimums() {
     assert!(
         intra_accepted >= 1_000,
         "only {intra_accepted} baseline-accepted intra-body jumps (need >= 1000)"
+    );
+    assert!(
+        over_loop_accepted >= 500,
+        "only {over_loop_accepted} baseline-accepted jumps over a loop (need >= 500)"
     );
 }
 
