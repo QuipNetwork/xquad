@@ -16,9 +16,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #[cfg(not(feature = "std"))]
-use alloc::{collections::BTreeMap, vec::Vec};
-#[cfg(feature = "std")]
-use std::collections::BTreeMap;
+use alloc::vec::Vec;
 
 use crate::Program;
 use crate::bytecode::{Instruction, InstructionStream};
@@ -49,17 +47,29 @@ use super::scan::stream_err;
 /// Reachability is not consulted: a loop with an unreachable `NEXT` is safe and
 /// is not rejected here (production assigns exact heights and checks every edge
 /// separately).
+///
+/// # Cost
+///
+/// Memory is proportional to the number of loop openers, `NEXT`s and jumps, not
+/// to the number of instructions: the body id changes only at a loop boundary,
+/// so the scan records those transitions and looks up a target's body by binary
+/// search. A program with no loops and no jumps allocates nothing here.
 pub struct JumpSpanPhase;
 
 impl Phase for JumpSpanPhase {
     type Error = VerifierError;
 
     fn run(&self, program: &Program) -> Result<(), VerifierError> {
-        // Pass 1: a single lexical scan assigns every instruction position its
-        // body id and records the jumps. `current` is the active body; `stack`
-        // holds the enclosing bodies; `next_id` mints a fresh id per loop body.
-        let mut body_of: BTreeMap<usize, u32> = BTreeMap::new();
-        let mut jumps: Vec<(usize, u16)> = Vec::new();
+        // Pass 1: one lexical scan. `current` is the active body, `stack` holds
+        // the enclosing bodies, and `next_id` mints a fresh id per loop body.
+        // The body id only changes at a loop boundary, so instead of a body per
+        // instruction this keeps `transitions`: `(pos, body)` meaning "every
+        // position after `pos` is in `body`" (until the next transition). A
+        // `RANGE`/`ITER` at `pos` is itself in the enclosing body and a `NEXT`
+        // at `pos` in the inner body it closes, which is exactly "after `pos`".
+        // Each jump is recorded with the body it sits in.
+        let mut transitions: Vec<(usize, u32)> = Vec::new();
+        let mut jumps: Vec<(usize, u16, u32)> = Vec::new();
         let mut current: u32 = 0;
         let mut next_id: u32 = 1;
         let mut stack: Vec<u32> = Vec::new();
@@ -69,42 +79,41 @@ impl Phase for JumpSpanPhase {
             let (pos, _label, instr) = item.map_err(|e| stream_err(&e))?;
             match instr {
                 Instruction::Range {} | Instruction::Iter { .. } => {
-                    // The opener belongs to the enclosing body; the inner body
-                    // begins after it.
-                    let _ = body_of.insert(pos, current);
                     stack.push(current);
                     current = next_id;
                     next_id = next_id.saturating_add(1);
+                    transitions.push((pos, current));
                 }
                 Instruction::Next {} => {
-                    // The closer belongs to the inner body; control then returns
-                    // to the enclosing body. A balanced program (LoopNestingPhase
-                    // runs first) always has an enclosing body to pop.
-                    let _ = body_of.insert(pos, current);
+                    // A balanced program (LoopNestingPhase runs first) always has
+                    // an enclosing body to pop.
                     current = stack.pop().unwrap_or(0);
+                    transitions.push((pos, current));
                 }
                 Instruction::Jump1 { label } | Instruction::JumpI1 { label } => {
-                    let _ = body_of.insert(pos, current);
-                    jumps.push((pos, u16::from(label)));
+                    jumps.push((pos, u16::from(label), current));
                 }
                 Instruction::Jump2 { label } | Instruction::JumpI2 { label } => {
-                    let _ = body_of.insert(pos, current);
-                    jumps.push((pos, label));
+                    jumps.push((pos, label, current));
                 }
-                _ => {
-                    let _ = body_of.insert(pos, current);
-                }
+                _ => {}
             }
         }
 
-        // Pass 2: reject any jump whose target lies in a different body. An
-        // undefined target is left to JumpTargetPhase, which runs first.
-        for (pos, label) in jumps {
+        // Pass 2: reject any jump whose target lies in a different body. The
+        // target's body is the one set by the last transition strictly before
+        // it (top level, 0, if none). `transitions` is in stream order, so it is
+        // sorted by position. An undefined target is left to JumpTargetPhase,
+        // which runs first.
+        for (pos, label, jump_body) in jumps {
             let Some(target) = program.jump_table().get(label) else {
                 continue;
             };
-            let jump_body = body_of.get(&pos).copied().unwrap_or(0);
-            let target_body = body_of.get(&target).copied().unwrap_or(0);
+            let after = transitions.partition_point(|&(at, _)| at < target);
+            let target_body = after
+                .checked_sub(1)
+                .and_then(|last| transitions.get(last))
+                .map_or(0, |&(_, body)| body);
             if jump_body != target_body {
                 return Err(VerifierError::JumpAcrossLoopBoundary { pos, target });
             }
