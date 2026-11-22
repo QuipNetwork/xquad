@@ -459,16 +459,27 @@ struct Builder {
     open: Vec<u32>,
     next_body: u32,
     current: u32,
+    /// Seeded choice of loop opener: RANGE or ITER.
+    opener: Rng,
+    /// How many loops this program opened with ITER.
+    iter_loops: usize,
 }
 
+/// The register the ITER opener iterates. The generator uses no other
+/// register (its filler is NOPs), so it never collides with one.
+const ITER_REG: u8 = 200;
+
 impl Builder {
-    fn new() -> Self {
+    fn new(opener_seed: u64) -> Self {
         Self {
             code: Vec::new(),
             targets: Vec::new(),
             open: Vec::new(),
             next_body: 1,
             current: 0,
+            // xorshift needs a non-zero state.
+            opener: Rng(opener_seed | 1),
+            iter_loops: 0,
         }
     }
     fn nop(&mut self) {
@@ -481,8 +492,21 @@ impl Builder {
         self.code.push(0x00);
         label
     }
+    /// Open a one-iteration loop with RANGE or, on a seeded choice, with ITER
+    /// over a one-element vec. Both are stack-neutral; `JumpSpanPhase` must
+    /// treat both as loop openers.
     fn open_loop(&mut self) {
-        self.code.extend_from_slice(&[0x11, 0x00, 0x11, 0x01, 0x08]); // PUSH1 0; PUSH1 1; RANGE
+        if self.opener.next() & 1 == 1 {
+            let k = ITER_REG;
+            self.code.extend_from_slice(&[
+                0x4B, k, // VECI rK
+                0x11, 0x01, 0x50, k, // PUSH1 1; VECPUSH rK
+                0x11, 0x00, 0x11, 0x01, 0x09, k, // PUSH1 0; PUSH1 1; ITER rK
+            ]);
+            self.iter_loops += 1;
+        } else {
+            self.code.extend_from_slice(&[0x11, 0x00, 0x11, 0x01, 0x08]); // PUSH1 0; PUSH1 1; RANGE
+        }
         self.open.push(self.current);
         self.current = self.next_body;
         self.next_body += 1;
@@ -515,6 +539,8 @@ impl Builder {
 /// One generated jump program: its bytes, a category label, and the
 /// construction-truth cross-body flag.
 struct JumpProgram {
+    /// Loops opened with ITER (read before `finish` consumes the builder).
+    iter_loops: usize,
     code: Vec<u8>,
     category: &'static str,
     is_cross: bool,
@@ -531,7 +557,7 @@ fn gen_jump_program(seed: u64) -> JumpProgram {
     let cond = r.next() & 1 == 0;
     let depth = 1 + (r.next() % 4); // 1..4 nesting levels
     let fill = r.next() % 3;
-    let mut b = Builder::new();
+    let mut b = Builder::new(r.next());
     let add_fill = |b: &mut Builder, r: &mut Rng| {
         for _ in 0..(r.next() % (fill + 1)) {
             b.nop();
@@ -555,6 +581,7 @@ fn gen_jump_program(seed: u64) -> JumpProgram {
             let _ = b.target();
             let target_body = b.targets.first().copied().unwrap_or(0);
             JumpProgram {
+                iter_loops: b.iter_loops,
                 code: b.finish(),
                 category: "over_loop_fwd",
                 is_cross: jb != target_body,
@@ -573,6 +600,7 @@ fn gen_jump_program(seed: u64) -> JumpProgram {
             let jb = b.jump(0, cond);
             let target_body = b.targets.first().copied().unwrap_or(0);
             JumpProgram {
+                iter_loops: b.iter_loops,
                 code: b.finish(),
                 category: "over_loop_back",
                 is_cross: jb != target_body,
@@ -593,6 +621,7 @@ fn gen_jump_program(seed: u64) -> JumpProgram {
             let _ = b.target();
             let target_body = b.targets.first().copied().unwrap_or(0);
             JumpProgram {
+                iter_loops: b.iter_loops,
                 code: b.finish(),
                 category: "top_over_loop",
                 is_cross: jb != target_body,
@@ -615,6 +644,7 @@ fn gen_jump_program(seed: u64) -> JumpProgram {
             }
             let target_body = b.targets.first().copied().unwrap_or(0);
             JumpProgram {
+                iter_loops: b.iter_loops,
                 code: b.finish(),
                 category: "nested_inner",
                 is_cross: jb != target_body,
@@ -629,6 +659,7 @@ fn gen_jump_program(seed: u64) -> JumpProgram {
             b.close_loop();
             let target_body = b.targets.first().copied().unwrap_or(0);
             JumpProgram {
+                iter_loops: b.iter_loops,
                 code: b.finish(),
                 category: "into_loop",
                 is_cross: jb != target_body,
@@ -644,6 +675,7 @@ fn gen_jump_program(seed: u64) -> JumpProgram {
             let _ = b.target(); // label 0, top level
             let target_body = b.targets.first().copied().unwrap_or(0);
             JumpProgram {
+                iter_loops: b.iter_loops,
                 code: b.finish(),
                 category: "out_of_loop",
                 is_cross: jb != target_body,
@@ -660,6 +692,7 @@ fn gen_jump_program(seed: u64) -> JumpProgram {
             b.close_loop();
             let target_body = b.targets.first().copied().unwrap_or(0);
             JumpProgram {
+                iter_loops: b.iter_loops,
                 code: b.finish(),
                 category: "sibling",
                 is_cross: jb != target_body,
@@ -677,6 +710,7 @@ fn gen_jump_program(seed: u64) -> JumpProgram {
             b.close_loop(); // outer NEXT
             let target_body = b.targets.first().copied().unwrap_or(0);
             JumpProgram {
+                iter_loops: b.iter_loops,
                 code: b.finish(),
                 category: "to_next",
                 is_cross: jb != target_body,
@@ -699,6 +733,7 @@ fn gen_jump_program(seed: u64) -> JumpProgram {
                     b.close_loop();
                 }
                 return JumpProgram {
+                    iter_loops: b.iter_loops,
                     code: b.finish(),
                     category: "intra_body",
                     is_cross: jb != target_body,
@@ -712,6 +747,7 @@ fn gen_jump_program(seed: u64) -> JumpProgram {
                 b.close_loop();
             }
             JumpProgram {
+                iter_loops: b.iter_loops,
                 code: b.finish(),
                 category: "intra_body",
                 is_cross: jb != target_body,
@@ -725,6 +761,10 @@ fn gen_jump_program(seed: u64) -> JumpProgram {
     clippy::print_stdout,
     reason = "the differential prints its change-list summary for review (run with --nocapture)"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one loop that tallies every hard minimum, then the summary and the asserts"
+)]
 fn differential_stack_neutral_jumps_hard_minimums() {
     use std::collections::BTreeMap;
 
@@ -737,13 +777,23 @@ fn differential_stack_neutral_jumps_hard_minimums() {
     // NEXT that resets to top level (instead of the enclosing body) would
     // wrongly reject.
     let mut over_loop_accepted = 0usize;
+    // Baseline-accepted programs with at least one ITER-opened loop, by
+    // cross/intra: without them a JumpSpanPhase that forgot ITER as an
+    // opener would pass (claude's M4).
+    let mut iter_cross = 0usize;
+    let mut iter_intra = 0usize;
     let mut cross_examples: Vec<String> = Vec::new();
     let mut intra_examples: Vec<String> = Vec::new();
 
     // Generate until both hard minimums are comfortably met, bounded so a
     // regression that stops producing accepted cross-body jumps fails loudly.
     for i in 0..200_000u64 {
-        if cross_accepted >= 1_000 && intra_accepted >= 1_000 && over_loop_accepted >= 500 {
+        if cross_accepted >= 1_000
+            && intra_accepted >= 1_000
+            && over_loop_accepted >= 500
+            && iter_cross >= 300
+            && iter_intra >= 300
+        {
             break;
         }
         let jp = gen_jump_program(rng.next() ^ i);
@@ -794,6 +844,13 @@ fn differential_stack_neutral_jumps_hard_minimums() {
                 intra_examples.push(format!("{}: {}", jp.category, hex(&jp.code)));
             }
         }
+        if jp.iter_loops > 0 {
+            if jp.is_cross {
+                iter_cross += 1;
+            } else {
+                iter_intra += 1;
+            }
+        }
         *by_cat.entry((jp.category, jp.is_cross)).or_default() += 1;
     }
 
@@ -801,6 +858,7 @@ fn differential_stack_neutral_jumps_hard_minimums() {
     for ((cat, cross), n) in &by_cat {
         println!("  {cat:<12} cross={cross:<5} count={n}");
     }
+    println!("  with an ITER-opened loop: cross={iter_cross} intra={iter_intra}");
     println!("first cross-body examples:");
     for e in &cross_examples {
         println!("  {e}");
@@ -821,6 +879,11 @@ fn differential_stack_neutral_jumps_hard_minimums() {
     assert!(
         over_loop_accepted >= 500,
         "only {over_loop_accepted} baseline-accepted jumps over a loop (need >= 500)"
+    );
+    assert!(
+        iter_cross >= 300 && iter_intra >= 300,
+        "only {iter_cross} cross / {iter_intra} intra baseline-accepted jumps with an \
+         ITER-opened loop (need >= 300 each)"
     );
 }
 
