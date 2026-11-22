@@ -210,11 +210,15 @@ acceptance-equivalence proof and historical minimum-walk oracle.
 | `StackDepthMismatch` | 4 | Two control-flow paths reach a join point with different stack depths |
 | `StackUnderflow` | 4 | Stack depth would go negative at a reachable instruction |
 | `StackOverflowRisk` | 4 | Stack depth would exceed 8,192 at a reachable instruction |
+| `AnalysisBudgetExceeded` | 2, 3 or 4 | A data-flow analysis exceeded its proven deterministic work bound: an analysis defect, not invalid bytecode |
 
-Every `VerifierError` variant carries the byte offset of the offending
-instruction; several (`RegisterTypeMismatch`, `UndefinedJumpTarget`, and
-others) also carry the register number or label id involved, so a
-diagnostic can point at the exact spot in the bytecode.
+Every bytecode `VerifierError` variant carries the byte offset of the
+offending instruction; several (`RegisterTypeMismatch`,
+`UndefinedJumpTarget`, and others) also carry the register number or label
+id involved, so a diagnostic can point at the exact spot in the bytecode.
+`AnalysisBudgetExceeded` is the exception: it carries no offset, because it
+reports a broken internal convergence contract, not a location in the
+program.
 
 ## When a program fails
 
