@@ -316,25 +316,25 @@ fn differential_seeded_structured_corpus() {
     // invariants, and the corpus must actually exercise the rule.
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
     let (mut accepted, mut changes) = (0usize, 0usize);
-    let mut examples: Vec<String> = Vec::new();
-    for _ in 0..10_000 {
+    // Every change is kept and printed (run with --nocapture), each with its
+    // corpus index, so the whole change list can be reviewed, not a sample.
+    let mut change_list: Vec<(usize, String)> = Vec::new();
+    for index in 0..10_000usize {
         let code = gen_structured(&mut rng);
         if baseline(&Program::new(code.clone())).is_ok() {
             accepted += 1;
         }
         if check_one(code.clone(), "seeded") {
             changes += 1;
-            if examples.len() < 5 {
-                examples.push(hex(&code));
-            }
+            change_list.push((index, hex(&code)));
         }
     }
     println!(
         "W1-011 seeded corpus: 10000 programs, {accepted} baseline-accepted, \
-         {changes} accept->reject (JumpAcrossLoopBoundary)"
+         {changes} accept->reject (JumpAcrossLoopBoundary); all of them:"
     );
-    for example in &examples {
-        println!("  {example}");
+    for (index, program) in &change_list {
+        println!("  #{index:05} {program}");
     }
     assert!(
         changes >= SEEDED_CHANGE_FLOOR,
