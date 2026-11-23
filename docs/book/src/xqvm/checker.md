@@ -197,9 +197,10 @@ acceptance-equivalence proof and historical minimum-walk oracle.
 | `StackDepthMismatch` | 4 | Two control-flow paths reach a join point with different stack depths |
 | `StackUnderflow` | 4 | Stack depth would go negative at a reachable instruction |
 | `StackOverflowRisk` | 4 | Stack depth would exceed 8,192 at a reachable instruction |
+| `AnalysisBudgetExceeded` | 2--4 | An analysis exhausted its derived work bound: a checker defect, not invalid bytecode |
 
-Every `CheckerError` variant carries the byte offset of the offending
-instruction; several (`RegisterTypeMismatch`, `UndefinedJumpTarget`, and
+Every `CheckerError` variant except `AnalysisBudgetExceeded` carries the
+byte offset of the offending instruction; several (`RegisterTypeMismatch`, `UndefinedJumpTarget`, and
 others) also carry the register number or label id involved, so a
 diagnostic can point at the exact spot in the bytecode.
 

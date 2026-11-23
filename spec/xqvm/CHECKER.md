@@ -299,7 +299,7 @@ predecessor of the body start has the body-entry height at its output;
 unreached predecessors contribute `Top`. Thus its loop-effect check cannot
 fail. An unreachable opener seeds only `Top`, and its body cannot fail that
 check either. Exact-height acceptance also preserves the old minimum-input,
-entry/exit bound and O7 peak checks. No assumption about nesting depth or
+entry/exit bound and intra-block peak checks. No assumption about nesting depth or
 loop count is needed in either direction.
 
 Errors: `LoopStackImbalance`, `StackDepthMismatch`, `StackUnderflow`,

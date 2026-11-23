@@ -1539,7 +1539,7 @@ mod tests {
     }
 }
 
-// QUIP-17 auditor shapes; copied unchanged into the instrumented base control.
+// Decreasing depth-cycle shapes, inside and outside a loop; copied unchanged into the instrumented base control.
 #[cfg(test)]
 mod audit_work_bounds {
     use super::*;

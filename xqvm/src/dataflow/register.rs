@@ -711,7 +711,7 @@ mod tests {
     }
 }
 
-// QUIP-02/16 auditor shape; copied unchanged into the instrumented base control.
+// The cycle that writes every register; copied unchanged into the instrumented base control.
 #[cfg(test)]
 mod audit_work_bounds {
     use super::*;

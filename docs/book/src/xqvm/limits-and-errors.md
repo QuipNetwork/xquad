@@ -162,7 +162,7 @@ before a program runs, by the four-phase pipeline described in
 [Checker](checker.md): structural, jump-target and loop-nesting checks;
 register type-state; must-init analysis; and stack depth.
 
-The eleven variants, which phase raises each one, and what each one means
+The variants, which phase raises each one, and what each one means
 are catalogued in [Checker's error reference](checker.md#error-reference)
 rather than repeated here, since that page also explains the phase that
 produces each one. See [Checking](../running/checking.md) for how
