@@ -333,8 +333,9 @@ was produced. From there, the `xquad` CLI static-inspects a single program
 without needing a Python host at all: `xquad vm asm` and `xquad vm dis`
 round-trip a `.xqasm` file to bytecode and back to a readable listing, and
 `xquad vm check` runs the same structural, jump-target, loop-nesting,
-register type-state, must-init and stack-depth checks `problem.compile()`
-already runs automatically through `xqffi` when that package is installed. See
+jump-span, register type-state, must-init and stack-depth checks
+`problem.compile()` already runs automatically through `xqffi` when that
+package is installed. See
 [CLI](../cli/) for the full command reference; nothing about
 compiling changes it.
 
