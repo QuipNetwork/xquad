@@ -1674,7 +1674,7 @@ mod exact_height_tests {
         Program::new(code)
     }
 
-    fn kimi_exact_spine() -> Program {
+    fn exact_raw_spine() -> Program {
         // Raw reviewer bytes, L=256/k=512/m=512. SHA-256:
         // 3ffb4e71c2b6b99a3e41cc9e642302335f90611ae995160b63a41e45d6891522
         let code = include_bytes!("../../tests/fixtures/work-guard-spine.bin");
@@ -1683,14 +1683,14 @@ mod exact_height_tests {
     }
 
     fn controls() -> [Program; 5] {
-        // Claude's spine; spine shape, L=256/k=512/m=512 parameters;
-        // negative-cycle and loop-free shapes; then Kimi's exact raw bytes.
+        // A wider spine; the L=256/k=512/m=512 spine; negative-cycle and
+        // loop-free shapes; then the exact raw spine bytes.
         [
             spine(300, 550, 550),
             spine(256, 512, 512),
             negative_cycle_tail(),
             spine(0, 1024, 1024),
-            kimi_exact_spine(),
+            exact_raw_spine(),
         ]
     }
 

@@ -60,7 +60,7 @@ xquad vm check --text uninit.xqasm
 ```
 
 ```
-Error: check failed: ReadUnsetRegister: register r0 read at byte 0x0000 before being written
+Error: check failed: ReadUnsetRegister: register r0 read at byte 0x0000 before being written on every path
 ```
 
 `check` exits `1` on the first violation any phase finds. A program with

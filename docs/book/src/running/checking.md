@@ -110,7 +110,7 @@ HALT
 ```
 
 ```
-Error: check failed: ReadUnsetRegister: register r0 read at byte 0x0000 before being written
+Error: check failed: ReadUnsetRegister: register r0 read at byte 0x0000 before being written on every path
 ```
 
 Fix: write the register before reading it. If the read follows a branch,
