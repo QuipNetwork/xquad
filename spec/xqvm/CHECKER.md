@@ -233,7 +233,10 @@ For each dequeued block:
 
 Stop at the first witnessed fault or edge conflict. This replaces the old
 whole-program error-class priority; rejected programs can change diagnostic
-variant or offset. The accepted program set is unchanged.
+variant or offset. Against the minimum-walk analysis this replaces, the
+accepted program set is unchanged. Acceptance does change under two other
+rules: block transfer stops at the first terminator (Phase 1), and the
+intra-block peak is checked (Phase 4).
 
 The implicit program-entry edge always has height zero. Back-edges to entry
 are compared with it, never ignored. A single-block CFG receives the same

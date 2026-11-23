@@ -64,6 +64,20 @@ mod block_ranges {
         assert!(xqvm::checker::check(&program).is_ok());
         assert!(xqvm::Vm::new().run(&program).is_ok());
     }
+
+    #[test]
+    fn dead_loop_closer_after_halt_does_not_reject_a_live_program() {
+        // The `NEXT` sits after a `HALT` in a block nothing jumps to, so the
+        // block has no CFG node. Looking its loop closer up must not turn
+        // that into `AnalysisBudgetExceeded`.
+        let program = xqasm::assemble_source(
+            "PUSH 0\nPUSH 1\nRANGE\nHALT\nJUMP .0\nTARGET .0\nHALT\nNEXT\nHALT\n",
+        )
+        .unwrap();
+        let verdict = xqvm::checker::check(&program);
+        assert!(verdict.is_ok(), "{verdict:?}");
+        assert!(xqvm::Vm::new().run(&program).is_ok());
+    }
 }
 
 mod stack_peaks {

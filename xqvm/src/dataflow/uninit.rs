@@ -218,11 +218,16 @@ pub(crate) fn check_uninit_registers_with_cfg(
     let result = super::sparse::solve(cfg, &analysis.block_inits)?;
 
     for &(block_start, block_end) in &ranges {
-        let before = result.before(block_start).copied().unwrap_or([true; 256]);
-
         if !analysis.reachable.contains(&block_start) {
             continue;
         }
+
+        // Every CFG node has a fact; a missing one is a checker defect, and
+        // falling back to "initialised" would accept every read in the block.
+        let before = result
+            .before(block_start)
+            .copied()
+            .ok_or(CheckerError::AnalysisBudgetExceeded)?;
 
         // Build the reg-type view once per block from the block's entry state,
         // then update it incrementally as writes are encountered.

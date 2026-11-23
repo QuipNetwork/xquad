@@ -100,9 +100,8 @@ loop in question.
 ### Register errors
 
 **`ReadUnsetRegister`** -- a register is read before anything writes it, or
-before every incoming control-flow path writes it (must-init analysis,
-phase 3, catches the second case even when phase 2's type check alone would
-not):
+before every incoming control-flow path writes it. Both the type check
+(phase 2) and must-init analysis (phase 3) reject the second case:
 
 ```asm
 LOAD r0
@@ -158,8 +157,9 @@ Fix: push the operands an instruction needs before it runs. This same
 check also catches loop-related shortfalls; see the "does not guarantee"
 section below for its blind spot.
 
-**`StackOverflowRisk`** -- the analysis converges on a depth past the
-8,192-item limit for some reachable block. A straight-line run of 8,200
+**`StackOverflowRisk`** -- a reachable block's exact entry or exit height,
+or a peak inside the block, exceeds the 8,192-item limit. A straight-line run
+of 8,200
 `PUSH` instructions with no loop involved:
 
 ```

@@ -241,14 +241,16 @@ pub(crate) fn check_register_types_with_cfg(
     let result = super::sparse::solve(cfg, &analysis.block_writes)?;
 
     for &(block_start, block_end) in &ranges {
-        let before = result
-            .before(block_start)
-            .copied()
-            .unwrap_or([RegType::Any; 256]);
-
         if !analysis.reachable.contains(&block_start) {
             continue;
         }
+
+        // Every CFG node has a fact; a missing one is a checker defect, and
+        // falling back to `Any` would accept every read in the block.
+        let before = result
+            .before(block_start)
+            .copied()
+            .ok_or(CheckerError::AnalysisBudgetExceeded)?;
 
         let block_code = code.get(block_start..block_end).unwrap_or(&[]);
         let mut state = before;

@@ -729,7 +729,12 @@ pub(crate) fn check_stack_depth_with_context(
     let mut heights = vec![None; count];
     let mut closers = vec![None; count];
     for region in loop_regions {
-        let index = graph.index(region.closer_block)?;
+        // A closer whose first terminator precedes its `NEXT` has no CFG
+        // edges and so no node. It has no out-edge to classify, so its
+        // `closers` entry would never be read.
+        let Ok(index) = graph.index(region.closer_block) else {
+            continue;
+        };
         *closers.get_mut(index).ok_or(SolveError::BudgetExceeded)? =
             Some((graph.index(region.body_start)?, region.opener_pos));
     }

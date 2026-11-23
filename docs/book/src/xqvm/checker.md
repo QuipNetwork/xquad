@@ -177,7 +177,10 @@ Checks run in this order:
 
 The first witnessed fault is reported. This replaces the former global
 error-class priority, so rejected programs can change diagnostic variant or
-offset. Accepted programs are unchanged. Arbitrary loop escapes and re-entry
+offset. Against the minimum-walk analysis it replaces, accepted programs are
+unchanged. Two other 0.6.0 rules do change acceptance: block analysis stops
+at the first terminator, so bytes after it are dead, and the transient peak
+inside a block is checked. Arbitrary loop escapes and re-entry
 remain ordinary CFG edges; there are no separate body walks or new nesting
 limits. Depth work is at most N block transfers and E edge checks after
 indexing the graph. See the normative checker specification for the
