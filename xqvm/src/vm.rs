@@ -176,6 +176,26 @@ fn resolve_iter_slice(
     Ok((start_us, start_us..end_us))
 }
 
+/// Refuse a constraint opcode on a model whose domain is not binary.
+///
+/// Every constraint expansion in `spec/xqvm/HLF.md` is derived under
+/// `x^2 = x`, which holds for `{0, 1}` and nowhere else: on a spin or integer
+/// model the same coefficients encode a different penalty and the model
+/// solves cleanly to a wrong answer. Called right after the handler's
+/// register type check and before any index or operand check, so a program
+/// that faults on an earlier check keeps that fault (`spec/xqvm/SPEC.md`,
+/// Error precedence).
+fn require_binary(pos: usize, reg: Register, m: &XqmxModel) -> Result<(), Error> {
+    match m.domain {
+        Domain::Binary => Ok(()),
+        domain => Err(Error::NonBinaryModel {
+            pos,
+            reg: reg.slot(),
+            domain,
+        }),
+    }
+}
+
 /// Convert a stack-supplied index to `usize` and bound it against `len`.
 ///
 /// Every opcode that addresses one variable of an `xqmx` takes the index off
@@ -2594,6 +2614,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        require_binary(pos, reg, m)?;
         // Both halves of `spec/xqvm/ISA.md`'s grid precondition, on the same
         // check the read-only grid opcodes use. A model with no grid has no
         // row to constrain, and a row outside `[0, rows)` names variables the
@@ -2625,6 +2646,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        require_binary(pos, reg, m)?;
         // The grid precondition, as in `exec_one_hot_r`. A column outside
         // `[0, cols)` cannot wrap the way a row can -- nothing multiplies by
         // it -- but its cells would still land outside the addressed column,
@@ -2650,6 +2672,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        require_binary(pos, reg, m)?;
         // Penalise x_i * x_j = 1 (mutual exclusion).
         let i_idx = bounded_index(pos, i, m.size)?;
         let j_idx = bounded_index(pos, j, m.size)?;
@@ -2673,6 +2696,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        require_binary(pos, reg, m)?;
         // Penalise x_i=1, x_j=0: penalty * x_i * (1 - x_j) = penalty*x_i - penalty*x_i*x_j.
         let i_idx = bounded_index(pos, i, m.size)?;
         let j_idx = bounded_index(pos, j, m.size)?;
@@ -2780,6 +2804,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        require_binary(pos, model, m)?;
         let needed = model_size(needed, pos)?;
         if needed > m.size {
             m.size = needed;
@@ -2846,6 +2871,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        require_binary(pos, model, m)?;
         if num_slacks == 0 {
             let unit_coeffs = vec![1i64; n];
             let idx_us = indices_to_usize(&idx_vec, pos, m.size)?;
@@ -2942,6 +2968,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        require_binary(pos, model, m)?;
         if num_slacks == 0 {
             let idx_us = indices_to_usize(&idx_vec, pos, m.size)?;
             expand_equality(m, &idx_us, &coeff_vec, k, penalty, pos)?;
@@ -2978,6 +3005,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        require_binary(pos, model, m)?;
         let ua =
             usize::try_from(var_a)
                 .ok()

@@ -141,6 +141,8 @@ pub(crate) enum Fault {
     InvalidIntegerK,
     /// A `SETLINE`/`ADDLINE` write put a value outside a sample's domain.
     SampleOutOfDomain,
+    /// A constraint opcode was applied to a spin or integer model.
+    NonBinaryModel,
     /// A tracer refused a step.
     TraceFailed,
     /// An allocator was handed a size that is not an allocation.
@@ -182,6 +184,7 @@ impl From<&xqvm::Error> for Fault {
             E::InvalidGridDimensions { .. } => Self::InvalidGridDimensions,
             E::InvalidIntegerK { .. } => Self::InvalidIntegerK,
             E::SampleOutOfDomain { .. } => Self::SampleOutOfDomain,
+            E::NonBinaryModel { .. } => Self::NonBinaryModel,
             E::TraceFailed { .. } => Self::TraceFailed,
             E::InvalidAllocation { .. } => Self::InvalidAllocation,
             E::LoopStackOverflow { .. } => Self::LoopStackOverflow,

@@ -151,6 +151,7 @@ which disassembles the program and points at the failing instruction.
 | `LoopStackOverflow` | `RANGE`/`ITER` nesting past 8,192 frames |
 | `InvalidIntegerK` | `XQMX`/`XSMX` called with `k < 2` -- `k` counts the values in `{0, ..., k-1}`, so `k = 1` leaves a single value and no decision to make |
 | `SampleOutOfDomain` | `SETLINE`/`ADDLINE` wrote a value outside a sample's domain. `ADDLINE` checks the result of the addition rather than the delta. Sample registers only: a model's `linear[i]` is a bias, not an assignment, and is unbounded |
+| `NonBinaryModel` | A constraint opcode (`ONEHOTR`, `ONEHOTC`, `EXCLUDE`, `IMPLIES`, `EQUALITY`, `ATLEAST`, `ATLEASTW`, `REDUCE`) on a spin or integer model. Their penalty expansions assume `x^2 = x`, which only binary variables satisfy. Raised after the register's type check and before any index check |
 | `UnmatchedLoop` | A `RANGE`/`ITER` skip-forward scan reached the end of the stream without a matching `NEXT` |
 | `TraceFailed` | A tracer callback returned an error (for example an I/O write failure) |
 

@@ -278,6 +278,21 @@ pub enum Error {
         domain: Domain,
     },
 
+    /// A constraint opcode was applied to a model whose domain is not binary.
+    ///
+    /// `ONEHOTR`, `ONEHOTC`, `EXCLUDE`, `IMPLIES`, `EQUALITY`, `ATLEAST`,
+    /// `ATLEASTW` and `REDUCE` write penalty terms derived under `x^2 = x`
+    /// (`spec/xqvm/HLF.md`), which holds only for binary variables. On a spin
+    /// or integer model the same terms encode a different, wrong penalty, so
+    /// the opcodes raise instead. `reg` is the model register; `domain` is
+    /// the domain it holds. Raised right after the register's type check and
+    /// before any index or operand check.
+    #[error(
+        "register r{reg} holds a {domain} model, but the constraint at byte \
+         {pos:#06x} requires a binary model"
+    )]
+    NonBinaryModel { pos: usize, reg: u8, domain: Domain },
+
     /// A RANGE or ITER skip-forward scan reached end-of-stream without
     /// finding a matching NEXT (nesting depth never reached zero).
     #[error("unmatched RANGE/ITER at byte {pos:#06x}: no matching NEXT found")]
@@ -388,6 +403,7 @@ impl Error {
             | Self::InvalidGridDimensions { pos, .. }
             | Self::InvalidIntegerK { pos, .. }
             | Self::SampleOutOfDomain { pos, .. }
+            | Self::NonBinaryModel { pos, .. }
             | Self::UnmatchedLoop { pos }
             | Self::LoopStackOverflow { pos }
             | Self::TraceFailed { pos, .. }

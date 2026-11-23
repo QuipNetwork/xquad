@@ -1,0 +1,15 @@
+; reduce_spin_model: REDUCE on a spin {-1, +1} model raises NonBinaryModel.
+;
+; REDUCE writes the Rosenberg reduction of x0 * x1, and spec/xqvm/HLF.md derives
+; every constraint expansion under x^2 = x, which holds only for binary
+; variables. On any other domain the same terms encode a different penalty,
+; so spec/xqvm/ISA.md has REDUCE raise NonBinaryModel instead. Every other
+; operand is valid, so the domain check alone decides.
+
+PUSH 4
+SQMX r0          ; spin model, 4 variables
+PUSH 0           ; var_a
+PUSH 1           ; var_b
+PUSH 1           ; p_aux
+REDUCE r0
+HALT

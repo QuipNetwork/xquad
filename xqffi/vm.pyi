@@ -50,6 +50,7 @@ __all__ = [
     "InvalidGridDimensions",
     "InvalidIntegerK",
     "SampleOutOfDomain",
+    "NonBinaryModel",
     "TraceFailed",
     "InvalidAllocation",
     "LoopStackOverflow",
@@ -325,6 +326,9 @@ class InvalidIntegerK(XqvmError):
 
 class SampleOutOfDomain(XqvmError):
     """A SETLINE or ADDLINE write put a value outside a sample's domain."""
+
+class NonBinaryModel(XqvmError):
+    """A constraint opcode was applied to a spin or integer model."""
 
 class TraceFailed(XqvmError):
     """A tracer refused a step."""

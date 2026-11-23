@@ -1,0 +1,18 @@
+; onehotc_integer_model: ONEHOTC on an integer {0, 1, 2} model raises NonBinaryModel.
+;
+; ONEHOTC writes a one-hot penalty over grid column 0, and spec/xqvm/HLF.md derives
+; every constraint expansion under x^2 = x, which holds only for binary
+; variables. On any other domain the same terms encode a different penalty,
+; so spec/xqvm/ISA.md has ONEHOTC raise NonBinaryModel instead. Every other
+; operand is valid, so the domain check alone decides.
+
+PUSH 4
+PUSH 3
+XQMX r0          ; integer model, k = 3, 4 variables
+PUSH 2           ; rows
+PUSH 2           ; cols
+RESIZE r0        ; 2x2 grid, so the grid precondition holds
+PUSH 0           ; col
+PUSH 1           ; penalty
+ONEHOTC r0
+HALT

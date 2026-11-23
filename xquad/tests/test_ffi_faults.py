@@ -58,6 +58,7 @@ FAULTS = [
     "InvalidGridDimensions",
     "InvalidIntegerK",
     "SampleOutOfDomain",
+    "NonBinaryModel",
     "TraceFailed",
     "InvalidAllocation",
     "LoopStackOverflow",
@@ -121,6 +122,7 @@ RAISED = [
     ("InvalidGridDimensions", "PUSH 4\nBQMX r0\nPUSH 0\nPUSH 1\nONEHOTC r0\nHALT", []),
     ("InvalidIntegerK", "PUSH 4\nPUSH 1\nXSMX r0\nHALT", []),
     ("SampleOutOfDomain", "PUSH 4\nPUSH 3\nXSMX r0\nPUSH 1\nPUSH 3\nSETLINE r0\nHALT", []),
+    ("NonBinaryModel", "PUSH 2\nSQMX r0\nPUSH 0\nPUSH 1\nPUSH 5\nEXCLUDE r0\nHALT", []),
     ("InvalidAllocation", "PUSH -1\nBQMX r0\nHALT", []),
     ("LoopStackOverflow", "TARGET .0\nPUSH 0\nPUSH 2\nRANGE\nJUMP .0", []),
 ]

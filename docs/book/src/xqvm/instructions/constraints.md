@@ -2,7 +2,11 @@
 
 These instructions inject QUBO penalty terms for common combinatorial
 constraints, expanding into linear and quadratic coefficient deltas
-automatically. The model register must hold a `Model` in model mode.
+automatically. The model register must hold a `Model` in model mode,
+and the model must be binary: every expansion below is derived under
+\\(x^2 = x\\), which spin and integer variables do not satisfy, so all
+eight opcodes raise `NonBinaryModel` on a spin or integer model. The check
+follows the register's type check and precedes every index check.
 Grid-based opcodes (`ONEHOTR`, `ONEHOTC`) read the grid dimensions set by
 `RESIZE` and require them, in both halves of the grid precondition
 [`spec/xqvm/ISA.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/ISA.md#xqmx-grid)

@@ -1,0 +1,16 @@
+; implies_integer_model: IMPLIES on an integer {0, 1, 2} model raises NonBinaryModel.
+;
+; IMPLIES writes an implication penalty from variable 0 to variable 1, and spec/xqvm/HLF.md derives
+; every constraint expansion under x^2 = x, which holds only for binary
+; variables. On any other domain the same terms encode a different penalty,
+; so spec/xqvm/ISA.md has IMPLIES raise NonBinaryModel instead. Every other
+; operand is valid, so the domain check alone decides.
+
+PUSH 4
+PUSH 3
+XQMX r0          ; integer model, k = 3, 4 variables
+PUSH 0           ; i
+PUSH 1           ; j
+PUSH 5           ; penalty
+IMPLIES r0
+HALT
