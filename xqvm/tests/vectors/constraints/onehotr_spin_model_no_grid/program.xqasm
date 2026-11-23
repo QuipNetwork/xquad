@@ -1,0 +1,14 @@
+; onehotr_spin_model_no_grid: on a spin model, NonBinaryModel comes before the
+; grid precondition.
+;
+; spec/xqvm/ISA.md raises NonBinaryModel right after the model type check and
+; before any check against the model. This model has no grid, so on a binary
+; model ONEHOTR would raise InvalidGridDimensions; on a spin model the domain
+; check runs first.
+
+PUSH 4
+SQMX r0          ; spin model, 4 variables, no RESIZE
+PUSH 0           ; row
+PUSH 1           ; penalty
+ONEHOTR r0
+HALT

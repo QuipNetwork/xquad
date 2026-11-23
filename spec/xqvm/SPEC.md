@@ -250,7 +250,7 @@ A fault aborts the run. Every fault has an **identity** -- a name from the list 
 | `InvalidGridDimensions` | A grid extent is not positive, does not fit the register's variables, or is required by the opcode and absent. |
 | `InvalidIntegerK` | `XQMX` or `XSMX` with `k < 2`. |
 | `SampleOutOfDomain` | `SETLINE` or `ADDLINE` writes a value outside the domain a sample's allocator declared. Sample registers only: model coefficients are unbounded. `ADDLINE` checks the result of the addition, not the delta. |
-| `NonBinaryModel` | `ONEHOTR`, `ONEHOTC`, `EXCLUDE`, `IMPLIES`, `EQUALITY`, `ATLEAST`, `ATLEASTW` or `REDUCE` on a spin or integer model. Their expansions hold only under `x^2 = x`. Raised after the model register's type check and before its index checks. |
+| `NonBinaryModel` | `ONEHOTR`, `ONEHOTC`, `EXCLUDE`, `IMPLIES`, `EQUALITY`, `ATLEAST`, `ATLEASTW` or `REDUCE` on any model not allocated by `BQMX` (spin, or integer of any `k`, `k = 2` included). Their expansions assume `x^2 = x`; the check follows the declared domain. Raised after the model register's type check and before its index checks. |
 
 The list is closed for program faults. A host-side failure that is not the program's doing -- a tracer callback that errors, an I/O failure in the embedder -- is outside it and is not compared. Every identity above has a counterpart in `xqvm`.
 
