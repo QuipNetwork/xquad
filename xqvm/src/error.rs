@@ -282,9 +282,9 @@ pub enum Error {
     ///
     /// `ONEHOTR`, `ONEHOTC`, `EXCLUDE`, `IMPLIES`, `EQUALITY`, `ATLEAST`,
     /// `ATLEASTW` and `REDUCE` write penalty terms derived under `x^2 = x`
-    /// (`spec/xqvm/HLF.md`), which holds only for binary variables. On a spin
-    /// or integer model the same terms encode a different, wrong penalty, so
-    /// the opcodes raise instead. `reg` is the model register; `domain` is
+    /// (`spec/xqvm/HLF.md`). On a spin or integer model those terms can encode
+    /// a different, wrong penalty, so the opcodes raise on any model whose
+    /// declared domain is not binary, an integer model with `k = 2` included. `reg` is the model register; `domain` is
     /// the domain it holds. Raised right after the register's type check and
     /// before any index or operand check.
     #[error(

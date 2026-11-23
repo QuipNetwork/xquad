@@ -179,9 +179,10 @@ fn resolve_iter_slice(
 /// Refuse a constraint opcode on a model whose domain is not binary.
 ///
 /// Every constraint expansion in `spec/xqvm/HLF.md` is derived under
-/// `x^2 = x`, which holds for `{0, 1}` and nowhere else: on a spin or integer
-/// model the same coefficients encode a different penalty and the model
-/// solves cleanly to a wrong answer. Called right after the handler's
+/// `x^2 = x`, which fails on a spin model and on an integer model with
+/// `k > 2`: there the same coefficients encode a different penalty and the
+/// model solves cleanly to a wrong answer. The check is on the declared
+/// domain, so an integer model with `k = 2` is refused too (use `BQMX`). Called right after the handler's
 /// register type check and before any index or operand check, so a program
 /// that faults on an earlier check keeps that fault (`spec/xqvm/SPEC.md`,
 /// Error precedence).
