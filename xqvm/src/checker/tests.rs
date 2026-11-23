@@ -183,13 +183,12 @@ fn nested_loops_outer_unmatched() {
     ));
 }
 
-// --- JumpSpanPhase (W1-011: jumps across loop bodies) ---
+// --- JumpSpanPhase (jumps across loop bodies) ---
 
 #[test]
 fn jump_span_rejects_a_jump_out_of_a_loop_body() {
     // RANGE opens the inner body; the JUMP sits inside it but targets a TARGET
-    // placed after NEXT, in the enclosing body. Cross-body -> rejected. This is
-    // the auditor's cross-body-jump shape.
+    // placed after NEXT, in the enclosing body. Cross-body -> rejected.
     let code = bytes(&[
         Instruction::Range {},
         Instruction::Jump1 { label: 0 },
@@ -241,8 +240,8 @@ fn jump_span_accepts_a_jump_outside_all_loops() {
 }
 
 #[test]
-fn jump_span_rejects_the_auditor_22_byte_poc() {
-    // Finding 011, verbatim: a JUMPI1 in loop A's body targets a TARGET inside
+fn jump_span_rejects_a_jump_from_one_loop_body_into_another() {
+    // A 22-byte program: a JUMPI1 in loop A's body targets a TARGET inside
     // loop B's body, so the NEXT the checker pairs with B closes A at runtime.
     // Both loops stay reachable with equal known depths, so the balance check
     // passes; the cross-body jump is what must be rejected.
@@ -268,8 +267,8 @@ fn jump_span_rejects_the_auditor_22_byte_poc() {
 }
 
 #[test]
-fn jump_span_rejects_the_auditor_poc_noactiveloop_variant() {
-    // The same PoC with loop A's count set to 1 (PUSH2 1): at runtime its NEXT
+fn jump_span_rejects_the_cross_loop_jump_whatever_the_loop_count() {
+    // The same program with loop A's count set to 1 (PUSH2 1): at runtime its NEXT
     // would hit NoActiveLoop. The opcode shape is identical, so the cross-body
     // jump is rejected regardless of the loop count.
     let code = vec![

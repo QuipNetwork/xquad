@@ -15,7 +15,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! W1-011 cost: the jump-span phase must not scale its memory with the number
+//! Jump-span cost: the phase must not scale its memory with the number
 //! of instructions.
 //!
 //! The first version of `JumpSpanPhase` kept a `BTreeMap` entry per
@@ -32,7 +32,7 @@
 #![expect(
     unsafe_code,
     reason = "a counting global allocator is the only way to measure the real heap \
-              high-water this test asserts against (W1-011 cost)"
+              high-water this test asserts against"
 )]
 
 use std::alloc::{GlobalAlloc, Layout, System};

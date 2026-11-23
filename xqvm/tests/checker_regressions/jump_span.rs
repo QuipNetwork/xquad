@@ -15,14 +15,14 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! W1-011 differential (finding 011).
+//! Jump-span differential.
 //!
 //! The cross-body-jump rule is a single extra checker phase, `JumpSpanPhase`,
 //! registered in `Checker::default()`. This compares a baseline checker (the
 //! pinned 4a31c96 phases, no `JumpSpanPhase`) against the candidate -- the
 //! production `xqvm::checker::check`, so the phase must really be registered
 //! there -- over a seeded corpus of structured programs,
-//! malformed byte streams, the constructed auditor reproduction, and the
+//! malformed byte streams, the constructed cross-loop reproduction, and the
 //! checked-in compiler-output vectors.
 //!
 //! Because the candidate is the baseline plus one reject-only phase that emits
@@ -170,10 +170,10 @@ fn check_one(code: Vec<u8>, note: &str) -> bool {
     false
 }
 
-/// The auditor's 22-byte reproduction (finding 011): a conditional jump in loop
+/// The 22-byte cross-loop reproduction: a conditional jump in loop
 /// A's body targets a TARGET in loop B's body; both loops stay reachable with
 /// equal known depths, so the baseline accepts it.
-fn auditor_poc(loop_a_count: [u8; 2]) -> Vec<u8> {
+fn cross_loop_poc(loop_a_count: [u8; 2]) -> Vec<u8> {
     vec![
         0x11,
         0x00, // PUSH1 0
@@ -200,15 +200,15 @@ fn auditor_poc(loop_a_count: [u8; 2]) -> Vec<u8> {
     ]
 }
 
-/// The phase is registered in production (X R8 item 2): the auditor reproduction goes
+/// The phase is registered in production: the cross-loop reproduction goes
 /// through `xqvm::checker::check` -- the entry point the pallet and the
 /// `xqffi` bindings call -- and must be rejected with `JumpAcrossLoopBoundary`.
 /// Removing `.with_phase(JumpSpanPhase)` from `Checker::default()` turns this
 /// red, as it does the differential tests that use the same entry point.
 #[test]
-fn auditor_poc_is_rejected_by_the_production_checker() {
+fn cross_loop_poc_is_rejected_by_the_production_checker() {
     for count in [[0x23, 0x28], [0x00, 0x01], [0x00, 0x00]] {
-        let program = Program::new(auditor_poc(count));
+        let program = Program::new(cross_loop_poc(count));
         assert!(
             matches!(
                 xqvm::checker::check(&program),
@@ -285,23 +285,23 @@ fn gen_structured(rng: &mut Rng) -> Vec<u8> {
 }
 
 #[test]
-fn differential_constructed_auditor_cases_are_rejected() {
+fn differential_constructed_cross_loop_cases_are_rejected() {
     // Construction truth: both carry the cross-body jump, and the baseline
     // accepts them, so the candidate must reject with JumpAcrossLoopBoundary.
     for count in [[0x23, 0x28], [0x00, 0x01]] {
-        let code = auditor_poc(count);
+        let code = cross_loop_poc(count);
         let program = Program::new(code.clone());
         assert!(
             baseline(&program).is_ok(),
-            "auditor PoC (count {count:?}) should pass the baseline checker"
+            "cross-loop PoC (count {count:?}) should pass the baseline checker"
         );
-        let changed = check_one(code, "auditor PoC");
-        assert!(changed, "auditor PoC must be an accept->reject change");
+        let changed = check_one(code, "cross-loop PoC");
+        assert!(changed, "cross-loop PoC must be an accept->reject change");
     }
 }
 
 /// Accept->reject changes the 10k seeded corpus must produce. Measured: 331
-/// changes among 966 baseline-accepted programs at this seed (claude's R8
+/// changes among 966 baseline-accepted programs at this seed (a reviewer's
 /// count, reproduced here); the floor sits just under it so the corpus cannot
 /// silently stop exercising the rule.
 const SEEDED_CHANGE_FLOOR: usize = 300;
@@ -330,7 +330,7 @@ fn differential_seeded_structured_corpus() {
         }
     }
     println!(
-        "W1-011 seeded corpus: 10000 programs, {accepted} baseline-accepted, \
+        "jump-span seeded corpus: 10000 programs, {accepted} baseline-accepted, \
          {changes} accept->reject (JumpAcrossLoopBoundary); all of them:"
     );
     for (index, program) in &change_list {
@@ -367,7 +367,7 @@ fn differential_malformed_streams() {
     }
 }
 
-/// Real compiler output (X R8 item 5): `xqcp`-compiled encoder, verifier and
+/// Real compiler output: `xqcp`-compiled encoder, verifier and
 /// decoder programs for a conditional inside a loop, a loop inside a
 /// conditional, and a conditional inside a loop whose arm itself loops (its
 /// decoder jumps over a whole inner loop, within the outer body). Regenerate
@@ -441,7 +441,7 @@ fn differential_zero_new_rejections_of_compiler_output() {
     assert!(checked > 0, "no compiler-output vectors were checked");
 }
 
-// --- Deliberately stack-neutral jump generator (architect R8 pre-finding) ---
+// --- Deliberately stack-neutral jump generator ---
 //
 // Builds baseline-valid loop programs and inserts a single jump whose source and
 // target sit at the same (depth-0) block boundary, so the jump is stack-neutral
@@ -628,7 +628,7 @@ fn gen_jump_program(seed: u64) -> JumpProgram {
             }
         }
         0 => {
-            // nested_inner (the auditor shape, generalized to `depth` levels):
+            // nested_inner (the cross-loop shape, generalized to `depth` levels):
             // a jump in the outermost loop body targets a TARGET in the
             // innermost loop body. Forward (jump before the target).
             b.open_loop();
@@ -779,7 +779,7 @@ fn differential_stack_neutral_jumps_hard_minimums() {
     let mut over_loop_accepted = 0usize;
     // Baseline-accepted programs with at least one ITER-opened loop, by
     // cross/intra: without them a JumpSpanPhase that forgot ITER as an
-    // opener would pass (claude's M4).
+    // opener would pass.
     let mut iter_cross = 0usize;
     let mut iter_intra = 0usize;
     let mut cross_examples: Vec<String> = Vec::new();
@@ -854,7 +854,7 @@ fn differential_stack_neutral_jumps_hard_minimums() {
         *by_cat.entry((jp.category, jp.is_cross)).or_default() += 1;
     }
 
-    println!("W1-011 differential change list (baseline-accepted jump programs):");
+    println!("Jump-span differential change list (baseline-accepted jump programs):");
     for ((cat, cross), n) in &by_cat {
         println!("  {cat:<12} cross={cross:<5} count={n}");
     }

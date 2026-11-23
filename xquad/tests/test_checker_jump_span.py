@@ -15,11 +15,11 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""The jump-span checker rule reaches Python (W1-011).
+"""The jump-span checker rule reaches Python.
 
 `xqffi.checker.check` delegates to the Rust default checker and surfaces
-every rejection as ``ValueError("<Variant>: <description>")``. The auditor's
-22-byte reproduction -- a conditional jump from loop A's body into loop B's
+every rejection as ``ValueError("<Variant>: <description>")``. The 22-byte
+cross-loop reproduction -- a conditional jump from loop A's body into loop B's
 body, which the pre-fix checker accepted -- must therefore raise a
 ``ValueError`` naming ``JumpAcrossLoopBoundary``. If the phase were dropped
 from the default checker, this program would check clean and the test would
@@ -30,7 +30,7 @@ import pytest
 
 from xquad.checker import check
 
-# Program::new(<auditor PoC>).encode(): the XQBC container around
+# Program::new(<cross-loop PoC>).encode(): the XQBC container around
 #   PUSH1 0; PUSH2 0x2328; RANGE; PUSH1 1; PUSH1 1; JUMPI1 .0;
 #   PUSH1 0; PUSH1 1; RANGE; TARGET .0; NEXT; POP; NEXT; HALT
 CROSS_LOOP_JUMP = bytes.fromhex("5851424301000000000016ff64b509110012232808110111010200110011010800071007ff")

@@ -25,7 +25,7 @@ use super::error::CheckerError;
 use super::phase::Phase;
 use super::scan::stream_err;
 
-/// Rejects `JUMP`/`JUMPI` instructions that cross a loop-body boundary (W1-011).
+/// Rejects `JUMP`/`JUMPI` instructions that cross a loop-body boundary.
 ///
 /// # The rule
 ///

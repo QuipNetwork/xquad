@@ -15,7 +15,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Regenerate the xqcp-compiled control-flow fixtures (W1-011).
+"""Regenerate the xqcp-compiled control-flow fixtures.
 
 Each fixture is real compiler output for a control-flow shape the jump-span
 checker rule must keep accepting: a conditional inside a loop, a loop inside

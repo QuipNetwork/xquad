@@ -121,7 +121,7 @@ pub enum CheckerError {
     /// A `JUMP`/`JUMPI` crosses a loop-body boundary: its target lies in a
     /// different lexical loop body than the jump itself. With no cross-body
     /// jumps the runtime loop stack equals the lexical nesting at every pc, so
-    /// permitting one would desynchronize them (W1-011). `pos` is the jump's
+    /// permitting one would desynchronize them. `pos` is the jump's
     /// byte offset, `target` the target `TARGET` opcode's byte offset.
     #[error(
         "jump at byte {pos:#06x} crosses a loop-body boundary to a target at byte \
