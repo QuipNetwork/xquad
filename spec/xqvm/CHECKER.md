@@ -262,9 +262,10 @@ For each dequeued block:
 Stop at the first witnessed fault or edge conflict. This replaces the old
 whole-program error-class priority; rejected programs can change diagnostic
 variant or offset. Against the minimum-walk analysis this replaces, the
-accepted program set is unchanged. Acceptance does change under two other
-rules: block transfer stops at the first terminator (Phase 1), and the
-intra-block peak is checked (Phase 4).
+accepted program set is unchanged. Acceptance does change under three other
+rules: block transfer stops at the first terminator (Phase 1), a jump may not
+cross a loop-body boundary (Phase 1d), and the intra-block peak is checked
+(Phase 4).
 
 The implicit program-entry edge always has height zero. Back-edges to entry
 are compared with it, never ignored. A single-block CFG receives the same
@@ -299,10 +300,10 @@ skip-edge to the block after `NEXT` (empty-loop path). `NEXT` emits a
 back-edge to the loop body start and a fall-through to the post-loop block.
 
 All these edges participate in exact-height consistency, including the
-post-loop `after_next` block. Arbitrary jumps leaving or re-entering a body
-remain ordinary CFG edges; no lexical confinement rule is added. A matching
-`NEXT` back-edge must restore the body's entry height, which enforces zero
-net effect without a separate body simulation.
+post-loop `after_next` block. Within Phase 4, jumps leaving or re-entering a
+body are ordinary CFG edges; the default pipeline has already rejected them
+in Phase 1d. A matching `NEXT` back-edge must restore the body's entry
+height, which enforces zero net effect without a separate body simulation.
 
 ### `SCLR` semantics
 

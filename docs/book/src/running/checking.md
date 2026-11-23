@@ -42,7 +42,7 @@ Error: check failed: TruncatedInstruction: truncated instruction at byte 0x0000
 Fix: same as `BadOpcode` -- the `.xqb` file is not a complete, valid
 encoding. Reassemble it.
 
-### Jump-target and loop-nesting errors
+### Jump-target, loop-nesting and jump-span errors
 
 **`UndefinedJumpTarget`** -- a jump instruction's label id is at or past the
 program's target count. Text assembly cannot produce this: the assembler

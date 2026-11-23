@@ -24,10 +24,10 @@ xquad vm check [OPTIONS] <FILE>
 `xquad vm check` runs the same default pipeline documented in
 [Checker](../../xqvm/checker.md): structural checks, jump-target checks,
 loop-nesting balance, jump span, register type-state, must-init analysis,
-and stack depth, in that order, stopping at the first phase that fails. This page
-covers only the command's own behaviour; for what each phase checks and
-what each error means, see that page. For a task-oriented walkthrough of
-fixing a rejected program, see
+and stack depth, in that order, stopping at the first phase that fails.
+This page covers only the command's own behaviour; for what each phase
+checks and what each error means, see that page. For a task-oriented
+walkthrough of fixing a rejected program, see
 [Checking](../../running/checking.md).
 
 ## A passing program

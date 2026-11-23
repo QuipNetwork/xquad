@@ -93,10 +93,11 @@ storage is charged as `VECPUSH` and `SLACK` create it.
 
 `ITER` copies the slice it iterates into its loop frame, and a loop frame is
 released only by `NEXT`. A back-edge that re-enters an `ITER` without reaching
-its `NEXT` therefore accumulates copies, which is why the copy is charged.
-The loop frame itself is not charged, but it is bounded: the loop stack is
-capped at 8,192 frames and a program that grows it past that fails with
-`LoopStackOverflow`.
+its `NEXT` therefore accumulates copies, which is why the copy is charged. Only
+an unchecked program can do that: the default checker rejects the jump such a
+back-edge needs (phase 1d). The loop frame itself is not charged, but it is
+bounded: the loop stack is capped at 8,192 frames and a program that grows it
+past that fails with `LoopStackOverflow`.
 
 An element of a `vec<xqmx>` is charged the whole-model copy rate, because
 cloning a model clones its coefficient maps: 8 bytes per declared variable

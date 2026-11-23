@@ -335,9 +335,8 @@ round-trip a `.xqasm` file to bytecode and back to a readable listing, and
 `xquad vm check` runs the same structural, jump-target, loop-nesting,
 jump-span, register type-state, must-init and stack-depth checks
 `problem.compile()` already runs automatically through `xqffi` when that
-package is installed. See
-[CLI](../cli/) for the full command reference; nothing about
-compiling changes it.
+package is installed. See [CLI](../cli/) for the full command reference;
+nothing about compiling changes it.
 
 `xquad vm check` and `xquad vm dis` work on any of the three programs as they
 stand, but `xquad vm run` does not, because none of the three programs' inputs

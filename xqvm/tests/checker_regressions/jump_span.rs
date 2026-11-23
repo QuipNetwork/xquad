@@ -23,7 +23,7 @@
 //! production `xqvm::checker::check`, so the phase must really be registered
 //! there -- over a seeded corpus of structured programs,
 //! malformed byte streams, the constructed cross-loop reproduction, and the
-//! checked-in compiler-output vectors.
+//! checked-in specification vectors.
 //!
 //! Because the candidate is the baseline plus one reject-only phase that emits
 //! only `JumpAcrossLoopBoundary`, the invariants are:
@@ -408,9 +408,10 @@ fn xqcp_compiled_control_flow_still_checks_clean() {
 }
 
 #[test]
-fn differential_zero_new_rejections_of_compiler_output() {
-    // Every assembled compiler-output vector the baseline accepts, the candidate
-    // must also accept: the rule rejects none of the toolchain's real output.
+fn differential_zero_new_rejections_of_spec_vectors() {
+    // Every assembled specification vector the baseline accepts, the candidate
+    // must also accept. These are hand-written; real compiler output is checked
+    // by `xqcp_compiled_control_flow_still_checks_clean`.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/vectors");
     let mut checked = 0usize;
     let mut stack = vec![root];
@@ -430,7 +431,7 @@ fn differential_zero_new_rejections_of_compiler_output() {
                 if baseline(&program).is_ok() {
                     assert!(
                         candidate(&program).is_ok(),
-                        "candidate rejected compiler output the baseline accepts: {}",
+                        "candidate rejected a spec vector the baseline accepts: {}",
                         path.display()
                     );
                 }
@@ -438,7 +439,7 @@ fn differential_zero_new_rejections_of_compiler_output() {
             }
         }
     }
-    assert!(checked > 0, "no compiler-output vectors were checked");
+    assert!(checked > 0, "no spec vectors were checked");
 }
 
 // --- Deliberately stack-neutral jump generator ---
