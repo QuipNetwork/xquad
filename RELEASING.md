@@ -1,21 +1,20 @@
 # Releasing the xquad toolchain
 
-Cutting a release publishes ten artefacts in one shot from a single
+Cutting a release publishes these artefacts in one shot from a single
 `v<X.Y.Z>` git tag:
 
 | # | Artefact | Registry | Ordering |
 |---|----------|----------|----------|
 | 1 | [`xqvm`](xqvm/) | crates.io | before xqasm |
 | 2 | [`xqasm`](xqasm/) | crates.io | last Rust crate |
-| 3 | [`xqffi`](xqffi/) abi3 wheels + sdist | PyPI | before peers (2 abi3 wheels + sdist) |
-| 4 | [`xqcp`](xqcp/) sdist | PyPI | before xquad |
-| 5 | [`xqsa`](xqsa/) sdist | PyPI | before xquad |
-| 6 | [`xquad`](xquad/) sdist (and the `xquad` command) | PyPI | last -- depends on 3-5 |
-| 7 | GitLab Release notes | GitLab | last -- `release:notes` |
+| 3 | `xquad`: 2 abi3 wheels + sdist, carrying `xqffi`, `xqcp`, `xqsa`, `xquad` and the `xquad` command | PyPI | after the crates |
+| 4 | GitLab Release notes | GitLab | last -- `release:notes` |
 
 Triggered by `.gitlab/ci/release.yml`; see that file for the exact
-ordering and rules. `xqffi` the Rust *crate* stays `publish = false`
-(cdylib-only, consumed via PyPI). The release-notes step generates
+ordering and rules. `xquad` is the only PyPI distribution: maturin
+builds it from the root `pyproject.toml`, compiling the `xqffi` crate
+into the wheel. `xqffi` the Rust *crate* stays `publish = false`
+(cdylib-only, shipped inside the `xquad` wheel). The release-notes step generates
 notes from conventional-commit history via [git-cliff] (config in
 [`cliff.toml`](cliff.toml)) and creates the GitLab Release page; no
 in-tree `CHANGELOG.md` exists -- the release page is the canonical
@@ -32,10 +31,9 @@ Variables**; masked + protected):
   `ops@postquant.xyz`. Scope to `xqvm`, `xqasm` publish-new
   + publish-update.
 
-**PyPI Trusted Publishing (OIDC)** -- no long-lived token in CI. Each
-of the 4 PyPI projects (`xqffi`, `xqcp`, `xqsa`, `xquad`)
-must have a GitLab Trusted Publisher configured at
-`pypi.org/manage/project/<name>/settings/publishing/` pointing at:
+**PyPI Trusted Publishing (OIDC)** -- no long-lived token in CI. The
+`xquad` PyPI project must have a GitLab Trusted Publisher configured at
+`pypi.org/manage/project/xquad/settings/publishing/` pointing at:
 
     namespace = quip.network
     project   = xquad
@@ -44,6 +42,11 @@ must have a GitLab Trusted Publisher configured at
 
 The matching `release` environment must exist in **Settings → CI/CD →
 Environments**, restricted to protected tags `v*`.
+
+Up to 0.5, `xqffi`, `xqcp` and `xqsa` were separate PyPI projects. From
+0.6.0 they ship inside the `xquad` wheel. Their Trusted Publishers are
+retired by hand once the v0.6.0 tag has published; their 0.4.x and
+0.5.x releases stay on PyPI.
 
 ## Pre-flight
 
@@ -95,18 +98,20 @@ Before cutting a tag:
    `release:validate` runs in CI, so it needs the same tooling that
    `.gitlab/ci/setup.yml` installs for that job:
 
-       uv tool install maturin --with ziglang
+       uv tool install maturin==1.16.0 --with ziglang==0.17.1
        uv tool install 'twine>=6.1'
        bash scripts/install-cargo-tools.sh --only cargo-zigbuild
-       rustup target add aarch64-unknown-linux-gnu
+       rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
        export PATH="${HOME}/.local/share/uv/tools/maturin/bin:${PATH}"
 
-   The `PATH` export is not optional. One of the three cdylib artefacts
-   is an aarch64 wheel cross-compiled with zig as the linker, and
+   The `PATH` export is not optional. Both Linux wheels are
+   cross-compiled with zig as the linker, and
    `cargo-zigbuild` locates zig by running `python3 -m ziglang`, so the
    `python3` first on `PATH` has to be maturin's own venv python, which
    is where `--with ziglang` put the package. Without it the run fails
-   at `Failed to find zig`, after the native wheel has already built.
+   at `Failed to find zig` on the first wheel. On a host that is not
+   Linux the run also builds a wheel for that host, which the smoke test
+   installs; it is never uploaded.
 
 ## Cutting a release
 
@@ -168,25 +173,24 @@ git fetch origin && git switch -c release/vX.Y.Z origin/main   # or origin/dev
 #    first push when it is missing, so a cut is steps 1 and 3. Made
 #    here instead, it is the same change, and CI finds nothing to bump.
 #    Set every version site, then regenerate the lockfiles.
-#    `make set-version` writes all of them, each in its own ecosystem's
-#    spelling; `make list-version-sites` prints them. That list lives in
+#    `make set-version` writes all of them, in the Cargo spelling;
+#    `make list-version-sites` prints them. That list lives in
 #    scripts/check-version-sites.py and is not repeated here, so the
 #    prose cannot fall behind the check. In shape it is: every crate
-#    manifest, the two workspace dependency aliases in Cargo.toml, every
-#    pyproject [project] version, every `==X.Y.Z`
-#    peer pin including xquad's optional-dependencies, and the pallet
-#    fixture's lock entry.
+#    manifest, the two workspace dependency aliases in Cargo.toml, and
+#    the pallet fixture's lock entry. The root pyproject.toml carries no
+#    version: maturin takes it from xqffi/Cargo.toml.
 make set-version VERSION=X.Y.Z
 #    Then regenerate: `cargo check` (Cargo.lock), then
 #    `make regen-uv-lock` (uv.lock), which runs the pinned uv from the
 #    Makefile's UV_VERSION. Not a plain `uv lock`: a newer local uv
 #    rewrites uv.lock to a newer lock revision, and CI's uv reads that
-#    as current, so nothing catches it. Regenerating uv.lock is not
-#    optional bookkeeping here -- `make check-uv-lock`
-#    (`uv lock --check`) runs in `verify:python` and `preflight-py` and
-#    fails the moment uv.lock is stale against any pyproject.toml, so a
-#    version bump that forgets it fails CI on this branch rather than
-#    drifting silently. Also run `cargo update -p xqvm
+#    as current, so nothing catches it. A plain version bump leaves
+#    uv.lock unchanged, since the root project's version is dynamic and
+#    uv records none; the step matters when a dependency or the uv pin
+#    moved, and `make check-uv-lock` (`uv lock --check`, in
+#    `verify:python` and `preflight-py`) fails when uv.lock is stale
+#    against pyproject.toml. Also run `cargo update -p xqvm
 #    --manifest-path fixtures/pallet-xqvm/Cargo.toml` (standalone
 #    workspace with its own lock, which check-uv-lock does not reach).
 #    That one is enforced too, but by a different guard: the fixture
@@ -358,7 +362,7 @@ The tag push triggers a fully-automatic pipeline in stage `release`:
    own pipeline, using the same setup `release:pypi` uses. `make -k
    check-release` checks every version site against `$CI_COMMIT_TAG`,
    dry-runs both crates, and builds, `twine check`s and
-   smoke-installs all four Python distributions against the tagged
+   smoke-installs the `xquad` distribution against the tagged
    commit. The version check is the one part that does nothing on the
    MR pipeline, where there is no tag to compare against, so the tag
    pipeline is the first run that exercises it.
@@ -372,7 +376,6 @@ The tag push triggers a fully-automatic pipeline in stage `release`:
    in topological order. Fires automatically once
    `release:validate` passes.
 3. **`release:pypi`** -- `maturin build` + `twine upload` (OIDC) for
-   `xqffi`, then `uv build` + `twine upload` for `xqcp` / `xqsa` /
    `xquad`. Fires automatically once `release:crates` passes
    (`needs:` enforces ordering so PyPI cannot run before crates.io).
 4. **`release:notes`** -- git-cliff renders the GitLab Release page
@@ -406,9 +409,8 @@ and rerun the pipeline.
 
 1. **Verify on the registries.** All three crates (xqvm, xqasm,
    and -- eventually, once we publish it -- xqffi's cdylib) should show
-   `vX.Y.Z` within a minute of pipeline completion; all four Python
-   distributions (`xqffi`, `xqcp`, `xqsa`, `xquad`) on
-   PyPI within seconds.
+   `vX.Y.Z` within a minute of pipeline completion; the `xquad`
+   distribution on PyPI within seconds.
 2. **Smoke-test the install.** In a fresh venv on your workstation:
 
    ```sh
@@ -426,8 +428,8 @@ and rerun the pipeline.
    <crate>` for crates.io. A yank keeps a resolver from selecting the
    broken version for a fresh install. It does **not** move anyone who
    already installed it, and it does not affect an existing environment
-   that already satisfies a requirement -- the exact peer pins in each
-   `pyproject.toml` are what force those forward.
+   that already satisfies a requirement -- `pip install -U xquad` is
+   what moves those forward.
 4. **Notify the pallet team** if this was a major bump they're
    blocked on.
 
@@ -452,8 +454,8 @@ and rerun the pipeline.
   minted only for `release:pypi`, the one job carrying `environment:
   release`, which is itself restricted to protected `v*` tags. Check
   that `CARGO_REGISTRY_TOKEN` has `Protected: yes`, that the tag
-  matches the protected `v*` pattern, and that each PyPI project's
-  Trusted Publisher lists `env = release`.
+  matches the protected `v*` pattern, and that the `xquad` PyPI
+  project's Trusted Publisher lists `env = release`.
 
 ## What this pipeline does *not* do yet
 

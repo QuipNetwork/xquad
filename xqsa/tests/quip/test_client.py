@@ -1270,7 +1270,7 @@ class TestSolverQuipGuards:
         monkeypatch.setitem(sys.modules, "substrateinterface", None)
         from xqsa.quip import SolverQuip
 
-        with pytest.raises(ImportError, match=r"xqsa\[quip\]"):
+        with pytest.raises(ImportError, match=r"xquad\[quip\]"):
             SolverQuip(url="ws://fake", seed=VALID_SEED)
 
     def test_missing_quip_signer(self, monkeypatch) -> None:

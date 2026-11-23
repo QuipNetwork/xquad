@@ -31,8 +31,8 @@ the tree as committed is self-consistent. They deliberately assert on
 otherwise every release MR would have to edit this file, which is exactly
 the drift the single site table exists to prevent.
 
-The pure functions (PEP 440 canonicalisation, SemVer validation, PEP 508
-splitting) are imported and tested in-process instead. They carry the
+The pure functions (PEP 440 canonicalisation, SemVer validation, PEP 503
+name normalisation) are imported and tested in-process instead. They carry the
 "two spellings, one version" rule, so they earn table-driven cases rather
 than a process launch each.
 """
@@ -102,12 +102,14 @@ _CRATE = '[package]\nname = "{name}"\nversion = "{cargo}"\nedition = "2024"\n'
 
 
 def write_tree(root: Path, cargo: str = CARGO_DEV, pep: str = PEP_DEV) -> Path:
-    """Write a complete, self-consistent manifest tree at `cargo` / `pep`.
+    """Write a complete, self-consistent manifest tree at `cargo`.
 
     Small but structurally real: it carries the third-party dependency
     specifiers the guard must ignore, the two excluded fixtures, and the
-    two dynamic-version packages, so a test can assert the guard leaves
-    them alone rather than merely not tripping over them.
+    dynamic-version root project, so a test can assert the guard leaves
+    them alone rather than merely not tripping over them. `pep` is the
+    PEP 440 spelling of `cargo`, which no file in the tree carries; it is
+    accepted so callers name both spellings of the version they mean.
     """
 
     def write(rel: str, text: str) -> None:
@@ -139,40 +141,20 @@ def write_tree(root: Path, cargo: str = CARGO_DEV, pep: str = PEP_DEV) -> Path:
     write("fixtures/pallet-xqvm/Cargo.lock", f'[[package]]\nname = "xqvm"\nversion = "{cargo}"\n')
     write("fixtures/xqvm-wasm/Cargo.toml", _CRATE.format(name="xqvm-wasm", cargo="0.0.0"))
 
-    write("pyproject.toml", '[tool.uv.workspace]\nmembers = [ "xqffi", "xqcp", "xqsa", "xquad" ]\n')
-    write("xqffi/pyproject.toml", '[project]\nname = "xqffi"\ndynamic = [ "version" ]\n')
     write(
-        "xqcp/pyproject.toml",
-        f'[project]\nname = "xqcp"\nversion = "{pep}"\ndependencies = [\n    "xqffi=={pep}",\n]\n',
-    )
-    write(
-        "xqsa/pyproject.toml",
-        f'[project]\nname = "xqsa"\nversion = "{pep}"\n'
-        f'dependencies = [\n    "xqffi=={pep}",\n    "dwave-samplers>=1.0",\n]\n'
+        "pyproject.toml",
+        '[project]\nname = "xquad"\ndynamic = [ "version" ]\n'
+        'dependencies = [ "dwave-samplers>=1.0", "click>=8.2" ]\n'
         "\n[project.optional-dependencies]\n"
-        'quip = [ "substrate-interface>=1.7.4,<2", "quip-signer>=0.2.2" ]\n',
-    )
-    write(
-        "xquad/pyproject.toml",
-        f'[project]\nname = "xquad"\nversion = "{pep}"\n'
-        f'dependencies = [\n    "xqffi=={pep}",\n    "xqcp=={pep}",\n    "xqsa=={pep}",\n]\n'
-        "\n[project.optional-dependencies]\n"
-        f'cuda  = [ "xqsa[cuda]=={pep}" ]\n'
-        f'dwave = [ "xqsa[dwave]=={pep}" ]\n'
-        f'metal = [ "xqsa[metal]=={pep}" ]\n'
-        f'quip  = [ "xqsa[quip]=={pep}" ]\n',
+        'quip = [ "substrate-interface>=1.8.0,<2", "quip-signer>=0.3.0,<0.4" ]\n',
     )
 
-    # xqffi carries no version: uv records none for a dynamic package, and
-    # the guard asserts that absence.
+    # The project carries no version: uv records none for a dynamic package,
+    # and the guard asserts that absence. A third-party entry beside it does.
     write(
         "uv.lock",
-        f'[[package]]\nname = "xqcp"\nversion = "{pep}"\nsource = {{ editable = "xqcp" }}\n\n'
-        f'[[package]]\nname = "xqsa"\nversion = "{pep}"\nsource = {{ editable = "xqsa" }}\n\n'
-        f'[[package]]\nname = "xquad"\nversion = "{pep}"\nsource = {{ editable = "xquad" }}\n\n'
-        '[[package]]\nname = "xqffi"\nsource = { directory = "xqffi" }\n',
+        '[[package]]\nname = "click"\nversion = "8.2.1"\n\n[[package]]\nname = "xquad"\nsource = { editable = "." }\n',
     )
-    write("scripts/python-packages.sh", "CDYLIB=xqffi\nPEERS=(xqcp xqsa xquad)\n")
     return root
 
 
@@ -208,7 +190,7 @@ def test_no_tag_is_a_no_op(tree: Path) -> None:
 
 def test_no_tag_ignores_a_disagreeing_site(tree: Path) -> None:
     """The version comparison is genuinely tag-gated, not merely quiet."""
-    patch(tree, "xquad/pyproject.toml", f'version = "{PEP_DEV}"', 'version = "9.9.9"')
+    patch(tree, "xqvm/Cargo.toml", f'version = "{CARGO_DEV}"', 'version = "9.9.9"')
     assert run_guard(tree).returncode == 0
 
 
@@ -216,28 +198,26 @@ def test_release_candidate_passes_against_its_own_spellings(bumped: Path) -> Non
     """v0.4.0-rc1 against 0.4.0-rc1 / 0.4.0rc1 is the release candidate flow."""
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 0, result.stderr
-    assert "18 sites at 0.4.0-rc1 / 0.4.0rc1" in result.stdout
+    assert "6 sites at 0.4.0-rc1 / 0.4.0rc1" in result.stdout
 
 
-def test_python_site_in_cargo_spelling_fails(bumped: Path) -> None:
-    """0.4.0-rc1 is PEP 440 equivalent to 0.4.0rc1 but is the wrong wheel filename."""
-    patch(bumped, "xqcp/pyproject.toml", f'version = "{PEP_RC}"', f'version = "{CARGO_RC}"')
+def test_cargo_site_in_pep440_spelling_fails(bumped: Path) -> None:
+    """0.4.0rc1 canonicalises to the tag's version but is not SemVer, so cargo would refuse it."""
+    patch(bumped, "xqffi/Cargo.toml", f'version = "{CARGO_RC}"', f'version = "{PEP_RC}"')
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert "disagrees with 1 of 18" in result.stderr
-    assert f"xqcp/pyproject.toml:3: project version: found {CARGO_RC}, expected {PEP_RC}" in result.stderr
+    assert "disagrees with 1 of 6" in result.stderr
+    assert f"xqffi/Cargo.toml:3: package version: found {PEP_RC}, expected {CARGO_RC}" in result.stderr
 
 
 def test_release_tag_against_dev_tree_fails(tree: Path) -> None:
     """The live gap: tagging v0.4.0 against a -dev main would publish 0.4.0-dev."""
     result = run_guard(tree, tag="v0.4.0")
     assert result.returncode == 1
-    assert "disagrees with 18 of 18" in result.stderr
+    assert "disagrees with 6 of 6" in result.stderr
     for expected in (
         "Cargo.toml:6: workspace dependency xqvm",
         "xqffi/Cargo.toml:3: package version",
-        "xquad/pyproject.toml:3: project version",
-        "xquad/pyproject.toml:11: peer pin xqsa[cuda]",
         "fixtures/pallet-xqvm/Cargo.lock:3: locked version xqvm",
     ):
         assert expected in result.stderr
@@ -250,14 +230,13 @@ def test_release_tag_against_dev_tree_fails(tree: Path) -> None:
     ("rel", "old", "new", "count", "site"),
     [
         (
-            "xquad/pyproject.toml",
-            f'version = "{PEP_RC}"',
-            f'version = "{PEP_DEV}"',
+            "xqffi/Cargo.toml",
+            f'version = "{CARGO_RC}"',
+            f'version = "{CARGO_DEV}"',
             1,
-            "xquad/pyproject.toml:3: project version",
+            "xqffi/Cargo.toml:3: package version",
         ),
-        ("xquad/pyproject.toml", f'"xqcp=={PEP_RC}"', f'"xqcp=={PEP_DEV}"', 1, "peer pin xqcp"),
-        ("xquad/pyproject.toml", f"xqsa[cuda]=={PEP_RC}", f"xqsa[cuda]=={PEP_DEV}", 1, "peer pin xqsa[cuda]"),
+        ("Cargo.toml", f'"./xqasm", version = "{CARGO_RC}"', f'"./xqasm", version = "{CARGO_DEV}"', 1, "xqasm"),
         ("fixtures/pallet-xqvm/Cargo.lock", CARGO_RC, CARGO_DEV, 1, "fixtures/pallet-xqvm/Cargo.lock:3"),
     ],
 )
@@ -266,39 +245,24 @@ def test_partial_bump_reports_exactly_the_stale_site(
 ) -> None:
     """A site missed by the bump fails, and no other site is implicated.
 
-    twine's --skip-existing makes a stale Python manifest a silent no-op at
-    upload time, so a partial bump is the failure mode with no other guard.
+    xqffi/Cargo.toml is the version the wheel takes, and twine's
+    --skip-existing makes a stale one a silent no-op at upload time, so a
+    partial bump is the failure mode with no other guard.
     """
     patch(bumped, rel, old, new)
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert f"disagrees with {count} of 18" in result.stderr
+    assert f"disagrees with {count} of 6" in result.stderr
     assert site in result.stderr
-
-
-def test_every_xquad_pin_missed_reports_three_sites(bumped: Path) -> None:
-    """The pins are one edit a bump can miss wholesale, separately from [project] version."""
-    patch(
-        bumped,
-        "xquad/pyproject.toml",
-        f'dependencies = [\n    "xqffi=={PEP_RC}"',
-        f'dependencies = [\n    "xqffi=={PEP_DEV}"',
-    )
-    for dist in ("xqcp", "xqsa"):
-        patch(bumped, "xquad/pyproject.toml", f'"{dist}=={PEP_RC}"', f'"{dist}=={PEP_DEV}"')
-    result = run_guard(bumped, tag="v0.4.0-rc1")
-    assert result.returncode == 1
-    assert "disagrees with 3 of 18" in result.stderr
-    assert "project version" not in result.stderr
 
 
 def test_unrelated_stale_sites_are_all_reported(bumped: Path) -> None:
     """Findings accumulate; the guard never stops at the first."""
     patch(bumped, "xqvm/Cargo.toml", f'version = "{CARGO_RC}"', f'version = "{CARGO_DEV}"')
-    patch(bumped, "xquad/pyproject.toml", f'version = "{PEP_RC}"', f'version = "{PEP_DEV}"')
+    patch(bumped, "xqffi/Cargo.toml", f'version = "{CARGO_RC}"', f'version = "{CARGO_DEV}"')
     result = run_guard(bumped, tag="v0.4.0-rc1")
     assert result.returncode == 1
-    assert "disagrees with 2 of 18" in result.stderr
+    assert "disagrees with 2 of 6" in result.stderr
 
 
 def test_environment_tag_is_used_when_no_argument_is_given(bumped: Path) -> None:
@@ -448,16 +412,8 @@ def test_in_tree_dependency_caches_are_not_swept(tree: Path, cache_dir: str, man
     assert result.returncode == 0, result.stderr
 
 
-def test_new_peer_pin_must_be_declared(tree: Path) -> None:
-    """A pin on a workspace distribution is a version site by definition."""
-    patch(tree, "xqsa/pyproject.toml", f'"xqffi=={PEP_DEV}",', f'"xqffi=={PEP_DEV}",\n    "xqcp=={PEP_DEV}",')
-    result = run_guard(tree)
-    assert result.returncode == 2
-    assert "is not declared in SITES" in result.stderr
-
-
-def test_third_party_specifiers_are_not_treated_as_pins(tree: Path) -> None:
-    """The pin sweep filters by distribution name, which is what spares dwave-samplers."""
+def test_third_party_specifiers_are_not_version_sites(tree: Path) -> None:
+    """Only declared sites are read, so dependency specifiers never enter the comparison."""
     result = run_guard(tree, tag="v0.4.0-dev")
     assert result.returncode == 0, result.stderr
     listing = run_guard(tree, "--list")
@@ -482,8 +438,8 @@ def test_missing_declared_site_is_a_setup_error(tree: Path) -> None:
 
 
 def test_literal_version_on_a_dynamic_package_is_a_setup_error(tree: Path) -> None:
-    """maturin ignores a literal in xqffi/pyproject.toml, so it would drift forever."""
-    patch(tree, "xqffi/pyproject.toml", 'dynamic = [ "version" ]', f'dynamic = [ "version" ]\nversion = "{PEP_DEV}"')
+    """maturin ignores a literal in the root pyproject.toml, so it would drift forever."""
+    patch(tree, "pyproject.toml", 'dynamic = [ "version" ]', f'dynamic = [ "version" ]\nversion = "{PEP_DEV}"')
     result = run_guard(tree)
     assert result.returncode == 2
     assert "version is set on a dynamic package" in result.stderr
@@ -491,7 +447,7 @@ def test_literal_version_on_a_dynamic_package_is_a_setup_error(tree: Path) -> No
 
 def test_lock_version_for_a_dynamic_package_is_a_setup_error(tree: Path) -> None:
     """If uv starts recording one, it becomes a version site nothing checks."""
-    patch(tree, "uv.lock", 'name = "xqffi"\n', f'name = "xqffi"\nversion = "{PEP_DEV}"\n')
+    patch(tree, "uv.lock", 'name = "xquad"\n', f'name = "xquad"\nversion = "{PEP_DEV}"\n')
     result = run_guard(tree)
     assert result.returncode == 2
     assert "now records version" in result.stderr
@@ -503,7 +459,7 @@ def test_lock_version_for_a_dynamic_package_is_a_setup_error(tree: Path) -> None
 def test_list_prints_every_site(tree: Path) -> None:
     result = run_guard(tree, "--list")
     assert result.returncode == 0
-    assert result.stdout.rstrip().endswith("18 version sites")
+    assert result.stdout.rstrip().endswith("6 version sites")
 
 
 def test_print_version_reports_the_canonical_spelling(tree: Path) -> None:
@@ -514,7 +470,7 @@ def test_print_version_reports_the_canonical_spelling(tree: Path) -> None:
 
 
 def test_print_version_refuses_a_tree_that_disagrees(tree: Path) -> None:
-    patch(tree, "xquad/pyproject.toml", f'version = "{PEP_DEV}"', 'version = "9.9.9"')
+    patch(tree, "xqvm/Cargo.toml", f'version = "{CARGO_DEV}"', 'version = "9.9.9"')
     result = run_guard(tree, "--print-version")
     assert result.returncode == 2
     assert "do not agree on one version" in result.stderr
@@ -584,19 +540,6 @@ def test_canon(raw: str, expected: str | None) -> None:
 def test_is_semver(raw: str, valid: bool) -> None:
     """Four dotted components are valid PEP 440 and invalid SemVer; a Cargo.toml must fail on them."""
     assert guard.is_semver(raw) is valid
-
-
-@pytest.mark.parametrize(
-    ("raw", "name", "extras", "spec"),
-    [
-        ("xqffi==0.4.0.dev0", "xqffi", (), "==0.4.0.dev0"),
-        ("xqsa[cuda]==0.4.0.dev0", "xqsa", ("cuda",), "==0.4.0.dev0"),
-        ("dwave-samplers>=1.0", "dwave-samplers", (), ">=1.0"),
-        ("pyobjc-framework-Metal>=11.0; sys_platform == 'darwin'", "pyobjc-framework-Metal", (), ">=11.0"),
-    ],
-)
-def test_parse_requirement(raw: str, name: str, extras: tuple[str, ...], spec: str) -> None:
-    assert guard.parse_requirement(raw) == (name, extras, spec)
 
 
 def test_distribution_names_are_normalised() -> None:

@@ -47,12 +47,12 @@ def git(repo: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def write_version(repo: Path, cargo: str, pep440: str, extra: str = "") -> None:
-    """Write the workspace version in both spellings, plus a lockfile line that shares it."""
+def write_version(repo: Path, cargo: str, extra: str = "") -> None:
+    """Write the workspace version to both crates the guard reads, plus a lockfile line that shares it."""
     (repo / "xqvm").mkdir(exist_ok=True)
-    (repo / "xquad").mkdir(exist_ok=True)
+    (repo / "xqffi").mkdir(exist_ok=True)
     (repo / "xqvm" / "Cargo.toml").write_text(f'[package]\nname = "xqvm"\nversion = "{cargo}"\n{extra}')
-    (repo / "xquad" / "pyproject.toml").write_text(f'[project]\nname = "xquad"\nversion = "{pep440}"\n')
+    (repo / "xqffi" / "Cargo.toml").write_text(f'[package]\nname = "xqffi"\nversion = "{cargo}"\n')
     # An unrelated package pinned at the old release version: masking
     # must treat it the same on both sides.
     (repo / "Cargo.lock").write_text(
@@ -71,7 +71,7 @@ def released_repo(tmp_path: Path) -> tuple[Path, str]:
     repo = tmp_path / "repo"
     repo.mkdir()
     git(repo, "init", "-q", "-b", "main")
-    write_version(repo, "0.4.1", "0.4.1")
+    write_version(repo, "0.4.1")
     return repo, commit_all(repo, "chore: bump workspace to 0.4.1")
 
 
@@ -85,7 +85,7 @@ def run_push(repo: Path, before: str, **overrides: str) -> subprocess.CompletedP
 
 def test_reopening_bump_passes(tmp_path: Path) -> None:
     repo, before = released_repo(tmp_path)
-    write_version(repo, "0.4.2-dev", "0.4.2.dev0")
+    write_version(repo, "0.4.2-dev")
     commit_all(repo, "chore: reopen main at 0.4.2-dev")
     result = run_push(repo, before)
     assert result.returncode == 0, result.stderr
@@ -93,7 +93,7 @@ def test_reopening_bump_passes(tmp_path: Path) -> None:
 
 def test_bump_carrying_another_change_fails(tmp_path: Path) -> None:
     repo, before = released_repo(tmp_path)
-    write_version(repo, "0.4.2-dev", "0.4.2.dev0", extra='[dependencies]\nserde = "1"\n')
+    write_version(repo, "0.4.2-dev", extra='[dependencies]\nserde = "1"\n')
     commit_all(repo, "chore: reopen main at 0.4.2-dev")
     result = run_push(repo, before)
     assert result.returncode == 1
@@ -138,7 +138,7 @@ MR_TRAILER = "refer to merge request quip.network/xquad!1"
 
 def test_bump_that_adds_a_file_fails(tmp_path: Path) -> None:
     repo, before = released_repo(tmp_path)
-    write_version(repo, "0.4.2-dev", "0.4.2.dev0")
+    write_version(repo, "0.4.2-dev")
     (repo / "NEW.md").write_text("new\n")
     commit_all(repo, "chore: reopen main at 0.4.2-dev")
     result = run_push(repo, before)
@@ -191,7 +191,7 @@ def test_release_merge_is_judged_by_its_merge_commit_alone(tmp_path: Path) -> No
     commit_all(repo, "fix: a fix")
     git(repo, "switch", "-q", "-c", "release/v0.4.2", "main")
     git(repo, "merge", "--no-ff", "-q", "fix", "-m", "merge: branch 'fix' into 'release/v0.4.2'")
-    write_version(repo, "0.4.2", "0.4.2")
+    write_version(repo, "0.4.2")
     commit_all(repo, "chore: bump workspace to 0.4.2")
     git(repo, "switch", "-q", "main")
     git(

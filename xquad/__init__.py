@@ -18,8 +18,8 @@
 """
 XQuad — umbrella namespace for the full toolchain.
 
-`xquad` is a thin meta-package that puts the peer distributions
-(`xqffi`, `xqcp`, `xqsa`) under one surface so users can write a single
+`xquad` is a thin umbrella that puts the `xqffi`, `xqcp` and `xqsa`
+packages it ships with under one surface so users can write a single
 set of imports for the full encode → sample → verify → decode
 pipeline::
 
@@ -40,8 +40,8 @@ objects. `types`, `vm` and `program` are this package's own modules.
 
 Nothing loads until it is first used: `import xquad` imports none of
 the peer packages, which keeps the `xquad` command's startup short.
-Users wanting a subset can still `pip install xqffi xqcp xqsa`
-individually; `pip install xquad` is the convenience path.
+All four packages ship in the one `xquad` distribution
+(`pip install xquad`).
 """
 
 from __future__ import annotations
@@ -51,6 +51,10 @@ import sys
 from importlib.machinery import ModuleSpec
 from types import ModuleType
 from typing import TYPE_CHECKING
+
+from xquad import _legacy
+
+_legacy.check()
 
 if TYPE_CHECKING:
     import xqcp as cp

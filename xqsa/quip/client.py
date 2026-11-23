@@ -218,7 +218,7 @@ class SolverQuip(Solver):
 
     Raises:
         ImportError: if the ``[quip]`` extra is not installed
-            (``pip install xqsa[quip]`` -- provides ``substrate-interface`` and
+            (``pip install xquad[quip]`` -- provides ``substrate-interface`` and
             the ``quip_signer`` signing extension).
         ValueError: if no RPC URL is configured, ``read_only=True`` comes with
             ``seed=`` or ``keystore=``, ``ssl_context`` comes with an
@@ -279,13 +279,13 @@ class SolverQuip(Solver):
             import substrateinterface  # noqa: F401 -- presence check; the client is built by quip_metadata.connect.
         except ImportError as exc:
             raise ImportError(
-                "substrate-interface is not installed. Install xqsa with: pip install xqsa[quip]"
+                "substrate-interface is not installed. Install xquad with: pip install xquad[quip]"
             ) from exc
         try:
             import quip_signer  # noqa: F401 -- presence check; used via xqsa.quip.signing.
         except ImportError as exc:
             raise ImportError(
-                "the quip_signer signing extension is not installed. Install it with: pip install xqsa[quip]"
+                "the quip_signer signing extension is not installed. Install it with: pip install xquad[quip]"
             ) from exc
         from xqsa.quip import signing as quip_signing
 

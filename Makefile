@@ -40,12 +40,12 @@ lint-python: fmt-check-py lint-py
 # "Does the repo still agree with its own policy": advisory + license
 # scanning, the changelog template smoke test, the atomic spec-MR guard,
 # and the commit-message guard. Distinct from "does the Rust workspace
-# build clean" (lint-rust) and "does the Python workspace format/lint
+# build clean" (lint-rust) and "does the Python code format/lint
 # clean" (lint-python).
 #
 # fmt-check-toml lives here rather than in lint-rust or lint-python. The
 # repo's TOML spans Cargo.toml (workspace root and every crate),
-# every Python package's pyproject.toml, deny.toml and cliff.toml, so it
+# the root pyproject.toml, deny.toml and cliff.toml, so it
 # has no single-language home. taplo is an acknowledged outlier in a
 # policy phase -- it is formatting, not policy -- but this phase is the
 # only one that compiles nothing, and pairing a two-second TOML check
@@ -171,9 +171,9 @@ check-version-sites:
 list-version-sites:
 	$(VERPY) scripts/check-version-sites.py --list
 
-# Writes every site in that list to VERSION, each in its own ecosystem's
-# spelling -- SemVer in the Cargo manifests, PEP 440 in the Python ones, so
-# `0.4.1-dev` lands as `0.4.1-dev` in one and `0.4.1.dev0` in the other.
+# Writes every site in that list to VERSION, in its Cargo spelling
+# (`0.4.1-dev`). No site carries the PEP 440 form: the wheel's
+# `0.4.1.dev0` comes from maturin's conversion of xqffi/Cargo.toml.
 #
 # The lockfiles are not version sites and do not move on their own. Follow
 # with `cargo check`, `make regen-uv-lock`, and `cargo update -p xqvm
@@ -181,7 +181,7 @@ list-version-sites:
 # same three.
 #
 # Every back-merge conflicts on these sites by construction, so the
-# resolution is this one command rather than 23 hand edits.
+# resolution is this one command rather than one hand edit per site.
 #   make set-version VERSION=0.4.1-dev
 set-version:
 	$(VERPY) scripts/check-version-sites.py --set "$(VERSION)"
@@ -249,9 +249,10 @@ check-crate-publish:
 
 # Needs maturin, twine and uv on PATH -- the same kind of prerequisite
 # note the hardware tiers below give for a CUDA device, a D-Wave QPU
-# token or a Metal-capable Mac. Builds the four distributions, runs
-# twine check, and smoke-installs each into a throwaway venv via
-# scripts/smoke-wheels.sh (wired into python-dists.sh's verify phase).
+# token or a Metal-capable Mac. Builds the xquad wheels and sdist, checks
+# the wheel contents, runs twine check, and smoke-installs the wheel into
+# a throwaway venv via scripts/smoke-wheels.sh (wired into
+# python-dists.sh's verify phase).
 check-python-dists:
 	bash scripts/python-dists.sh check
 
@@ -285,7 +286,7 @@ check-release: check-version-sites check-crate-publish check-python-dists
 # (test-quip*, test-cuda, test-qpu, test-metal), which need a real
 # device, token or devnet and are driven by hand or a dedicated runner,
 # and preflight-release (below), which needs maturin/twine/uv and builds
-# four distributions into a throwaway venv on top of a full-verify
+# the xquad distribution into a throwaway venv on top of a full-verify
 # workspace packaging dry-run.
 preflight-rs: lint-rust lint-deny-rs lint-deny-fixture test-rust test-wasm test-substrate-fixture
 
@@ -329,8 +330,8 @@ preflight-docs: check-docs-generated check-docs-handwritten
 preflight-policy: lint-policy
 
 # Stays OUT of the plain preflight aggregate below, on purpose, matching
-# test-miri and the hardware tiers: check-release builds four
-# distributions and installs them into a throwaway venv, on top of the
+# test-miri and the hardware tiers: check-release builds the xquad
+# distribution and installs it into a throwaway venv, on top of the
 # workspace-wide cargo publish dry-run, so hanging it off preflight-rs
 # or the default `make preflight` would be an unwelcome surprise for a
 # contributor who just wants the fast local loop. Run it explicitly
@@ -343,16 +344,15 @@ preflight: preflight-rs preflight-py preflight-docs preflight-policy
 
 # Bootstrap everything a contributor needs to use the XQuad toolchain
 # locally:
-#   - Python workspace (xqcp, xqsa, xqffi, xquad) synced into .venv/
-#     with the maturin-built xqffi wheel; the xqcp, xqsa and xquad
-#     editable installs put the repo root on sys.path, so any script in
-#     the repo can `import xqcp` etc.
+#   - the root xquad project (xqffi, xqcp, xqsa, xquad) synced into
+#     .venv/ as one editable maturin install; it puts the repo root on
+#     sys.path, so any script in the repo can `import xqcp` etc.
 #   - the `xquad` command, installed into .venv/bin/ by the same sync
 #     from the umbrella package's console script, so `uv run xquad vm
 #     run …` (or `xquad` with the venv active) works.
 #
 # Run once per environment; re-run after a pull that touches Rust
-# sources or workspace deps. Publishing / wheel distribution is out
+# sources or Python deps. Publishing / wheel distribution is out
 # of scope (see QUI-442).
 xquad: deps-py
 
@@ -413,36 +413,39 @@ deps-wasm:
 	rustup target add wasm32-unknown-unknown
 	rustup target add wasm32v1-none
 
-# Sync the Python workspace (xqffi, xqcp, xqsa, xquad) into .venv/
-# via uv. Assumes `uv` is already on $PATH; CI installs it in its
-# before_script.
+# Sync the root `xquad` project (xqffi, xqcp, xqsa, xquad in one
+# maturin build) into .venv/ via uv. Assumes `uv` is already on $PATH;
+# CI installs it in its before_script.
 #
 # The sync builds xqffi's cdylib through maturin, and rebuilds it
-# whenever its Rust inputs change: xqffi/pyproject.toml lists them as uv
-# `cache-keys`. No separate `maturin develop` step is needed. xqffi
-# installs as a regular wheel (`editable = false` in the members'
-# `[tool.uv.sources]`): an editable install leaves the extension in
-# xqffi/python/xqffi/, outside anything uv tracks, so a `git clean`
-# with unchanged inputs left uv reusing an install with no extension.
+# whenever its Rust inputs change: the root pyproject.toml lists them
+# as uv `cache-keys`. No separate `maturin develop` step is needed.
+#
+# The project installs editable: a `.pth` puts the repo root on
+# sys.path, so scripts run from sibling directories (examples/,
+# scripts/) can `import xqcp` etc., and a Python edit is live with no
+# reinstall. maturin builds the extension into xqffi/xqffi.*.so in
+# the tree, which no cache-key tracks (a key on it would rebuild on
+# every sync). So after a `git clean` that spares .venv/, uv sees
+# unchanged inputs, reports nothing to do, and `import xqffi` fails
+# with `No module named 'xqffi.xqffi'`. scripts/ensure-xqffi.sh
+# reinstalls the project when the extension is missing, and every
+# target here that runs its own `uv sync` calls it next; by hand the
+# fix is `uv sync --reinstall-package xquad`.
 #
 # That build runs `cargo --locked --profile dev` (the root
 # pyproject.toml's `config-settings-package`, which explains the
-# profile). `--locked` is the same contract every other resolving
-# cargo invocation in this file carries (see CONTRIBUTING.md,
-# "Dependencies and Lockfiles"). It is worth naming here because deps-py
-# is the contributor bootstrap: a Cargo.lock that has drifted from the
+# profile).
+# `--locked` is the same contract every other resolving cargo
+# invocation in this file carries (see CONTRIBUTING.md, "Dependencies
+# and Lockfiles"). It is worth naming here because deps-py is the
+# contributor bootstrap: a Cargo.lock that has drifted from the
 # manifests fails `make deps-py` outright rather than being quietly
 # re-resolved into a different dependency set. Regenerate with
 # `cargo check` and commit the result.
-#
-# xqcp, xqsa and xquad each set `dev-mode-dirs = [".."]`, so their
-# editable install puts the repo root on sys.path rather than just
-# the package directory (a flat-layout quirk: without it, only
-# /repo/xqcp would be importable, not /repo). That's what lets
-# scripts run from sibling directories (examples/, scripts/) `import
-# xqcp` etc.
 deps-py:
 	uv sync
+	@bash scripts/ensure-xqffi.sh
 
 # Point git at the repo-tracked .githooks/ directory so the pre-commit
 # hook runs on every commit. Run once per clone; bypass ad hoc with
@@ -457,8 +460,8 @@ install-hooks:
 
 # Pinned ruff version for the uvx invocations below (fmt-py, fmt-check-py,
 # lint-py). `uvx` fetches an isolated ruff install rather than running
-# through the project's own `uv run`, which -- because xqffi is a uv
-# workspace member -- would trigger `uv sync` and, with it, a full
+# through the project's own `uv run`, which -- because the root project
+# builds xqffi -- would trigger `uv sync` and, with it, a full
 # maturin build of xqffi's cdylib just to check Python formatting. An
 # unpinned `uvx ruff` would drift from uv.lock's resolved ruff version and
 # could break CI on an unrelated upstream release; keep this in sync with
@@ -605,7 +608,7 @@ check-uv-lock:
 # published on PyPI, so `uvx` fetches and runs the pin like any other
 # tool. Every documented `uv lock` step (version bumps, back-merges,
 # lockfile conflicts) goes through this target. Run it after `cargo
-# check`: uv asks maturin for xqffi's metadata, and maturin reads
+# check`: uv asks maturin for the xquad project's metadata, and maturin reads
 # Cargo.lock with `--locked`.
 regen-uv-lock:
 	uvx uv@$(UV_VERSION) lock
@@ -628,7 +631,7 @@ test-doc:
 test-miri: deps-miri
 	cargo +nightly miri test --locked --workspace --all-features
 
-# Depends on deps-py so the workspace, and with it xqffi's cdylib, is
+# Depends on deps-py so the project, and with it xqffi's cdylib, is
 # synced to this tree before pytest starts. `--no-sync` then keeps the
 # pytest call from re-resolving the environment it was just given.
 # Excludes the hardware-backed solver tests (cuda/qpu/metal); those run in
@@ -691,6 +694,7 @@ test-quip: test-quip-sign test-quip-e2e
 #      wrote, with no second resolve.
 test-quip-sign:
 	uv sync --extra quip
+	@bash scripts/ensure-xqffi.sh --extra quip
 	uv run --no-sync pytest xqsa/tests/quip/test_signing.py -m quip
 
 # Live Quip Network devnet end-to-end tests for SolverQuip
@@ -717,6 +721,7 @@ test-quip-e2e:
 		exit 2; \
 	fi
 	uv sync --extra quip
+	@bash scripts/ensure-xqffi.sh --extra quip
 	QUIP_RPC_URL="$(QUIP_RPC_URL)" QUIP_FAUCET_URL="$(QUIP_FAUCET_URL)" \
 		uv run --no-sync pytest xqsa/tests/quip/test_live.py -m quip -v -rs
 
@@ -767,7 +772,7 @@ test-metal:
 # than hand-enforced at each quip/hardware call site.
 #
 # Locally, what binds the assertion to *this* tree is the `cache-keys`
-# list in xqffi/pyproject.toml: the sync rebuilds the cdylib when a listed
+# list in the root pyproject.toml: the sync rebuilds the cdylib when a listed
 # Rust input changed, and reuses uv's cached build otherwise. This check
 # does NOT prove that list is complete. A fresh clone (every CI run) gives
 # every file a new modification time, so the sync rebuilds whatever the
@@ -798,6 +803,7 @@ test-metal:
 # the rest of local dev expects.
 check-xqffi-fresh:
 	uv sync --extra dwave
+	@bash scripts/ensure-xqffi.sh --extra dwave
 	uv run --no-sync python -c \
 		"import xquad; \
 		syms = [xquad.asm.assemble_source, xquad.asm.disassemble, xquad.asm.parse_xqasm, \
@@ -806,7 +812,7 @@ check-xqffi-fresh:
 		assert all(s is not None for s in syms), 'xqffi symbol failed to resolve'; \
 		print(f'xqffi fresh: {len(syms)} symbols resolved')"
 
-# Asserts the hand-written type stubs under xqffi/python/xqffi/ describe
+# Asserts the hand-written type stubs in xqffi/ describe
 # the extension deps-py just built (QUI-1506). Two checks, because neither
 # covers the other:
 #
@@ -851,8 +857,8 @@ conformance-coverage:
 # -- Dev ergonomics ---------------------------------------------------------
 
 # Open a Python REPL with the xqffi extension fresh and the
-# workspace packages (xqcp, xqsa, xquad) importable. Depends on
-# deps-py so the .so and per-package .pth files stay current;
+# packages (xqcp, xqsa, xquad) importable. Depends on deps-py so the
+# .so and the project's .pth file stay current;
 # `uv run --no-sync` skips the implicit sync that would otherwise
 # revert maturin's fresh extension build to a cached wheel.
 repl: deps-py
@@ -883,7 +889,7 @@ build-docs:
 	sh scripts/check-mermaid-render.sh
 
 # Both generators (scripts/gen-bytecode-docs.py, scripts/gen-example-docs.py)
-# import only scripts/_docsgen.py and PyYAML -- no workspace package, so
+# import only scripts/_docsgen.py and PyYAML -- no project package, so
 # they don't need `uv sync` (which would build xqffi's cdylib through
 # maturin just to diff some YAML against some Markdown). `--no-project`
 # skips project/workspace discovery; `--isolated` on top of that is what

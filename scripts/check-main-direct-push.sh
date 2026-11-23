@@ -29,8 +29,9 @@
 #     naming this project ($CI_PROJECT_PATH, quip.network/xquad off
 #     CI), or
 #   - a version-only change: each file it touches is identical before
-#     and after once the old and new workspace versions, in both their
-#     Cargo and PEP 440 spellings, are masked out on both sides.
+#     and after once the old and new workspace versions are masked out
+#     on both sides. They are read from xqvm/Cargo.toml and from
+#     xqffi/Cargo.toml, the version the xquad wheel takes.
 #
 # Anything else turns `main`'s pipeline red. Detection, not prevention:
 # the commit is on `main` by the time this runs. See
@@ -87,7 +88,7 @@ if ! commits="$(git rev-list --first-parent --reverse "${RANGE}")"; then
     exit 2
 fi
 
-# The workspace version at a commit, in the given file's spelling.
+# The version a file carries at a commit, in that file's spelling.
 version_at() {
     git show "$1:$2" | sed -nE "s/^$3[[:space:]]*=[[:space:]]*\"([^\"]+)\".*/\1/p" | head -n1
 }
@@ -109,8 +110,8 @@ version_only_violation() {
     SPELLINGS=(
         "$(version_at "${sha}^" xqvm/Cargo.toml version)"
         "$(version_at "${sha}" xqvm/Cargo.toml version)"
-        "$(version_at "${sha}^" xquad/pyproject.toml version)"
-        "$(version_at "${sha}" xquad/pyproject.toml version)"
+        "$(version_at "${sha}^" xqffi/Cargo.toml version)"
+        "$(version_at "${sha}" xqffi/Cargo.toml version)"
     )
     if [[ "${SPELLINGS[0]}" == "${SPELLINGS[1]}" ]]; then
         echo "it does not change the workspace version (${SPELLINGS[0]})"

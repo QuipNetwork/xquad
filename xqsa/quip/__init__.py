@@ -100,7 +100,7 @@ builds a solver against a preset, ``aglais`` (the public testnet) or ``devnet``
 Signing is hybrid (sr25519 + FN-DSA-512): the chain's ``Signature`` is
 ``HybridTxSignature``, which ``substrate-interface`` cannot produce, so all
 crypto is delegated to the ``quip_signer`` extension and extrinsic assembly to
-:mod:`xqsa.quip.signing`. Install both with ``pip install xqsa[quip]`` (or
+:mod:`xqsa.quip.signing`. Install both with ``pip install xquad[quip]`` (or
 ``uv sync --extra quip``); ``quip_signer`` resolves a wheel on Linux and builds
 from its sdist with a local Rust toolchain elsewhere. It is lazy-imported, so
 every other xqsa solver installs and runs without it; only constructing

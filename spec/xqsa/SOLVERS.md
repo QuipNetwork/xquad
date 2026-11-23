@@ -112,7 +112,7 @@ Configuration (constructor arg, then environment): `url`/`QUIP_RPC_URL`, `seed`,
 
 `SolverCPU` needs only the base package. Every other solver needs an optional extra, and its dependency is imported only when the solver is constructed, so `import xqsa` never fails: `InProcessCuda`, `InProcessMetal` and `InProcessDWave` import theirs inside `__init__`, `SolverGPU` imports the engine module it picks, and `SolverQuip` checks for `substrate-interface` and imports its signing module on construction.
 
-- `ImportError` with a `pip install xqsa[extra]` hint when the required extra is not installed
+- `ImportError` with a `pip install xquad[extra]` hint when the required extra is not installed
 - `RuntimeError` when required hardware is not detected (GPU, QPU)
 
 ## Solver Registry

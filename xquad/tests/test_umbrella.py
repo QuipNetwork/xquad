@@ -15,7 +15,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Smoke tests for the xquad umbrella meta-package.
+"""Smoke tests for the xquad umbrella namespace.
 
 Guards three invariants:
 

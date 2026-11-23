@@ -17,7 +17,7 @@
 #
 # Fault docstring guard (QUI-1506).
 #
-# `xqffi/python/xqffi/vm.pyi` restates, by hand, the docstring of every
+# `xqffi/vm.pyi` restates, by hand, the docstring of every
 # fault class `xqffi/src/fault.rs` declares. `stubtest` (the other half of
 # `make check-stubs`) compares signatures and leaves docstrings alone, so
 # without this check a fault reworded in `fault.rs` would leave type
@@ -45,7 +45,7 @@ from pathlib import Path
 from types import ModuleType
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-STUB = REPO_ROOT / "xqffi" / "python" / "xqffi" / "vm.pyi"
+STUB = REPO_ROOT / "xqffi" / "vm.pyi"
 BASE = "XqvmError"
 
 

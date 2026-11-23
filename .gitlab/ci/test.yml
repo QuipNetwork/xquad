@@ -1,5 +1,5 @@
 # Test phase -- does the workspace do what it should when actually
-# executed? Rust unit/integration/doc tests, the Python workspace test
+# executed? Rust unit/integration/doc tests, the Python test
 # suite, the Quip signing-layer tests, the WASM no_std correctness tests,
 # and the Substrate FRAME pallet fixture -- see setup.yml's verify-vs-test
 # header for what makes these `test` jobs rather than `verify` jobs.

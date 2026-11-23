@@ -41,7 +41,7 @@ cd "$REPO_ROOT"
 # rather than hardcoding it here a second time. The Makefile's fmt-py /
 # fmt-check-py / lint-py targets run the same pinned ruff via `uvx`, for
 # the same reason this hook does: an isolated ruff install skips `uv
-# sync`, which -- because xqffi is a uv workspace member -- would
+# sync`, which -- because the root project builds xqffi -- would
 # otherwise trigger a full maturin build of xqffi's cdylib just to check
 # staged Python files.
 RUFF_VERSION="$(sed -n 's/^RUFF_VERSION[[:space:]]*:=[[:space:]]*//p' "$REPO_ROOT/Makefile" | head -n1)"

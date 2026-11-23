@@ -54,7 +54,7 @@ uv run python examples/weighted_set_cover/runner.py --num-sets 6
 | `dwave` | D-Wave Leap account | `pip install xquad[dwave]` |
 | `cuda` | NVIDIA CUDA GPU | `pip install xquad[cuda]` |
 | `metal` | Apple Silicon (macOS) | `pip install xquad[metal]` |
-| `quip` | Quip Network (remote miner, env-configured) | `pip install xqsa[quip]` |
+| `quip` | Quip Network (remote miner, env-configured) | `pip install xquad[quip]` |
 
 See [GPU/QPU installation](../../README.md#gpuqpu-support) for driver
 prerequisites and [xqsa solver quick-starts](../../xqsa/README.md) for

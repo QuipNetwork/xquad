@@ -45,30 +45,32 @@
 # (0.4.0.dev0, 0.4.0rc1). maturin performs no conversion between them: it
 # hands the raw Cargo string to a PEP 440 parser and renders the normalised
 # form (maturin 1.13.3, src/metadata.rs). So this guard has one
-# canonicaliser, PEP 440's, applied to the tag and to both ecosystems.
+# canonicaliser, PEP 440's, applied to the tag and to every site.
 #
 # Observed with `maturin sdist --manifest-path xqffi/Cargo.toml`, maturin
-# 1.13.3, 2026-08-26 -- xqffi/pyproject.toml declares dynamic = ["version"]
-# and maturin sources it from xqffi/Cargo.toml, so this one site feeds both
+# 1.13.3, 2026-08-26 -- then xqffi/pyproject.toml, now the root
+# pyproject.toml, declares dynamic = ["version"] and maturin sources it
+# from xqffi/Cargo.toml, so this one site feeds both
 # ecosystems and the mapping had to be measured rather than assumed:
 #
 #     Cargo 0.4.0-dev      ->  xqffi-0.4.0.dev0.tar.gz   Version: 0.4.0.dev0
 #     Cargo 0.4.0-alpha.1  ->  xqffi-0.4.0a1.tar.gz      Version: 0.4.0a1
 #     Cargo 0.4.0-rc1      ->  xqffi-0.4.0rc1.tar.gz     Version: 0.4.0rc1
 #
-# Comparison is two-layer. Agreement: every site must canonicalise to the
-# tag's canonical form. Spelling: Python sites must additionally match that
-# canonical form exactly, because 0.4.0.dev and 0.4.0.dev0 are PEP 440
-# equivalent but produce different wheel filenames. Cargo sites are held to
-# valid SemVer plus agreement instead, because 0.4.0-alpha.1 is the correct
-# authored string and canonicalising it back would demand 0.4.0-a1.
+# Every site is a Cargo site, so the comparison asks two things of each:
+# that it is valid SemVer, and that it canonicalises to the tag's PEP 440
+# form. The PEP 440 spelling is never written in the tree; the wheel takes
+# it from xqffi/Cargo.toml through maturin's conversion above. Sites are not
+# held to the canonical spelling itself, because 0.4.0-alpha.1 is the
+# correct authored string and canonicalising it back would demand 0.4.0-a1.
 #
 # What runs when
 # --------------
 # The tag comparison is gated on a tag being present, so merge request and
-# branch pipelines are unaffected. The two table sweeps run always: they
-# compare no versions, they assert the table still describes the tree, and
-# they exist so that a crate added in September is caught on that merge
+# branch pipelines are unaffected. The table sweep and the no-version
+# assertions run always: they compare no versions, they assert the table
+# still describes the tree, and they exist so that a crate added in
+# September is caught on that merge
 # request rather than at tag time in November.
 #
 # With no tag at all, one assertion still runs, and only on the two
@@ -109,7 +111,7 @@
 #                                             # the tree, for smoke-wheels.sh
 #   scripts/check-version-sites.py --set VERSION
 #                                             # write every site to VERSION, in
-#                                             # each ecosystem's spelling
+#                                             # its Cargo spelling
 #                                             # (`make set-version`)
 #   scripts/check-version-sites.py --root DIR # check a tree other than this one
 #
@@ -244,18 +246,6 @@ def normalise_dist(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-_REQUIREMENT_RE = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[(?P<extras>[^\]]*)\])?\s*(?P<spec>.*)$")
-
-
-def parse_requirement(raw: str) -> tuple[str, tuple[str, ...], str] | None:
-    """Split a PEP 508 requirement into (name, extras, specifier). Environment markers are discarded."""
-    match = _REQUIREMENT_RE.match(raw.split(";", 1)[0].strip())
-    if match is None:
-        return None
-    extras = tuple(extra.strip() for extra in (match["extras"] or "").split(",") if extra.strip())
-    return match["name"], extras, match["spec"].strip()
-
-
 # The two long-lived branches, which are both working branches before
 # 1.0. See check_branch below, and docs/guide/gitflow-protocol.md.
 WORKING_BRANCHES = frozenset({"main", "dev"})
@@ -264,20 +254,11 @@ WORKING_BRANCHES = frozenset({"main", "dev"})
 # --- Site table ------------------------------------------------------------
 
 
-class Eco(StrEnum):
-    """Which of the two spellings a site is written in."""
-
-    CARGO = "cargo"
-    PYTHON = "python"
-
-
 class Role(StrEnum):
     """What kind of site it is. Shown in `--list` and in every finding line."""
 
     PACKAGE_VERSION = "package version"
-    PROJECT_VERSION = "project version"
     WORKSPACE_DEP = "workspace dependency"
-    PEER_PIN = "peer pin"
     LOCK_ENTRY = "locked version"
 
 
@@ -299,25 +280,15 @@ class Site:
     """
 
     path: str
-    eco: Eco
     role: Role
     dist: str = ""
-    extras: tuple[str, ...] = ()
     table: tuple[str, ...] = ()
 
     @property
     def label(self) -> str:
-        if self.role is Role.PEER_PIN:
-            extras = f"[{','.join(self.extras)}]" if self.extras else ""
-            return f"peer pin {self.dist}{extras}"
         if self.role in (Role.WORKSPACE_DEP, Role.LOCK_ENTRY):
             return f"{self.role} {self.dist}"
         return str(self.role)
-
-    @property
-    def pin_name(self) -> str:
-        extras = f"[{','.join(self.extras)}]" if self.extras else ""
-        return f"{self.dist}{extras}"
 
 
 _CRATES = ("xqvm", "xqasm", "xqffi")
@@ -333,36 +304,12 @@ SITES: tuple[Site, ...] = (
     # xqasm, so a version there makes xqvm's dry-run chase a crates.io version
     # that does not exist yet. Its own comment says so; do not "complete" the
     # table by adding it.
-    Site("Cargo.toml", Eco.CARGO, Role.WORKSPACE_DEP, dist="xqvm", table=("workspace", "dependencies")),
-    Site("Cargo.toml", Eco.CARGO, Role.WORKSPACE_DEP, dist="xqasm", table=("workspace", "dependencies")),
+    Site("Cargo.toml", Role.WORKSPACE_DEP, dist="xqvm", table=("workspace", "dependencies")),
+    Site("Cargo.toml", Role.WORKSPACE_DEP, dist="xqasm", table=("workspace", "dependencies")),
     # Every crate manifest. xqffi is publish = false, but it is what maturin
     # stamps on the PyPI wheel.
-    *(Site(f"{crate}/Cargo.toml", Eco.CARGO, Role.PACKAGE_VERSION, dist=crate) for crate in _CRATES),
-    # The three hatchling packages that carry a literal version. xqffi is
-    # dynamic and appears under ASSERTIONS instead.
-    Site("xqcp/pyproject.toml", Eco.PYTHON, Role.PROJECT_VERSION, dist="xqcp"),
-    Site("xqsa/pyproject.toml", Eco.PYTHON, Role.PROJECT_VERSION, dist="xqsa"),
-    Site("xquad/pyproject.toml", Eco.PYTHON, Role.PROJECT_VERSION, dist="xquad"),
-    # Exact peer pins. The four distributions share one workspace version and
-    # are uploaded as a set, so a mixed-version install is never supported.
-    Site("xqcp/pyproject.toml", Eco.PYTHON, Role.PEER_PIN, dist="xqffi", table=("project", "dependencies")),
-    Site("xqsa/pyproject.toml", Eco.PYTHON, Role.PEER_PIN, dist="xqffi", table=("project", "dependencies")),
-    *(
-        Site("xquad/pyproject.toml", Eco.PYTHON, Role.PEER_PIN, dist=dist, table=("project", "dependencies"))
-        for dist in ("xqffi", "xqcp", "xqsa")
-    ),
-    *(
-        Site(
-            "xquad/pyproject.toml",
-            Eco.PYTHON,
-            Role.PEER_PIN,
-            dist="xqsa",
-            extras=(extra,),
-            table=("project", "optional-dependencies", extra),
-        )
-        for extra in ("cuda", "dwave", "metal", "quip")
-    ),
-    # uv.lock's internal consistency (every workspace member's locked entry
+    *(Site(f"{crate}/Cargo.toml", Role.PACKAGE_VERSION, dist=crate) for crate in _CRATES),
+    # uv.lock's internal consistency (the project's locked entry
     # agreeing with its manifest) is now enforced by `uv lock --check`
     # (`make check-uv-lock`, run by `verify:python` and `preflight-py`), so
     # entries here would be redundant duplication of what uv already checks.
@@ -373,7 +320,7 @@ SITES: tuple[Site, ...] = (
     # fixture targets build with --locked (`make test-substrate-fixture`,
     # `make lint-deny-fixture`), so a stale entry fails CI rather than
     # drifting silently.
-    Site("fixtures/pallet-xqvm/Cargo.lock", Eco.CARGO, Role.LOCK_ENTRY, dist="xqvm"),
+    Site("fixtures/pallet-xqvm/Cargo.lock", Role.LOCK_ENTRY, dist="xqvm"),
 )
 
 
@@ -396,15 +343,15 @@ class Assertion:
 
 ASSERTIONS: tuple[Assertion, ...] = (
     Assertion(
-        "xqffi/pyproject.toml",
+        "pyproject.toml",
         AssertKind.DYNAMIC_PYPROJECT,
-        "xqffi",
+        "xquad",
         "maturin sources the version from xqffi/Cargo.toml; a literal here is ignored and drifts forever",
     ),
     Assertion(
         "uv.lock",
         AssertKind.LOCK_NO_VERSION,
-        "xqffi",
+        "xquad",
         "uv records no version for a dynamic package; if that changes this becomes an unguarded site",
     ),
 )
@@ -415,7 +362,6 @@ ASSERTIONS: tuple[Assertion, ...] = (
 EXCLUDED: dict[str, str] = {
     "fixtures/pallet-xqvm/Cargo.toml": "standalone excluded workspace; its own 0.1.0 is never published",
     "fixtures/xqvm-wasm/Cargo.toml": "no_std build fixture, publish = false, permanently 0.0.0",
-    "pyproject.toml": "uv workspace root; declares [tool.uv.workspace] members only, no [project]",
 }
 
 
@@ -507,51 +453,16 @@ def read_site(root: Path, site: Site) -> Found:
             raise SetupError(f"{site.path}: [package] version is not a string")
         return Found(value, find_line(text, "version", f'"{value}"'), value)
 
-    if site.role is Role.PROJECT_VERSION:
-        value = walk(doc, ("project", "version"), site.path)
-        if not isinstance(value, str):
-            raise SetupError(f"{site.path}: [project] version is not a string")
-        return Found(value, find_line(text, "version", f'"{value}"'), value)
-
     if site.role is Role.WORKSPACE_DEP:
         value = walk(doc, (*site.table, site.dist, "version"), site.path)
         if not isinstance(value, str):
             raise SetupError(f"{site.path}: [{'.'.join(site.table)}] {site.dist} has no version string")
         return Found(value, find_line(text, site.dist, f'"{value}"'), value)
 
-    # Role.PEER_PIN
-    requirements = walk(doc, site.table, site.path)
-    if not isinstance(requirements, list):
-        raise SetupError(f"{site.path}: [{'.'.join(site.table)}] is not a list")
-    wanted = normalise_dist(site.dist)
-    for raw in requirements:
-        parsed = parse_requirement(str(raw))
-        if parsed is None or normalise_dist(parsed[0]) != wanted or parsed[1] != site.extras:
-            continue
-        spec = parsed[2]
-        if not spec.startswith("=="):
-            raise SetupError(f"{site.path}: {site.pin_name} is pinned '{spec}', expected an == pin")
-        value = spec[2:].strip()
-        return Found(value, find_line(text, f"{site.pin_name}=="), f"{site.pin_name}=={value}")
-    raise SetupError(f"{site.path}: no {site.pin_name} pin in [{'.'.join(site.table)}]")
+    raise SetupError(f"{site.path}: unknown site role {site.role}")
 
 
 # --- Sweeps ----------------------------------------------------------------
-
-
-def workspace_dists(root: Path) -> frozenset[str]:
-    """The distribution set, parsed from scripts/python-packages.sh.
-
-    That file's header promises adding or renaming a distribution is a
-    one-line edit there and nowhere else, so this reads it rather than
-    keeping a second copy.
-    """
-    text = load_text(root, "scripts/python-packages.sh")
-    cdylib = re.search(r"^CDYLIB=(\S+)", text, re.MULTILINE)
-    peers = re.search(r"^PEERS=\(([^)]*)\)", text, re.MULTILINE)
-    if cdylib is None or peers is None:
-        raise SetupError("scripts/python-packages.sh: could not parse CDYLIB / PEERS")
-    return frozenset(normalise_dist(name) for name in (cdylib[1], *peers[1].split()))
 
 
 def discover_manifests(root: Path) -> list[str]:
@@ -590,35 +501,8 @@ def sweep_manifests(root: Path, report: list[str]) -> None:
         )
 
 
-def sweep_peer_pins(root: Path, dists: frozenset[str], report: list[str]) -> None:
-    """Every workspace-distribution pin in a declared pyproject is a declared site."""
-    declared = {(site.path, normalise_dist(site.dist), site.extras) for site in SITES if site.role is Role.PEER_PIN}
-    pyprojects = sorted(
-        {site.path for site in SITES if site.path.endswith("pyproject.toml")}
-        | {a.path for a in ASSERTIONS if a.path.endswith("pyproject.toml")}
-    )
-    for rel in pyprojects:
-        project = load_toml(root, rel).get("project", {})
-        groups: list[list] = [project.get("dependencies", [])]
-        groups.extend(project.get("optional-dependencies", {}).values())
-        for group in groups:
-            for raw in group:
-                parsed = parse_requirement(str(raw))
-                if parsed is None:
-                    continue
-                name, extras, _ = parsed
-                if normalise_dist(name) not in dists:
-                    continue
-                if (rel, normalise_dist(name), extras) in declared:
-                    continue
-                report.append(
-                    f"error: site-table: {rel}: pin on {raw!r} is not declared in SITES. "
-                    "Every workspace-distribution pin is a version site."
-                )
-
-
 def check_assertions(root: Path, report: list[str]) -> None:
-    """The four sites whose invariant is that they carry no version."""
+    """The sites whose invariant is that they carry no version."""
     for assertion in ASSERTIONS:
         if assertion.kind is AssertKind.DYNAMIC_PYPROJECT:
             project = load_toml(root, assertion.path).get("project", {})
@@ -651,7 +535,7 @@ def read_all(root: Path) -> list[tuple[Site, Found]]:
 def do_list(root: Path) -> int:
     for site, found in read_all(root):
         where = f"{site.path}:{found.lineno if found.lineno is not None else '?'}"
-        print(f"{where:<40} {site.label:<28} {site.eco:<7} {found.value}")
+        print(f"{where:<40} {site.label:<28} {found.value}")
     print(f"{len(SITES)} version sites")
     return 0
 
@@ -713,7 +597,7 @@ def _spellings(raw: str, noun: str) -> tuple[str, str] | None:
 
 
 def do_set(root: Path, version: str) -> int:
-    """Write every site to `version`, each in its own ecosystem's spelling.
+    """Write every site to `version`, in its Cargo spelling.
 
     The write is a line substitution, not a TOML round-trip: `tomllib` is
     read-only and the Makefile runs this under `uv run --no-project
@@ -749,8 +633,7 @@ def do_set(root: Path, version: str) -> int:
         if (site.path, found.lineno) in claimed:
             raise SetupError(f"{site.path}:{found.lineno}: two sites resolve to this line")
         claimed.add((site.path, found.lineno))
-        wanted = pep440 if site.eco is Eco.PYTHON else body
-        edits.setdefault(site.path, []).append((found.lineno, _needle(site, found.value), _needle(site, wanted)))
+        edits.setdefault(site.path, []).append((found.lineno, _needle(found.value), _needle(body)))
 
     for rel, items in sorted(edits.items()):
         lines = load_text(root, rel).splitlines(keepends=True)
@@ -762,19 +645,19 @@ def do_set(root: Path, version: str) -> int:
         (root / rel).write_text("".join(lines), encoding="utf-8")
 
     # Read the tree back rather than trusting the write. A bad substitution
-    # across 23 sites on the release path is exactly the failure that must not
+    # across every site on the release path is exactly the failure that must not
     # be silent, and re-reading also re-parses every manifest, so a write that
     # broke the TOML fails here instead of in the next job.
     findings = [
         f"{site.path}:{found.lineno if found.lineno is not None else '?'}: {site.label}: wrote {found.display}"
         for site, found in read_all(root)
-        if found.value != (pep440 if site.eco is Eco.PYTHON else body)
+        if found.value != body
     ]
     if findings:
         emit(f"{len(findings)} of {len(SITES)} sites did not take the new version.", "", *findings)
         return 2
 
-    print(f"set {len(SITES)} version sites to {body} (Cargo) / {pep440} (PEP 440)")
+    print(f"set {len(SITES)} version sites to {body} (the wheel takes {pep440})")
     print("regenerate the lockfiles: cargo check; make regen-uv-lock;")
     print("  cargo update -p xqvm --manifest-path fixtures/pallet-xqvm/Cargo.toml")
     return 0
@@ -866,14 +749,8 @@ def check_tag(root: Path, tag: str) -> int:
     findings: list[tuple[str, str]] = []
     for site, found in read_all(root):
         where = f"{site.path}:{found.lineno if found.lineno is not None else '?'}"
-        if site.eco is Eco.PYTHON:
-            ok = found.value == expected_pep440
-            expected_display = _expected_display(site, expected_pep440)
-        else:
-            ok = is_semver(found.value) and canon(found.value) == expected_pep440
-            expected_display = _expected_display(site, body)
-        if not ok:
-            findings.append((where, f"{site.label}: found {found.display}, expected {expected_display}"))
+        if not (is_semver(found.value) and canon(found.value) == expected_pep440):
+            findings.append((where, f"{site.label}: found {found.display}, expected {body}"))
 
     if not findings:
         print(f"version sites OK ({len(SITES)} sites at {body} / {expected_pep440}, tag {tag})")
@@ -901,20 +778,13 @@ def check_tag(root: Path, tag: str) -> int:
     return 1
 
 
-def _expected_display(site: Site, version: str) -> str:
-    return f"{site.pin_name}=={version}" if site.role is Role.PEER_PIN else version
-
-
-def _needle(site: Site, version: str) -> str:
+def _needle(version: str) -> str:
     """The exact text a site's version is written as, for a line substitution.
 
-    A peer pin is written inside a requirement string (`xqsa[cuda]==0.4.0`),
-    so the pin name anchors it. Every other role writes a bare quoted version,
-    and the quotes are what keep `version = "0.4.0"` from also matching a path
-    or a name on the same line.
+    Every role writes a bare quoted version, and the quotes are what keep
+    `version = "0.4.0"` from also matching a path or a name on the same line.
     """
-    display = _expected_display(site, version)
-    return display if site.role is Role.PEER_PIN else f'"{display}"'
+    return f'"{version}"'
 
 
 def emit(*lines: str) -> None:
@@ -956,11 +826,9 @@ def main(argv: list[str]) -> int:
 
         # The table sweeps run whether or not there is a tag. They compare no
         # versions; they assert the table still describes the tree, so a new
-        # crate or a new peer pin is caught on the merge request that adds it.
+        # crate is caught on the merge request that adds it.
         report: list[str] = []
         sweep_manifests(root, report)
-        dists = workspace_dists(root)
-        sweep_peer_pins(root, dists, report)
         check_assertions(root, report)
         for site in SITES:
             read_site(root, site)

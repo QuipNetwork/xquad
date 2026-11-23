@@ -3,22 +3,18 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Build and validate (or build and publish) the xquad Python
-# distributions. Single source of truth for the build/check/upload
+# distribution. Single source of truth for the build/check/upload
 # commands so the two CI jobs that touch them (release:validate,
-# release:pypi) don't drift. The package list itself lives in
-# scripts/python-packages.sh, shared with
-# scripts/smoke-wheels.sh -- adding or renaming a package is a one-line
-# edit there.
+# release:pypi) don't drift. The distribution and the import packages
+# it carries live in scripts/python-packages.sh, shared with
+# scripts/smoke-wheels.sh.
 #
 # Phases, in order. Both modes run build and verify; only publish mode
 # reaches the third:
-#   build    -- maturin (xqffi abi3 wheels + sdist), then uv build for
-#               each peer. Nothing is checked or uploaded until every
-#               distribution exists, because the smoke test installs the
-#               whole set into one venv and because a peer failing to
-#               build after xqffi had already uploaded used to leave a
-#               partial release on PyPI.
-#   verify   -- twine check across every dist dir, then
+#   build    -- maturin builds the root pyproject.toml: abi3 wheels and
+#               an sdist, all into dist/. Nothing is checked or uploaded
+#               until every artefact exists.
+#   verify   -- the wheel-content guard, twine check, then
 #               scripts/smoke-wheels.sh, which opens the built wheels and
 #               installs and imports them.
 #   publish  -- twine upload via PyPI Trusted Publishing (OIDC).
@@ -27,22 +23,20 @@
 #   check    -- build + verify. No network upload, no token needed. Used
 #               by release:validate, which runs on every pipeline
 #               including tags.
-#   publish  -- build + verify + publish. One PyPI API token is minted
-#               per package (PyPI's mint-token endpoint is single-use per
-#               GitLab JWT, so a monorepo needs one JWT per package --
-#               see release.yml's id_tokens block). Requires
-#               PYPI_ID_TOKEN_<PKG> in env for each PKG. Used by
-#               release:pypi (tag only).
+#   publish  -- build + verify + publish. The GitLab JWT in
+#               PYPI_ID_TOKEN_XQUAD (release.yml's id_tokens block) is
+#               exchanged for a PyPI API token. Used by release:pypi (tag
+#               only).
 #
-# Run from the workspace root.
+# Run from the repo root.
 
 set -euo pipefail
 
-# CDYLIB, PEERS and PACKAGES. Shared with scripts/smoke-wheels.sh, which
+# DIST, NATIVE and PACKAGES. Shared with scripts/smoke-wheels.sh, which
 # opens and imports what this builds, so neither can drift into a
-# different idea of what "every package" means. Sourced by path rather
-# than relative to the cwd: every other path here assumes the workspace
-# root, but a `source` that misses is a harder failure to read.
+# different idea of what the wheel holds. Sourced by path rather than
+# relative to the cwd: every other path here assumes the repo root, but
+# a `source` that misses is a harder failure to read.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=python-packages.sh
 source "${SCRIPT_DIR}/python-packages.sh"
@@ -56,32 +50,24 @@ case "${mode}" in
         ;;
 esac
 
-if [[ "${mode}" == "publish" ]]; then
-    for pkg in "${PACKAGES[@]}"; do
-        var="PYPI_ID_TOKEN_$(printf '%s' "${pkg}" | tr '[:lower:]' '[:upper:]')"
-        if [[ -z "${!var:-}" ]]; then
-            echo "${var} is required for publish mode (OIDC trusted publishing — set by GitLab id_tokens block in .gitlab/ci/release.yml)" >&2
-            exit 1
-        fi
-    done
+JWT_VAR="PYPI_ID_TOKEN_$(printf '%s' "${DIST}" | tr '[:lower:]' '[:upper:]')"
+if [[ "${mode}" == "publish" && -z "${!JWT_VAR:-}" ]]; then
+    echo "${JWT_VAR} is required for publish mode (OIDC trusted publishing — set by GitLab id_tokens block in .gitlab/ci/release.yml)" >&2
+    exit 1
 fi
 
-# Exchange a GitLab OIDC JWT for a per-project PyPI API token, then
-# upload via twine using that token. PyPI's mint-token endpoint
-# refuses to exchange the same JWT twice (anti-replay), so each
-# package gets its own JWT (see release.yml's id_tokens block) and
-# its own minted API token.
+# Exchange the GitLab OIDC JWT for a PyPI API token scoped to the
+# project, then upload via twine using that token.
 #
 # We set TWINE_USERNAME/TWINE_PASSWORD explicitly rather than let
 # twine auto-detect, because twine's `id.detect_credential` only
-# reads the single `PYPI_ID_TOKEN` env var — it can't pick the right
-# per-package JWT from `PYPI_ID_TOKEN_<PKG>`.
+# reads the `PYPI_ID_TOKEN` env var, and the JWT is named after the
+# distribution (`PYPI_ID_TOKEN_XQUAD`), as it was when one job
+# published several.
 publish_pkg() {
     local pkg="$1"
     local dist_glob="$2"
-    local jwt_var
-    jwt_var="PYPI_ID_TOKEN_$(printf '%s' "${pkg}" | tr '[:lower:]' '[:upper:]')"
-    local jwt="${!jwt_var}"
+    local jwt="${!JWT_VAR}"
 
     # Build the request body via python3 rather than string interpolation
     # so weird characters in the JWT (none expected — base64url-safe — but
@@ -123,27 +109,48 @@ publish_pkg() {
         twine upload --non-interactive --skip-existing ${dist_glob}
 }
 
-# --- build: the pyo3 cdylib ------------------------------------------------
-# Three artefacts:
-#   1. abi3 wheel for linux-x86_64 (native build on CI runner)
+# --- build -----------------------------------------------------------------
+# Three artefacts, all from the root pyproject.toml, all into dist/:
+#   1. abi3 wheel for linux-x86_64 (cross-compiled via cargo-zigbuild)
 #   2. abi3 wheel for linux-aarch64 (cross-compiled via cargo-zigbuild)
 #   3. sdist (universal source fallback for macOS/Windows/other)
+# plus, in check mode on a host that is not Linux, a wheel for that host
+# (below), which only the smoke test reads.
+#
+# Both Linux wheels link through zig against glibc 2.17 and carry the
+# manylinux2014 tag (QUI-2177). A native build takes its glibc floor from
+# the build image instead: on rust:1.99.0-trixie that is manylinux_2_34,
+# so the floor would move every time the image did. With the tag named,
+# maturin's audit fails the build if the library needs a newer glibc
+# symbol than 2.17, and the guard after the builds checks the tags the
+# wheels actually carry.
 #
 # `maturin publish` has no OIDC support (no --trusted-publishing flag);
 # it only accepts --username/--password. Split build from upload so the
-# artefacts go through twine, which lets the cdylib follow the same
-# OIDC-mint-and-upload path as the pure-Python peers below.
+# artefacts go through twine and the OIDC mint below.
+#
+# The directory is cleared first so an artefact left by an earlier
+# version cannot be picked up by the guards or the upload.
 
-rm -rf "${CDYLIB}/dist"
-mkdir -p "${CDYLIB}/dist"
+rm -rf dist
+mkdir -p dist
 
-# 1. Native abi3 wheel (abi3 tag comes from pyo3's abi3-py313 feature)
-maturin build --locked --release --manifest-path "${CDYLIB}/Cargo.toml" \
-    --out "${CDYLIB}/dist"
+# 1-2. Linux abi3 wheels (abi3 tag comes from pyo3's abi3-py313 feature)
+maturin build --locked --release --out dist \
+    --target x86_64-unknown-linux-gnu --zig --compatibility manylinux2014
+maturin build --locked --release --out dist \
+    --target aarch64-unknown-linux-gnu --zig --compatibility manylinux2014
 
-# 2. Cross-compiled aarch64 abi3 wheel via zig linker
-maturin build --locked --release --manifest-path "${CDYLIB}/Cargo.toml" \
-    --out "${CDYLIB}/dist" --target aarch64-unknown-linux-gnu --zig
+# A host wheel for the smoke test, on a host that is not Linux. Neither
+# Linux wheel installs on macOS, and the smoke test installs with the
+# index off so the copy on PyPI cannot shadow the build, so without this a
+# local `make check-release` there has nothing to install. Check mode
+# only: publish mode runs on the Linux release image and uploads exactly
+# what the tag guard below approves. The guard skips this wheel, as it
+# skips every wheel that is not for Linux.
+if [[ "${mode}" == "check" && "$(uname -s)" != "Linux" ]]; then
+    maturin build --locked --release --out dist
+fi
 
 # 3. sdist (universal source fallback)
 #
@@ -152,49 +159,123 @@ maturin build --locked --release --manifest-path "${CDYLIB}/Cargo.toml" \
 # does re-resolve -- it shells out to `cargo metadata`, which rewrites a
 # stale Cargo.lock in place. The ordering is what covers it. This script
 # is `set -euo pipefail` and sdist runs LAST, so a lock that would have
-# to change has already hard-failed at step 1's `maturin build
+# to change has already hard-failed at the first `maturin build
 # --locked` and the run never reaches here. Moving sdist ahead of the
 # builds, or dropping `--locked` from them, reopens the gap silently:
 # the wheels uploaded to PyPI would be built from a re-resolved
 # dependency set that no lockfile records.
-maturin sdist --manifest-path "${CDYLIB}/Cargo.toml" --out "${CDYLIB}/dist"
-
-# --- build: pure-Python peers + umbrella -----------------------------------
-# `uv build` inside a workspace member defaults to the workspace-root
-# `dist/`; `--out-dir dist` keeps each package's artefacts under its own
-# subdir so twine and the smoke test resolve files locally to that package.
-# The directory is cleared first so an artefact left by an earlier version
-# cannot be picked up by either.
-for pkg in "${PEERS[@]}"; do
-    rm -rf "${pkg}/dist"
-    (
-        cd "${pkg}"
-        uv build --out-dir dist
-    )
-done
+maturin sdist --out dist
 
 # --- verify ----------------------------------------------------------------
-# `twine check` reads metadata and renders the long description. It never
-# opens the wheel, so it cannot see a mislaid package directory: that is
-# what the smoke test is for, and QUI-1020 is what happens without it.
-# Both run in either mode, so publish never uploads an artefact that check
-# mode would have rejected.
 
-for pkg in "${PACKAGES[@]}"; do
-    twine check "${pkg}"/dist/*
-done
+# Platform-tag guard, ported from quip-validator's scripts/python-dists.sh.
+# `twine check` validates metadata only and never reads a platform tag, so
+# a wheel tagged plain `linux_x86_64` passes it and is then rejected at
+# upload time. A bare manylinux match is not enough either: a native build
+# is tagged with whatever glibc floor its symbols need, so the floor would
+# drift with the image and the check would still pass. Assert the exact
+# tags instead, and that both are present. Only Linux wheels are judged;
+# other platforms are skipped, not rejected, so adding macOS wheels
+# (QUI-2174) needs no change here.
+check_wheel_tags() {
+    local expected_tags=(
+        "manylinux2014_x86_64.manylinux_2_17_x86_64"
+        "manylinux2014_aarch64.manylinux_2_17_aarch64"
+    )
+    local whl tag matched
+    for whl in dist/*.whl; do
+        case "${whl##*/}" in
+            *manylinux* | *musllinux* | *linux_*) ;;
+            *) continue ;;
+        esac
+        matched=""
+        for tag in "${expected_tags[@]}"; do
+            [[ "${whl}" == *"-${tag}.whl" ]] && matched=1
+        done
+        if [[ -z "${matched}" ]]; then
+            echo "ERROR: ${whl##*/} does not carry one of the expected platform tags: ${expected_tags[*]}." >&2
+            echo "       The glibc floor moved or the build fell back to a native link; keep --zig --compatibility manylinux2014 on every Linux wheel build." >&2
+            exit 1
+        fi
+    done
+    for tag in "${expected_tags[@]}"; do
+        if ! compgen -G "dist/*-${tag}.whl" >/dev/null; then
+            echo "ERROR: no wheel with platform tag ${tag} in dist/; expected: ${expected_tags[*]}." >&2
+            exit 1
+        fi
+    done
+}
+
+check_wheel_tags
+
+# Wheel-content guard (QUI-792, ported from quip-validator's
+# scripts/python-dists.sh). A wheel is a zip; `twine check` validates
+# metadata but never opens the archive. quip-signer once shipped a wheel
+# whose maturin layout packed the extension and dropped its Python
+# package, and every other check passed. Open each wheel and assert the
+# whole import surface is there -- the xqffi shim, its stubs and typing
+# marker and the extension itself, and each pure-Python package -- and
+# that nothing from the source tree's build side came along with it
+# (`python-source = "."` makes the repo root the source, so the
+# `[tool.maturin]` excludes are all that keep it out).
+check_wheel_contents() {
+    local whl
+    for whl in dist/*.whl; do
+        python3 - "${whl}" "${NATIVE}" "${PACKAGES[@]}" <<'PY'
+import sys
+import zipfile
+
+wheel, native, packages = sys.argv[1], sys.argv[2], sys.argv[3:]
+names = set(zipfile.ZipFile(wheel).namelist())
+
+required = [
+    f"{native}/__init__.py",
+    f"{native}/asm.pyi",
+    f"{native}/checker.pyi",
+    f"{native}/vm.pyi",
+    f"{native}/xqffi.pyi",
+    f"{native}/py.typed",
+    f"{native}/xqffi.abi3.so",
+    *(f"{package}/__init__.py" for package in packages),
+    "xquad/cli/__init__.py",
+]
+missing = [member for member in required if member not in names]
+forbidden = sorted(
+    name
+    for name in names
+    if name.rsplit("/", 1)[-1] == "Cargo.toml" or name.endswith(".rs") or "tests" in name.split("/")[:-1]
+)
+
+name = wheel.rsplit("/", 1)[-1]
+for member in missing:
+    print(f"ERROR: {name} is missing {member} (QUI-792).", file=sys.stderr)
+for member in forbidden:
+    print(f"ERROR: {name} carries {member}, which is build input, not package content.", file=sys.stderr)
+if missing or forbidden:
+    print(
+        "       Check [tool.maturin] in pyproject.toml: python-source, python-packages and the"
+        " wheel-only excludes decide what the wheel holds.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+PY
+    done
+}
+
+check_wheel_contents
+
+# `twine check` reads metadata and renders the long description. It never
+# opens the wheel; the guard above and the smoke test do. Both run in
+# either mode, so publish never uploads an artefact that check mode would
+# have rejected.
+twine check dist/*
 
 bash scripts/smoke-wheels.sh
 
 # --- publish ---------------------------------------------------------------
 # Everything is built and verified by this point, so an upload failure is
-# a PyPI or credential problem rather than a half-released workspace.
+# a PyPI or credential problem rather than a half-built release.
 
-# PACKAGES is cdylib-first and its peers are in dependency order, which is
-# exactly the order an upload must take: nothing goes live on PyPI before
-# the packages it requires.
 if [[ "${mode}" == "publish" ]]; then
-    for pkg in "${PACKAGES[@]}"; do
-        publish_pkg "${pkg}" "${pkg}/dist/*"
-    done
+    publish_pkg "${DIST}" "dist/*"
 fi
