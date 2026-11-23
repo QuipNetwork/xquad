@@ -284,9 +284,10 @@ pub enum Error {
     /// `ATLEASTW` and `REDUCE` write penalty terms derived under `x^2 = x`
     /// (`spec/xqvm/HLF.md`). On a spin or integer model those terms can encode
     /// a different, wrong penalty, so the opcodes raise on any model whose
-    /// declared domain is not binary, an integer model with `k = 2` included. `reg` is the model register; `domain` is
-    /// the domain it holds. Raised right after the register's type check and
-    /// before any index or operand check.
+    /// declared domain is not binary, an integer model with `k = 2` included.
+    /// `reg` is the model register; `domain` is the domain it holds. Raised
+    /// right after the register's type check and before any index or operand
+    /// check.
     #[error(
         "register r{reg} holds a {domain} model, but the constraint at byte \
          {pos:#06x} requires a binary model"

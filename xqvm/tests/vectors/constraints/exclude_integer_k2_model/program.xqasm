@@ -1,0 +1,16 @@
+; exclude_integer_k2_model: EXCLUDE on an integer model with k = 2 raises
+; NonBinaryModel.
+;
+; With k = 2 the integer domain is {0, 1}, so x^2 = x would hold, but
+; spec/xqvm/SPEC.md makes the check follow the declared domain: only a model
+; allocated by BQMX passes. This vector pins that rule; build such a model
+; with BQMX instead.
+
+PUSH 4
+PUSH 2
+XQMX r0          ; integer model, k = 2, 4 variables
+PUSH 0           ; i
+PUSH 1           ; j
+PUSH 5           ; penalty
+EXCLUDE r0
+HALT
