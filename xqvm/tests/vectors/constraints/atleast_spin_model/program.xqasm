@@ -1,9 +1,9 @@
 ; atleast_spin_model: ATLEAST on a spin {-1, +1} model raises NonBinaryModel.
 ;
 ; ATLEAST writes the penalty for at least one of x0, x1, x2, and spec/xqvm/HLF.md derives
-; every constraint expansion under x^2 = x, which holds only for binary
-; variables. On any other domain the same terms encode a different penalty,
-; so spec/xqvm/ISA.md has ATLEAST raise NonBinaryModel instead. Every other
+; every constraint expansion under x^2 = x, which fails for spin variables
+; and for integer variables with k > 2. The check follows the declared domain
+; (only a model allocated by BQMX passes), so spec/xqvm/ISA.md has ATLEAST raise NonBinaryModel instead. Every other
 ; operand is valid, so the domain check alone decides.
 
 PUSH 4
