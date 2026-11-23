@@ -3016,10 +3016,12 @@ impl Vm {
         // the sample slot is rejected. `spec/xqvm/HLF.md` (`ENERGY`
         // Computation) gives the formula.
         //
-        // Both halves of this are O(model): the sample is copied out of its
-        // register and every coefficient is accumulated. Charge for both
-        // before either happens, or a program can buy an arbitrarily large
-        // model walk for one step (QUI-1056).
+        // Both halves of this are O(model): every sample element is read
+        // and every coefficient is accumulated. Charge for both before
+        // either happens, or a program can buy an arbitrarily large model
+        // walk for one step (QUI-1056). The sample is read in place, not
+        // copied: a copy would be a heap allocation the memory budget never
+        // sees.
         // The model register is checked before the sample register, in
         // operand order, so that a program holding the wrong type in both
         // sees the model register's error. The order is normative -- see `spec/xqvm/METERING.md` (Conformance).
@@ -3044,14 +3046,10 @@ impl Vm {
             }
         };
         self.charge_steps(pos, model_eval_steps(widen(sample_len), widen(terms)))?;
-        let sample_values: Vec<i64> = match self.reg(sample) {
-            RegVal::Sample(s) => s.values.clone(),
-            _ => unreachable!("sample register type checked above"),
+        let (RegVal::Model(m), RegVal::Sample(s)) = (self.reg(model), self.reg(sample)) else {
+            unreachable!("model and sample register types checked above")
         };
-        let RegVal::Model(m) = self.reg(model) else {
-            unreachable!("model register type checked above")
-        };
-        let energy = m.checked_energy(&sample_values).map_err(at_pos(pos))?;
+        let energy = m.checked_energy(&s.values).map_err(at_pos(pos))?;
         self.push_stack(energy, pos)?;
         Ok(StepResult::Continue)
     }
