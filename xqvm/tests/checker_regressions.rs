@@ -244,7 +244,7 @@ mod stack_cycles {
         let program = b.build().unwrap();
         assert_eq!(program.encode().len(), 17_020);
         let result = checker::check(&program);
-        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().variant_name(), "StackDepthMismatch");
     }
 
     #[test]
@@ -264,7 +264,10 @@ mod stack_cycles {
         }
         b.emit_pop().emit_jump(cycle).emit_next().emit_halt();
         let program = b.build().unwrap();
-        assert!(checker::check(&program).is_err());
+        assert_eq!(
+            checker::check(&program).unwrap_err().variant_name(),
+            "StackDepthMismatch"
+        );
     }
 
     #[test]
@@ -315,7 +318,7 @@ mod register_cycles {
     #[test]
     fn one_unwritten_register_returns() {
         let result = checker::check(&cyclic_program(255));
-        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().variant_name(), "StackUnderflow");
     }
 
     #[test]
@@ -325,8 +328,14 @@ mod register_cycles {
             "vectors/control-flow/cycle_writing_every_register_terminates/program.xqasm"
         ))
         .unwrap();
-        assert!(checker::check(&program).is_err());
-        assert!(checker::check(&vector).is_err());
+        assert_eq!(
+            checker::check(&program).unwrap_err().variant_name(),
+            "StackUnderflow"
+        );
+        assert_eq!(
+            checker::check(&vector).unwrap_err().variant_name(),
+            "StackUnderflow"
+        );
     }
 }
 
