@@ -204,14 +204,14 @@ Total: **93 opcodes**.
 
 | Code | Mnemonic | Operands | Stack | Description |
 |------|----------|----------|-------|-------------|
-| `0x70` | `ONEHOTR` | `reg: Register` | `2 → 0` | Pop penalty and row; add a one-hot constraint over the grid row. |
-| `0x71` | `ONEHOTC` | `reg: Register` | `2 → 0` | Pop penalty and col; add a one-hot constraint over the grid column. |
-| `0x72` | `EXCLUDE` | `reg: Register` | `3 → 0` | Pop penalty, j, and i; add a mutual-exclusion constraint between variables i and j; raises IndexOutOfBounds outside [0, size). |
-| `0x73` | `IMPLIES` | `reg: Register` | `3 → 0` | Pop penalty, j, and i; add an implication constraint from variable i to variable j; raises IndexOutOfBounds outside [0, size). |
-| `0x74` | `EQUALITY` | `model: Register`, `indices: Register`, `coeffs: Register` | `2 → 0` | Pop penalty and target; expand weighted equality constraint into QUBO terms on a model. |
-| `0x75` | `ATLEAST` | `model: Register`, `indices: Register` | `2 → 0` | Pop penalty and k; allocate slack variables and apply at-least-k constraint. |
-| `0x76` | `ATLEASTW` | `model: Register`, `indices: Register`, `coeffs: Register` | `2 → 0` | Pop penalty and k; allocate slack variables and apply weighted at-least-k constraint. |
-| `0x77` | `REDUCE` | `model: Register` | `3 → 1` | Pop P_aux, var_b, var_a; allocate auxiliary variable and add Rosenberg enforcement terms; push aux index. |
+| `0x70` | `ONEHOTR` | `reg: Register` | `2 → 0` | Pop penalty and row; add a one-hot constraint over the grid row; a model whose domain is not binary raises `NonBinaryModel`. |
+| `0x71` | `ONEHOTC` | `reg: Register` | `2 → 0` | Pop penalty and col; add a one-hot constraint over the grid column; a model whose domain is not binary raises `NonBinaryModel`. |
+| `0x72` | `EXCLUDE` | `reg: Register` | `3 → 0` | Pop penalty, j, and i; add a mutual-exclusion constraint between variables i and j; a model whose domain is not binary raises `NonBinaryModel`; raises IndexOutOfBounds outside [0, size). |
+| `0x73` | `IMPLIES` | `reg: Register` | `3 → 0` | Pop penalty, j, and i; add an implication constraint from variable i to variable j; a model whose domain is not binary raises `NonBinaryModel`; raises IndexOutOfBounds outside [0, size). |
+| `0x74` | `EQUALITY` | `model: Register`, `indices: Register`, `coeffs: Register` | `2 → 0` | Pop penalty and target; expand weighted equality constraint into QUBO terms on a model; a model whose domain is not binary raises `NonBinaryModel`. |
+| `0x75` | `ATLEAST` | `model: Register`, `indices: Register` | `2 → 0` | Pop penalty and k; allocate slack variables and apply at-least-k constraint; a model whose domain is not binary raises `NonBinaryModel`. |
+| `0x76` | `ATLEASTW` | `model: Register`, `indices: Register`, `coeffs: Register` | `2 → 0` | Pop penalty and k; allocate slack variables and apply weighted at-least-k constraint; a model whose domain is not binary raises `NonBinaryModel`. |
+| `0x77` | `REDUCE` | `model: Register` | `3 → 1` | Pop P_aux, var_b, var_a; allocate auxiliary variable and add Rosenberg enforcement terms; push aux index; a model whose domain is not binary raises `NonBinaryModel`. |
 | `0x7F` | `ENERGY` | `model: Register`, `sample: Register` | `0 → 1` | Compute the Hamiltonian energy of a sample against a model; push the result. |
 
 ---

@@ -5,8 +5,8 @@ constraints, expanding into linear and quadratic coefficient deltas
 automatically. The model register must hold a `Model` in model mode,
 and the model must be binary: every expansion below is derived under
 \\(x^2 = x\\), which spin variables and integer variables with \\(k > 2\\)
-do not satisfy. All eight opcodes raise `NonBinaryModel` on any model not
-allocated by `BQMX`, an integer model with \\(k = 2\\) included. The check
+do not satisfy. All eight opcodes raise `NonBinaryModel` on any model whose
+domain is not binary, an integer model with \\(k = 2\\) included. The check
 follows the register's type check and precedes every index or operand check
 against the model. Checks an opcode makes before the register's type check
 still come first: for example stack pops, charges, operand vectors, and

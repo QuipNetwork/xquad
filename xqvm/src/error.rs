@@ -289,8 +289,8 @@ pub enum Error {
     /// right after the register's type check and before any index or operand
     /// check against the model; checks made before the type check come first.
     #[error(
-        "register r{reg} holds a {domain} model, but the constraint at byte \
-         {pos:#06x} requires a binary model"
+        "register r{reg} holds a model over the {domain} domain, but the constraint \
+         at byte {pos:#06x} requires a model declared binary"
     )]
     NonBinaryModel { pos: usize, reg: u8, domain: Domain },
 

@@ -3,8 +3,8 @@
 ;
 ; With k = 2 the integer domain is {0, 1}, so x^2 = x would hold, but
 ; spec/xqvm/SPEC.md makes the check follow the declared domain: only a model
-; allocated by BQMX passes. This vector pins that rule; build such a model
-; with BQMX instead.
+; whose domain is binary passes, however it was built. This vector pins that
+; rule; build such a model with BQMX instead.
 
 PUSH 4
 PUSH 2
