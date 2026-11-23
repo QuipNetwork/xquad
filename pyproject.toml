@@ -20,7 +20,7 @@ build-backend = "maturin"
 [project]
 name            = "xquad"
 description     = "XQuad toolchain: xqffi, xqcp, xqsa and the xquad command"
-readme          = "README.md"
+readme          = "xquad/README.md"
 requires-python = ">=3.13"
 license         = { text = "AGPL-3.0-or-later" }
 dynamic         = [ "version" ]
@@ -125,7 +125,7 @@ strip = true
 config-settings-package = { xquad = { build-args = "--locked --profile dev" } }
 cache-keys = [
     { file = "pyproject.toml" },
-    { file = "README.md" },
+    { file = "xquad/README.md" },
     { file = "Cargo.toml" },
     { file = "Cargo.lock" },
     { file = "rust-toolchain.toml" },

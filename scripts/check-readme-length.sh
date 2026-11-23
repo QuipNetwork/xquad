@@ -35,10 +35,14 @@
 # package is covered once it is added there. The crates are discovered: a
 # directory is in scope when it carries a `Cargo.toml` that does not set
 # `publish = false` (ships to crates.io), so a new crate is covered the day it
-# is added. That covers xqffi, xqcp, xqsa and xquad on the PyPI side, and xqvm and xqasm. Note
-# `xqffi/` is in scope as a Python package: cargo does not publish it, maturin
-# does. The repository root README is out of scope; it is the project landing
-# page and answers to a different brief.
+# is added. That covers xqffi, xqcp, xqsa and xquad on the Python side, and
+# xqvm and xqasm. Note `xqffi/` is in scope as a Python package: cargo does
+# not publish it, maturin builds it into the xquad wheel. On PyPI the one
+# distribution's description is xquad/README.md (`readme` in the root
+# pyproject.toml); the xqffi, xqcp and xqsa READMEs are the packages' landing
+# pages in the repository and keep the same brief. The repository root README
+# is out of scope; it is the project landing page and answers to a different
+# brief.
 #
 # Usage:
 #   scripts/check-readme-length.sh          # enforce the limit

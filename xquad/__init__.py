@@ -52,6 +52,10 @@ from importlib.machinery import ModuleSpec
 from types import ModuleType
 from typing import TYPE_CHECKING
 
+from xquad import _legacy
+
+_legacy.check()
+
 if TYPE_CHECKING:
     import xqcp as cp
     import xqsa as sa

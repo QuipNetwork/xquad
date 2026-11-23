@@ -9,8 +9,10 @@ pip install xquad
 ```
 
 The one wheel carries `xqffi`, `xqcp` and `xqsa` as well, importable
-under their own names. Up to 0.5 they were separate distributions; from
-0.6 they are not published on their own.
+under their own names, and the `xquad` command. Up to 0.5 they were
+separate distributions; from 0.6 they are not published on their own.
+Solver backends are extras: `pip install xquad[dwave]`, and likewise
+`cuda`, `metal` and `quip` (see [`xqsa`](https://gitlab.com/quip.network/xquad/-/tree/main/xqsa)).
 
 ## Interactive usage
 
