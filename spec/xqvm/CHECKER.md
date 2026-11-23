@@ -343,8 +343,10 @@ is exactly the same as folding all current predecessors. The boundary's
 incoming facts remain constant; incoming back-edges never overwrite them.
 A written coordinate has a fixed output and needs no transfer on later
 input changes. An unwritten coordinate copies its changed input with
-constant scalar work. The generic `Analysis`, `Lattice` and `solve` APIs and
-their backward behavior are unchanged.
+constant scalar work. This sparse propagation is internal to the built-in
+phases: the generic `Analysis` and `Lattice` traits are unchanged, and the
+generic `solve` keeps dense propagation, changing only by its `max_visits`
+budget and `Result` return.
 
 Dense indices follow CFG insertion order. Initialise reachable nodes in that
 order and coordinates from 0 through 255. Outputs start at top and only

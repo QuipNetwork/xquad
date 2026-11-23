@@ -153,7 +153,8 @@ is no full predecessor fold or repeated block scan per change. Each of 256 regis
 coordinates descends at most four times, and each initialization bit clears
 once. At 2,048 nodes and 4,096 edges, this bounds register edge updates by
 4,194,304 and must-init bit updates by 1,048,576. These operation counts still
-need runtime weight calibration. The public generic solver is unchanged.
+need runtime weight calibration. The public generic `solve` keeps dense
+propagation; it changes only by its `max_visits` budget and `Result` return.
 
 ## Phase 4 -- stack depth
 

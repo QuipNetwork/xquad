@@ -433,9 +433,10 @@ mod sclr_after_halt {
             Vm::new().run(&program),
             Err(Error::StackUnderflow { .. })
         ));
-        assert!(
-            checker::check(&program).is_err(),
-            "checker accepted a live POP underflow"
+        assert_eq!(
+            checker::check(&program).unwrap_err().variant_name(),
+            "StackUnderflow",
+            "the live POP underflow must be the reported fault"
         );
     }
 
@@ -444,7 +445,10 @@ mod sclr_after_halt {
     #[test]
     fn dead_sclr_controls() {
         let live_underflow = Program::new(vec![0x1a, 0x10, 0xff]);
-        assert!(checker::check(&live_underflow).is_err());
+        assert_eq!(
+            checker::check(&live_underflow).unwrap_err().variant_name(),
+            "StackUnderflow"
+        );
         assert!(matches!(
             Vm::new().run(&live_underflow),
             Err(Error::StackUnderflow { .. })
