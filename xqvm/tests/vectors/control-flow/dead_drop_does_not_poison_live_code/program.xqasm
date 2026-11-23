@@ -1,4 +1,4 @@
-; QUIP-16: neither dead block can execute or poison live analysis.
+; Neither dead block can execute or poison live analysis.
 HALT
 TARGET .0
 DROP r0

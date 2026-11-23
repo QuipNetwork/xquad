@@ -1,4 +1,4 @@
-; QUIP-02: reaching lattice top does not mean this cycle is dead.
+; Reaching lattice top does not mean this cycle is dead.
 NOP
 TARGET .0
 BSMX r0

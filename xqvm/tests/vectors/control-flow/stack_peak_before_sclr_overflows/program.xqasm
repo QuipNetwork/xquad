@@ -1,4 +1,4 @@
-; O7: 8193 pushes overflow before SCLR can hide the peak.
+; 8193 pushes overflow before SCLR can hide the peak.
 PUSH 1
 PUSH 1
 PUSH 1

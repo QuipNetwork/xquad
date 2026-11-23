@@ -1,0 +1,7 @@
+; Control: reachable reads after DROP remain invalid.
+TARGET .0
+DROP r0
+JUMP .1
+TARGET .1
+LOAD r0
+HALT

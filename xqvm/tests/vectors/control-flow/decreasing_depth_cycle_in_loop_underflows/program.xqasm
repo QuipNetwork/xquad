@@ -1,4 +1,4 @@
-; QUIP-17: arbitrary internal cycles also occur inside structured loops.
+; Arbitrary internal cycles also occur inside structured loops.
 PUSH 1
 PUSH 1
 PUSH 1

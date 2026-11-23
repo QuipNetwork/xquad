@@ -1,4 +1,4 @@
-; O3: a dead write after JUMP must not initialize the live target.
+; A dead write after JUMP must not initialize the live target.
 JUMP .0
 PUSH 1
 STOW r0

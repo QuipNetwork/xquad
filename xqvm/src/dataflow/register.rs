@@ -732,7 +732,7 @@ mod audit_work_bounds {
         let _ = builder.emit_jump(cycle).emit_halt();
         let original = builder.build().unwrap();
         let vector = xqasm::assemble_source(include_str!(
-            "../../tests/vectors/control-flow/audit_all_registers_cycle/program.xqasm"
+            "../../tests/vectors/control-flow/cycle_writing_every_register_terminates/program.xqasm"
         ))
         .unwrap();
         for program in [original, Program::new(vector.code().to_vec())] {

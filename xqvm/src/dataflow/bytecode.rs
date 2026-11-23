@@ -1677,7 +1677,7 @@ mod exact_height_tests {
     fn kimi_exact_spine() -> Program {
         // Raw reviewer bytes, L=256/k=512/m=512. SHA-256:
         // 3ffb4e71c2b6b99a3e41cc9e642302335f90611ae995160b63a41e45d6891522
-        let code = include_bytes!("../../tests/fixtures/kimi-spine-control.bin");
+        let code = include_bytes!("../../tests/fixtures/work-guard-spine.bin");
         assert_eq!(code.len(), 5889);
         Program::new(code.to_vec())
     }

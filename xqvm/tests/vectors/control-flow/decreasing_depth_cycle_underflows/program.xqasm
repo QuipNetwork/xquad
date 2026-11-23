@@ -1,4 +1,4 @@
-; QUIP-17: reject a decreasing cycle without counting the stack down.
+; Reject a decreasing cycle without counting the stack down.
 PUSH 1
 PUSH 1
 PUSH 1
