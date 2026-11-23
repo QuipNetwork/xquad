@@ -7,7 +7,9 @@ and the model must be binary: every expansion below is derived under
 \\(x^2 = x\\), which spin variables and integer variables with \\(k > 2\\)
 do not satisfy. All eight opcodes raise `NonBinaryModel` on any model not
 allocated by `BQMX`, an integer model with \\(k = 2\\) included. The check
-follows the register's type check and precedes every index check.
+follows the register's type check and precedes every index or operand check
+against the model. Checks an opcode makes before reading the model (stack
+pops, charges, operand vectors, `ATLEAST`'s `k`) still come first.
 Grid-based opcodes (`ONEHOTR`, `ONEHOTC`) read the grid dimensions set by
 `RESIZE` and require them, in both halves of the grid precondition
 [`spec/xqvm/ISA.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/ISA.md#xqmx-grid)

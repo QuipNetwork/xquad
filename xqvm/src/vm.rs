@@ -184,8 +184,8 @@ fn resolve_iter_slice(
 /// model solves cleanly to a wrong answer. The check is on the declared
 /// domain, so an integer model with `k = 2` is refused too (use `BQMX`).
 /// Called right after the handler's register type check and before any index
-/// or operand check, so a program that faults on an earlier check keeps that
-/// fault (`spec/xqvm/SPEC.md`, Error precedence).
+/// or operand check against the model, so a program that faults on an earlier
+/// check keeps that fault (`spec/xqvm/SPEC.md`, Error precedence).
 fn require_binary(pos: usize, reg: Register, m: &XqmxModel) -> Result<(), Error> {
     match m.domain {
         Domain::Binary => Ok(()),

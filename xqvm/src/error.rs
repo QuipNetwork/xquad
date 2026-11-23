@@ -287,7 +287,7 @@ pub enum Error {
     /// declared domain is not binary, an integer model with `k = 2` included.
     /// `reg` is the model register; `domain` is the domain it holds. Raised
     /// right after the register's type check and before any index or operand
-    /// check.
+    /// check against the model; checks made before the type check come first.
     #[error(
         "register r{reg} holds a {domain} model, but the constraint at byte \
          {pos:#06x} requires a binary model"
