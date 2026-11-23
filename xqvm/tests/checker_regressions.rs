@@ -28,7 +28,7 @@
 //! | QUIP-02 | Register-type analysis terminates on a reachable join where every register is `Any` | `register_cycles`; vector `control-flow/cycle_writing_every_register_terminates`; unit tests `all_register_cycle_obeys_lattice_visit_bound` and `cyclic_programs_terminate_with_the_production_budget_disabled` (`dataflow::register`) |
 //! | QUIP-16 | A `DROP` in dead code does not make the checker reject a valid program | `dead_code_init`; vectors `control-flow/dead_drop_does_not_poison_live_code`, `live_read_after_drop_is_unset` and `drop_after_full_init_still_unsets` |
 //! | QUIP-17 | A decreasing depth cycle costs work linear in the CFG, inside loops too | unit tests `all_cost_controls_have_linear_exact_height_work` and `restoring_minimum_walks_fails_the_linear_work_guard` (`dataflow::bytecode`); `stack_cycles` and vectors `control-flow/decreasing_depth_cycle_underflows` and `decreasing_depth_cycle_in_loop_underflows` pin the verdicts only, which were already right |
-//! | QUIP-19 | A second `SCLR` keeps an underflow recorded before it | `a_second_sclr_does_not_erase_an_underflow_after_the_first` (`checker::tests`); fixed in 0.5.0, before the audit's fix review |
+//! | QUIP-19 | A `SCLR` keeps an underflow recorded before it: a second live `SCLR` (part a), or a dead one after `HALT` (part b) | part a: `a_second_sclr_does_not_erase_an_underflow_after_the_first` (`checker::tests`); part b: `sclr_after_halt`. Both were fixed in 0.5.0, before the audit's fix review |
 //! | O3 | A block's analysed bytes end at its first terminator | `block_ranges`; vectors `control-flow/dead_write_after_jump_does_not_init` and `dead_read_after_halt_is_not_live` |
 //! | O7 | A stack peak inside one block is checked against the limit | `stack_peaks`; vector `control-flow/stack_peak_before_sclr_overflows` |
 //!
@@ -411,5 +411,47 @@ mod dead_code_init {
                 expected
             );
         }
+    }
+}
+
+mod sclr_after_halt {
+    //! A `SCLR` after `HALT` is dead and cannot erase an underflow on the live
+    //! path before it.
+    //!
+    //! Two rules each keep this true: a `SCLR` never clears a recorded
+    //! underflow, and a block's scan stops at its first terminator. The test
+    //! fails only when both are lost, as in xqvm 0.4.0.
+
+    use xqvm::{Error, Program, Vm, checker};
+
+    /// `SCLR, POP, HALT, SCLR`: the live `POP` underflows, and the trailing
+    /// `SCLR` never runs.
+    #[test]
+    fn dead_sclr_after_halt_keeps_the_live_underflow() {
+        let program = Program::new(vec![0x1a, 0x10, 0xff, 0x1a]);
+        assert!(matches!(
+            Vm::new().run(&program),
+            Err(Error::StackUnderflow { .. })
+        ));
+        assert!(
+            checker::check(&program).is_err(),
+            "checker accepted a live POP underflow"
+        );
+    }
+
+    /// Controls: the same underflow without the dead `SCLR` is rejected, and
+    /// a dead `SCLR` after a clean `HALT` is accepted.
+    #[test]
+    fn dead_sclr_controls() {
+        let live_underflow = Program::new(vec![0x1a, 0x10, 0xff]);
+        assert!(checker::check(&live_underflow).is_err());
+        assert!(matches!(
+            Vm::new().run(&live_underflow),
+            Err(Error::StackUnderflow { .. })
+        ));
+
+        let safe_halt = Program::new(vec![0x1a, 0xff, 0x1a]);
+        assert!(checker::check(&safe_halt).is_ok());
+        assert!(Vm::new().run(&safe_halt).is_ok());
     }
 }
