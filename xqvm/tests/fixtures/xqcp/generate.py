@@ -21,12 +21,13 @@ Each fixture is real compiler output for a control-flow shape the jump-span
 checker rule must keep accepting: a conditional inside a loop, a loop inside
 a conditional, and a conditional inside a loop whose arm itself loops. The
 encoder, verifier and decoder programs of each problem are written as
-``<shape>.<program>.xqasm``; ``w1_011_differential.rs`` assembles every one and
-requires both the baseline and the production checker to accept it.
+``<shape>.<program>.xqasm``; ``checker_regressions/jump_span.rs`` assembles
+every one and requires both the baseline and the production checker to
+accept it.
 
 Run from the repository root after a compiler change, then review the diff:
 
-    uv run --no-sync python xqvm/tests/xqcp_fixtures/generate.py
+    uv run --no-sync python xqvm/tests/fixtures/xqcp/generate.py
 """
 
 from pathlib import Path

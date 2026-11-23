@@ -371,11 +371,11 @@ fn differential_malformed_streams() {
 /// decoder programs for a conditional inside a loop, a loop inside a
 /// conditional, and a conditional inside a loop whose arm itself loops (its
 /// decoder jumps over a whole inner loop, within the outer body). Regenerate
-/// with `tests/xqcp_fixtures/generate.py`. Every program must be accepted by
+/// with `tests/fixtures/xqcp/generate.py`. Every program must be accepted by
 /// both the baseline and the production checker.
 #[test]
 fn xqcp_compiled_control_flow_still_checks_clean() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/xqcp_fixtures");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/xqcp");
     let mut checked = 0usize;
     for entry in std::fs::read_dir(&dir)
         .expect("xqcp fixtures directory")

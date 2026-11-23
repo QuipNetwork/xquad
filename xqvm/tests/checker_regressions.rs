@@ -31,13 +31,24 @@
 //! | QUIP-19 | A `SCLR` keeps an underflow recorded before it: a second live `SCLR` (part a), or a dead one after `HALT` (part b) | part a: `a_second_sclr_does_not_erase_an_underflow_after_the_first` (`checker::tests`); part b: `sclr_after_halt`. Both were fixed in 0.5.0, before the audit's fix review |
 //! | O3 | A block's analysed bytes end at its first terminator | `block_ranges`; vectors `control-flow/dead_write_after_jump_does_not_init` and `dead_read_after_halt_is_not_live` |
 //! | O7 | A stack peak inside one block is checked against the limit | `stack_peaks`; vector `control-flow/stack_peak_before_sclr_overflows` |
+//! | W1-011 | A jump whose target lies in a different loop body from the jump is rejected with `JumpAcrossLoopBoundary`, so the VM's loop stack always matches the lexical loop nesting | `jump_span` (a differential against the checker without `JumpSpanPhase`, and the xqcp-compiled fixtures in `fixtures/xqcp/`); unit tests `jump_span_*` (`checker::tests`); the `jump_span_alloc` test target (the phase's heap peak); `xquad/tests/test_checker_jump_span.py` (the rule reaches Python) |
+//! | W1-014 | A dead block skipped after an unconditional jump or a `HALT` neither initializes a live read nor makes a valid program fail | `block_ranges`: `dead_block_write_does_not_initialize_a_live_read` and `unset_read_inside_a_skipped_dead_block_is_not_rejected`. Fixed by the O3 change; tests only |
+//!
+//! W1-011 and W1-014 are not findings of the audit report: they come from the
+//! remediation work in merge request 246.
 //!
 //! The vectors pin what the VM does with each program; the vector runner does
 //! not run the checker. The checker verdicts on the same programs are asserted
 //! in the modules here.
 
+#[path = "checker_regressions/jump_span.rs"]
+mod jump_span;
+
 mod block_ranges {
     //! Checker block ranges stop at their first terminator.
+
+    use xqvm::Program;
+    use xqvm::checker::CheckerError;
 
     #[test]
     fn dead_writes_cannot_initialize_a_live_read() {
@@ -77,6 +88,51 @@ mod block_ranges {
         let verdict = xqvm::checker::check(&program);
         assert!(verdict.is_ok(), "{verdict:?}");
         assert!(xqvm::Vm::new().run(&program).is_ok());
+    }
+
+    /// Direction 1 (the auditor's 12-byte reproduction — former false accept): a live block
+    /// reads `r5`, a dead block that is skipped writes `r5`. The write must not
+    /// count, so the live read of the unset register is rejected.
+    #[test]
+    fn dead_block_write_does_not_initialize_a_live_read() {
+        // 0x00 JUMP1 .0   (01 00)   -> TARGET at 0x05
+        // 0x02 STOW r5    (0B 05)   dead: never runs
+        // 0x04 HALT       (FF)      dead block ends here (no edge, no node)
+        // 0x05 TARGET .0  (00)
+        // 0x06 LOAD r5    (0A 05)   live read of the unset r5
+        // 0x08 POP        (10)
+        // 0x09 JUMP1 .0   (01 00)
+        // 0x0B HALT       (FF)      exit
+        let code = vec![
+            0x01, 0x00, 0x0B, 0x05, 0xFF, 0x00, 0x0A, 0x05, 0x10, 0x01, 0x00, 0xFF,
+        ];
+        assert_eq!(code.len(), 12);
+        let err = xqvm::checker::check(&Program::new(code)).unwrap_err();
+        assert!(
+            matches!(err, CheckerError::ReadUnsetRegister { offset: 6, reg: 5 }),
+            "expected ReadUnsetRegister {{ offset: 6, reg: 5 }}, got {err:?}"
+        );
+    }
+
+    /// Direction 2 (former false reject): a valid program whose only unset read is
+    /// inside a dead block after `HALT` must check clean. The dead block unsets the
+    /// register itself before reading it, so the read is unset only on the dead
+    /// path: the pre-O3 checker (3c68010) merged that block into the live
+    /// analysis and rejected this program with `ReadUnsetRegister { offset: 7,
+    /// reg: 0 }`; it is accepted now that dead blocks are skipped.
+    #[test]
+    fn unset_read_inside_a_skipped_dead_block_is_not_rejected() {
+        // 0x00 PUSH1 1    (11 01)
+        // 0x02 STOW r0    (0B 00)   r0 is set on the live path
+        // 0x04 HALT       (FF)      exit; everything after is dead
+        // 0x05 DROP r0    (0C 00)   dead: unsets r0
+        // 0x07 LOAD r0    (0A 00)   dead: reads the unset r0
+        // 0x09 HALT       (FF)
+        let code = vec![0x11, 0x01, 0x0B, 0x00, 0xFF, 0x0C, 0x00, 0x0A, 0x00, 0xFF];
+        assert!(
+            xqvm::checker::check(&Program::new(code)).is_ok(),
+            "a dead-code unset read must be skipped, not rejected"
+        );
     }
 }
 
