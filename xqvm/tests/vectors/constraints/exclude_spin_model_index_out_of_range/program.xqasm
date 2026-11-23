@@ -1,0 +1,15 @@
+; exclude_spin_model_index_out_of_range: on a spin model, NonBinaryModel comes
+; before the index check.
+;
+; spec/xqvm/ISA.md raises NonBinaryModel right after the model type check and
+; before any index or operand check against the model. Index 9 is outside the
+; 4-variable model, so this program would raise IndexOutOfBounds on a binary
+; model; on a spin model the domain check runs first.
+
+PUSH 4
+SQMX r0          ; spin model, 4 variables
+PUSH 0           ; i
+PUSH 9           ; j, out of range
+PUSH 5           ; penalty
+EXCLUDE r0
+HALT

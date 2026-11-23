@@ -60,7 +60,7 @@ observable behaviour and must be made in both places at once.
 | `COEFF_WRITE_STEPS` | 13 | One coefficient written into a model's sparse map. |
 | `MODEL_TERM_STEPS` | 1 | One model term accumulated into an energy. |
 | `GRID_CELL_STEPS` | 3 | One cell of a grid's linear surface read by a row or column scan. |
-| `SAMPLE_COPY_STEPS` | 1 | One sample element written. |
+| `SAMPLE_COPY_STEPS` | 1 | One sample element written by a sample allocator, or read by `ENERGY`. |
 | `ELEMENT_COPY_STEPS` | 1 | One `i64` copied out of a vec. |
 
 ### How the constants were measured
