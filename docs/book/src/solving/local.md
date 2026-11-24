@@ -15,7 +15,7 @@ rather than from execution.
 It needs only a CPU and no credentials, and that is exactly what makes
 `cpu` the `xqsa.DEFAULT_SOLVER`: every other backend in this chapter is worth
 comparing against it before you trust a faster or more exotic answer.
-It ships in the base package -- `pip install xqsa` is enough.
+It ships in the base install -- `pip install xquad` is enough.
 
 ```python
 from xqsa import SolverCPU
@@ -60,8 +60,8 @@ different processors.
 Install the extra that matches your hardware:
 
 ```sh
-pip install xqsa[cuda]     # NVIDIA GPU, CUDA 12.x driver
-pip install xqsa[metal]    # Apple Silicon Mac with a Metal device
+pip install xquad[cuda]     # NVIDIA GPU, CUDA 12.x driver
+pip install xquad[metal]    # Apple Silicon Mac with a Metal device
 ```
 
 ```python
@@ -137,7 +137,7 @@ python -c "from xqsa import SolverGPU; SolverGPU(engine='cuda'); print('ok')"
 python -c "from xqsa import SolverGPU; SolverGPU(engine='metal'); print('ok')"
 ```
 
-Both raise `ImportError` with a `pip install xqsa[...]` hint if the
+Both raise `ImportError` with a `pip install xquad[...]` hint if the
 extra is missing, and `RuntimeError` if the extra is installed but no
 matching GPU is detected -- `import xqsa` itself never fails on a
 missing extra, only constructing the solver that needs it does.

@@ -1,14 +1,18 @@
 # xqffi -- PyO3 FFI bindings for the XQuad Rust runtime
 
-The Python extension that exposes the Rust [`xqvm`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm) interpreter and [`xqasm`](https://gitlab.com/quip.network/xquad/-/tree/main/xqasm) assembler. Ships as abi3 manylinux wheels (x86_64 + aarch64, CPython >= 3.13) plus a universal sdist for other platforms, all built by maturin.
+The Python extension that exposes the Rust [`xqvm`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm) interpreter and [`xqasm`](https://gitlab.com/quip.network/xquad/-/tree/main/xqasm) assembler. Ships inside the `xquad` distribution: abi3 manylinux wheels (x86_64 + aarch64, CPython >= 3.13) plus a universal sdist for other platforms, all built by maturin from the repository's root `pyproject.toml`.
 
 `xqffi` is a **pure FFI shim** -- it only re-exposes the Rust types and entry points. User-facing conveniences (`Program` / `Session` / `RunResult`, keyword calldata, trace inspection) live in the [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) umbrella package.
 
 ## Install
 
 ```sh
-pip install xqffi
+pip install xquad
 ```
+
+The extension, its shim and its type stubs live in this directory: maturin
+builds the compiled module to `xqffi/xqffi.*.so` beside `__init__.py` and the
+`.pyi` stubs.
 
 ## Surface
 
@@ -33,9 +37,9 @@ assert vm.outputs() == [42]
 
 `parse_xqasm(str)` -> wire dict; `assemble_source(str)` -> raw bytes; `disassemble(bytes)` -> human-readable listing; `instruction_count(bytes)` -> instruction count.
 
-### `xqffi.verifier` -- static verification
+### `xqffi.checker` -- static checking
 
-`verify(bytes)` and `verify_source(str)` run the pre-execution verifier: every jump lands on a `TARGET`, every register is read after it is written, and stack depth balances. Both return `None` on success and raise `ValueError` on a rejected program. See [Verifier](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/xqvm/verifier.md).
+`check(bytes)` and `check_source(str)` run the pre-execution checker: every jump lands on a `TARGET`, every register is read after it is written, and stack depth balances. Both return `None` on success and raise `ValueError` on a rejected program. See [Checker](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/xqvm/checker.md).
 
 ## Interactive / multi-run API
 
@@ -57,7 +61,7 @@ assert dict(result.outputs) == {0: 42}
 
 - [`xqcp`](https://gitlab.com/quip.network/xquad/-/tree/main/xqcp) -- constraint programming DSL that compiles to `.xqasm`.
 - [`xqsa`](https://gitlab.com/quip.network/xquad/-/tree/main/xqsa) -- solver adapters: CPU/GPU annealers, D-Wave QPU, Quip network.
-- [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) -- umbrella meta-package with the interactive API.
+- [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) -- the interactive API and the `xquad` CLI; the one PyPI distribution, which also ships this package.
 - [Running Programs](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/running/README.md) -- full tour.
 
 ## License

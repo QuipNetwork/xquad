@@ -113,7 +113,7 @@ fn forward_linear_chain() {
     let analysis = ForwardDepth {
         deltas: [(0, 1_isize), (1, -1_isize)].into_iter().collect(),
     };
-    let r = solve(&analysis, &cfg);
+    let r = solve(&analysis, &cfg, 1_000).unwrap();
 
     assert_eq!(r.before(&0).unwrap().0, 0, "entry: boundary seeds 0");
     assert_eq!(r.after(&0).unwrap().0, 1, "entry: +1 delta");
@@ -138,7 +138,7 @@ fn forward_diamond_join() {
     let analysis = ForwardDepth {
         deltas: [(1, 2_isize), (2, 5_isize)].into_iter().collect(),
     };
-    let r = solve(&analysis, &cfg);
+    let r = solve(&analysis, &cfg, 1_000).unwrap();
 
     assert_eq!(r.after(&1).unwrap().0, 2);
     assert_eq!(r.after(&2).unwrap().0, 5);
@@ -166,7 +166,7 @@ fn forward_loop_converges() {
     let analysis = ForwardDepth {
         deltas: [(0, 1_isize)].into_iter().collect(),
     };
-    let r = solve(&analysis, &cfg);
+    let r = solve(&analysis, &cfg, 1_000).unwrap();
 
     // Entry pushes 1; header and body are neutral.
     assert_eq!(r.after(&0).unwrap().0, 1);
@@ -182,7 +182,7 @@ fn backward_linear_chain() {
     let analysis = BackwardDepth {
         deltas: [(1, 1_isize)].into_iter().collect(),
     };
-    let r = solve(&analysis, &cfg);
+    let r = solve(&analysis, &cfg, 1_000).unwrap();
 
     // Exit is the boundary node; its "before" (in backward = the output) = 0.
     assert_eq!(r.after(&2).unwrap().0, 0, "exit boundary seeds 0");
@@ -199,7 +199,7 @@ fn cfg_no_edges_single_node() {
     let analysis = ForwardDepth {
         deltas: HashMap::new(),
     };
-    let r = solve(&analysis, &cfg);
+    let r = solve(&analysis, &cfg, 1_000).unwrap();
     assert_eq!(r.before(&0).unwrap().0, 0);
     assert_eq!(r.after(&0).unwrap().0, 0);
 }
@@ -225,4 +225,58 @@ fn cfg_builder_deduplicates_nodes_and_edges() {
     // Duplicate edges are deduplicated: only one 0→1 edge.
     assert_eq!(cfg.successors(&0).len(), 1);
     assert_eq!(cfg.predecessors(&1).len(), 1);
+}
+
+#[test]
+fn boundary_seed_is_input_not_a_premature_backward_output() {
+    let cfg = Cfg::builder(0u32, 1).edge(0, 1).build();
+    let analysis = BackwardDepth {
+        deltas: HashMap::from([(1, 7)]),
+    };
+    let result = solve(&analysis, &cfg, 4).unwrap();
+    assert_eq!(result.after(&1), Some(&Depth(0)));
+    assert_eq!(result.before(&1), Some(&Depth(7)));
+    assert_eq!(result.after(&0), Some(&Depth(7)));
+    assert_eq!(result.before(&0), Some(&Depth(7)));
+}
+
+#[test]
+fn backward_single_node_keeps_boundary_input_and_output_distinct() {
+    let cfg = Cfg::builder(0u32, 0).build();
+    let analysis = BackwardDepth {
+        deltas: HashMap::from([(0, 7)]),
+    };
+    let result = solve(&analysis, &cfg, 1).unwrap();
+    assert_eq!(result.after(&0), Some(&Depth(0)));
+    assert_eq!(result.before(&0), Some(&Depth(7)));
+}
+
+#[test]
+fn broken_analysis_exhausts_budget_without_returning_partial_facts() {
+    use super::SolveError;
+    use core::cell::Cell;
+    struct Oscillating(Cell<bool>);
+    impl Analysis for Oscillating {
+        type Node = u32;
+        type Value = Depth;
+        type Dir = Forward;
+        fn boundary_value(&self) -> Depth {
+            Depth(0)
+        }
+        fn transfer(&self, _: &u32, _: &Depth) -> Depth {
+            self.0.set(!self.0.get());
+            Depth(usize::from(self.0.get()))
+        }
+    }
+    let cfg = Cfg::builder(0, 0).edge(0, 0).build();
+    for budget in [0, 1, 10, 100] {
+        assert!(matches!(
+            solve(&Oscillating(Cell::new(false)), &cfg, budget),
+            Err(SolveError::BudgetExceeded)
+        ));
+    }
+    assert!(matches!(
+        crate::CheckerError::from(SolveError::BudgetExceeded),
+        crate::CheckerError::AnalysisBudgetExceeded
+    ));
 }

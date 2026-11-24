@@ -1,0 +1,16 @@
+; reduce_integer_model: REDUCE on an integer {0, 1, 2} model raises NonBinaryModel.
+;
+; REDUCE writes the Rosenberg reduction of x0 * x1, and spec/xqvm/HLF.md derives
+; every constraint expansion under x^2 = x, which fails for spin variables
+; and for integer variables with k > 2. The check follows the declared domain
+; (only a model whose domain is binary passes), so spec/xqvm/ISA.md has REDUCE raise NonBinaryModel instead. Every other
+; operand is valid, so the domain check alone decides.
+
+PUSH 4
+PUSH 3
+XQMX r0          ; integer model, k = 3, 4 variables
+PUSH 0           ; var_a
+PUSH 1           ; var_b
+PUSH 1           ; p_aux
+REDUCE r0
+HALT

@@ -88,7 +88,7 @@ a program is constructed from raw bytes.
 This pre-scan is why a decoder cannot fully validate a single instruction in
 isolation: whether `JUMP1 .3` is well-formed depends on how many `TARGET`
 opcodes exist anywhere in the program, which is only known once the whole
-stream has been scanned. See [Verifier](verifier.md) for how an out-of-range
+stream has been scanned. See [Checker](checker.md) for how an out-of-range
 label is rejected before execution.
 
 ## Instruction lengths by opcode
@@ -138,4 +138,4 @@ the assembler pick the width.
 - [`spec/xqvm/ENCODING.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/ENCODING.md) is the normative reference.
 - [`xqvm/src/bytecode/program.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/bytecode/program.rs) implements the header encode/decode and owns the pre-scanned `JumpTable`.
 - [`xqvm/src/bytecode/codec.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/bytecode/codec.rs) implements the per-instruction operand encoding.
-- [`xqvm/src/verifier/scan.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/verifier/scan.rs) implements the single linear pass that builds the id-to-offset lookup and checks for undefined jump targets in the same walk.
+- [`xqvm/src/checker/scan.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/checker/scan.rs) implements the single linear pass that builds the id-to-offset lookup and checks for undefined jump targets in the same walk.

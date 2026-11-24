@@ -7,7 +7,7 @@
 # decode pipeline rather than the mocked unit tests in `make test-py`.
 #
 # The sync rebuilds xqffi's cdylib when its Rust inputs changed (the
-# `cache-keys` in xqffi/pyproject.toml). Two things this script does that a
+# `cache-keys` in the root pyproject.toml). Two things this script does that a
 # plain `uv sync --extra X && pytest -m X` would not:
 #
 #   1. Preflight via scripts/_hwprobe.py's require(): a missing GPU or an
@@ -51,6 +51,9 @@ cd "${REPO_ROOT}"
 
 echo ">> uv sync --extra ${extra}"
 uv sync --extra "${extra}"
+# A reused runner build directory can hold an install whose extension
+# `git clean` deleted; see the script for why uv does not notice.
+bash scripts/ensure-xqffi.sh --extra "${extra}"
 
 # Both `uv run` calls below pass `--no-sync`, so they run in the
 # environment the sync above wrote, extra included, with no second resolve.

@@ -10,14 +10,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 XQuad is a hardware-agnostic toolchain for expressing and running quadratic
 optimization problems (QUBO / Ising / integer) across quantum annealers and
-classical solvers. It ships as two Rust crates plus four Python distributions
-built around a single virtual-machine specification.
+classical solvers. It ships as two Rust crates plus one Python distribution,
+`xquad`, built around a single virtual-machine specification.
 
 Think of it as **LLVM for quadratic models** -- a common intermediate
 representation that lets you write a problem once and retarget it to any
 supported backend.
 
-- **Spec-first.** Every behaviour is nailed down in [`spec/xqvm/SPEC.md`](spec/xqvm/SPEC.md)
+- **Spec-first.** Every behaviour is nailed down in [`spec/xqvm/SPEC.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/SPEC.md)
   and the VM is mechanically held to it: every committed conformance vector
   runs `xqvm` in CI against the outcome the spec prescribes, and a mismatch
   fails the build.
@@ -50,7 +50,7 @@ uv tool install 'xquad[quip]'    # with the xquad quip commands
 
 On macOS, a user install (`pip install --user`, or pip falling back to one) puts the `xquad` command in `~/Library/Python/3.x/bin`, which is not on `PATH`; `python -m xquad` runs the same command without it.
 
-The `xquad` package is the umbrella: the full pipeline and the `xquad` command. To pick individual pieces instead, install `xqffi`, `xqcp` and `xqsa` (FFI bindings, DSL, solvers). Prebuilt wheels are available for Linux x86_64 and aarch64 (CPython >= 3.13). On macOS and Windows, pip builds the `xqffi` Rust extension from source -- this requires a [Rust toolchain](https://rustup.rs/) (>= 1.85).
+`xquad` is the only distribution: one install carries the full pipeline, the `xquad` command, and the `xqffi`, `xqcp` and `xqsa` packages (FFI bindings, DSL, solvers), which import under their own names. Up to 0.5 those three were separate PyPI distributions; from 0.6 they ship only inside `xquad`. Prebuilt wheels are available for Linux x86_64 and aarch64 (CPython >= 3.13, glibc >= 2.27). On macOS and Windows, pip builds the `xqffi` Rust extension from source -- this requires a [Rust toolchain](https://rustup.rs/) (>= 1.85).
 
 ### GPU/QPU support
 
@@ -63,11 +63,11 @@ The base install includes CPU simulated annealing only. To use GPU or quantum ha
 | D-Wave Advantage QPU (`dwave`) | `pip install 'xquad[dwave]'` | D-Wave Leap account + API token |
 | Quip Network solver (`quip`) | `pip install 'xquad[quip]'` | `QUIP_RPC_URL` + a configured signer |
 
-Extras are composable: `pip install 'xquad[cuda,dwave]'`. See [`xqsa/README.md`](xqsa/README.md#install) for driver prerequisites and per-solver quick-starts.
+Extras are composable: `pip install 'xquad[cuda,dwave]'`. See [`xqsa/README.md`](https://gitlab.com/quip.network/xquad/-/blob/main/xqsa/README.md#install) for driver prerequisites and per-solver quick-starts.
 
 For a guided walkthrough that installs XQuad, verifies it, and runs a
 complete problem end to end, see
-[Install XQuad](docs/book/src/start/README.md) in the book.
+[Install XQuad](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/start/README.md) in the book.
 
 ## Package map
 
@@ -75,21 +75,21 @@ Two Rust crates on **crates.io**:
 
 | Crate | Description |
 |---|---|
-| [`xqvm`](xqvm/) | X-Quadratic Virtual Machine interpreter, bytecode codec, opcode table (`no_std + alloc`) |
-| [`xqasm`](xqasm/) | `.xqasm` text-format assembler |
+| [`xqvm`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm) | X-Quadratic Virtual Machine interpreter, bytecode codec, opcode table (`no_std + alloc`) |
+| [`xqasm`](https://gitlab.com/quip.network/xquad/-/tree/main/xqasm) | `.xqasm` text-format assembler |
 
-Four Python distributions on **PyPI**:
+One Python distribution on **PyPI**, `xquad`, carrying four packages:
 
 | Package | Description |
 |---|---|
-| [`xqffi`](xqffi/) | PyO3 FFI bindings for `xqvm` + `xqasm` (`xqffi.vm`, `xqffi.asm`, `xqffi.verifier`) |
-| [`xqcp`](xqcp/) | Constraint-programming DSL that compiles to `.xqasm` |
-| [`xqsa`](xqsa/) | Solver adapters -- CPU/GPU annealers, D-Wave QPU, Quip network |
-| [`xquad`](xquad/) | Umbrella meta-package with interactive `Program` / `Session` / `RunResult` API, and the `xquad` CLI (`xquad vm asm` / `dis` / `run` / `check`) |
+| [`xqffi`](https://gitlab.com/quip.network/xquad/-/tree/main/xqffi) | PyO3 FFI bindings for `xqvm` + `xqasm` (`xqffi.vm`, `xqffi.asm`, `xqffi.checker`) |
+| [`xqcp`](https://gitlab.com/quip.network/xquad/-/tree/main/xqcp) | Constraint-programming DSL that compiles to `.xqasm` |
+| [`xqsa`](https://gitlab.com/quip.network/xquad/-/tree/main/xqsa) | Solver adapters -- CPU/GPU annealers, D-Wave QPU, Quip network |
+| [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) | Umbrella package with interactive `Program` / `Session` / `RunResult` API, and the `xquad` CLI (`xquad vm asm` / `dis` / `run` / `check`) |
 
 The one Rust package without a crates.io artefact is the `xqffi` pyo3
-crate itself -- it ships as the `xqffi` PyPI wheel rather than a reusable
-Rust library.
+crate itself -- it ships compiled inside the `xquad` wheel rather than as a
+reusable Rust library.
 
 ## Quick start
 
@@ -139,7 +139,7 @@ assert dict(result.outputs) == {0: 42}
 `Program.load(bytes)` takes wire-format bytecode; `Session.run()`
 returns a `RunResult` with dict-keyed outputs (unset slots present as
 `None`), residual stack, and step count. See
-[Running Programs](docs/book/src/running/README.md) for the full tour.
+[Running Programs](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/running/README.md) for the full tour.
 
 #### Low-level / conformance surface
 
@@ -164,7 +164,7 @@ limits across runs, and hands back the `xqffi` types unchanged.
 
 ### End-to-end worked example
 
-[`examples/tsp/`](examples/tsp/) shows a full Travelling Salesman Problem
+[`examples/tsp/`](https://gitlab.com/quip.network/xquad/-/tree/main/examples/tsp) shows a full Travelling Salesman Problem
 driven from the `xqcp` DSL through the VM and `xqsa` solver:
 
 ```sh
@@ -192,9 +192,9 @@ magic, version, calldata/output-slot counts, code length, and a CRC-32
 checksum of the payload -- followed by the instruction stream: an
 opcode byte followed by its operands in big-endian byte order.
 
-See [`docs/book/src/xqvm/opcodes.md`](docs/book/src/xqvm/opcodes.md) for
+See [`docs/book/src/xqvm/opcodes.md`](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/xqvm/opcodes.md) for
 the opcode reference and
-[`spec/xqvm/SPEC.md`](spec/xqvm/SPEC.md) for the normative spec.
+[`spec/xqvm/SPEC.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/SPEC.md) for the normative spec.
 
 ## Development
 
@@ -211,8 +211,8 @@ make deps                                                          # dev tools
 make xquad
 ```
 
-This syncs the Python workspace (`xqcp`, `xqsa`, `xqffi`, `xquad`) into
-`.venv/`, builds the `xqffi` pyo3 extension via maturin,
+This installs the root `xquad` project (`xqffi`, `xqcp`, `xqsa`, `xquad`)
+editable into `.venv/`, builds the `xqffi` pyo3 extension via maturin,
 puts the repo root on `sys.path` so scripts anywhere in the repo can
 `import xqcp` / `xqsa` / `xqffi` / `xquad` naturally, and
 installs the `xquad` command into `.venv/bin/`, run with `uv run xquad`.
@@ -232,11 +232,11 @@ make conformance  # the specification vectors under xqvm/tests/vectors/
 
 ### Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, commit
+See [CONTRIBUTING.md](https://gitlab.com/quip.network/xquad/-/blob/main/CONTRIBUTING.md) for the development workflow, commit
 conventions, and DCO sign-off requirements. Agent guidelines for AI coding
-assistants are in [AGENTS.md](AGENTS.md); cutting a release is documented in
-[RELEASING.md](RELEASING.md).
+assistants are in [AGENTS.md](https://gitlab.com/quip.network/xquad/-/blob/main/AGENTS.md); cutting a release is documented in
+[RELEASING.md](https://gitlab.com/quip.network/xquad/-/blob/main/RELEASING.md).
 
 ## License
 
-Licensed under the [GNU Affero General Public License v3.0 or later](LICENSE).
+Licensed under the [GNU Affero General Public License v3.0 or later](https://gitlab.com/quip.network/xquad/-/blob/main/LICENSE).

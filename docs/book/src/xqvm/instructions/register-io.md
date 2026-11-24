@@ -15,11 +15,12 @@ expected vec<int>` from `VECPUSH r7`, `register r7 holds unset, expected
 model|sample` from `GETLINE r7`, or `register r7 holds unset, expected
 sample` from `ENERGY r0 r7`. `LOAD r3` as the first instruction of a
 program, before anything has written to `r3`, fails at runtime with
-`register r3 is unset`. The verifier's uninitialised-register check
+`register r3 is unset`. The checker's uninitialised-register check
 catches the same defect statically for straight-line code, one reason to
 run `xquad vm check` before `xquad vm run`: the sequence `PUSH 1 / STOW r0 /
 DROP r0 / LOAD r0` is rejected by `check` with `register r0 read at byte
-0x0006 before being written`, before the runtime fault is ever reached.
+0x0006 before being written on every path`, before the runtime fault is
+ever reached.
 
 `LOAD` distinguishes two failure modes for a register that is not usable
 as an integer. An unset register faults `UnsetRegister`; a register holding

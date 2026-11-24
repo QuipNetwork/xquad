@@ -13,9 +13,9 @@
 # live in .gitlab/ci/setup.yml, included first by the root .gitlab-ci.yml.
 
 # `make check-docs-generated` (see the Makefile's DOCSGEN comment) runs the
-# two generators through `uv run --no-project --isolated`, not a workspace
+# two generators through `uv run --no-project --isolated`, not a project
 # sync -- both import only scripts/_docsgen.py, scripts/_scriptio.py and
-# PyYAML. This job therefore needs uv on PATH but not a synced workspace,
+# PyYAML. This job therefore needs uv on PATH but not a synced project,
 # so it shares `.python-tools`'s cache instead of paying a cold resolve
 # (and a maturin build of xqffi's cdylib) every pipeline just to diff
 # some YAML.
@@ -56,6 +56,7 @@ docs:generated:
 # fragment in setup.yml for how the failure presents without them.
 docs:handwritten:
     stage: docs
+    tags: [docker, amd64]
     extends: .alpine
     needs:
         - job: dependency-gate

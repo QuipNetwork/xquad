@@ -68,7 +68,7 @@
 //! failure paths included. The same page records the parts of that bar the
 //! tree does not yet enforce.
 //!
-//! A production runtime enforces the bar in two places: `verifier::verify`
+//! A production runtime enforces the bar in two places: `checker::check`
 //! before it stores or runs a program, and `Vm::set_memory_limit` plus
 //! `Vm::set_step_limit` before it executes one. A static opcode allowlist
 //! is deliberately not part of the design -- the denied set is empty by
@@ -76,7 +76,7 @@
 //!
 //! This fixture does only the second of those. It sets both budgets, from
 //! the caller's arguments under the `Config` caps, but it never calls
-//! `verifier::verify` -- it decodes and runs -- and it charges a fixed
+//! `checker::check` -- it decodes and runs -- and it charges a fixed
 //! placeholder weight rather than a benchmarked one. That is adequate for
 //! an integration gate running trusted bytecode in tests, and is not a
 //! template for a runtime that admits bytecode from an untrusted account.
@@ -246,7 +246,7 @@ pub mod pallet {
 
             // The caller's count, not `program.output_slots()`. That header
             // byte is a saturating count of OUTPUT instructions -- see
-            // `xqvm/src/verifier/scan.rs` -- so a single OUTPUT inside a
+            // `xqvm/src/checker/scan.rs` -- so a single OUTPUT inside a
             // RANGE writing slots 0 and 1 records 1, sizes `outputs` to 1,
             // and turns a legitimate write into OutputIndex and so into
             // ExecutionFailed. spec/xqvm/ENCODING.md is explicit that

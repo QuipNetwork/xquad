@@ -23,17 +23,17 @@ xquad vm run [OPTIONS] <FILE>
 | `--calldata <CALLDATA>` | none | Comma-separated `i64` integers passed to `INPUT` instructions. |
 | `--outputs <OUTPUTS>` | `16` | Number of output slots available for `OUTPUT` instructions. |
 | `--step-limit <STEP_LIMIT>` | `10000000`, the VM's `DEFAULT_STEP_LIMIT` | Maximum number of steps to execute. The limit is exact: `0` executes nothing. Conflicts with `--unlimited-steps`. See [Step limits](../../running/#step-limits). |
-| `--unlimited-steps` | off | Run without a step limit. Conflicts with `--step-limit`. A program that never halts will not return. |
+| `--unlimited-steps` | off | Run without a step limit. Conflicts with `--step-limit`. A program that never halts runs until interrupted: Ctrl-C stops it, and the command ends by SIGINT as an interrupted process does. |
 | `--memory-limit <MEMORY_LIMIT>` | `1073741824` (1 GiB), the VM's `DEFAULT_MEMORY_LIMIT` | Allocation budget in bytes for models, samples and vectors. See [The allocation budget](../../xqvm/limits-and-errors.md#the-allocation-budget). |
 | `--trace` | off | Enable step-by-step execution tracing. |
 | `--trace-format <TRACE_FORMAT>` | `text` | Trace output format: `text` or `json`. Requires `--trace`. |
 | `--trace-file <TRACE_FILE>` | stderr | Write trace output to a file instead of stderr. Requires `--trace`. |
 
-`xquad vm run` does not call the verifier. A program that fails
-verification can still be handed to `run`; some defects (an unset register read, for
+`xquad vm run` does not call the checker. A program that fails
+the check can still be handed to `run`; some defects (an unset register read, for
 example) are also caught by the VM's own runtime checks and abort with a
 runtime error, but others are not. See [`xquad vm check`](check.md) and
-[Verification](../../running/verification.md) for what static verification
+[Checking](../../running/checking.md) for what the static check
 does and does not guarantee.
 
 ## Examples

@@ -118,8 +118,10 @@ become `StackEffect::Fixed { pops, pushes }` and `StackEffect::fixed`.
 
 ## Deprecated Names
 
-The names that 0.4 deprecated still work in 0.5 and still warn, and they are
-removed in v0.6.0. The [Deprecated APIs](../solving/quip-network.md#deprecated-apis)
-table lists each one with its replacement. The top-level commands `xquad asm`,
-`dism`, `run` and `verify` are among them; use `xquad vm` instead (see
-[xquad vm](../cli/vm/)).
+The names that 0.4 deprecated still work in 0.5 and still warn. The top-level
+commands `xquad asm`, `dism`, `run` and `verify` are among them and are
+removed in v0.6.0; use `xquad vm` instead (see [xquad vm](../cli/vm/)). The
+rest are removed in v0.7.0 (see [Migrating from 0.5 to
+0.6](migration-0.6.md#deprecated-names)). The [Deprecated
+APIs](../solving/quip-network.md#deprecated-apis) table lists each one with
+its replacement.

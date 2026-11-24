@@ -23,7 +23,7 @@ files directly.
 ## XQVM
 
 Normative for the virtual machine: the instruction set, the wire format,
-and the bytecode verifier.
+and the bytecode checker.
 
 - [`spec/xqvm/README.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/README.md)
   -- document index for this layer.
@@ -40,8 +40,8 @@ and the bytecode verifier.
 - [`spec/xqvm/ENCODING.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/ENCODING.md)
   -- normative for both file formats: `.xqasm` assembly syntax and the
   `.xqb` binary encoding, including the XQBC header layout.
-- [`spec/xqvm/VERIFIER.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/VERIFIER.md)
-  -- normative for the bytecode verifier: its phase pipeline and every
+- [`spec/xqvm/CHECKER.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/CHECKER.md)
+  -- normative for the bytecode checker: its phase pipeline and every
   error it can raise.
 - [`spec/xqvm/METERING.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/METERING.md)
   -- normative for step metering: what a step is, the cost constants and

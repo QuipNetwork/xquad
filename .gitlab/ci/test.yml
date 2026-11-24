@@ -1,5 +1,5 @@
 # Test phase -- does the workspace do what it should when actually
-# executed? Rust unit/integration/doc tests, the Python workspace test
+# executed? Rust unit/integration/doc tests, the Python test
 # suite, the Quip signing-layer tests, the WASM no_std correctness tests,
 # and the Substrate FRAME pallet fixture -- see setup.yml's verify-vs-test
 # header for what makes these `test` jobs rather than `verify` jobs.
@@ -175,6 +175,7 @@
 # which is what the old three-job layout paid for on every pipeline.
 test:rust:
     stage: test
+    tags: [docker, amd64]
     extends: .rust
     needs:
         - job: dependency-gate
@@ -188,6 +189,7 @@ test:rust:
 
 test:python:
     stage: test
+    tags: [docker, amd64]
     extends: .python
     needs:
         - job: dependency-gate
@@ -213,6 +215,7 @@ test:python:
 # an MR-template Optional Check developers run by hand against a devnet.
 test:quip:
     stage: test
+    tags: [docker, amd64]
     extends: .python
     needs:
         - job: dependency-gate
@@ -238,6 +241,7 @@ test:quip:
 # Debian host, so the same target works on a contributor's macOS box.
 test:wasm:
     stage: test
+    tags: [docker, amd64]
     extends: .rust
     needs:
         - job: dependency-gate
@@ -276,6 +280,7 @@ test:wasm:
 # what actually governs when those downloads need to change.
 test:substrate:
     stage: test
+    tags: [docker, amd64]
     needs:
         - job: dependency-gate
           optional: true

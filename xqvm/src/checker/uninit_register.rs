@@ -1,0 +1,45 @@
+// Copyright (C) 2026 Postquant Labs Incorporated
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+use crate::Program;
+use crate::dataflow::uninit::check_uninit_registers;
+
+use super::error::CheckerError;
+use super::phase::Phase;
+
+/// CFG-based forward must-init phase.
+///
+/// Runs a forward AND-meet analysis over basic blocks tracking per-register
+/// initialization state (`bool`).  A register is considered definitely
+/// initialized only if it is written on **every** path to the read site.
+///
+/// This agrees with the initialization projection of
+/// [`RegisterTypePhase`](super::register_type::RegisterTypePhase), and can
+/// also be used independently in a custom pipeline.
+///
+/// Unreachable blocks are skipped. Missing writes emit
+/// [`CheckerError::ReadUnsetRegister`]; work budget exhaustion emits
+/// [`CheckerError::AnalysisBudgetExceeded`].
+pub struct UninitRegisterPhase;
+
+impl Phase for UninitRegisterPhase {
+    type Error = CheckerError;
+
+    fn run(&self, program: &Program) -> Result<(), CheckerError> {
+        check_uninit_registers(program)
+    }
+}

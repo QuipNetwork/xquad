@@ -1,20 +1,20 @@
 # Limits and Errors
 
-XQVM has two separate error surfaces. The [verifier](verifier.md) is static
+XQVM has two separate error surfaces. The [checker](checker.md) is static
 analysis that runs before a program executes; `xquad vm check` runs it without
-running the program. The VM is runtime: `xquad vm run` does not verify
+running the program. The VM is runtime: `xquad vm run` does not check
 automatically, so a program that was never checked can reach the VM and
 fault there instead. Several conditions -- an out-of-range jump label, in
-particular -- have both a verifier error and a distinct VM runtime error for
+particular -- have both a checker error and a distinct VM runtime error for
 this reason.
 
 ## Fixed Limits
 
 | Limit | Value | Enforced by |
 |---|---|---|
-| Stack depth | 8,192 items | VM: `StackOverflow`. Verifier: `StackUnderflow`/`StackOverflowRisk` (Phase 4) |
+| Stack depth | 8,192 items | VM: `StackOverflow`. Checker: `StackUnderflow`/`StackOverflowRisk` (Phase 4) |
 | Register count | 256 slots (r0-r255), statically allocated | -- |
-| Jump label range | 0-65,535 (`u16`), 65,536 labels max | Assembler: `TooManyTargets`. Verifier: `UndefinedJumpTarget`. VM: `InvalidLabel` |
+| Jump label range | 0-65,535 (`u16`), 65,536 labels max | Assembler: `TooManyTargets`. Checker: `UndefinedJumpTarget`. VM: `InvalidLabel` |
 | Shift amount | 0-63 bits | VM: `InvalidShift` |
 | Grid dimensions | rows and cols must be > 0, and `rows * cols` must not exceed the register's declared size | VM: `InvalidGridDimensions` |
 | XQMX size | 4,294,967,295 (`2^32 - 1`) variables, and the allocation budget | VM: `InvalidAllocation` past the maximum, `MemoryLimitExceeded` when the budget cannot pay. Applies to a size an allocator was given and to one `ATLEAST`, `ATLEASTW`, `REDUCE` or `EQUALITY` grew a model to |
@@ -93,10 +93,11 @@ storage is charged as `VECPUSH` and `SLACK` create it.
 
 `ITER` copies the slice it iterates into its loop frame, and a loop frame is
 released only by `NEXT`. A back-edge that re-enters an `ITER` without reaching
-its `NEXT` therefore accumulates copies, which is why the copy is charged.
-The loop frame itself is not charged, but it is bounded: the loop stack is
-capped at 8,192 frames and a program that grows it past that fails with
-`LoopStackOverflow`.
+its `NEXT` therefore accumulates copies, which is why the copy is charged. Only
+an unchecked program can do that: the default checker rejects the jump such a
+back-edge needs (phase 1d). The loop frame itself is not charged, but it is
+bounded: the loop stack is capped at 8,192 frames and a program that grows it
+past that fails with `LoopStackOverflow`.
 
 An element of a `vec<xqmx>` is charged the whole-model copy rate, because
 cloning a model clones its coefficient maps: 8 bytes per declared variable
@@ -151,21 +152,22 @@ which disassembles the program and points at the failing instruction.
 | `LoopStackOverflow` | `RANGE`/`ITER` nesting past 8,192 frames |
 | `InvalidIntegerK` | `XQMX`/`XSMX` called with `k < 2` -- `k` counts the values in `{0, ..., k-1}`, so `k = 1` leaves a single value and no decision to make |
 | `SampleOutOfDomain` | `SETLINE`/`ADDLINE` wrote a value outside a sample's domain. `ADDLINE` checks the result of the addition rather than the delta. Sample registers only: a model's `linear[i]` is a bias, not an assignment, and is unbounded |
+| `NonBinaryModel` | A constraint opcode (`ONEHOTR`, `ONEHOTC`, `EXCLUDE`, `IMPLIES`, `EQUALITY`, `ATLEAST`, `ATLEASTW`, `REDUCE`) on a spin or integer model. Their penalty expansions assume `x^2 = x`, which fails for spin and for integer `k > 2`; the check follows the declared domain, so any model whose domain is not binary is refused, integer `k = 2` included. Raised after the register's type check and before any index or operand check against the model; checks made before the type check still come first |
 | `UnmatchedLoop` | A `RANGE`/`ITER` skip-forward scan reached the end of the stream without a matching `NEXT` |
 | `TraceFailed` | A tracer callback returned an error (for example an I/O write failure) |
 
-## Verifier errors
+## Checker errors
 
-Produced by `xqvm::verifier::VerifierError`
-([`xqvm/src/verifier/error.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/verifier/error.rs))
+Produced by `xqvm::checker::CheckerError`
+([`xqvm/src/checker/error.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/checker/error.rs))
 before a program runs, by the four-phase pipeline described in
-[Verifier](verifier.md): structural, jump-target and loop-nesting checks;
-register type-state; must-init analysis; and stack depth.
+[Checker](checker.md): structural, jump-target, loop-nesting and
+jump-span checks; register type-state; must-init analysis; and stack depth.
 
-The eleven variants, which phase raises each one, and what each one means
-are catalogued in [Verifier's error reference](verifier.md#error-reference)
+The variants, which phase raises each one, and what each one means
+are catalogued in [Checker's error reference](checker.md#error-reference)
 rather than repeated here, since that page also explains the phase that
-produces each one. See [Verification](../running/verification.md) for how
+produces each one. See [Checking](../running/checking.md) for how
 to fix a rejected program.
 
 ## Substrate pallet fixture limits

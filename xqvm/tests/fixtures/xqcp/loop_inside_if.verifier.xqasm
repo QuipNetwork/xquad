@@ -1,0 +1,45 @@
+; === Inputs ===
+PUSH 0
+INPUT r0
+PUSH 1
+INPUT r1
+PUSH 2
+INPUT r4
+
+; === Model shape ===
+LOAD r0
+STOW r7
+
+; === Validity checks ===
+PUSH 1
+STOW r5
+
+; Check every declared variable is in the model's domain
+PUSH 0
+LOAD r7
+RANGE
+  LVAL r9
+  LOAD r9
+  GETLINE r4
+  COPY
+  PUSH 0
+  EQ
+  SWAP
+  PUSH 1
+  EQ
+  OR
+  LOAD r5
+  AND
+  STOW r5
+NEXT
+
+; === Energy ===
+ENERGY r1 r4
+STOW r6
+
+; === Output ===
+PUSH 0
+OUTPUT r6
+PUSH 1
+OUTPUT r5
+HALT

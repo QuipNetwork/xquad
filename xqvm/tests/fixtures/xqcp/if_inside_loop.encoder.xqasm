@@ -1,0 +1,12 @@
+; === Inputs ===
+PUSH 0
+INPUT r0
+
+; === Allocations ===
+LOAD r0
+BQMX r1
+
+; === Output ===
+PUSH 0
+OUTPUT r1
+HALT

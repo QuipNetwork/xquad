@@ -24,7 +24,7 @@
 //!
 //! `JUMP1`/`JUMP2`/`JUMPI1`/`JUMPI2` operands are these sequential ids: the
 //! VM looks up `jump_table.get(label)` to recover the target byte offset.
-//! This matches the xq-py reference behaviour described in `spec/xqvm/SPEC.md`.
+//! `spec/xqvm/SPEC.md` specifies this sequential assignment (Target IDs).
 //!
 //! # Examples
 //!
@@ -96,12 +96,12 @@ impl JumpTable {
     /// Scan an instruction-byte buffer and record the position of every
     /// `TARGET` opcode in stream order.
     ///
-    /// Delegates to the shared `verifier::scan` kernel so that
+    /// Delegates to the shared `checker::scan` kernel so that
     /// TARGET collection and Phase 1 error detection share a single pass.
-    /// Any verification error found during the scan is discarded here --
-    /// callers that need it should call `verifier::scan` directly.
+    /// Any checker error found during the scan is discarded here --
+    /// callers that need it should call `checker::scan` directly.
     pub fn scan(code: &[u8]) -> Self {
-        crate::verifier::scan(code).0
+        crate::checker::scan(code).0
     }
 
     /// Look up the byte offset of the `TARGET` with sequential id `label`.

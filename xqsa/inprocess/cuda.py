@@ -24,7 +24,7 @@ models on NVIDIA GPUs. Bypasses the D-Wave SDK entirely. Run through
 
 Requires the optional ``cuda`` extra::
 
-    pip install xqsa[cuda]
+    pip install xquad[cuda]
 """
 
 from __future__ import annotations
@@ -294,7 +294,7 @@ class InProcessCuda(Implementation):
         try:
             import cupy as _cupy
         except ImportError as exc:
-            raise ImportError("cupy is not installed. Install xqsa with: pip install xqsa[cuda]") from exc
+            raise ImportError("cupy is not installed. Install xquad with: pip install xquad[cuda]") from exc
 
         if _cupy.cuda.runtime.getDeviceCount() == 0:
             raise RuntimeError("No NVIDIA CUDA GPU detected. The CUDA engine requires an NVIDIA GPU with CUDA support.")

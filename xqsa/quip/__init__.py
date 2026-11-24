@@ -100,7 +100,7 @@ builds a solver against a preset, ``aglais`` (the public testnet) or ``devnet``
 Signing is hybrid (sr25519 + FN-DSA-512): the chain's ``Signature`` is
 ``HybridTxSignature``, which ``substrate-interface`` cannot produce, so all
 crypto is delegated to the ``quip_signer`` extension and extrinsic assembly to
-:mod:`xqsa.quip.signing`. Install both with ``pip install xqsa[quip]`` (or
+:mod:`xqsa.quip.signing`. Install both with ``pip install xquad[quip]`` (or
 ``uv sync --extra quip``); ``quip_signer`` resolves a wheel on Linux and builds
 from its sdist with a local Rust toolchain elsewhere. It is lazy-imported, so
 every other xqsa solver installs and runs without it; only constructing
@@ -238,11 +238,11 @@ __all__ = [
     "MINEABLE_TOPOLOGIES_STORAGE",
 ]
 
-# Importable, with a warning, until QUI-1608 removes them in v0.6.0.
+# Importable, with a warning, until QUI-1608 removes them in v0.7.0.
 _DEPRECATED = {
     "QuipUnconfirmedError": (
         "QuipUnconfirmedError is deprecated and no longer produced since v0.4.5: a send submit() cannot settle "
-        "raises QuipSubmitIncompleteError; removed in v0.6.0"
+        "raises QuipSubmitIncompleteError; removed in v0.7.0"
     ),
 }
 

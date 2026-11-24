@@ -77,7 +77,7 @@ pub(crate) enum LoopKind {
 
 /// Storage for the slice copied by `ITER`.
 ///
-/// Vecs in xq-rs hold either `Int` or `Model` elements, so the loop frame
+/// Vecs hold either `Int` or `Model` elements, so the loop frame
 /// carries one of two parallel buffers rather than a `Vec<RegVal>` (which
 /// would force `RegVal::default()` placeholders into every slot).
 #[derive(Debug)]
@@ -174,6 +174,27 @@ fn resolve_iter_slice(
         });
     }
     Ok((start_us, start_us..end_us))
+}
+
+/// Refuse a constraint opcode on a model whose domain is not binary.
+///
+/// Every constraint expansion in `spec/xqvm/HLF.md` is derived under
+/// `x^2 = x`, which fails on a spin model and on an integer model with
+/// `k > 2`: there the same coefficients encode a different penalty and the
+/// model solves cleanly to a wrong answer. The check is on the declared
+/// domain, so an integer model with `k = 2` is refused too (use `BQMX`).
+/// Called right after the handler's register type check and before any index
+/// or operand check against the model, so a program that faults on an earlier
+/// check keeps that fault (`spec/xqvm/SPEC.md`, Error precedence).
+fn require_binary(pos: usize, reg: Register, m: &XqmxModel) -> Result<(), Error> {
+    match m.domain {
+        Domain::Binary => Ok(()),
+        domain => Err(Error::NonBinaryModel {
+            pos,
+            reg: reg.slot(),
+            domain,
+        }),
+    }
 }
 
 /// Convert a stack-supplied index to `usize` and bound it against `len`.
@@ -712,7 +733,9 @@ impl Vm {
     /// Execute a [`Program`] with a [`Tracer`].
     ///
     /// Behaves identically to [`run`](Self::run) but invokes `tracer.on_step`
-    /// after every instruction, providing a snapshot of the VM state.
+    /// after every instruction, providing a snapshot of the VM state, and
+    /// `tracer.poll` between instructions every [`Tracer::POLL_INTERVAL`]
+    /// metered steps when that interval is not zero.
     ///
     /// When `T` is [`NoopTracer`], the compiler eliminates all tracing
     /// overhead via dead-code elimination.
@@ -720,7 +743,7 @@ impl Vm {
     /// # Errors
     ///
     /// Returns [`Error`] on any runtime fault, or [`Error::TraceFailed`] if
-    /// the tracer callback returns an error.
+    /// `tracer.on_step` or `tracer.poll` returns an error.
     #[expect(
         clippy::arithmetic_side_effects,
         reason = "`self.steps < self.step_limit` is checked immediately above, so the step counter stops at u64::MAX rather than wrapping (`spec/xqvm/SPEC.md`'s Step budget)"
@@ -734,6 +757,8 @@ impl Vm {
         self.steps = 0;
         self.instructions = 0;
         self.memory_used = 0;
+        let mut next_poll = T::POLL_INTERVAL;
+        let mut base_limit = self.base_limit::<T>(next_poll);
 
         // Probe for the next instruction before charging: the limit bounds
         // instructions executed, so a program that ends -- HALT or end of
@@ -741,7 +766,13 @@ impl Vm {
         // succeeds, and `steps()` never counts the probe: the loop shape is
         // `while pc < len`.
         while let Some(item) = cursor.next_instruction() {
-            self.charge_steps_base()?;
+            // The base charge is checked against `base_limit`, the step
+            // limit lowered to the next poll, so a polling tracer adds no
+            // comparison to an instruction between polls.
+            if !self.try_charge_steps_base(base_limit) {
+                let next_pos = item.as_ref().ok().map(|&(pos, _)| pos);
+                base_limit = self.poll_then_charge_base(tracer, next_pos, &mut next_poll)?;
+            }
             self.instructions += 1;
             let (pos, instr) = item.map_err(Error::from)?;
 
@@ -786,10 +817,9 @@ impl Vm {
                     loop_depth: self.loop_stack.len(),
                 };
 
-                tracer.on_step(&state).map_err(|e| Error::TraceFailed {
-                    pos,
-                    message: format!("{e}"),
-                })?;
+                tracer
+                    .on_step(&state)
+                    .map_err(|e| Self::trace_failed(pos, &e))?;
 
                 result
             } else {
@@ -849,6 +879,51 @@ impl Vm {
         }
 
         Ok(())
+    }
+
+    /// The cold path of a base charge that failed `base_limit`: a poll is
+    /// due, the budget is spent, or both. Returns the next `base_limit`.
+    ///
+    /// The poll runs first, before the instruction at `next_pos` is charged,
+    /// and is skipped when that instruction failed to decode (`None`), since
+    /// the decode error ends the run anyway. The budget's own charge then
+    /// decides exactly as it does without a poll.
+    #[cold]
+    fn poll_then_charge_base<T: Tracer>(
+        &mut self,
+        tracer: &mut T,
+        next_pos: Option<usize>,
+        next_poll: &mut u64,
+    ) -> Result<u64, Error>
+    where
+        T::Error: core::fmt::Display,
+    {
+        if T::POLL_INTERVAL != 0 && self.steps >= *next_poll {
+            if let Some(pos) = next_pos {
+                tracer.poll().map_err(|e| Self::trace_failed(pos, &e))?;
+            }
+            *next_poll = self.steps.saturating_add(T::POLL_INTERVAL);
+        }
+        self.charge_steps_base()?;
+        Ok(self.base_limit::<T>(*next_poll))
+    }
+
+    /// The total [`run_trace`](Self::run_trace) checks a base charge
+    /// against: the step limit, lowered to `next_poll` when `T` polls.
+    fn base_limit<T: Tracer>(&self, next_poll: u64) -> u64 {
+        if T::POLL_INTERVAL == 0 {
+            self.step_limit
+        } else {
+            self.step_limit.min(next_poll)
+        }
+    }
+
+    /// The fault a tracer callback's error becomes, at the instruction `pos`.
+    fn trace_failed(pos: usize, error: &impl core::fmt::Display) -> Error {
+        Error::TraceFailed {
+            pos,
+            message: format!("{error}"),
+        }
     }
 }
 
@@ -926,6 +1001,20 @@ impl Vm {
     /// before the instruction is decoded, so it carries no position.
     fn charge_steps_base(&mut self) -> Result<(), Error> {
         self.charge_steps_at(None, metering::BASE_STEPS)
+    }
+
+    /// Charge the base cost if the total stays within `limit`, and report
+    /// whether it did. The run loop's fast path: on `false` nothing was
+    /// charged, and [`charge_steps_base`](Self::charge_steps_base) decides.
+    #[inline]
+    fn try_charge_steps_base(&mut self, limit: u64) -> bool {
+        match self.steps.checked_add(metering::BASE_STEPS) {
+            Some(total) if total <= limit => {
+                self.steps = total;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// The accumulation is exact, for the reason [`charge`](Self::charge)
@@ -1394,14 +1483,14 @@ impl Vm {
         let end = self.pop(pos)?;
         let start = self.pop(pos)?;
         // The register kind is discriminated before the skip, not after it:
-        // `ITER` carries a `read` effect on `reg` that the verifier's static
+        // `ITER` carries a `read` effect on `reg` that the checker's static
         // type system depends on, and skipping the loop without ever
         // resolving the register discards it. `spec/xqvm/ISA.md`'s `ITER` row
         // orders the steps register-read-before-skip and its error clause has
         // no emptiness carve-out. Returning `SkipLoop` first made
         // `INPUT r0 / PUSH 1 / PUSH 1 / ITER r0 / NEXT / ...` complete and
         // write outputs where 0.3.x aborted with a register-type fault, on a
-        // program the verifier admits because `INPUT` writes `RegType::Any`.
+        // program the checker admits because `INPUT` writes `RegType::Any`.
         self.require_vec(pos, reg)?;
         if start >= end {
             return Ok(StepResult::SkipLoop);
@@ -1948,9 +2037,9 @@ impl Vm {
         if !(0..64).contains(&b) {
             return Err(Error::InvalidShift { pos, amount: b });
         }
-        // Arithmetic (sign-preserving) right shift, matching xq-py: the sign
-        // bit is replicated, so negative values stay negative and `i64::MIN >> 1`
-        // halves the magnitude rather than overflowing.
+        // Arithmetic (sign-preserving) right shift, per `spec/xqvm/ISA.md`
+        // (`SHR`): the sign bit is replicated, so negative values stay negative
+        // and `i64::MIN >> 1` halves the magnitude rather than overflowing.
         self.push_stack(a >> b, pos)?;
         Ok(StepResult::Continue)
     }
@@ -2156,11 +2245,11 @@ impl Vm {
         let start_index = self.pop(pos)?;
         // Both registers are discriminated before the empty-capacity skip,
         // and before either is mutated. `SLACK` carries a `mutate` effect on
-        // both, and the verifier's static type system depends on it:
-        // `xqvm/src/verifier/reg_type.rs` requires `vec<int>` of each, and
+        // both, and the checker's static type system depends on it:
+        // `xqvm/src/checker/reg_type.rs` requires `vec<int>` of each, and
         // `RegType::Any` -- what `INPUT` writes -- satisfies that, so
         // `INPUT r0 / INPUT r1 / PUSH 0 / PUSH 0 / SLACK r0 r1` is
-        // verifier-clean and reaches here with two ints. Returning on
+        // checker-clean and reaches here with two ints. Returning on
         // `capacity <= 0` before touching either register discarded the
         // effect and halted Ok where the spec requires a fault. Same rule,
         // and same reason, as `ITER`'s register-read-before-skip.
@@ -2526,6 +2615,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        require_binary(pos, reg, m)?;
         // Both halves of `spec/xqvm/ISA.md`'s grid precondition, on the same
         // check the read-only grid opcodes use. A model with no grid has no
         // row to constrain, and a row outside `[0, rows)` names variables the
@@ -2557,6 +2647,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        require_binary(pos, reg, m)?;
         // The grid precondition, as in `exec_one_hot_r`. A column outside
         // `[0, cols)` cannot wrap the way a row can -- nothing multiplies by
         // it -- but its cells would still land outside the addressed column,
@@ -2582,6 +2673,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        require_binary(pos, reg, m)?;
         // Penalise x_i * x_j = 1 (mutual exclusion).
         let i_idx = bounded_index(pos, i, m.size)?;
         let j_idx = bounded_index(pos, j, m.size)?;
@@ -2605,6 +2697,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        require_binary(pos, reg, m)?;
         // Penalise x_i=1, x_j=0: penalty * x_i * (1 - x_j) = penalty*x_i - penalty*x_i*x_j.
         let i_idx = bounded_index(pos, i, m.size)?;
         let j_idx = bounded_index(pos, j, m.size)?;
@@ -2712,6 +2805,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        require_binary(pos, model, m)?;
         let needed = model_size(needed, pos)?;
         if needed > m.size {
             m.size = needed;
@@ -2778,6 +2872,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        require_binary(pos, model, m)?;
         if num_slacks == 0 {
             let unit_coeffs = vec![1i64; n];
             let idx_us = indices_to_usize(&idx_vec, pos, m.size)?;
@@ -2874,6 +2969,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        require_binary(pos, model, m)?;
         if num_slacks == 0 {
             let idx_us = indices_to_usize(&idx_vec, pos, m.size)?;
             expand_equality(m, &idx_us, &coeff_vec, k, penalty, pos)?;
@@ -2910,6 +3006,7 @@ impl Vm {
                 expected: "model",
                 got: e.actual.kind_name(),
             })?;
+        require_binary(pos, model, m)?;
         let ua =
             usize::try_from(var_a)
                 .ok()
@@ -2943,17 +3040,17 @@ impl Vm {
         model: Register,
         sample: Register,
     ) -> Result<StepResult, Error> {
-        // Per `spec/xqvm/SPEC.md` (`ENERGY`) and the xq-py reference
-        // (`compute_energy` in `xqvm/core/xqmx.py`), the model register must
-        // hold a Model and the sample register must hold a Sample. A Model
-        // passed in the sample slot is rejected -- that "model-as-sample"
-        // shortcut existed only in xq-rs and produced different programs
-        // from xq-py for the same source.
+        // Per `spec/xqvm/ISA.md` (`ENERGY`), the model register must hold a
+        // Model and the sample register must hold a Sample; a Model passed in
+        // the sample slot is rejected. `spec/xqvm/HLF.md` (`ENERGY`
+        // Computation) gives the formula.
         //
-        // Both halves of this are O(model): the sample is copied out of its
-        // register and every coefficient is accumulated. Charge for both
-        // before either happens, or a program can buy an arbitrarily large
-        // model walk for one step (QUI-1056).
+        // Both halves of this are O(model): every sample element is read
+        // and every coefficient is accumulated. Charge for both before
+        // either happens, or a program can buy an arbitrarily large model
+        // walk for one step (QUI-1056). The sample is read in place, not
+        // copied: a copy would be a heap allocation the memory budget never
+        // sees.
         // The model register is checked before the sample register, in
         // operand order, so that a program holding the wrong type in both
         // sees the model register's error. The order is normative -- see `spec/xqvm/METERING.md` (Conformance).
@@ -2978,14 +3075,10 @@ impl Vm {
             }
         };
         self.charge_steps(pos, model_eval_steps(widen(sample_len), widen(terms)))?;
-        let sample_values: Vec<i64> = match self.reg(sample) {
-            RegVal::Sample(s) => s.values.clone(),
-            _ => unreachable!("sample register type checked above"),
+        let (RegVal::Model(m), RegVal::Sample(s)) = (self.reg(model), self.reg(sample)) else {
+            unreachable!("model and sample register types checked above")
         };
-        let RegVal::Model(m) = self.reg(model) else {
-            unreachable!("model register type checked above")
-        };
-        let energy = m.checked_energy(&sample_values).map_err(at_pos(pos))?;
+        let energy = m.checked_energy(&s.values).map_err(at_pos(pos))?;
         self.push_stack(energy, pos)?;
         Ok(StepResult::Continue)
     }
@@ -3388,6 +3481,128 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    /// Tracer that records nothing and polls every 10 steps, refusing the
+    /// `stop_at`-th poll.
+    struct PollingTracer {
+        polls: u32,
+        stop_at: Option<u32>,
+    }
+
+    impl Tracer for PollingTracer {
+        type Error = String;
+
+        const ENABLED: bool = false;
+        const POLL_INTERVAL: u64 = 10;
+
+        fn on_step(&mut self, _state: &StepState<'_>) -> Result<(), Self::Error> {
+            unreachable!("ENABLED is false")
+        }
+
+        fn poll(&mut self) -> Result<(), Self::Error> {
+            self.polls = self.polls.saturating_add(1);
+            if Some(self.polls) == self.stop_at {
+                Err(format!("stopped at poll {}", self.polls))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    /// `count` `PUSH 1`s, then `HALT`.
+    fn pushes(count: usize) -> crate::bytecode::Program {
+        let mut b = InstructionBuilder::new();
+        for _ in 0..count {
+            let _ = b.emit_push(1);
+        }
+        let _ = b.emit_halt();
+        b.build().unwrap()
+    }
+
+    #[test]
+    fn poll_runs_every_interval_without_tracing() {
+        // 35 one-step pushes reach steps 10, 20 and 30; HALT ends the run
+        // before a fourth poll could fall due.
+        let mut vm = Vm::new();
+        let mut tracer = PollingTracer {
+            polls: 0,
+            stop_at: None,
+        };
+        vm.run_trace(&mut tracer, &pushes(35)).unwrap();
+        assert_eq!(tracer.polls, 3);
+        assert_eq!(vm.stack().len(), 35);
+    }
+
+    #[test]
+    fn poll_error_stops_between_instructions() {
+        let mut vm = Vm::new();
+        let mut tracer = PollingTracer {
+            polls: 0,
+            stop_at: Some(2),
+        };
+        let err = vm.run_trace(&mut tracer, &pushes(35)).unwrap_err();
+        // The second poll falls before the 21st push, at offset 40: `PUSH 1`
+        // encodes in two bytes. Twenty pushes have run; the 21st has not been
+        // charged.
+        assert!(
+            matches!(&err, Error::TraceFailed { pos: 40, message } if message == "stopped at poll 2"),
+            "expected TraceFailed at 40, got {err:?}",
+        );
+        assert_eq!(vm.stack().len(), 20);
+        assert_eq!(vm.instructions(), 20);
+        assert_eq!(vm.steps(), 20);
+    }
+
+    #[test]
+    fn step_limit_below_the_next_poll_still_binds() {
+        // A budget of 15 sits between the first poll (step 10) and the
+        // second (step 20): the run polls once, then faults at the budget
+        // exactly as it would without a polling tracer.
+        let mut vm = Vm::new();
+        let _ = vm.set_step_limit(15);
+        let mut tracer = PollingTracer {
+            polls: 0,
+            stop_at: None,
+        };
+        let err = vm.run_trace(&mut tracer, &pushes(35)).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::StepLimitExceeded {
+                    pos: None,
+                    used: 15,
+                    limit: 15,
+                    ..
+                }
+            ),
+            "expected StepLimitExceeded at 15, got {err:?}",
+        );
+        assert_eq!(tracer.polls, 1);
+        assert_eq!(vm.stack().len(), 15);
+    }
+
+    #[test]
+    fn zero_poll_interval_never_polls() {
+        struct NeverPolled;
+
+        impl Tracer for NeverPolled {
+            type Error = core::convert::Infallible;
+
+            const ENABLED: bool = false;
+
+            fn on_step(&mut self, _state: &StepState<'_>) -> Result<(), Self::Error> {
+                Ok(())
+            }
+
+            fn poll(&mut self) -> Result<(), Self::Error> {
+                unreachable!("POLL_INTERVAL defaults to 0")
+            }
+        }
+
+        let mut vm = Vm::new();
+        vm.run_trace(&mut NeverPolled, &pushes(35)).unwrap();
+        assert_eq!(vm.stack().len(), 35);
     }
 
     #[test]

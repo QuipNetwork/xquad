@@ -23,7 +23,7 @@ CUDA kernel on identical seeded instances with an identical RNG stream and
 fixed beta range, so trajectories match bit-for-bit. Reports per-buffer
 analytic sizes, measured mempool peaks, and median wall times.
 
-Requires an NVIDIA GPU + the xqsa[cuda] extra. Results are written as JSON
+Requires an NVIDIA GPU + the xquad[cuda] extra. Results are written as JSON
 to scratch/spin_packing/ (not committed); see the QUI-704 findings doc.
 
 Usage:

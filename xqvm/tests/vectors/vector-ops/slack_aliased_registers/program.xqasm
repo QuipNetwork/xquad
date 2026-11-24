@@ -5,7 +5,7 @@
 ; register the append order becomes observable. SLACK fills the indices
 ; register in one loop and then the coefficients register in a second,
 ; giving [100, 101, 1, 2]; a single interleaving loop would give
-; [100, 1, 101, 2]. The program is verifier-clean, and slack_append and
+; [100, 1, 101, 2]. The program is checker-clean, and slack_append and
 ; slack_basic both use two distinct registers, so this is the vector that
 ; covers the aliased case.
 ;

@@ -1,0 +1,17 @@
+; onehotc_spin_model: ONEHOTC on a spin {-1, +1} model raises NonBinaryModel.
+;
+; ONEHOTC writes a one-hot penalty over grid column 0, and spec/xqvm/HLF.md derives
+; every constraint expansion under x^2 = x, which fails for spin variables
+; and for integer variables with k > 2. The check follows the declared domain
+; (only a model whose domain is binary passes), so spec/xqvm/ISA.md has ONEHOTC raise NonBinaryModel instead. Every other
+; operand is valid, so the domain check alone decides.
+
+PUSH 4
+SQMX r0          ; spin model, 4 variables
+PUSH 2           ; rows
+PUSH 2           ; cols
+RESIZE r0        ; 2x2 grid, so the grid precondition holds
+PUSH 0           ; col
+PUSH 1           ; penalty
+ONEHOTC r0
+HALT

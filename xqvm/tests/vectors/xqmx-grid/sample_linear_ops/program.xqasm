@@ -7,7 +7,7 @@
 ;
 ; This vector regresses the fix for QUI-461's §281 linear
 ; widening (pre-fix: Sample was rejected here with
-; RegisterType { expected: "model" }). It also regresses the verifier rule
+; RegisterType { expected: "model" }). It also regresses the checker rule
 ; QUI-1168 corrected: reg_type.rs required a Model register for all three
 ; linear opcodes, so this program assembled and ran but could not pass
 ; `xquad vm check`.

@@ -20,7 +20,7 @@ Deprecated alias for :mod:`xqsa.quip.codec`.
 
 Importing ``xqsa.quip_codec`` warns and returns the ``xqsa.quip.codec`` module
 itself, so attribute access and patch targets keep working. The shim is removed
-in v0.6.0.
+in v0.7.0.
 """
 
 import importlib

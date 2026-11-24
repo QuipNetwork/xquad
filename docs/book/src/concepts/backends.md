@@ -9,11 +9,11 @@ choice.
 
 | Name | Class | Where it solves | Install |
 |---|---|---|---|
-| `cpu` (default) | `SolverCPU` | Locally, on the CPU: simulated annealing | base `xqsa` |
-| `dwave` | `SolverDWave` | D-Wave Leap cloud: physical quantum annealing hardware | `xqsa[dwave]` |
-| `cuda` | `SolverGPU(engine="cuda")` | Locally, on an NVIDIA GPU: simulated annealing | `xqsa[cuda]` |
-| `metal` | `SolverGPU(engine="metal")` | Locally, on an Apple GPU: simulated annealing or block Gibbs sampling | `xqsa[metal]` |
-| `quip` | `SolverQuip` | The Quip network: submitted to a decentralised compute market, solved by a miner you do not control | `xqsa[quip]` |
+| `cpu` (default) | `SolverCPU` | Locally, on the CPU: simulated annealing | base `xquad` |
+| `dwave` | `SolverDWave` | D-Wave Leap cloud: physical quantum annealing hardware | `xquad[dwave]` |
+| `cuda` | `SolverGPU(engine="cuda")` | Locally, on an NVIDIA GPU: simulated annealing | `xquad[cuda]` |
+| `metal` | `SolverGPU(engine="metal")` | Locally, on an Apple GPU: simulated annealing or block Gibbs sampling | `xquad[metal]` |
+| `quip` | `SolverQuip` | The Quip network: submitted to a decentralised compute market, solved by a miner you do not control | `xquad[quip]` |
 
 `build_solver(name, seed=...)` constructs any of the five from this name,
 so a caller can stay backend-agnostic. `seed` reaches the three classical

@@ -84,6 +84,23 @@ impl<N: Eq + Hash + Clone> Cfg<N> {
         self.succs.get(node).map(Vec::as_slice).unwrap_or_default()
     }
 
+    /// Nodes reachable from program entry, independent of any analysis value.
+    /// Each node enters the worklist once; every outgoing edge is visited once.
+    pub(crate) fn reachable_nodes(&self) -> HashSet<N> {
+        let mut reachable = HashSet::new();
+        let mut pending = Vec::new();
+        let _ = reachable.insert(self.entry.clone());
+        pending.push(self.entry.clone());
+        while let Some(node) = pending.pop() {
+            for next in self.successors(&node) {
+                if reachable.insert(next.clone()) {
+                    pending.push(next.clone());
+                }
+            }
+        }
+        reachable
+    }
+
     /// Direct predecessors of `node`.  Returns `&[]` if `node` is not in the graph.
     ///
     /// This list only holds edges derived from the instruction stream. The
@@ -139,10 +156,9 @@ impl<N: Eq + Hash + Clone> CfgBuilder<N> {
         let succs = self.succs.entry(from.clone()).or_default();
         if !succs.contains(&to) {
             succs.push(to.clone());
-        }
-        let preds = self.preds.entry(to).or_default();
-        if !preds.contains(&from) {
-            preds.push(from);
+            // The reverse edge is new exactly when the forward edge is new.
+            // Searching high-fan-in predecessor lists would be quadratic.
+            self.preds.entry(to).or_default().push(from);
         }
         self
     }
@@ -162,5 +178,58 @@ impl<N: Eq + Hash + Clone> CfgBuilder<N> {
         if self.seen.insert(node.clone()) {
             self.nodes.push(node);
         }
+    }
+}
+
+#[cfg(test)]
+mod construction_tests {
+    use super::*;
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static COMPARISONS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    #[derive(Clone, Eq)]
+    struct Counted(usize);
+
+    impl Hash for Counted {
+        fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+            self.0.hash(state);
+        }
+    }
+
+    impl PartialEq for Counted {
+        fn eq(&self, other: &Self) -> bool {
+            COMPARISONS.set(COMPARISONS.get().saturating_add(1));
+            self.0 == other.0
+        }
+    }
+
+    #[test]
+    fn high_fan_in_construction_is_linear_and_preserves_edge_order() {
+        let n = 1024usize;
+        COMPARISONS.set(0);
+        let mut builder = Cfg::builder(Counted(0), Counted(n));
+        for node in 0..n {
+            builder = builder.edge(Counted(node), Counted(n));
+            builder = builder.edge(Counted(node), Counted(n));
+        }
+        let cfg = builder.build();
+        let comparisons = COMPARISONS.get();
+        assert!(comparisons < n.saturating_mul(32), "{comparisons}");
+        assert_eq!(cfg.predecessors(&Counted(n)).len(), n);
+        for (expected, actual) in cfg.predecessors(&Counted(n)).iter().enumerate() {
+            assert_eq!(actual.0, expected);
+            assert_eq!(cfg.successors(actual).len(), 1);
+        }
+    }
+
+    #[test]
+    fn duplicate_self_edges_preserve_both_adjacency_lists() {
+        let cfg = Cfg::builder(0, 0).edge(0, 0).edge(0, 0).build();
+        assert_eq!(cfg.nodes(), &[0]);
+        assert_eq!(cfg.successors(&0), &[0]);
+        assert_eq!(cfg.predecessors(&0), &[0]);
     }
 }

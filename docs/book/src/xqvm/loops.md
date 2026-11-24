@@ -105,7 +105,8 @@ the first release; a program past it fails with `LoopStackOverflow`. Real
 nesting never approaches that. The cap exists because only `NEXT` pops a
 frame, so a back-edge that re-enters a loop header without running its
 `NEXT` grows the stack once per execution and would otherwise be bounded
-only by the step budget.
+only by the step budget. Only an unchecked program can do that: the default
+checker rejects the jump such a back-edge needs (phase 1d).
 
 ```asm
 PUSH 0

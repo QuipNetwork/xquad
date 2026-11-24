@@ -20,12 +20,10 @@
 //! The main entry point is [`check_uninit_registers`], which catches reads of
 //! registers that are not definitely initialized on all paths to the read site.
 //!
-//! This complements [`crate::dataflow::register`]: the type-state pass uses a
-//! permissive `Any`-meet so that registers written on only one branch of a
-//! conditional do not produce false positives at the join.  As a consequence,
-//! it misses the case where a register is genuinely uninitialized on the taken
-//! path.  This pass uses AND-meet instead, so a register must be written on
-//! **every** predecessor path to be considered initialized.
+//! This agrees with the initialization projection of
+//! [`crate::dataflow::register`]: a register must be written on **every**
+//! predecessor path to be considered initialized. It remains independently
+//! usable in custom pipelines.
 //!
 //! # Lattice
 //!
@@ -47,20 +45,19 @@
 use alloc::vec::Vec;
 
 #[cfg(feature = "std")]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[cfg(not(feature = "std"))]
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 
+use crate::CheckerError;
 use crate::Program;
-use crate::VerifierError;
 use crate::bytecode::InstructionStream;
+use crate::checker::reg_type::{RegType, check_reads, write_effect};
 use crate::dataflow::analysis::Analysis;
-use crate::dataflow::bytecode::{BlockId, CfgContext, build_cfg};
+use crate::dataflow::bytecode::{BlockId, CfgContext, block_ranges, build_cfg};
 use crate::dataflow::direction::Forward;
 use crate::dataflow::lattice::Lattice;
-use crate::dataflow::solver::solve;
-use crate::verifier::reg_type::{RegType, check_reads, write_effect};
 
 // ---------------------------------------------------------------------------
 // InitValue lattice
@@ -81,13 +78,6 @@ use crate::verifier::reg_type::{RegType, check_reads, write_effect};
 pub struct InitValue([u64; 4]);
 
 impl InitValue {
-    /// Whether register `slot` is definitely initialized.
-    pub(crate) fn is_init(&self, slot: u8) -> bool {
-        let word = usize::from(slot) / 64;
-        let bit = u32::from(slot & 63);
-        self.0.get(word).is_some_and(|&w| (w >> bit) & 1 == 1)
-    }
-
     /// Mark register `slot` as definitely initialized.
     pub(crate) fn set_init(&mut self, slot: u8) {
         let word = usize::from(slot) / 64;
@@ -130,6 +120,8 @@ pub struct InitAnalysis {
     /// `true` = register is written (any type except `Unset`).
     /// `false` = register is cleared (`DROP`).
     block_inits: HashMap<BlockId, Vec<(u8, bool)>>,
+    /// Reachability is distinct from the lattice top.
+    reachable: HashSet<BlockId>,
 }
 
 impl Analysis for InitAnalysis {
@@ -142,6 +134,9 @@ impl Analysis for InitAnalysis {
     }
 
     fn transfer(&self, node: &BlockId, input: &InitValue) -> InitValue {
+        if !self.reachable.contains(node) {
+            return InitValue::top();
+        }
         let mut state = input.clone();
         if let Some(inits) = self.block_inits.get(node) {
             for &(slot, initialized) in inits {
@@ -181,41 +176,28 @@ fn collect_block_inits(code: &[u8], block_start: usize, block_end: usize) -> Vec
 
 /// Run the CFG-based forward must-init analysis using a pre-built CFG.
 ///
-/// Detects [`VerifierError::ReadUnsetRegister`] for registers that are not
+/// Detects [`CheckerError::ReadUnsetRegister`] for registers that are not
 /// definitely written on every path to the read site.  This includes the case
 /// that [`crate::dataflow::register::check_register_types`] misses: a register
 /// written on only one branch of a conditional, then read after the join.
 ///
-/// Unreachable blocks (entry state == `top = [u64::MAX; 4]`) are skipped to
-/// avoid false positives from dead code.
+/// Unreachable blocks are skipped using CFG reachability. An all-initialized
+/// state can be reachable and must still be replayed.
 ///
 /// A `[RegType; 256]` buffer is allocated once per block (not per instruction)
 /// and updated incrementally as writes are observed.
 ///
 /// # Errors
 ///
-/// Returns the first [`VerifierError::ReadUnsetRegister`] found in program
+/// Returns the first [`CheckerError::ReadUnsetRegister`] found in program
 /// order across reachable blocks.
 pub(crate) fn check_uninit_registers_with_cfg(
     program: &Program,
     cfg: &crate::dataflow::cfg::Cfg<BlockId>,
-) -> Result<(), VerifierError> {
+) -> Result<(), CheckerError> {
     let code = program.code();
 
-    let mut starts: Vec<BlockId> = cfg.nodes().to_vec();
-    starts.sort_unstable();
-    let ranges: Vec<(usize, usize)> = starts
-        .iter()
-        .enumerate()
-        .map(|(i, &s)| {
-            #[expect(
-                clippy::arithmetic_side_effects,
-                reason = "`i` is an `enumerate` index into `starts`, so `i + 1` is at most its length"
-            )]
-            let end = starts.get(i + 1).copied().unwrap_or(code.len());
-            (s, end)
-        })
-        .collect();
+    let ranges = block_ranges(cfg, code);
 
     let block_inits: HashMap<BlockId, Vec<(u8, bool)>> = ranges
         .iter()
@@ -229,26 +211,29 @@ pub(crate) fn check_uninit_registers_with_cfg(
         })
         .collect();
 
-    let analysis = InitAnalysis { block_inits };
-    let result = solve(&analysis, cfg);
-
-    let top = InitValue::top();
+    let analysis = InitAnalysis {
+        block_inits,
+        reachable: cfg.reachable_nodes(),
+    };
+    let result = super::sparse::solve(cfg, &analysis.block_inits)?;
 
     for &(block_start, block_end) in &ranges {
-        let before = result
-            .before(&block_start)
-            .cloned()
-            .unwrap_or_else(InitValue::top);
-
-        if before == top {
+        if !analysis.reachable.contains(&block_start) {
             continue;
         }
+
+        // Every CFG node has a fact; a missing one is a checker defect, and
+        // falling back to "initialised" would accept every read in the block.
+        let before = result
+            .before(block_start)
+            .copied()
+            .ok_or(CheckerError::AnalysisBudgetExceeded)?;
 
         // Build the reg-type view once per block from the block's entry state,
         // then update it incrementally as writes are encountered.
         let mut regs = [RegType::Any; 256];
         for slot in 0u8..=255 {
-            if !before.is_init(slot)
+            if !before.get(usize::from(slot)).copied().unwrap_or(true)
                 && let Some(e) = regs.get_mut(usize::from(slot))
             {
                 *e = RegType::Unset;
@@ -287,8 +272,8 @@ pub(crate) fn check_uninit_registers_with_cfg(
 ///
 /// # Errors
 ///
-/// Returns the first [`VerifierError::ReadUnsetRegister`] found.
-pub fn check_uninit_registers(program: &Program) -> Result<(), VerifierError> {
+/// Returns the first [`CheckerError::ReadUnsetRegister`] found.
+pub fn check_uninit_registers(program: &Program) -> Result<(), CheckerError> {
     let code = program.code();
     if code.is_empty() {
         return Ok(());
@@ -351,7 +336,7 @@ mod tests {
 
     // The key case this pass adds: register written on only the fall-through
     // path, then read after the join.  The type-state pass misses this because
-    // meet(Unset, Int) = Any (permissive).  This pass uses AND-meet:
+    // Both the type-state meet and this AND-meet preserve a missing write:
     // meet(false, true) = false, so the read is correctly flagged.
     //
     // Layout: JumpI1(0); STOW r0; TARGET(0): LOAD r0; HALT

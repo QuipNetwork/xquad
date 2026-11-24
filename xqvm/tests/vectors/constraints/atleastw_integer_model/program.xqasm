@@ -1,0 +1,25 @@
+; atleastw_integer_model: ATLEASTW on an integer {0, 1, 2} model raises NonBinaryModel.
+;
+; ATLEASTW writes the penalty for 2*x0 + 3*x1 >= 2, and spec/xqvm/HLF.md derives
+; every constraint expansion under x^2 = x, which fails for spin variables
+; and for integer variables with k > 2. The check follows the declared domain
+; (only a model whose domain is binary passes), so spec/xqvm/ISA.md has ATLEASTW raise NonBinaryModel instead. Every other
+; operand is valid, so the domain check alone decides.
+
+PUSH 4
+PUSH 3
+XQMX r0          ; integer model, k = 3, 4 variables
+VECI r1          ; indices [0, 1]
+PUSH 0
+VECPUSH r1
+PUSH 1
+VECPUSH r1
+VECI r2          ; weights [2, 3]
+PUSH 2
+VECPUSH r2
+PUSH 3
+VECPUSH r2
+PUSH 2           ; k
+PUSH 1           ; penalty
+ATLEASTW r0 r1 r2
+HALT

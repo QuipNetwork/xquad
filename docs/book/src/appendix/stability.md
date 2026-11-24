@@ -9,11 +9,12 @@ current process discipline, not a promise that anything is frozen.
 
 ## What Is Versioned Together
 
-Six packages ship from this repository, two to crates.io (`xqvm`,
-`xqasm`) and four to PyPI (`xqffi`, `xqcp`, `xqsa`, `xquad`). All six
-always carry the same version. They release together: one release MR
-bumps every version, one tag triggers the one pipeline that publishes all
-six, and the changelog is generated from that same tag.
+Three packages ship from this repository, two to crates.io (`xqvm`,
+`xqasm`) and one to PyPI (`xquad`, which carries `xqffi`, `xqcp` and
+`xqsa`). All three always carry the same version. They release together:
+one release MR bumps every version, one tag triggers the one pipeline
+that publishes all three, and the changelog is generated from that same
+tag.
 There is no independent release cadence per package today.
 
 ## What CI Actually Guards
@@ -51,8 +52,13 @@ semver as Cargo reads it, where the leftmost non-zero field is the major: before
 That policy governs the crate versions -- it is not a commitment that nothing
 observable will ever break before `1.0`. Treat every `0.x` release as a
 snapshot, not a foundation to build on without re-checking. The breaking
+changes in v0.6.0 are listed in [Migrating from 0.5 to
+0.6](migration-0.6.md). The breaking
 changes in v0.5.0 are listed in [Migrating from 0.4 to
-0.5](migration-0.5.md). If your use
+0.5](migration-0.5.md). The book keeps the migration guides for the
+last three minor releases. To read an older one, check out the latest
+tag of the release it covers, as described in [Reading the
+Documentation for an Older Release](#reading-the-documentation-for-an-older-release). If your use
 case needs a stability guarantee this project does not yet make, [file an
 issue](https://gitlab.com/quip.network/xquad/-/issues) against the
 repository rather than assuming one.

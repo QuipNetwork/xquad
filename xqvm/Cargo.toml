@@ -1,7 +1,7 @@
 [package]
 name                 = "xqvm"
 description          = "X-Quadratic Virtual Machine -- bytecode interpreter for the XQuad Toolchain"
-version              = "0.5.3-dev"
+version              = "0.6.0"
 license.workspace    = true
 repository.workspace = true
 edition              = "2024"
@@ -27,7 +27,7 @@ std = [
 [dependencies]
 crc32fast = { version = "1.5", default-features = false }
 # hashbrown provides no_std-compatible HashMap/HashSet used by the dataflow/
-# verifier modules. Declared explicitly because Rust does not allow using
+# checker modules. Declared explicitly because Rust does not allow using
 # transitive dependencies directly.
 hashbrown           = { version = "0.15", default-features = false, features = [ "default-hasher" ] }
 pastey.workspace    = true

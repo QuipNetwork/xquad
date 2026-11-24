@@ -767,7 +767,7 @@ def test_default_spec_id_constant() -> None:
 class TestIsingEnergyMilli:
     """The chain-energy canary helper matches the authoritative energy for SPIN."""
 
-    def test_matches_compute_energy_times_milli(self) -> None:
+    def test_matches_model_energy_times_milli(self) -> None:
         """For a SPIN model, ising_energy_milli == model.energy * MILLI_SCALE."""
         model = XqmxModel.spin(2)
         model.set_linear(0, 1)
@@ -1270,7 +1270,7 @@ class TestSolverQuipGuards:
         monkeypatch.setitem(sys.modules, "substrateinterface", None)
         from xqsa.quip import SolverQuip
 
-        with pytest.raises(ImportError, match=r"xqsa\[quip\]"):
+        with pytest.raises(ImportError, match=r"xquad\[quip\]"):
             SolverQuip(url="ws://fake", seed=VALID_SEED)
 
     def test_missing_quip_signer(self, monkeypatch) -> None:

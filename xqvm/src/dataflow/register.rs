@@ -39,7 +39,7 @@
 //! | `T` | `T` | `T` (same type, kept) |
 //! | `Model`/`Sample`/`Grid` | ditto | `Grid` (the shared grid surface) |
 //! | `VecInt`/`VecXqmx`/`AnyVec` | ditto | `AnyVec` (the shared vec surface) |
-//! | `Unset` | `T` | `Any` (permissive; see below) |
+//! | `Unset` | `T` | `Unset` (possibly unwritten on some path) |
 //! | `T` | `U` (T ≠ U) | `Conflict` (nothing shared but non-unset-ness) |
 //!
 //! The join keeps what both sides share, and never more. `Any` satisfies
@@ -58,36 +58,33 @@
 //! `Any` where `meet(Model, meet(Sample, Int))` is `Model`, and a third
 //! branch of an unrelated type reopens the bypass the pair rows close.
 //!
-//! `Unset` is the one row left out of that: `meet(Unset, Int) = Any`, so a
-//! register written on only one branch is treated as `Any` (not `Unset`) at
-//! the join and reads after the join are not flagged here. That row is not a
-//! way back in, because [`UninitRegisterPhase`] rejects every read of a
-//! register left unset on any path, and it runs on the same program. Its
-//! cost is that this one row is not associative, so a join mixing an
-//! unwritten branch with two related types can be rejected by either phase
-//! depending on edge order. Both outcomes reject.
+//! `Unset` is absorbing: a register possibly unwritten on any incoming path
+//! is possibly unwritten after the join. The dedicated must-init analysis
+//! agrees with this projection and remains useful as a standalone phase.
+//! The full order is `Any` above the five concrete types, `Model`/`Sample`
+//! above `Grid`, `VecInt`/`VecXqmx` above `AnyVec`, `Int`/`Grid`/`AnyVec`
+//! above `Conflict`, and `Conflict` above `Unset`. A coordinate descends strictly at most four times.
 //!
-//! [`UninitRegisterPhase`]: crate::verifier::UninitRegisterPhase
-
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
 #[cfg(feature = "std")]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[cfg(not(feature = "std"))]
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 
+use crate::CheckerError;
 use crate::Program;
-use crate::VerifierError;
 use crate::bytecode::InstructionStream;
+use crate::checker::reg_type::{RegType, apply_writes, check_reads, write_effect};
 use crate::dataflow::analysis::Analysis;
-use crate::dataflow::bytecode::{BlockId, CfgContext, build_cfg};
+use crate::dataflow::bytecode::{BlockId, CfgContext, block_ranges, build_cfg};
 use crate::dataflow::cfg::Cfg;
 use crate::dataflow::direction::Forward;
 use crate::dataflow::lattice::Lattice;
-use crate::dataflow::solver::solve;
-use crate::verifier::reg_type::{RegType, apply_writes, check_reads, write_effect};
+#[cfg(test)]
+use crate::dataflow::solver::{solve, visit_limit};
 
 // ---------------------------------------------------------------------------
 // RegTypeValue lattice
@@ -117,9 +114,8 @@ impl Lattice for RegTypeValue {
 
 /// Per-register meet: `Any` is the top element (identity); two concrete types
 /// meet to what they share, which is `Grid` or `AnyVec` for the two related
-/// pairs and `Conflict` for everything else. `Unset` against a concrete type
-/// is the one row that still meets to `Any`. See the module docs' meet table.
-fn meet_reg(a: RegType, b: RegType) -> RegType {
+/// pairs and `Conflict` for unrelated initialized types. `Unset` is bottom.
+pub(super) fn meet_reg(a: RegType, b: RegType) -> RegType {
     use RegType as T;
     match (a, b) {
         (T::Any, x) | (x, T::Any) => x,
@@ -128,10 +124,8 @@ fn meet_reg(a: RegType, b: RegType) -> RegType {
         // satisfies everything.
         (T::Model | T::Sample | T::Grid, T::Model | T::Sample | T::Grid) => T::Grid,
         (T::VecInt | T::VecXqmx | T::AnyVec, T::VecInt | T::VecXqmx | T::AnyVec) => T::AnyVec,
-        // A register written on only one branch stays permissive here; the
-        // must-init pass is what rejects the read. Keeping this row above
-        // the catch-all is what stops `Conflict` from swallowing it.
-        (T::Unset, _) | (_, T::Unset) => T::Any,
+        // A missing write on either path survives the join.
+        (T::Unset, _) | (_, T::Unset) => T::Unset,
         // Nothing in common: `NonUnset` is all that survives the join.
         _ => T::Conflict,
     }
@@ -148,6 +142,8 @@ pub struct RegTypeAnalysis {
     /// Only registers actually written appear here; unwritten registers carry
     /// their incoming value unchanged through the transfer function.
     block_writes: HashMap<BlockId, Vec<(u8, RegType)>>,
+    /// Reachability is distinct from the lattice top.
+    reachable: HashSet<BlockId>,
 }
 
 impl Analysis for RegTypeAnalysis {
@@ -160,15 +156,9 @@ impl Analysis for RegTypeAnalysis {
     }
 
     fn transfer(&self, node: &BlockId, input: &RegTypeValue) -> RegTypeValue {
-        // A block no path reaches contributes nothing to a join. Its input is
-        // the meet over an empty or equally unreachable predecessor set, which
-        // is `top` -- the same test the replay loop uses to skip it -- and the
-        // boundary node is excluded because its input is the all-`Unset`
-        // boundary value, never `top`. Applying the writes of dead code here
-        // would poison every join it falls through into: the `VECI r0` after
-        // an unconditional `JUMP` would meet with the live `Model` and answer
-        // `Conflict`, rejecting a program whose only fault is unreachable.
-        if input == &RegTypeValue::top() {
+        // A reachable join can have every register at Any. Only actual
+        // dead blocks must contribute the meet identity without writes.
+        if !self.reachable.contains(node) {
             return RegTypeValue::top();
         }
         let mut state = input.clone();
@@ -207,47 +197,29 @@ fn collect_block_writes(code: &[u8], block_start: usize, block_end: usize) -> Ve
     writes
 }
 
-/// Produce a sorted list of `(block_start, block_end)` pairs from CFG nodes.
-fn block_ranges(cfg: &Cfg<BlockId>, code_len: usize) -> Vec<(usize, usize)> {
-    let mut starts: Vec<BlockId> = cfg.nodes().to_vec();
-    starts.sort_unstable();
-    starts
-        .iter()
-        .enumerate()
-        .map(|(i, &s)| {
-            #[expect(
-                clippy::arithmetic_side_effects,
-                reason = "`i` is an `enumerate` index into `starts`, so `i + 1` is at most its length"
-            )]
-            let end = starts.get(i + 1).copied().unwrap_or(code_len);
-            (s, end)
-        })
-        .collect()
-}
-
 // ---------------------------------------------------------------------------
 // check_register_types
 // ---------------------------------------------------------------------------
 
 /// Run the CFG-based forward register type-state analysis using a pre-built CFG.
 ///
-/// Detects [`VerifierError::ReadUnsetRegister`] and
-/// [`VerifierError::RegisterTypeMismatch`] errors.  Unreachable blocks
-/// (entry state equals `[Any; 256]`) are skipped.
+/// Detects [`CheckerError::ReadUnsetRegister`] and
+/// [`CheckerError::RegisterTypeMismatch`] errors. Blocks not reachable from program entry are skipped.
+/// A reachable all-Any input is still transferred and replayed.
 ///
 /// Callers running multiple analyses should use this variant with a shared
 /// [`Cfg`] to avoid redundant construction.
 ///
 /// # Errors
 ///
-/// Returns the first [`VerifierError`] found in program order across reachable
+/// Returns the first [`CheckerError`] found in program order across reachable
 /// blocks.
 pub(crate) fn check_register_types_with_cfg(
     program: &Program,
     cfg: &Cfg<BlockId>,
-) -> Result<(), VerifierError> {
+) -> Result<(), CheckerError> {
     let code = program.code();
-    let ranges = block_ranges(cfg, code.len());
+    let ranges = block_ranges(cfg, code);
 
     // Pre-compute write sequences for the transfer function.
     let block_writes: HashMap<BlockId, Vec<(u8, RegType)>> = ranges
@@ -262,24 +234,26 @@ pub(crate) fn check_register_types_with_cfg(
         })
         .collect();
 
-    let analysis = RegTypeAnalysis { block_writes };
-    let result = solve(&analysis, cfg);
-
-    let top = RegTypeValue::top();
+    let analysis = RegTypeAnalysis {
+        block_writes,
+        reachable: cfg.reachable_nodes(),
+    };
+    let result = super::sparse::solve(cfg, &analysis.block_writes)?;
 
     for &(block_start, block_end) in &ranges {
-        let before = result
-            .before(&block_start)
-            .cloned()
-            .unwrap_or_else(RegTypeValue::top);
-
-        // Skip unreachable blocks (entry state = top means no predecessor reached here).
-        if before == top {
+        if !analysis.reachable.contains(&block_start) {
             continue;
         }
 
+        // Every CFG node has a fact; a missing one is a checker defect, and
+        // falling back to `Any` would accept every read in the block.
+        let before = result
+            .before(block_start)
+            .copied()
+            .ok_or(CheckerError::AnalysisBudgetExceeded)?;
+
         let block_code = code.get(block_start..block_end).unwrap_or(&[]);
-        let mut state = before.0;
+        let mut state = before;
         let mut stream = InstructionStream::new(block_code);
         while let Some(item) = stream.next_instruction() {
             let Ok((rel_pos, _, instr)) = item else { break };
@@ -303,9 +277,9 @@ pub(crate) fn check_register_types_with_cfg(
 ///
 /// # Errors
 ///
-/// Returns the first [`VerifierError`] found in program order across reachable
+/// Returns the first [`CheckerError`] found in program order across reachable
 /// blocks.
-pub fn check_register_types(program: &Program) -> Result<(), VerifierError> {
+pub fn check_register_types(program: &Program) -> Result<(), CheckerError> {
     let code = program.code();
     if code.is_empty() {
         return Ok(());
@@ -334,12 +308,9 @@ mod tests {
     //
     // The join at a CFG node is a fold over predecessors, so the meet has to
     // be commutative and associative or the edge order decides the verdict.
-    // `Unset` is left out on purpose: its row answers `Any` to keep a
-    // one-branch write from being flagged here, which is not associative, and
-    // `UninitRegisterPhase` is what rejects those reads instead.
-
-    /// Every type the meet is required to be a semilattice over.
-    const CONCRETE: [RegType; 8] = [
+    // Include all public values, including the identity and absorbing bottom.
+    const ALL_TYPES: [RegType; 10] = [
+        RegType::Any,
         RegType::Int,
         RegType::VecInt,
         RegType::VecXqmx,
@@ -348,13 +319,14 @@ mod tests {
         RegType::Sample,
         RegType::Grid,
         RegType::Conflict,
+        RegType::Unset,
     ];
 
     #[test]
     fn meet_is_commutative_and_idempotent() {
-        for a in CONCRETE {
+        for a in ALL_TYPES {
             assert_eq!(meet_reg(a, a), a, "{a:?} is not idempotent");
-            for b in CONCRETE {
+            for b in ALL_TYPES {
                 assert_eq!(meet_reg(a, b), meet_reg(b, a), "{a:?} vs {b:?}");
             }
         }
@@ -362,9 +334,9 @@ mod tests {
 
     #[test]
     fn meet_is_associative() {
-        for a in CONCRETE {
-            for b in CONCRETE {
-                for c in CONCRETE {
+        for a in ALL_TYPES {
+            for b in ALL_TYPES {
+                for c in ALL_TYPES {
                     assert_eq!(
                         meet_reg(meet_reg(a, b), c),
                         meet_reg(a, meet_reg(b, c)),
@@ -377,7 +349,7 @@ mod tests {
 
     #[test]
     fn any_is_the_identity() {
-        for a in CONCRETE {
+        for a in ALL_TYPES {
             assert_eq!(meet_reg(RegType::Any, a), a);
             assert_eq!(meet_reg(a, RegType::Any), a);
         }
@@ -396,12 +368,208 @@ mod tests {
     }
 
     #[test]
-    fn unset_against_a_concrete_type_stays_permissive() {
-        for a in CONCRETE {
-            assert_eq!(meet_reg(RegType::Unset, a), RegType::Any);
-            assert_eq!(meet_reg(a, RegType::Unset), RegType::Any);
+    fn unset_is_absorbing() {
+        for a in ALL_TYPES {
+            assert_eq!(meet_reg(RegType::Unset, a), RegType::Unset);
+            assert_eq!(meet_reg(a, RegType::Unset), RegType::Unset);
         }
         assert_eq!(meet_reg(RegType::Unset, RegType::Unset), RegType::Unset);
+    }
+
+    // Independent transitive order, specified by the Hasse covers rather
+    // than by the implementation of meet being tested.
+    fn below(a: RegType, b: RegType) -> bool {
+        use RegType as T;
+        a == b
+            || a == T::Unset
+            || b == T::Any
+            || (a == T::Conflict && b != T::Unset)
+            || matches!(
+                (a, b),
+                (T::Grid, T::Model | T::Sample) | (T::AnyVec, T::VecInt | T::VecXqmx)
+            )
+    }
+
+    #[test]
+    fn meet_is_greatest_lower_bound_of_the_independent_order() {
+        for a in ALL_TYPES {
+            for b in ALL_TYPES {
+                let m = meet_reg(a, b);
+                assert!(below(m, a) && below(m, b));
+                for c in ALL_TYPES {
+                    if below(c, a) && below(c, b) {
+                        assert!(below(c, m));
+                    }
+                    if below(a, b) {
+                        assert!(below(meet_reg(a, c), meet_reg(b, c)));
+                    }
+                }
+                // Projection to the independently used must-init domain.
+                assert_eq!(
+                    m != RegType::Unset,
+                    a != RegType::Unset && b != RegType::Unset
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_strict_descent_decreases_rank_within_four_levels() {
+        use RegType as T;
+        let rank = |t| match t {
+            T::Any => 4,
+            T::Model | T::Sample | T::VecInt | T::VecXqmx => 3,
+            T::Grid | T::AnyVec | T::Int => 2,
+            T::Conflict => 1,
+            T::Unset => 0,
+        };
+        for a in ALL_TYPES {
+            for b in ALL_TYPES {
+                if a != b && below(a, b) {
+                    assert!(rank(a) < rank(b));
+                }
+            }
+        }
+        let longest = [T::Any, T::Model, T::Grid, T::Conflict, T::Unset];
+        assert!(
+            longest
+                .windows(2)
+                .all(|p| below(*p.get(1).unwrap(), *p.first().unwrap()))
+        );
+    }
+
+    #[test]
+    fn production_transfers_are_monotone_for_every_register_type() {
+        for write in ALL_TYPES.into_iter().map(Some).chain([None]) {
+            for live in [false, true] {
+                let analysis = RegTypeAnalysis {
+                    block_writes: HashMap::from([(
+                        0,
+                        write.map(|t| vec![(7, t)]).unwrap_or_default(),
+                    )]),
+                    reachable: if live {
+                        HashSet::from([0])
+                    } else {
+                        HashSet::new()
+                    },
+                };
+                for a in ALL_TYPES {
+                    for b in ALL_TYPES {
+                        if !below(a, b) {
+                            continue;
+                        }
+                        let x = analysis.transfer(&0, &RegTypeValue([a; 256]));
+                        let y = analysis.transfer(&0, &RegTypeValue([b; 256]));
+                        assert!(x.0.iter().zip(y.0.iter()).all(|(&u, &v)| below(u, v)));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cyclic_programs_terminate_with_the_production_budget_disabled() {
+        use super::super::solver::test_work;
+        use crate::{Instruction as I, InstructionBuilder};
+        let drop_cycle = Program::new(vec![
+            0x43, 0x02, 0x02, 0x02, 0x0c, 0x02, 0x02, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01,
+            0x01, 0xff,
+        ]);
+        let mut b = InstructionBuilder::new();
+        let _ = b
+            .emit(I::Target {})
+            .emit(I::Jump1 { label: 4 })
+            .emit(I::Target {})
+            .emit_push(0)
+            .emit(I::Bsmx { reg: Register(0) })
+            .emit(I::Jump1 { label: 2 })
+            .emit(I::Target {})
+            .emit_push(0)
+            .emit(I::Bsmx { reg: Register(0) })
+            .emit(I::Jump1 { label: 3 })
+            .emit(I::Target {})
+            .emit_push(0)
+            .emit(I::JumpI1 { label: 6 })
+            .emit(I::Target {})
+            .emit_push(0)
+            .emit(I::JumpI1 { label: 6 })
+            .emit(I::Target {})
+            .emit(I::Jump1 { label: 3 })
+            .emit(I::Target {})
+            .emit_push(0)
+            .emit(I::JumpI1 { label: 2 })
+            .emit(I::Target {})
+            .emit_halt();
+        let entry_cycle = b.build().unwrap();
+        let vector = xqasm::assemble_source(include_str!(
+            "../../tests/vectors/control-flow/entry_cycle/program.xqasm"
+        ))
+        .unwrap();
+        assert_eq!(vector.code(), entry_cycle.code());
+        let vector = xqasm::assemble_source(include_str!(
+            "../../tests/vectors/control-flow/drop_cycle/program.xqasm"
+        ))
+        .unwrap();
+        assert_eq!(vector.code(), drop_cycle.code());
+        for (p, expected) in [
+            (drop_cycle, Err(CheckerError::StackUnderflow { offset: 0 })),
+            (entry_cycle, Ok(())),
+        ] {
+            // Independent instrumentation panics rather than allowing a
+            // regression to hang the test process; it cannot return a verdict.
+            let (result, _) = test_work::measure(100_000, || {
+                test_work::without_budget(|| crate::checker::check(&p))
+            });
+            assert_eq!(format!("{result:?}"), format!("{expected:?}"));
+            assert_eq!(
+                format!("{:?}", crate::checker::check(&p)),
+                format!("{expected:?}")
+            );
+        }
+    }
+
+    #[test]
+    fn seeded_production_cfgs_stay_within_the_register_height_bound() {
+        use super::super::solver::test_work;
+        let mut seed = 0x05ee_da11_u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for case in 0..256 {
+            let n = 2 + case % 31;
+            let mut cfg = Cfg::builder(0, n - 1);
+            let mut writes = HashMap::new();
+            for node in 0..n {
+                cfg = cfg.edge(
+                    node,
+                    usize::try_from(next() % u64::try_from(n).unwrap()).unwrap(),
+                );
+                cfg = cfg.edge(node, (node + 1) % n);
+                let events = (0..8)
+                    .map(|_| {
+                        let slot = u8::try_from(next() % 256).unwrap();
+                        let ty = *ALL_TYPES
+                            .get(usize::try_from(next() % 10).unwrap())
+                            .unwrap();
+                        (slot, ty)
+                    })
+                    .collect();
+                let _ = writes.insert(node, events);
+            }
+            let cfg = cfg.build();
+            let analysis = RegTypeAnalysis {
+                block_writes: writes,
+                reachable: cfg.reachable_nodes(),
+            };
+            let bound = visit_limit(&cfg, 1024).unwrap();
+            let (result, visits) = test_work::measure(usize::try_from(bound).unwrap(), || {
+                solve(&analysis, &cfg, bound)
+            });
+            assert!(result.is_ok(), "case {case}, visits {visits}");
+        }
     }
 
     // --- basic valid programs ---
@@ -526,19 +694,67 @@ mod tests {
         assert!(check_register_types(&p).is_ok());
     }
 
-    // One branch writes, the other does not: meet(Model, Unset) = Any.
-    // Any satisfies all requirements → no false error at the join (permissive).
+    // A read must be initialized on every incoming path, including in this phase.
     #[test]
-    fn one_branch_writes_join_is_any_permissive() {
+    fn one_branch_writes_join_remains_possibly_unset() {
         let p = prog(&[
             Instruction::JumpI1 { label: 0 }, // taken: skip write → r0=Unset
             Instruction::Push1 { val: [4] },  // fall-through: writes r0=Model
             Instruction::Bqmx { reg: Register(0) },
             Instruction::Target {}, // label=0: join
-            // meet(Unset [taken], Model [fall-through]) = Any → satisfies Model
+            // meet(Unset [taken], Model [fall-through]) = Unset
             Instruction::GetLine { reg: Register(0) },
             Instruction::Halt {},
         ]);
-        assert!(check_register_types(&p).is_ok());
+        assert!(matches!(
+            check_register_types(&p),
+            Err(CheckerError::ReadUnsetRegister { .. })
+        ));
+    }
+}
+
+// The cycle that writes every register; copied unchanged into the instrumented base control.
+#[cfg(test)]
+mod audit_work_bounds {
+    use super::*;
+    use crate::dataflow::solver::test_work;
+    use crate::{Instruction, InstructionBuilder, Register};
+
+    #[test]
+    fn all_register_cycle_obeys_lattice_visit_bound() {
+        let mut builder = InstructionBuilder::new();
+        let _ = builder.emit(Instruction::Nop {});
+        let cycle = builder.label();
+        let _ = builder.place(cycle).unwrap().emit(Instruction::Target {});
+        for slot in 0..=u8::MAX {
+            let _ = builder.emit(Instruction::Bsmx {
+                reg: Register(slot),
+            });
+        }
+        let _ = builder.emit_jump(cycle).emit_halt();
+        let original = builder.build().unwrap();
+        let vector = xqasm::assemble_source(include_str!(
+            "../../tests/vectors/control-flow/cycle_writing_every_register_terminates/program.xqasm"
+        ))
+        .unwrap();
+        for program in [original, Program::new(vector.code().to_vec())] {
+            let ctx = build_cfg(program.code(), program.jump_table()).unwrap();
+            // This fixture changes each coordinate at most once. Count
+            // coordinate events AND outgoing coordinate updates: at most
+            // 256 * (N + E), with E <= N for this particular shape.
+            assert!(
+                ctx.cfg
+                    .nodes()
+                    .iter()
+                    .all(|node| ctx.cfg.successors(node).len() <= 1)
+            );
+            let height = RegTypeValue::top().0.len().saturating_mul(2);
+            let limit = height.saturating_mul(ctx.cfg.nodes().len());
+            let (result, visits) =
+                test_work::measure(limit, || check_register_types_with_cfg(&program, &ctx.cfg));
+            assert!(visits > 0 && visits <= limit);
+            // Type analysis converges; the whole checker rejects stack use.
+            assert!(result.is_ok());
+        }
     }
 }

@@ -35,75 +35,118 @@ use crate::dataflow::lattice::Lattice;
 
 /// The converged data-flow facts for every node in the CFG.
 ///
-/// `before[n]` is the value just before the transfer function of `n` is
-/// applied; `after[n]` is the value just after.  For a forward analysis,
-/// `before` flows in from predecessors and `after` flows out to successors;
-/// for a backward analysis the roles are reversed.
+/// `before[n]` and `after[n]` refer to program order. For a forward
+/// analysis they hold transfer input and output respectively; for a
+/// backward analysis they hold transfer output and input respectively.
+#[derive(Debug)]
 pub struct DataFlowResult<N, V> {
-    /// Value at the input of each node's transfer function.
+    /// Facts immediately before each node in program order.
     pub before: HashMap<N, V>,
-    /// Value at the output of each node's transfer function.
+    /// Facts immediately after each node in program order.
     pub after: HashMap<N, V>,
 }
 
 impl<N: Eq + Hash, V> DataFlowResult<N, V> {
-    /// Value flowing into `node` (before its transfer function).
+    /// Facts before `node` in program order.
     pub fn before(&self, node: &N) -> Option<&V> {
         self.before.get(node)
     }
 
-    /// Value flowing out of `node` (after its transfer function).
+    /// Facts after `node` in program order.
     pub fn after(&self, node: &N) -> Option<&V> {
         self.after.get(node)
     }
 }
 
-/// Run a worklist-based fixed-point data-flow analysis.
+/// Failure to converge within the caller's deterministic scheduling bound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SolveError {
+    /// The worklist needs more visits than its supplied bound permits.
+    #[error("data-flow work budget exhausted")]
+    BudgetExceeded,
+}
+
+impl From<SolveError> for crate::CheckerError {
+    fn from(_: SolveError) -> Self {
+        Self::AnalysisBudgetExceeded
+    }
+}
+
+pub(super) struct VisitBudget(u64);
+
+impl VisitBudget {
+    pub(super) fn new(limit: u64) -> Self {
+        Self(limit)
+    }
+
+    pub(super) fn visit(&mut self) -> Result<(), SolveError> {
+        #[cfg(test)]
+        if test_work::budget_disabled() {
+            return Ok(());
+        }
+        self.0 = self.0.checked_sub(1).ok_or(SolveError::BudgetExceeded)?;
+        Ok(())
+    }
+}
+
+/// Initial N visits plus at most H enqueue attempts per outgoing edge.
+/// Checked arithmetic fails closed if the bound cannot be represented.
+#[cfg(test)]
+pub(super) fn visit_limit<N: Eq + Hash + Clone>(
+    cfg: &Cfg<N>,
+    max_descents: u64,
+) -> Result<u64, SolveError> {
+    let nodes = u64::try_from(cfg.nodes().len()).map_err(|_| SolveError::BudgetExceeded)?;
+    let edges = cfg.nodes().iter().try_fold(0u64, |sum, node| {
+        let degree = u64::try_from(cfg.successors(node).len()).ok()?;
+        sum.checked_add(degree)
+    });
+    edges
+        .and_then(|e| e.checked_mul(max_descents))
+        .and_then(|changes| nodes.checked_add(changes))
+        .ok_or(SolveError::BudgetExceeded)
+}
+
+/// Run a bounded worklist-based fixed-point data-flow analysis.
 ///
-/// Initialises every node to [`Lattice::top`], seeds the boundary node with
-/// [`Analysis::boundary_value`], then iterates until no node's state changes.
+/// Every stored output starts at [`Lattice::top`]. The boundary value is
+/// supplied only as the boundary node's input, before its transfer runs.
+/// The FIFO worklist suppresses duplicate queued nodes.
 ///
-/// The worklist is a FIFO queue backed by a [`HashSet`] for O(1) duplicate
-/// suppression.  Nodes are enqueued in CFG insertion order initially and re-
-/// enqueued whenever their state changes.
+/// # Convergence and budget
 ///
-/// # Convergence
-///
-/// The algorithm converges if and only if:
-/// - The lattice has finite height (no infinite ascending chains).
-/// - The transfer function is monotone.
+/// Meet must be a greatest lower bound with top as identity, and transfers
+/// must be monotone. If a node's output can descend strictly at most H times,
+/// N nodes and E edges require at most N + H * E visits. Supply that bound as
+/// `max_visits`, using checked arithmetic. The bound covers scheduling, not
+/// the cost or termination of a caller-provided transfer function.
 ///
 /// # Errors
 ///
-/// This function is infallible; analysis-level errors (e.g. type mismatches
-/// found during transfer) should be encoded in `Value` or collected via a
-/// side-channel on the `Analysis` implementor.
+/// Returns [`SolveError::BudgetExceeded`] before exceeding `max_visits`.
+/// With a valid derived bound, exhaustion indicates a broken analysis
+/// contract, not a bytecode validation error. No partial result is returned.
 ///
 /// # Examples
 ///
-/// See [`crate::dataflow`] module docs for a complete worked example.
-pub fn solve<A>(analysis: &A, cfg: &Cfg<A::Node>) -> DataFlowResult<A::Node, A::Value>
+/// See [`crate::dataflow`] for a complete worked example.
+pub fn solve<A>(
+    analysis: &A,
+    cfg: &Cfg<A::Node>,
+    max_visits: u64,
+) -> Result<DataFlowResult<A::Node, A::Value>, SolveError>
 where
     A: Analysis,
     A::Node: Eq + Hash + Clone,
     A::Dir: Direction,
 {
-    let boundary = A::Dir::boundary_node(cfg);
+    let mut budget = VisitBudget::new(max_visits);
 
-    // ------------------------------------------------------------------
-    // Initialise: boundary node → boundary_value; all others → top.
-    // ------------------------------------------------------------------
+    // These are transfer OUTPUTS: even the boundary starts at top.
     let mut state: HashMap<A::Node, A::Value> = cfg
         .nodes()
         .iter()
-        .map(|n| {
-            let v = if n == boundary {
-                analysis.boundary_value()
-            } else {
-                A::Value::top()
-            };
-            (n.clone(), v)
-        })
+        .map(|n| (n.clone(), A::Value::top()))
         .collect();
 
     // ------------------------------------------------------------------
@@ -116,11 +159,12 @@ where
     // Fixed-point iteration.
     // ------------------------------------------------------------------
     while let Some(node) = worklist.pop_front() {
+        budget.visit()?;
+        #[cfg(test)]
+        test_work::visit();
         let _ = in_worklist.remove(&node);
 
         // Compute the input: meet of all incoming states.
-        // The boundary node always uses boundary_value as its input so that
-        // back-edges (e.g. loop header) cannot override the seed.
         // Boundary node always uses the seed value so back-edges cannot
         // override it.  All others fold over incoming state with meet;
         // top() is the identity so an empty predecessor set gives top().
@@ -169,16 +213,8 @@ where
                 .fold(A::Value::top(), |acc, v| acc.meet(&v))
         };
 
-        // For Forward: input = before, out = after.
-        // For Backward: input = after, out = before.
-        // We use the direction to decide which slot each value belongs to.
-        // Since `Direction` doesn't expose a const, we check by comparing
-        // which node is the boundary to identify direction at runtime.
-        //
-        // Simpler: Forward → before=input/after=out; Backward → before=out/after=input.
-        // We detect direction by asking: is the boundary node the entry?
-        // If boundary == entry, it's forward; if boundary == exit, backward.
-        let is_forward = A::Dir::boundary_node(cfg) == cfg.entry();
+        // Direction is explicit even when entry and exit are the same node.
+        let is_forward = <A::Dir as super::direction::sealed::Sealed>::FORWARD;
         if is_forward {
             let _ = before.insert(node.clone(), input);
             let _ = after.insert(node.clone(), out);
@@ -188,5 +224,59 @@ where
         }
     }
 
-    DataFlowResult { before, after }
+    Ok(DataFlowResult { before, after })
+}
+
+/// Scoped, thread-local instrumentation of the actual production worklists.
+/// Absent from non-test builds, including the public solver signature.
+#[cfg(test)]
+pub(super) mod test_work {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static BUDGET: Cell<Option<(usize, usize)>> = const { Cell::new(None) };
+        static DISABLED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(in crate::dataflow) fn budget_disabled() -> bool {
+        DISABLED.get()
+    }
+
+    pub(in crate::dataflow) fn without_budget<R>(run: impl FnOnce() -> R) -> R {
+        struct Restore(bool);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                DISABLED.set(self.0);
+            }
+        }
+        let _restore = Restore(DISABLED.replace(true));
+        run()
+    }
+
+    struct Reset;
+
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            BUDGET.set(None);
+        }
+    }
+
+    pub(in crate::dataflow) fn visit() {
+        if let Some((limit, visits)) = BUDGET.get() {
+            assert!(visits < limit, "worklist visit budget exceeded: {limit}");
+            BUDGET.set(Some((limit, visits.saturating_add(1))));
+        }
+    }
+
+    pub(in crate::dataflow) fn measure<R>(limit: usize, run: impl FnOnce() -> R) -> (R, usize) {
+        assert!(BUDGET.get().is_none(), "worklist budgets must not nest");
+        BUDGET.set(Some((limit, 0)));
+        let _reset = Reset;
+        let result = run();
+        let visits = BUDGET
+            .get()
+            .expect("budget stays installed until scope exit")
+            .1;
+        (result, visits)
+    }
 }

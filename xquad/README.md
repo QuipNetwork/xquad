@@ -1,6 +1,6 @@
 # xquad -- Primary user-facing package for the XQuad toolchain
 
-`xquad` is the Python distribution most users should install. It provides the interactive `Program` / `Session` / `RunResult` API, a `VM` wrapper over the Rust interpreter, and re-exports the lower-level peer packages (`xqffi`, `xqcp`, `xqsa`) under a single namespace.
+`xquad` is the Python distribution to install, and the only one XQuad publishes. It provides the interactive `Program` / `Session` / `RunResult` API, a `VM` wrapper over the Rust interpreter, and re-exports the lower-level packages (`xqffi`, `xqcp`, `xqsa`) under a single namespace.
 
 ## Install
 
@@ -8,9 +8,11 @@
 pip install xquad
 ```
 
-Pulls `xqffi`, `xqcp`, and `xqsa` as runtime dependencies.
-Peer installs stay valid (`pip install xqffi xqcp xqsa`) if you only
-need a subset.
+The one wheel carries `xqffi`, `xqcp` and `xqsa` as well, importable
+under their own names, and the `xquad` command. Up to 0.5 they were
+separate distributions; from 0.6 they are not published on their own.
+Solver backends are extras: `pip install xquad[dwave]`, and likewise
+`cuda`, `metal` and `quip` (see [`xqsa`](https://gitlab.com/quip.network/xquad/-/tree/main/xqsa)).
 
 ## Interactive usage
 
@@ -78,7 +80,7 @@ So `isinstance` works whether the caller imported directly from the peer or via 
 | `xquad.vm` | first-party | `VM` wrapper over the Rust interpreter: assembles source, keeps calldata and limits across runs |
 | `xquad.types` | re-exports `xqffi.vm` | `Domain`, `XqmxModel`, `XqmxSample`, `triu`, `XqvmError` and its faults, VM limits |
 | `xquad.asm` | is `xqffi.asm` | `parse_xqasm`, `assemble_source`, `disassemble` |
-| `xquad.verifier` | is `xqffi.verifier` | `verify`, `verify_source` |
+| `xquad.checker` | is `xqffi.checker` | `check`, `check_source` |
 | `xquad.cp` | is `xqcp` | DSL -- `Problem`, `Types`, expression builders |
 | `xquad.sa` | is `xqsa` | Solvers -- `SolverCPU`, `Solver` |
 

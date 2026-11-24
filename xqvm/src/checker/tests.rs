@@ -1,0 +1,1527 @@
+// Copyright (C) 2026 Postquant Labs Incorporated
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+use std::collections::BTreeSet;
+
+use crate::bytecode::codec;
+use crate::{Instruction, InstructionBuilder, InstructionStream, JumpTable, Program, Register};
+
+use super::check;
+use super::error::CheckerError;
+use super::jump_span::JumpSpanPhase;
+use super::jump_target::JumpTargetPhase;
+use super::loop_nesting::LoopNestingPhase;
+use super::phase::{Checker, Phase};
+use super::register_type::RegisterTypePhase;
+use super::scan;
+use super::scan::stream_err;
+use super::stack_depth::StackDepthPhase;
+use super::structural::StructuralPhase;
+
+fn bytes(instrs: &[Instruction]) -> Vec<u8> {
+    instrs.iter().flat_map(codec::encode).collect()
+}
+
+// --- StructuralPhase ---
+
+#[test]
+fn structural_accepts_valid_stream() {
+    let mut b = InstructionBuilder::new();
+    let _ = b.emit_push(1).emit_push(2).emit_add().emit_halt();
+    assert!(StructuralPhase.run(&b.build().unwrap()).is_ok());
+}
+
+#[test]
+fn structural_rejects_truncated_push2() {
+    // PUSH2 (0x12) needs 2 operand bytes; supply only 1.
+    let prog = Program::new(vec![0x12, 0x00]);
+    let err = StructuralPhase.run(&prog).unwrap_err();
+    assert_eq!(err.variant_name(), "TruncatedInstruction");
+}
+
+#[test]
+fn structural_rejects_reserved_opcode() {
+    // 0x0D is the reserved gap in the opcode table.
+    let err = StructuralPhase.run(&Program::new(vec![0x0D])).unwrap_err();
+    assert_eq!(err.variant_name(), "BadOpcode");
+}
+
+// --- JumpTargetPhase ---
+
+#[test]
+fn jump_target_accepts_valid_label() {
+    // TARGET(.0) then JUMP1 0.
+    let code = bytes(&[
+        Instruction::Target {},
+        Instruction::Jump1 { label: 0 },
+        Instruction::Halt {},
+    ]);
+    assert!(JumpTargetPhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn jump1_to_nonexistent_label() {
+    // No TARGETs; label 0 is undefined.
+    let code = bytes(&[Instruction::Jump1 { label: 0 }, Instruction::Halt {}]);
+    let err = JumpTargetPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "UndefinedJumpTarget");
+}
+
+#[test]
+fn jumpi1_to_nonexistent_label() {
+    let code = bytes(&[Instruction::JumpI1 { label: 0 }, Instruction::Halt {}]);
+    let err = JumpTargetPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "UndefinedJumpTarget");
+}
+
+#[test]
+fn jump2_to_nonexistent_label() {
+    let code = bytes(&[Instruction::Jump2 { label: 0 }, Instruction::Halt {}]);
+    let err = JumpTargetPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "UndefinedJumpTarget");
+}
+
+#[test]
+fn jump2_label_out_of_range_with_one_target() {
+    // One TARGET (id 0); JUMP2 label=1 is out of range.
+    let code = bytes(&[
+        Instruction::Target {},
+        Instruction::Jump2 { label: 1 },
+        Instruction::Halt {},
+    ]);
+    let err = JumpTargetPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "UndefinedJumpTarget");
+}
+
+// --- LoopNestingPhase ---
+
+#[test]
+fn loop_nesting_accepts_balanced_range() {
+    let mut b = InstructionBuilder::new();
+    let _ = b
+        .emit_push(0)
+        .emit_push(3)
+        .emit_range()
+        .emit_next()
+        .emit_halt();
+    assert!(LoopNestingPhase.run(&b.build().unwrap()).is_ok());
+}
+
+#[test]
+fn unmatched_range_at_eof() {
+    let code = bytes(&[Instruction::Range {}, Instruction::Halt {}]);
+    let err = LoopNestingPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "UnmatchedLoop");
+}
+
+#[test]
+fn next_outside_any_loop() {
+    let code = bytes(&[Instruction::Next {}, Instruction::Halt {}]);
+    let err = LoopNestingPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "NoActiveLoop");
+}
+
+#[test]
+fn lval_outside_loop() {
+    let code = bytes(&[Instruction::LVal { reg: Register(0) }, Instruction::Halt {}]);
+    let err = LoopNestingPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "NoActiveLoop");
+}
+
+#[test]
+fn lidx_outside_loop() {
+    let code = bytes(&[Instruction::Lidx { reg: Register(0) }, Instruction::Halt {}]);
+    let err = LoopNestingPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "NoActiveLoop");
+}
+
+#[test]
+fn nested_loops_balanced() {
+    // RANGE { RANGE { NEXT } NEXT } HALT
+    let code = bytes(&[
+        Instruction::Range {},
+        Instruction::Range {},
+        Instruction::Next {},
+        Instruction::Next {},
+        Instruction::Halt {},
+    ]);
+    assert!(LoopNestingPhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn nested_loops_outer_unmatched() {
+    // RANGE { RANGE { NEXT } HALT -- outer RANGE has no NEXT
+    let code = bytes(&[
+        Instruction::Range {},
+        Instruction::Range {},
+        Instruction::Next {},
+        Instruction::Halt {},
+    ]);
+    let err = LoopNestingPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "UnmatchedLoop");
+    // Outermost opener is at offset 0.
+    assert!(matches!(
+        err,
+        CheckerError::UnmatchedLoop {
+            offset: 0,
+            depth: 1
+        }
+    ));
+}
+
+// --- JumpSpanPhase (jumps across loop bodies) ---
+
+#[test]
+fn jump_span_rejects_a_jump_out_of_a_loop_body() {
+    // RANGE opens the inner body; the JUMP sits inside it but targets a TARGET
+    // placed after NEXT, in the enclosing body. Cross-body -> rejected.
+    let code = bytes(&[
+        Instruction::Range {},
+        Instruction::Jump1 { label: 0 },
+        Instruction::Next {},
+        Instruction::Target {},
+        Instruction::Halt {},
+    ]);
+    let err = JumpSpanPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "JumpAcrossLoopBoundary");
+}
+
+#[test]
+fn jump_span_rejects_a_jump_into_a_loop_body() {
+    // The JUMP is outside all loops; its target is a TARGET inside a loop body.
+    // Cross-body in the other direction -> rejected.
+    let code = bytes(&[
+        Instruction::Jump1 { label: 0 },
+        Instruction::Range {},
+        Instruction::Target {},
+        Instruction::Next {},
+        Instruction::Halt {},
+    ]);
+    let err = JumpSpanPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "JumpAcrossLoopBoundary");
+}
+
+#[test]
+fn jump_span_accepts_an_intra_body_jump() {
+    // Both the JUMP and its TARGET sit inside the same loop body.
+    let code = bytes(&[
+        Instruction::Range {},
+        Instruction::Target {},
+        Instruction::Jump1 { label: 0 },
+        Instruction::Next {},
+        Instruction::Halt {},
+    ]);
+    assert!(JumpSpanPhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn jump_span_accepts_a_jump_outside_all_loops() {
+    // No loop at all: the JUMP and TARGET share the top-level body.
+    let code = bytes(&[
+        Instruction::Target {},
+        Instruction::Jump1 { label: 0 },
+        Instruction::Halt {},
+    ]);
+    assert!(JumpSpanPhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn jump_span_rejects_a_jump_from_one_loop_body_into_another() {
+    // A 22-byte program: a JUMPI1 in loop A's body targets a TARGET inside
+    // loop B's body, so the NEXT the checker pairs with B closes A at runtime.
+    // Both loops stay reachable with equal known depths, so the balance check
+    // passes; the cross-body jump is what must be rejected.
+    let code = vec![
+        0x11, 0x00, // PUSH1 0
+        0x12, 0x23, 0x28, // PUSH2 9000
+        0x08, // RANGE (loop A)
+        0x11, 0x01, // PUSH1 1
+        0x11, 0x01, // PUSH1 1
+        0x02, 0x00, // JUMPI1 .0  (loop A body -> loop B body)
+        0x11, 0x00, // PUSH1 0
+        0x11, 0x01, // PUSH1 1
+        0x08, // RANGE (loop B)
+        0x00, // TARGET .0
+        0x07, // NEXT   (checker pairs with B, VM closes A)
+        0x10, // POP
+        0x07, // NEXT
+        0xFF, // HALT
+    ];
+    assert_eq!(code.len(), 22);
+    let err = JumpSpanPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "JumpAcrossLoopBoundary");
+}
+
+#[test]
+fn jump_span_rejects_the_cross_loop_jump_whatever_the_loop_count() {
+    // The same program with loop A's count set to 1 (PUSH2 1): at runtime its NEXT
+    // would hit NoActiveLoop. The opcode shape is identical, so the cross-body
+    // jump is rejected regardless of the loop count.
+    let code = vec![
+        0x11, 0x00, // PUSH1 0
+        0x12, 0x00, 0x01, // PUSH2 1
+        0x08, // RANGE (loop A)
+        0x11, 0x01, 0x11, 0x01, 0x02, 0x00, // ...; JUMPI1 .0
+        0x11, 0x00, 0x11, 0x01, 0x08, // ...; RANGE (loop B)
+        0x00, // TARGET .0
+        0x07, 0x10, 0x07, 0xFF, // NEXT; POP; NEXT; HALT
+    ];
+    let err = JumpSpanPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "JumpAcrossLoopBoundary");
+}
+
+/// Boundary semantics of the transition lookup, pinned with explicit jump
+/// tables (`Program::from_parts`) so the target can be a loop instruction
+/// itself rather than a TARGET: a `RANGE` belongs to the enclosing body and its
+/// `NEXT` to the inner body it closes.
+#[test]
+fn jump_span_places_range_in_the_enclosing_body_and_next_in_the_inner() {
+    // 0 JUMP1 .0; 2 PUSH1 0; 4 PUSH1 1; 6 RANGE; 7 NEXT; 8 HALT
+    let code = vec![0x01, 0x00, 0x11, 0x00, 0x11, 0x01, 0x08, 0x07, 0xFF];
+    let to_range = Program::from_parts(code.clone(), JumpTable::new(vec![6]));
+    assert!(
+        JumpSpanPhase.run(&to_range).is_ok(),
+        "RANGE is in the top-level body"
+    );
+    let to_next = Program::from_parts(code, JumpTable::new(vec![7]));
+    assert!(
+        matches!(
+            JumpSpanPhase.run(&to_next),
+            Err(CheckerError::JumpAcrossLoopBoundary {
+                offset: 0,
+                target: 7
+            })
+        ),
+        "NEXT is in the loop body"
+    );
+}
+
+/// A jump table shorter than the code's labels (only reachable through
+/// `Program::from_parts`) is rejected, not skipped: the phase must hold when
+/// run on its own.
+#[test]
+fn jump_span_rejects_a_label_missing_from_the_jump_table() {
+    let code = bytes(&[
+        Instruction::Jump1 { label: 0 },
+        Instruction::Target {},
+        Instruction::Halt {},
+    ]);
+    let program = Program::from_parts(code, JumpTable::new(vec![]));
+    assert!(matches!(
+        JumpSpanPhase.run(&program),
+        Err(CheckerError::UndefinedJumpTarget {
+            offset: 0,
+            label: 0,
+            target_count: 0
+        })
+    ));
+}
+
+#[test]
+fn jump_span_pairs_bodies_by_lexical_nesting() {
+    // Two sibling loops: a jump in the first loop's body to a TARGET in the
+    // second loop's body is cross-body even though both are at nesting depth 1.
+    // Mutation control: were body ids assigned by depth rather than by lexical
+    // pairing, this would be wrongly accepted.
+    let code = bytes(&[
+        Instruction::Range {},
+        Instruction::Jump1 { label: 0 },
+        Instruction::Next {},
+        Instruction::Range {},
+        Instruction::Target {},
+        Instruction::Next {},
+        Instruction::Halt {},
+    ]);
+    let err = JumpSpanPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "JumpAcrossLoopBoundary");
+}
+
+// --- RegisterTypePhase ---
+
+#[test]
+fn reg_type_stow_then_load_ok() {
+    let code = bytes(&[
+        Instruction::Push1 { val: [7] },
+        Instruction::Stow { reg: Register(0) },
+        Instruction::Load { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    assert!(RegisterTypePhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn reg_type_load_unset_register_is_error() {
+    let code = bytes(&[Instruction::Load { reg: Register(1) }, Instruction::Halt {}]);
+    let err = RegisterTypePhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "ReadUnsetRegister");
+}
+
+#[test]
+fn reg_type_output_unset_register_is_error() {
+    let code = bytes(&[
+        Instruction::Push1 { val: [0] }, // output slot index
+        Instruction::Output { reg: Register(2) },
+        Instruction::Halt {},
+    ]);
+    let err = RegisterTypePhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "ReadUnsetRegister");
+}
+
+#[test]
+fn reg_type_drop_clears_register() {
+    // STOW r0, DROP r0, LOAD r0 -- Load after Drop should error.
+    let code = bytes(&[
+        Instruction::Push1 { val: [1] },
+        Instruction::Stow { reg: Register(0) },
+        Instruction::Drop { reg: Register(0) },
+        Instruction::Load { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    let err = RegisterTypePhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "ReadUnsetRegister");
+}
+
+#[test]
+fn reg_type_wrong_type_for_load() {
+    // BQMX writes Model to r0; LOAD expects Int.
+    let code = bytes(&[
+        Instruction::Push1 { val: [4] }, // size
+        Instruction::Bqmx { reg: Register(0) },
+        Instruction::Load { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    let err = RegisterTypePhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "RegisterTypeMismatch");
+}
+
+#[test]
+fn reg_type_input_satisfies_any_read() {
+    // INPUT writes Any; subsequent LOAD should not error.
+    let code = bytes(&[
+        Instruction::Push1 { val: [0] }, // calldata index
+        Instruction::Input { reg: Register(0) },
+        Instruction::Load { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    assert!(RegisterTypePhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn reg_type_bqmx_then_getline_ok() {
+    let code = bytes(&[
+        Instruction::Push1 { val: [4] },
+        Instruction::Bqmx { reg: Register(0) },
+        Instruction::Push1 { val: [0] },
+        Instruction::GetLine { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    assert!(RegisterTypePhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn reg_type_bsmx_then_getline_ok() {
+    // GETLINE reads a sample's assignment as readily as a model's bias.
+    let code = bytes(&[
+        Instruction::Push1 { val: [4] },
+        Instruction::Bsmx { reg: Register(0) },
+        Instruction::Push1 { val: [0] },
+        Instruction::GetLine { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    assert!(RegisterTypePhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn reg_type_bsmx_then_setline_ok() {
+    // SETLINE assigns a sample variable. The value's domain is a run-time
+    // quantity the VM checks; the checker only settles the register kind.
+    let code = bytes(&[
+        Instruction::Push1 { val: [4] },
+        Instruction::Bsmx { reg: Register(0) },
+        Instruction::Push1 { val: [0] },
+        Instruction::Push1 { val: [1] },
+        Instruction::SetLine { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    assert!(RegisterTypePhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn reg_type_bsmx_then_addline_ok() {
+    let code = bytes(&[
+        Instruction::Push1 { val: [4] },
+        Instruction::Bsmx { reg: Register(0) },
+        Instruction::Push1 { val: [0] },
+        Instruction::Push1 { val: [1] },
+        Instruction::AddLine { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    assert!(RegisterTypePhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn reg_type_bsmx_then_setquad_mismatch() {
+    // The linear opcodes widened to accept a sample; the quadratic ones did
+    // not. A sample has no place to put a coupling term.
+    let code = bytes(&[
+        Instruction::Push1 { val: [4] },
+        Instruction::Bsmx { reg: Register(0) },
+        Instruction::Push1 { val: [0] },
+        Instruction::Push1 { val: [1] },
+        Instruction::Push1 { val: [1] },
+        Instruction::SetQuad { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    let err = RegisterTypePhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "RegisterTypeMismatch");
+}
+
+// --- Branch joins of a related pair (QUI-1160) ---
+//
+// `meet_reg` used to discard any two differing types to `RegType::Any`, and
+// `Any` satisfies every requirement. So a join of two *related* types lost
+// the capability they share and handed out the ones they do not: a
+// `BQMX`/`BSMX` join satisfied `SETQUAD`'s Model requirement, and the
+// program reached a quadratic write on a sample using nothing but its own
+// instructions. The meet now keeps the intersection instead.
+//
+// A third branch of an unrelated type used to undo that: `Grid` met with
+// `Int` collapsed back to `Any`, so the same bypass returned with one more
+// branch, and which of the three came first decided the verdict. Unrelated
+// types now meet to `Conflict`, which satisfies `NonUnset` and nothing else,
+// and the meet is associative over the concrete types.
+//
+// The positive cases are the ones that catch an over-tightening; the
+// negative ones alone would pass even if the new variants satisfied nothing.
+
+/// Emit one block per entry in `branches`, each writing r0, all joined at a
+/// common `tail`.
+///
+/// Branch `i` is selected by `INPUT r(i+1) / LOAD / JUMPI`, so every block is
+/// a real predecessor of the join and every path is reachable at run time.
+/// The order the branches appear in is the order the CFG records their edges,
+/// and so the order the solver folds them: a meet that is not associative
+/// lets that order decide the verdict.
+fn joined_branches(branches: &[Instruction], tail: &[Instruction]) -> Program {
+    let mut b = InstructionBuilder::new();
+    let after = b.label();
+
+    let (last, dispatched) = branches.split_last().expect("at least one branch");
+    for (branch, (slot, reg)) in dispatched.iter().zip((0i64..).zip(1u8..)) {
+        let next = b.label();
+        let _ = b.emit_push(slot);
+        let _ = b.emit_input(Register(reg));
+        let _ = b.emit_load(Register(reg));
+        let _ = b.emit_jump_if(next);
+
+        let _ = b.emit_push(4);
+        let _ = b.emit(*branch);
+        let _ = b.emit_jump(after);
+
+        let _ = b.place(next).unwrap();
+    }
+    let _ = b.emit_push(4);
+    let _ = b.emit(*last);
+
+    let _ = b.place(after).unwrap();
+    for instr in tail {
+        let _ = b.emit(*instr);
+    }
+    let _ = b.emit_halt();
+    b.build().unwrap()
+}
+
+#[test]
+fn reg_type_model_sample_join_rejects_a_model_only_opcode() {
+    let code = joined_branches(
+        &[
+            Instruction::Bqmx { reg: Register(0) },
+            Instruction::Bsmx { reg: Register(0) },
+        ],
+        &[
+            Instruction::Push1 { val: [0] },
+            Instruction::Push1 { val: [1] },
+            Instruction::Push1 { val: [1] },
+            Instruction::SetQuad { reg: Register(0) },
+        ],
+    );
+    let err = RegisterTypePhase.run(&code).unwrap_err();
+    assert_eq!(err.variant_name(), "RegisterTypeMismatch");
+}
+
+#[test]
+fn reg_type_model_sample_join_rejects_a_sample_only_opcode() {
+    // ENERGY's second operand must be a Sample; the join is not one.
+    let code = joined_branches(
+        &[
+            Instruction::Bqmx { reg: Register(0) },
+            Instruction::Bsmx { reg: Register(0) },
+        ],
+        &[
+            Instruction::Push1 { val: [4] },
+            Instruction::Bqmx { reg: Register(2) },
+            Instruction::Energy {
+                model: Register(2),
+                sample: Register(0),
+            },
+        ],
+    );
+    let err = RegisterTypePhase.run(&code).unwrap_err();
+    assert_eq!(err.variant_name(), "RegisterTypeMismatch");
+}
+
+#[test]
+fn reg_type_model_sample_join_still_accepts_a_grid_opcode() {
+    // RESIZE, ROWSUM and the linear trio address the surface both members
+    // share, so the join must keep satisfying them.
+    let code = joined_branches(
+        &[
+            Instruction::Bqmx { reg: Register(0) },
+            Instruction::Bsmx { reg: Register(0) },
+        ],
+        &[
+            Instruction::Push1 { val: [2] },
+            Instruction::Push1 { val: [2] },
+            Instruction::Resize { reg: Register(0) },
+            Instruction::Push1 { val: [0] },
+            Instruction::RowSum { reg: Register(0) },
+            Instruction::Pop {},
+            Instruction::Push1 { val: [0] },
+            Instruction::GetLine { reg: Register(0) },
+            Instruction::Pop {},
+        ],
+    );
+    assert!(RegisterTypePhase.run(&code).is_ok());
+}
+
+#[test]
+fn reg_type_vec_join_rejects_a_vecint_only_opcode() {
+    let code = joined_branches(
+        &[
+            Instruction::Vec { reg: Register(0) },
+            Instruction::VecX { reg: Register(0) },
+        ],
+        &[
+            Instruction::Push1 { val: [1] },
+            Instruction::VecPush { reg: Register(0) },
+        ],
+    );
+    let err = RegisterTypePhase.run(&code).unwrap_err();
+    assert_eq!(err.variant_name(), "RegisterTypeMismatch");
+}
+
+#[test]
+fn reg_type_vec_join_still_accepts_veclen() {
+    let code = joined_branches(
+        &[
+            Instruction::Vec { reg: Register(0) },
+            Instruction::VecX { reg: Register(0) },
+        ],
+        &[
+            Instruction::VecLen { reg: Register(0) },
+            Instruction::Pop {},
+        ],
+    );
+    assert!(RegisterTypePhase.run(&code).is_ok());
+}
+
+#[test]
+fn reg_type_three_way_join_rejects_a_model_only_opcode() {
+    // Both orders, and for the same reason: the edge order is the fold
+    // order, so an associative meet is the only thing that makes these two
+    // programs agree. Before `Conflict` the first accepted and the second
+    // rejected.
+    for branches in [
+        [
+            Instruction::Bqmx { reg: Register(0) },
+            Instruction::Bsmx { reg: Register(0) },
+            Instruction::Stow { reg: Register(0) },
+        ],
+        [
+            Instruction::Bqmx { reg: Register(0) },
+            Instruction::Stow { reg: Register(0) },
+            Instruction::Bsmx { reg: Register(0) },
+        ],
+    ] {
+        let code = joined_branches(
+            &branches,
+            &[
+                Instruction::Push1 { val: [0] },
+                Instruction::Push1 { val: [1] },
+                Instruction::Push1 { val: [1] },
+                Instruction::SetQuad { reg: Register(0) },
+            ],
+        );
+        let err = RegisterTypePhase.run(&code).unwrap_err();
+        assert_eq!(err.variant_name(), "RegisterTypeMismatch", "{branches:?}");
+    }
+}
+
+#[test]
+fn reg_type_three_way_vec_join_rejects_a_vecint_only_opcode() {
+    // The vec twin: `AnyVec` met with `Int` is a conflict, not a vec.
+    let code = joined_branches(
+        &[
+            Instruction::Vec { reg: Register(0) },
+            Instruction::VecX { reg: Register(0) },
+            Instruction::Stow { reg: Register(0) },
+        ],
+        &[
+            Instruction::Push1 { val: [1] },
+            Instruction::VecPush { reg: Register(0) },
+        ],
+    );
+    let err = RegisterTypePhase.run(&code).unwrap_err();
+    assert_eq!(err.variant_name(), "RegisterTypeMismatch");
+}
+
+#[test]
+fn reg_type_conflicting_join_still_accepts_output() {
+    // `Conflict` is not `Unset`: the register is written on every path, so
+    // the requirement both branches do share must keep passing. Without this
+    // the tightening would be indistinguishable from rejecting the join
+    // outright.
+    let code = joined_branches(
+        &[
+            Instruction::Bqmx { reg: Register(0) },
+            Instruction::Stow { reg: Register(0) },
+        ],
+        &[
+            Instruction::Push1 { val: [0] },
+            Instruction::Output { reg: Register(0) },
+        ],
+    );
+    assert!(RegisterTypePhase.run(&code).is_ok());
+}
+
+#[test]
+fn reg_type_bsmx_then_onehotr_mismatch() {
+    // The same guard for the high-level constraint group: a penalty
+    // expansion writes coefficients, which a sample does not hold.
+    let code = bytes(&[
+        Instruction::Push1 { val: [4] },
+        Instruction::Bsmx { reg: Register(0) },
+        Instruction::Push1 { val: [0] },
+        Instruction::Push1 { val: [1] },
+        Instruction::OneHotR { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    let err = RegisterTypePhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "RegisterTypeMismatch");
+}
+
+#[test]
+fn reg_type_veci_then_getline_mismatch() {
+    // VECI writes VecInt to r0; GETLINE accepts Model or Sample, not a vec.
+    let code = bytes(&[
+        Instruction::VecI { reg: Register(0) },
+        Instruction::Push1 { val: [0] },
+        Instruction::GetLine { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    let err = RegisterTypePhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "RegisterTypeMismatch");
+}
+
+#[test]
+fn reg_type_energy_wrong_sample_slot() {
+    // BQMX r0=Model, BSMX r1=Sample, ENERGY with model=r1, sample=r0.
+    // r1 is Sample (ok for model slot? no -- model slot requires Model).
+    let code = bytes(&[
+        Instruction::Push1 { val: [2] },
+        Instruction::Bqmx { reg: Register(0) }, // r0 = Model
+        Instruction::Push1 { val: [2] },
+        Instruction::Bsmx { reg: Register(1) }, // r1 = Sample
+        // Energy with model=r1(Sample) -- should fail
+        Instruction::Energy {
+            model: Register(1),
+            sample: Register(0),
+        },
+        Instruction::Halt {},
+    ]);
+    let err = RegisterTypePhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "RegisterTypeMismatch");
+}
+
+#[test]
+fn reg_type_correct_energy_program() {
+    let code = bytes(&[
+        Instruction::Push1 { val: [2] },
+        Instruction::Bqmx { reg: Register(0) }, // r0 = Model
+        Instruction::Push1 { val: [2] },
+        Instruction::Bsmx { reg: Register(1) }, // r1 = Sample
+        Instruction::Energy {
+            model: Register(0),
+            sample: Register(1),
+        },
+        Instruction::Halt {},
+    ]);
+    assert!(RegisterTypePhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn reg_type_veclen_accepts_vec_xqmx() {
+    let code = bytes(&[
+        Instruction::VecX { reg: Register(0) }, // r0 = VecXqmx
+        Instruction::VecLen { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    assert!(RegisterTypePhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn reg_type_resize_accepts_model_or_sample() {
+    // RESIZE accepts both Model and Sample via the Grid requirement.
+    let code_model = bytes(&[
+        Instruction::Push1 { val: [4] },
+        Instruction::Bqmx { reg: Register(0) },
+        Instruction::Push1 { val: [8] },
+        Instruction::Push1 { val: [8] },
+        Instruction::Resize { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    assert!(RegisterTypePhase.run(&Program::new(code_model)).is_ok());
+
+    let code_sample = bytes(&[
+        Instruction::Push1 { val: [4] },
+        Instruction::Bsmx { reg: Register(0) },
+        Instruction::Push1 { val: [8] },
+        Instruction::Push1 { val: [8] },
+        Instruction::Resize { reg: Register(0) },
+        Instruction::Halt {},
+    ]);
+    assert!(RegisterTypePhase.run(&Program::new(code_sample)).is_ok());
+}
+
+// --- Checker composition ---
+
+#[test]
+fn default_checker_passes_valid_program() {
+    let mut b = InstructionBuilder::new();
+    let _ = b.emit_push(10).emit_push(32).emit_add().emit_halt();
+    assert!(check(&b.build().unwrap()).is_ok());
+}
+
+#[test]
+fn custom_checker_only_jump_phase() {
+    // An unmatched RANGE is not caught if LoopNestingPhase is not included.
+    let code = bytes(&[Instruction::Range {}, Instruction::Halt {}]);
+    let result = Checker::new()
+        .with_phase(JumpTargetPhase)
+        .run(&Program::new(code));
+    assert!(
+        result.is_ok(),
+        "jump-only checker should not catch loop errors"
+    );
+}
+
+#[test]
+fn custom_checker_structural_then_loop() {
+    // A bad opcode is caught by StructuralPhase before LoopNestingPhase runs.
+    let prog = Program::new(vec![0x0D]);
+    let err = Checker::new()
+        .with_phase(StructuralPhase)
+        .with_phase(LoopNestingPhase)
+        .run(&prog)
+        .unwrap_err();
+    assert_eq!(err.variant_name(), "BadOpcode");
+}
+
+// --- StackDepthPhase ---
+
+#[test]
+fn stack_depth_mismatch_at_conditional_join() {
+    // PUSH1(1); JUMPI1(label=0); PUSH1(2); TARGET(label=0); HALT
+    // Taken (JUMPI1 fires, depth 0) vs fall-through (depth 1) at TARGET.
+    let mut b = InstructionBuilder::new();
+    let label = b.label();
+    let _ = b
+        .emit_push(1)
+        .emit_jump_if(label) // taken: depth 0
+        .emit_push(2) // fall-through only: depth 1
+        .place(label)
+        .unwrap()
+        .emit_halt();
+    let err = StackDepthPhase.run(&b.build().unwrap()).unwrap_err();
+    assert_eq!(err.variant_name(), "StackDepthMismatch");
+}
+
+#[test]
+fn stack_depth_mismatch_on_back_edge_to_entry_block() {
+    // .0: PUSH 1; JUMP .0; HALT
+    //
+    // The loop grows the stack by one per iteration and overflows at runtime.
+    // It used to check clean: the entry block's only *predecessor block* is
+    // itself, so the join check skipped it. Program entry is an implicit
+    // incoming edge at depth 0, and counting it makes this the same
+    // disagreement the conditional-join test above catches.
+    let mut b = InstructionBuilder::new();
+    let top = b.label();
+    let _ = b
+        .place(top)
+        .unwrap()
+        .emit_push(1)
+        .emit_jump(top)
+        .emit_halt();
+    let err = StackDepthPhase.run(&b.build().unwrap()).unwrap_err();
+    let CheckerError::StackDepthMismatch {
+        target_offset,
+        depth_a,
+        depth_b,
+    } = err
+    else {
+        panic!("expected StackDepthMismatch, got {err:?}");
+    };
+    // Program entry contributes depth 0; the back-edge arrives at depth 1.
+    assert_eq!(target_offset, 0);
+    assert_eq!(depth_a, 0);
+    assert_eq!(depth_b, 1);
+}
+
+#[test]
+fn stack_depth_mismatch_on_entry_block_with_two_explicit_predecessors() {
+    // .0: PUSH 1; JUMPI .1; PUSH 5; PUSH 5; JUMP .0
+    // .1: PUSH 5; PUSH 5; JUMP .0
+    //
+    // The second shape the fix newly rejects: the entry block already has two
+    // explicit predecessors, so the pre-fix eligibility check fired -- but both
+    // back-edges agree (depth 2), and only the implicit program-entry edge
+    // (depth 0) creates the disagreement. Guards against weakening the fix to
+    // "count the implicit edge only when there are fewer than two explicit
+    // predecessors", which passes the other two tests and silently reinstates
+    // acceptance of this program, growing the stack by 2 per iteration.
+    let mut b = InstructionBuilder::new();
+    let top = b.label();
+    let alt = b.label();
+    let _ = b
+        .place(top)
+        .unwrap()
+        .emit_push(1)
+        .emit_jump_if(alt)
+        .emit_push(5)
+        .emit_push(5)
+        .emit_jump(top)
+        .place(alt)
+        .unwrap()
+        .emit_push(5)
+        .emit_push(5)
+        .emit_jump(top);
+    let err = StackDepthPhase.run(&b.build().unwrap()).unwrap_err();
+    let CheckerError::StackDepthMismatch {
+        target_offset,
+        depth_a,
+        depth_b,
+    } = err
+    else {
+        panic!("expected StackDepthMismatch, got {err:?}");
+    };
+    assert_eq!(target_offset, 0);
+    assert_eq!(depth_a, 0);
+    assert_eq!(depth_b, 2);
+}
+
+#[test]
+fn balanced_back_edge_to_entry_block_is_accepted() {
+    // The counterpart: a loop whose body leaves the stack as it found it must
+    // still check clean, so the implicit entry edge does not reject honest programs.
+    //
+    // .0: PUSH 1; POP; JUMP .0; HALT  -- net zero per iteration.
+    let mut b = InstructionBuilder::new();
+    let top = b.label();
+    let _ = b
+        .place(top)
+        .unwrap()
+        .emit_push(1)
+        .emit_pop()
+        .emit_jump(top)
+        .emit_halt();
+    assert!(StackDepthPhase.run(&b.build().unwrap()).is_ok());
+}
+
+#[test]
+fn sclr_back_edge_to_entry_block_is_rejected() {
+    // .0: SCLR; PUSH 1; JUMP .0; HALT
+    //
+    // This loop cannot overflow at runtime -- SCLR resets the stack every
+    // iteration -- so rejecting it is an over-rejection, pinned here as
+    // intended rather than incidental: the same loop with a NOP before the
+    // label was already rejected at a non-entry join before the implicit
+    // entry edge was counted, and the entry block gets no special exemption.
+    let mut b = InstructionBuilder::new();
+    let top = b.label();
+    let _ = b
+        .place(top)
+        .unwrap()
+        .emit_sclr()
+        .emit_push(1)
+        .emit_jump(top)
+        .emit_halt();
+    let err = StackDepthPhase.run(&b.build().unwrap()).unwrap_err();
+    let CheckerError::StackDepthMismatch {
+        target_offset,
+        depth_a,
+        depth_b,
+    } = err
+    else {
+        panic!("expected StackDepthMismatch, got {err:?}");
+    };
+    // Program entry contributes depth 0; the back-edge arrives at depth 1.
+    assert_eq!(target_offset, 0);
+    assert_eq!(depth_a, 0);
+    assert_eq!(depth_b, 1);
+}
+
+#[test]
+fn stack_effect_underflow_on_pop_empty() {
+    // POP with nothing on the stack.
+    let code = bytes(&[Instruction::Pop {}, Instruction::Halt {}]);
+    let err = StackDepthPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "StackUnderflow");
+}
+
+#[test]
+fn stack_effect_underflow_on_binary_op() {
+    // ADD on an empty stack pops two values that are not there.
+    let code = bytes(&[Instruction::Add {}, Instruction::Halt {}]);
+    let err = StackDepthPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "StackUnderflow");
+}
+
+#[test]
+fn stack_effect_underflow_on_binary_op_with_one_operand() {
+    // ADD pops two before pushing one; a single value is not enough, even
+    // though the block's net depth never goes negative (+1, then -1).
+    let code = bytes(&[
+        Instruction::Push1 { val: [1] },
+        Instruction::Add {},
+        Instruction::Halt {},
+    ]);
+    let err = StackDepthPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "StackUnderflow");
+}
+
+#[test]
+fn stack_effect_underflow_on_swap_with_one_value() {
+    // SWAP pops two and pushes two: net zero, but it needs two values.
+    let code = bytes(&[
+        Instruction::Push1 { val: [1] },
+        Instruction::Swap {},
+        Instruction::Halt {},
+    ]);
+    let program = Program::new(code);
+    let err = StackDepthPhase.run(&program).unwrap_err();
+    assert_eq!(err.variant_name(), "StackUnderflow");
+    // The full pipeline, which the CLI and the chain run, rejects it too.
+    assert!(matches!(
+        check(&program),
+        Err(CheckerError::StackUnderflow { .. })
+    ));
+}
+
+#[test]
+fn stack_effect_underflow_on_copy_of_empty_stack() {
+    // COPY pops one and pushes two: net +1, but it needs a value to copy.
+    let code = bytes(&[Instruction::Copy {}, Instruction::Halt {}]);
+    let err = StackDepthPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "StackUnderflow");
+}
+
+#[test]
+fn stack_effect_underflow_on_idxgrid_with_two_operands() {
+    // The example spec/xqvm/CHECKER.md uses: IDXGRID pops three.
+    let code = bytes(&[
+        Instruction::Push1 { val: [1] },
+        Instruction::Push1 { val: [2] },
+        Instruction::IdxGrid {},
+        Instruction::Halt {},
+    ]);
+    let err = StackDepthPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "StackUnderflow");
+}
+
+#[test]
+fn stack_effect_underflow_after_sclr_counts_pops() {
+    // After SCLR the depth is absolute: PUSH 1 / SWAP underflows there too.
+    let code = bytes(&[
+        Instruction::Sclr {},
+        Instruction::Push1 { val: [1] },
+        Instruction::Swap {},
+        Instruction::Halt {},
+    ]);
+    let err = StackDepthPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "StackUnderflow");
+}
+
+#[test]
+fn a_second_sclr_does_not_erase_an_underflow_after_the_first() {
+    // Both programs fault at run time on the instruction between the two
+    // SCLRs; the second SCLR resets the depth but not that fault.
+    let programs: [&[Instruction]; 2] = [
+        &[
+            Instruction::Sclr {},
+            Instruction::Push1 { val: [1] },
+            Instruction::Swap {},
+            Instruction::Sclr {},
+            Instruction::Halt {},
+        ],
+        &[
+            Instruction::Sclr {},
+            Instruction::Pop {},
+            Instruction::Sclr {},
+            Instruction::Halt {},
+        ],
+    ];
+    for program in programs {
+        let err = StackDepthPhase
+            .run(&Program::new(bytes(program)))
+            .unwrap_err();
+        assert_eq!(err.variant_name(), "StackUnderflow", "{program:?}");
+    }
+}
+
+#[test]
+fn stack_effect_underflow_on_a_path_through_a_join() {
+    // Both arms leave depth 1 at the join, where SWAP needs 2.
+    let mut b = InstructionBuilder::new();
+    let join = b.label();
+    let _ = b.emit_push(1);
+    let _ = b.emit_push(0);
+    let _ = b.emit_jump_if(join);
+    let _ = b.place(join).unwrap();
+    let _ = b.emit(Instruction::Swap {});
+    let _ = b.emit_halt();
+    let program = b.build().unwrap();
+    let err = StackDepthPhase.run(&program).unwrap_err();
+    assert_eq!(err.variant_name(), "StackUnderflow");
+}
+
+/// Every opcode in the table, zero-initialised, for the table-driven test
+/// below.
+macro_rules! all_default_instructions {
+    (
+        $( ($code:literal, $variant:ident, $mnem:literal, $doc:literal, $_stack:expr,
+            {$($fname:ident: $fty:ty),* $(,)?}) ),*
+        $(,)?
+    ) => {
+        [ $( Instruction::$variant { $($fname: <$fty as Default>::default(),)* } ),* ]
+    };
+}
+
+/// Every opcode that pops is rejected one value short of its pop count and
+/// accepted at exactly it, whatever it pushes. Control-flow openers and
+/// conditional jumps are left out: their programs need a matching `NEXT`
+/// or `TARGET`, and the plain pop-only case is already covered above.
+///
+/// The checker reads its pop counts from the opcode table, and the build
+/// checks the table against `opcodes.yaml`, so neither check reaches what
+/// the VM actually pops. Each program is therefore also run: one short, the
+/// VM must underflow (an overstated count would make the checker reject
+/// valid programs); at exactly the count it must not (an understated one
+/// would make it accept programs that fault on every run). The VM pops
+/// before it resolves a register, so the underflow comes first even where
+/// the zeroed operands would fault later. Where the exact run completes,
+/// the stack it leaves is the push count. An opcode that pops nothing is
+/// run on an empty stack for the same push-count check: a push count that
+/// is too high would let the checker accept a later pop that underflows.
+#[test]
+fn every_popping_opcode_needs_its_full_pop_count() {
+    let with = |instr: Instruction, values: u8| {
+        let mut instrs: Vec<Instruction> = (0..values)
+            .map(|_| Instruction::Push1 { val: [1] })
+            .collect();
+        instrs.extend([instr, Instruction::Halt {}]);
+        Program::new(bytes(&instrs))
+    };
+    let mut pop_and_push = Vec::new();
+    let mut pushes_only = Vec::new();
+    for instr in crate::opcodes!(all_default_instructions) {
+        let crate::StackEffect::Fixed { pops, pushes } = instr.stack_effect() else {
+            continue;
+        };
+        // An opcode that pops nothing cannot underflow, but its push count
+        // still decides the depth the checker assumes after it.
+        let Some(one_short) = pops.checked_sub(1) else {
+            let mut vm = crate::Vm::new();
+            if vm.run(&with(instr, 0)).is_ok() {
+                assert_eq!(
+                    vm.stack().len(),
+                    usize::from(pushes),
+                    "{}: the VM left a stack the table's push count does not predict",
+                    instr.mnemonic()
+                );
+                if pushes > 0 {
+                    pushes_only.push(instr.mnemonic());
+                }
+            }
+            continue;
+        };
+        if matches!(
+            instr,
+            Instruction::JumpI1 { .. }
+                | Instruction::JumpI2 { .. }
+                | Instruction::Range {}
+                | Instruction::Iter { .. }
+        ) {
+            continue;
+        }
+        if pushes > 0 {
+            pop_and_push.push(instr.mnemonic());
+        }
+        let short = StackDepthPhase.run(&with(instr, one_short));
+        assert!(
+            matches!(short, Err(CheckerError::StackUnderflow { .. })),
+            "{}: {one_short} values for {pops} pops should underflow, got {short:?}",
+            instr.mnemonic()
+        );
+        let exact = StackDepthPhase.run(&with(instr, pops));
+        assert!(
+            exact.is_ok(),
+            "{}: {pops} values for {pops} pops should check clean, got {exact:?}",
+            instr.mnemonic()
+        );
+
+        let short_run = crate::Vm::new().run(&with(instr, one_short));
+        assert!(
+            matches!(short_run, Err(crate::Error::StackUnderflow { .. })),
+            "{}: the VM should underflow on {one_short} values for {pops} pops, got {short_run:?}",
+            instr.mnemonic()
+        );
+        let mut vm = crate::Vm::new();
+        match vm.run(&with(instr, pops)) {
+            Err(crate::Error::StackUnderflow { .. }) => panic!(
+                "{}: the VM underflowed on {pops} values; the table understates its pops",
+                instr.mnemonic()
+            ),
+            Ok(()) => assert_eq!(
+                vm.stack().len(),
+                usize::from(pushes),
+                "{}: the VM left a stack the table's push count does not predict",
+                instr.mnemonic()
+            ),
+            Err(_) => {}
+        }
+    }
+    // Every opcode that both pops and pushes went through the loop above;
+    // spec/xqvm/CHECKER.md's per-opcode table lists the same forty.
+    assert_eq!(pop_and_push.len(), 40, "{pop_and_push:?}");
+    // Of the opcodes that pop nothing and push, only the PUSHn family runs
+    // to completion on zeroed operands; LOAD, VECLEN and ENERGY stop at an
+    // unset register. The list pins that the push check above ran at all.
+    assert_eq!(
+        pushes_only,
+        [
+            "PUSH1", "PUSH2", "PUSH3", "PUSH4", "PUSH5", "PUSH6", "PUSH7", "PUSH8"
+        ],
+    );
+}
+
+#[test]
+fn stack_effect_valid_push_pop() {
+    let code = bytes(&[
+        Instruction::Push1 { val: [42] },
+        Instruction::Pop {},
+        Instruction::Halt {},
+    ]);
+    assert!(StackDepthPhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn stack_effect_sclr_resets_depth() {
+    // PUSH, PUSH, SCLR, then POP would underflow — SCLR drops both items.
+    let code = bytes(&[
+        Instruction::Push1 { val: [1] },
+        Instruction::Push1 { val: [2] },
+        Instruction::Sclr {},
+        Instruction::Pop {},
+        Instruction::Halt {},
+    ]);
+    let err = StackDepthPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "StackUnderflow");
+}
+
+#[test]
+fn stack_effect_sclr_leaves_clean_stack() {
+    // PUSH, PUSH, SCLR -- depth is 0 afterwards; HALT is fine.
+    let code = bytes(&[
+        Instruction::Push1 { val: [1] },
+        Instruction::Push1 { val: [2] },
+        Instruction::Sclr {},
+        Instruction::Halt {},
+    ]);
+    assert!(StackDepthPhase.run(&Program::new(code)).is_ok());
+}
+
+// SCLR inside a loop resets the depth counter to 0 unconditionally. If the
+// depth at loop body entry was N > 0, the exit depth will be 0 != N and
+// LoopStackImbalance is raised. The error message says "loop has non-zero
+// stack effect", which is technically correct but the root cause is a global
+// stack reset mid-iteration rather than an unmatched push or pop.
+#[test]
+fn sclr_inside_loop_body_causes_imbalance() {
+    let code = bytes(&[
+        Instruction::Push1 { val: [1] }, // extra item -- entry depth before RANGE = 3
+        Instruction::Push1 { val: [0] }, // start
+        Instruction::Push1 { val: [3] }, // count
+        Instruction::Range {},           // pops 2; entry depth recorded = 1
+        Instruction::Sclr {},            // resets depth to 0; exit depth = 0 != 1
+        Instruction::Next {},
+        Instruction::Halt {},
+    ]);
+    let err = StackDepthPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "LoopStackImbalance");
+}
+
+#[test]
+fn loop_body_neutral_passes() {
+    // PUSH start, PUSH count, RANGE, NEXT, HALT -- body is empty, net effect = 0.
+    let code = bytes(&[
+        Instruction::Push1 { val: [0] },
+        Instruction::Push1 { val: [3] },
+        Instruction::Range {},
+        Instruction::Next {},
+        Instruction::Halt {},
+    ]);
+    assert!(StackDepthPhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn loop_body_push_causes_imbalance() {
+    // Loop body does a PUSH but no matching POP: each iteration leaks one item.
+    let code = bytes(&[
+        Instruction::Push1 { val: [0] },
+        Instruction::Push1 { val: [3] },
+        Instruction::Range {},
+        Instruction::Push1 { val: [99] }, // unmatched push inside loop
+        Instruction::Next {},
+        Instruction::Halt {},
+    ]);
+    let err = StackDepthPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "LoopStackImbalance");
+}
+
+#[test]
+fn loop_body_pop_causes_imbalance() {
+    // Loop body pops the loop's own operands off the stack.
+    // Entry depth after RANGE's -2 = 0. POP inside would underflow -- caught as underflow.
+    // Instead use a loop that has 1 extra item before RANGE.
+    // depth before RANGE = 3 (start=0, count=3, extra=1 → no, RANGE pops 2 → depth=1)
+    // body pops 1 → depth=0, NEXT expects depth=1 → LoopStackImbalance
+    let code = bytes(&[
+        Instruction::Push1 { val: [1] }, // extra item
+        Instruction::Push1 { val: [0] }, // start
+        Instruction::Push1 { val: [3] }, // count
+        Instruction::Range {},           // pops 2, depth = 1
+        Instruction::Pop {},             // pops extra, depth = 0
+        Instruction::Next {},            // expects depth = 1
+        Instruction::Halt {},
+    ]);
+    let err = StackDepthPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "LoopStackImbalance");
+}
+
+#[test]
+fn nested_loops_both_neutral() {
+    let code = bytes(&[
+        Instruction::Push1 { val: [0] },
+        Instruction::Push1 { val: [2] },
+        Instruction::Range {},
+        Instruction::Push1 { val: [0] },
+        Instruction::Push1 { val: [2] },
+        Instruction::Range {},
+        Instruction::Next {},
+        Instruction::Next {},
+        Instruction::Halt {},
+    ]);
+    assert!(StackDepthPhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn stack_effect_on_all_variants_does_not_panic() {
+    // Smoke test: stack_effect() must not panic for any instruction variant.
+    use crate::bytecode::types::Register;
+    let instrs: &[Instruction] = &[
+        Instruction::Target {},
+        Instruction::Jump1 { label: 0 },
+        Instruction::JumpI1 { label: 0 },
+        Instruction::Nop {},
+        Instruction::Halt {},
+        Instruction::Sclr {},
+        Instruction::Add {},
+        Instruction::Energy {
+            model: Register(0),
+            sample: Register(1),
+        },
+    ];
+    for instr in instrs {
+        let _ = instr.stack_effect();
+    }
+}
+
+// --- scan ---
+
+/// `scan` as a walk over an [`InstructionStream`], kept verbatim as the
+/// oracle for `scan_matches_the_stream_walk`.
+fn scan_via_stream(code: &[u8]) -> (JumpTable, (u8, u8), Option<CheckerError>) {
+    let mut targets: Vec<usize> = Vec::new();
+    let mut loop_offsets: Vec<usize> = Vec::new();
+    let mut jump_refs: Vec<(usize, u16)> = Vec::new();
+    let mut first_error: Option<CheckerError> = None;
+    let mut input_slots: u8 = 0;
+    let mut output_slots: u8 = 0;
+
+    let mut stream = InstructionStream::new(code);
+    'scan: while let Some(item) = stream.next_instruction() {
+        let (pos, _label, instr) = match item {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = first_error.get_or_insert_with(|| stream_err(&e));
+                break 'scan;
+            }
+        };
+
+        match instr {
+            Instruction::Target {} => targets.push(pos),
+            Instruction::Input { .. } => input_slots = input_slots.saturating_add(1),
+            Instruction::Output { .. } => output_slots = output_slots.saturating_add(1),
+            Instruction::Range {} | Instruction::Iter { .. } => loop_offsets.push(pos),
+            Instruction::Next {} if first_error.is_none() && loop_offsets.pop().is_none() => {
+                first_error = Some(CheckerError::NoActiveLoop { offset: pos });
+            }
+            Instruction::Lidx { .. } | Instruction::LVal { .. } if loop_offsets.is_empty() => {
+                let _ = first_error.get_or_insert(CheckerError::NoActiveLoop { offset: pos });
+            }
+            Instruction::Jump1 { label } | Instruction::JumpI1 { label } => {
+                jump_refs.push((pos, u16::from(label)));
+            }
+            Instruction::Jump2 { label } | Instruction::JumpI2 { label } => {
+                jump_refs.push((pos, label));
+            }
+            _ => {}
+        }
+    }
+
+    // Unmatched loop openers: report the outermost (first-pushed) one.
+    if first_error.is_none()
+        && let Some(&outermost) = loop_offsets.first()
+    {
+        first_error = Some(CheckerError::UnmatchedLoop {
+            offset: outermost,
+            depth: loop_offsets.len(),
+        });
+    }
+
+    let jump_table = JumpTable::new(targets);
+
+    // Deferred jump-target check: needs the final TARGET count.
+    if first_error.is_none() {
+        let target_count = jump_table.len();
+        for (offset, label) in jump_refs {
+            if usize::from(label) >= target_count {
+                first_error = Some(CheckerError::UndefinedJumpTarget {
+                    offset,
+                    label,
+                    target_count,
+                });
+                break;
+            }
+        }
+    }
+
+    (jump_table, (input_slots, output_slots), first_error)
+}
+
+/// One xorshift64 step: deterministic and dependency-free.
+fn next_rand(state: &mut u64) -> u64 {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    *state
+}
+
+/// Encode one instruction from the set `scan` treats specially, or a byte
+/// the decoder rejects, or a `PUSH2` that truncates when it ends the buffer.
+fn random_instruction(state: &mut u64) -> Vec<u8> {
+    let [reg, label8, label16, pick, ..] = next_rand(state).to_le_bytes();
+    let reg = Register(reg);
+    let label8 = label8 % 8;
+    let label16 = u16::from(label16 % 8);
+    let instr = match pick % 16 {
+        0 | 1 => Instruction::Target {},
+        2 => Instruction::Jump1 { label: label8 },
+        3 => Instruction::JumpI1 { label: label8 },
+        4 => Instruction::Jump2 { label: label16 },
+        5 => Instruction::JumpI2 { label: label16 },
+        6 => Instruction::Range {},
+        7 => Instruction::Iter { reg },
+        8 | 9 => Instruction::Next {},
+        10 => Instruction::Lidx { reg },
+        11 => Instruction::LVal { reg },
+        12 => Instruction::Input { reg },
+        13 => Instruction::Output { reg },
+        14 => return vec![0x0D],
+        _ => return vec![0x12],
+    };
+    codec::encode(&instr)
+}
+
+#[test]
+fn scan_matches_the_stream_walk() {
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut seen: BTreeSet<&'static str> = BTreeSet::new();
+    let mut clean = 0_u32;
+    for _ in 0..20_000 {
+        let len = next_rand(&mut state) % 24;
+        let code: Vec<u8> = (0..len)
+            .flat_map(|_| random_instruction(&mut state))
+            .collect();
+        let (table, slots, err) = scan(&code);
+        let (want_table, want_slots, want_err) = scan_via_stream(&code);
+        assert_eq!((&table, slots), (&want_table, want_slots), "{code:02X?}");
+        assert_eq!(format!("{err:?}"), format!("{want_err:?}"), "{code:02X?}");
+        match err {
+            Some(e) => {
+                let _ = seen.insert(e.variant_name());
+            }
+            None => clean += 1,
+        }
+    }
+    // The generator has to reach every outcome `scan` can report, or the
+    // comparison above proves less than it appears to.
+    assert!(clean > 100, "only {clean} generated programs checked clean");
+    for variant in [
+        "BadOpcode",
+        "TruncatedInstruction",
+        "NoActiveLoop",
+        "UnmatchedLoop",
+        "UndefinedJumpTarget",
+    ] {
+        assert!(
+            seen.contains(variant),
+            "{variant} never generated; saw {seen:?}"
+        );
+    }
+}
+
+#[test]
+fn scan_reports_a_truncated_last_instruction_at_its_opcode() {
+    // NOP, then PUSH2 (0x12) with one of its two operand bytes.
+    let (_, _, err) = scan(&[0xF0, 0x12, 0x00]);
+    assert!(
+        matches!(err, Some(CheckerError::TruncatedInstruction { offset: 1 })),
+        "got {err:?}"
+    );
+}

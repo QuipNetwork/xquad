@@ -18,8 +18,8 @@
 """
 XQuad — umbrella namespace for the full toolchain.
 
-`xquad` is a thin meta-package that puts the peer distributions
-(`xqffi`, `xqcp`, `xqsa`) under one surface so users can write a single
+`xquad` is a thin umbrella that puts the `xqffi`, `xqcp` and `xqsa`
+packages it ships with under one surface so users can write a single
 set of imports for the full encode → sample → verify → decode
 pipeline::
 
@@ -31,17 +31,17 @@ pipeline::
     v.run_bytecode(bytecode)
     samples = sa.SolverCPU().solve(problem.model())
 
-`cp`, `sa`, `asm` and `verifier` are aliases, not copies: `xquad.cp` *is*
+`cp`, `sa`, `asm` and `checker` are aliases, not copies: `xquad.cp` *is*
 `xqcp`, `xquad.sa` *is* `xqsa`, `xquad.asm` *is* `xqffi.asm` and
-`xquad.verifier` *is* `xqffi.verifier`. An import finder maps every
+`xquad.checker` *is* `xqffi.checker`. An import finder maps every
 dotted import under an alias to its target, so `import xquad.cp` and
 `from xquad.sa.quip import SolverQuip` resolve to the same module
 objects. `types`, `vm` and `program` are this package's own modules.
 
 Nothing loads until it is first used: `import xquad` imports none of
 the peer packages, which keeps the `xquad` command's startup short.
-Users wanting a subset can still `pip install xqffi xqcp xqsa`
-individually; `pip install xquad` is the convenience path.
+All four packages ship in the one `xquad` distribution
+(`pip install xquad`).
 """
 
 from __future__ import annotations
@@ -52,16 +52,20 @@ from importlib.machinery import ModuleSpec
 from types import ModuleType
 from typing import TYPE_CHECKING
 
+from xquad import _legacy
+
+_legacy.check()
+
 if TYPE_CHECKING:
     import xqcp as cp
     import xqsa as sa
-    from xqffi import asm, verifier
+    from xqffi import asm, checker
     from xquad import program, types, vm
 
-_ALIASES = {"cp": "xqcp", "sa": "xqsa", "asm": "xqffi.asm", "verifier": "xqffi.verifier"}
+_ALIASES = {"cp": "xqcp", "sa": "xqsa", "asm": "xqffi.asm", "checker": "xqffi.checker"}
 _LAZY = ("types", "vm", "program")
 
-__all__ = ["asm", "cp", "program", "sa", "types", "verifier", "vm"]
+__all__ = ["asm", "checker", "cp", "program", "sa", "types", "vm"]
 
 
 class _AliasLoader:
@@ -78,7 +82,7 @@ class _AliasLoader:
     def exec_module(self, module: ModuleType) -> None:
         # The import system has just set the alias's spec on the target; give it its own back, or
         # `importlib.reload` and `importlib.resources` see a spec with no origin and no real loader.
-        # The PyO3 submodules (`xqffi.asm`, `xqffi.verifier`) have none, so they keep the alias spec
+        # The PyO3 submodules (`xqffi.asm`, `xqffi.checker`) have none, so they keep the alias spec
         # for `find_spec`; `importlib.reload` does not work on them either way.
         if self._target_spec is not None:
             module.__spec__ = self._target_spec

@@ -37,25 +37,35 @@ brew install vale          # macOS
 # or download the pinned release from https://github.com/errata-ai/vale/releases
 ```
 
-- Python 3.13+ and [uv](https://docs.astral.sh/uv/) 0.8.1 or later -- install the Python workspace in one step:
+- Python 3.13+ and [uv](https://docs.astral.sh/uv/) 0.8.1 or later -- install the Python project in one step:
 
 ```sh
 make deps-py
 ```
 
-This runs `uv sync`, giving you editable installs of `xqcp`, `xqsa` and
-`xquad`, and `xqffi` as a wheel built from the current Rust sources. Later
-`uv sync` and `uv run` calls rebuild it after a Rust edit, because
-`xqffi/pyproject.toml` lists its Rust inputs as uv `cache-keys`. `xqffi` is not
-editable so that its compiled extension lives in the installed wheel, where a
-cached build always carries it; an edit under `xqffi/python/` takes effect on
-the next `uv sync` or `uv run`.
+This runs `uv sync`, which installs the root `xquad` project -- `xqffi`,
+`xqcp`, `xqsa` and `xquad` -- editable into `.venv/`. maturin compiles the
+`xqffi` extension from the current Rust sources into `xqffi/xqffi.*.so`, in the
+tree beside the package's shim and stubs. A Python edit anywhere takes effect
+straight away. A Rust edit is rebuilt by the next `uv sync` or `uv run`,
+because the root `pyproject.toml` lists the Rust inputs as uv `cache-keys`.
 The build runs `cargo --locked` from the root `pyproject.toml`'s
 `config-settings-package`, which uv reads from 0.8.1. An older uv warns that it
 failed to parse `pyproject.toml` and builds without `--locked`.
 
+The compiled extension is the one thing in the tree uv does not track. If it
+goes while `.venv/` stays -- a `git clean -fdX` that spares `.venv/`, say --
+`uv sync` reports nothing to do and `import xqffi` fails with
+`No module named 'xqffi.xqffi'`. `make deps-py`, and every make target that
+runs its own `uv sync`, notices through `scripts/ensure-xqffi.sh` and
+reinstalls the project; by hand, run:
+
+```sh
+uv sync --reinstall-package xquad
+```
+
 `uv sync` resolves the base dependencies only, so the optional solver backends
-are absent from a fresh workspace. Local GPU or QPU work needs the matching
+are absent from a fresh install. Local GPU or QPU work needs the matching
 extra synced on top -- `uv sync --extra cuda`, `--extra metal`, `--extra dwave`
 or `--extra quip`.
 
@@ -69,9 +79,9 @@ re-resolved:
   `--locked`, so cargo fails if the lockfile would have to change instead of
   quietly resolving a different dependency set. That covers the wrappers as
   well as `cargo` itself: `cargo deny --locked check`, the maturin
-  build `uv sync` runs for `xqffi` (the root `pyproject.toml` passes
+  build `uv sync` runs for the project (the root `pyproject.toml` passes
   `--locked` through `config-settings-package`, so a drifted lock fails
-  `make deps-py` rather than being resolved around), the two `maturin build
+  `make deps-py` rather than being resolved around), the `maturin build
   --locked` calls in `scripts/python-dists.sh` that produce the wheels
   `release:pypi` uploads, and `wasm-pack test`, which forwards trailing
   options through to its `cargo build`. `cargo fmt` is excluded because it
@@ -81,9 +91,9 @@ re-resolved:
   One resolving invocation is covered by ordering instead of by a flag:
   `maturin sdist`, at the end of `scripts/python-dists.sh`, re-resolves (it
   shells out to `cargo metadata`, which rewrites a stale lock in place) but
-  has no `--locked` option. The script is `set -euo pipefail` and the two
+  has no `--locked` option. The script is `set -euo pipefail` and the
   `maturin build --locked` calls run first, so a stale lock fails there and
-  the run never reaches the sdist. Do not reorder those three calls.
+  the run never reaches the sdist. Do not move the sdist ahead of them.
 
   `fixtures/pallet-xqvm` is a standalone workspace with its own lock; it is
   covered too, by `make test-substrate-fixture`'s `cargo test --locked`.
@@ -92,8 +102,10 @@ re-resolved:
   `pyproject.toml`, rather than the `uv sync` behaviour of quietly rewriting
   it. It runs in `make preflight-py` and in CI's `verify:python`.
 
-If either check fails, regenerate the lock (`cargo check`, `uv lock`) and
-commit the result with the change that caused it.
+If either check fails, regenerate the lock (`cargo check`,
+`make regen-uv-lock`) and commit the result with the change that caused it.
+`make regen-uv-lock` runs the pinned uv; a plain `uv lock` with a newer uv
+rewrites `uv.lock` to a lock revision CI's uv does not flag.
 
 Tool-version pins live in the Makefile rather than in CI configuration.
 `RUFF_VERSION` and `UV_VERSION` are each read out of the Makefile with `sed`,
@@ -127,9 +139,9 @@ make preflight-docs     # generated-doc freshness, docs drift, README length, pr
 make preflight-policy   # changelog render, release-notes scoping, atomic spec-MR and commit-message guards
 ```
 
-`make preflight-release` (crate packaging dry-run plus the four Python
-distributions) needs `maturin`, `twine`, and `uv` on `PATH`, so it is kept out
-of plain `make preflight`; see [RELEASING.md](RELEASING.md).
+`make preflight-release` (crate packaging dry-run plus the `xquad` Python
+distribution) needs `maturin` with `ziglang`, `twine`, and `uv` on `PATH`, so
+it is kept out of plain `make preflight`; see [RELEASING.md](RELEASING.md).
 
 `make all` (`fmt` + `lint` + `test`) is a convenience for reformatting the
 tree and running everything locally, but it is not what CI runs -- CI invokes
@@ -165,7 +177,7 @@ All commit messages must follow the [Conventional Commits](https://www.conventio
 
 **Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`, `security`, `deprecate`, `release`
 
-**Scope** is optional. When used, it should be the crate or package name (e.g. `xqvm`, `xqcp`, `conformance`).
+**Scope** is optional. When used, it should be the crate or package name (e.g. `xqvm`, `xqcp`, `xqffi`).
 
 **Rules:**
 

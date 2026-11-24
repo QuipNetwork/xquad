@@ -24,7 +24,7 @@ Pegasus qubit topology. :class:`xqsa.SolverDWave` runs it.
 
 Requires the optional ``dwave`` extra::
 
-    pip install xqsa[dwave]
+    pip install xquad[dwave]
 
 Credentials are resolved from constructor arguments first, then from the
 ``DWAVE_API_TOKEN`` and ``DWAVE_API_ENDPOINT`` environment variables.
@@ -64,7 +64,7 @@ class InProcessDWave(Implementation):
         try:
             import dwave.system as _dwave_system
         except ImportError as exc:
-            raise ImportError("dwave-system is not installed. Install xqsa with: pip install xqsa[dwave]") from exc
+            raise ImportError("dwave-system is not installed. Install xquad with: pip install xquad[dwave]") from exc
 
         resolved_token = token or os.environ.get("DWAVE_API_TOKEN")
         if resolved_token is None:

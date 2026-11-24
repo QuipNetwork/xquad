@@ -34,16 +34,17 @@ Two Rust crates, published to crates.io:
 | [`xqasm`](https://gitlab.com/quip.network/xquad/-/tree/main/xqasm) | Text assembler: `.xqasm` source to bytecode |
 
 A third crate, [`xqffi`](https://gitlab.com/quip.network/xquad/-/tree/main/xqffi),
-is a PyO3 bridge that exposes `xqvm` and `xqasm` to Python. It ships as a
-Python wheel rather than a crates.io library.
+is a PyO3 bridge that exposes `xqvm` and `xqasm` to Python. It ships inside
+the Python wheel rather than as a crates.io library.
 
-Four Python distributions, published to PyPI:
+One Python distribution, `xquad`, is published to PyPI. It carries four
+packages:
 
 | Package | Role |
 |---|---|
 | [`xqcp`](https://gitlab.com/quip.network/xquad/-/tree/main/xqcp) | High-level constraint-programming DSL that compiles to XQVM assembly |
 | [`xqsa`](https://gitlab.com/quip.network/xquad/-/tree/main/xqsa) | Solver adapters for XQMX models: local simulated annealing, D-Wave, and the Quip network |
-| [`xqffi`](https://gitlab.com/quip.network/xquad/-/tree/main/xqffi) | The PyO3 FFI bindings crate above, packaged as a wheel |
+| [`xqffi`](https://gitlab.com/quip.network/xquad/-/tree/main/xqffi) | The PyO3 FFI bindings crate above, compiled into the wheel |
 | [`xquad`](https://gitlab.com/quip.network/xquad/-/tree/main/xquad) | Umbrella package re-exporting `xqffi`, `xqcp`, and `xqsa` under one namespace, with an interactive `Program` / `Session` / `RunResult` API |
 
 `spec/xqvm/` defines the VM, and the committed conformance vectors hold

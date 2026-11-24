@@ -17,10 +17,8 @@
 
 """`xquad` command parity with the retired `xqcli` binary, through click's `CliRunner`.
 
-Every case runs under the deprecated top-level names (`asm`, `dism`,
-`run`, `verify`), which keep `xqcli`'s spelling, and again under
-`xquad vm ...`. The Rust tracer writes to fd 2, which `CliRunner` cannot
-see, so the trace cases read it through `capfd`.
+Every case runs under `xquad vm ...`. The Rust tracer writes to fd 2,
+which `CliRunner` cannot see, so the trace cases read it through `capfd`.
 """
 
 from __future__ import annotations
@@ -41,13 +39,7 @@ LOOP_1M = "PUSH 0\nPUSH 1000000\nRANGE\n  LVAL r0\nNEXT\nHALT\n"
 # Source that is not valid XQASM.
 INVALID_SRC = "NOTANOPCODE\n"
 
-OLD = {"asm": ["asm"], "dis": ["dism"], "run": ["run"], "check": ["verify"]}
-NEW = {"asm": ["vm", "asm"], "dis": ["vm", "dis"], "run": ["vm", "run"], "check": ["vm", "check"]}
-
-
-@pytest.fixture(params=["old", "vm"])
-def cmd(request: pytest.FixtureRequest) -> dict[str, list[str]]:
-    return OLD if request.param == "old" else NEW
+VM = {"asm": ["vm", "asm"], "dis": ["vm", "dis"], "run": ["vm", "run"], "check": ["vm", "check"]}
 
 
 def invoke(args: list[str], stdin: bytes | None = None) -> Result:
@@ -72,41 +64,41 @@ def assemble_bytes(tmp_path: Path, src: str) -> bytes:
 # -- asm --
 
 
-def test_asm_writes_default_xqb_file(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
-    result = invoke([*cmd["asm"], str(write(tmp_path, "prog.xqasm", PUSH_42))])
+def test_asm_writes_default_xqb_file(tmp_path: Path) -> None:
+    result = invoke([*VM["asm"], str(write(tmp_path, "prog.xqasm", PUSH_42))])
     assert result.exit_code == 0, result.output
     assert (tmp_path / "prog.xqb").exists()
     assert "assembled 2 instructions" in result.stderr
     assert f"-> {tmp_path / 'prog.xqb'}" in result.stderr
 
 
-def test_asm_stdout_flag_emits_nonempty_bytes(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
-    result = invoke([*cmd["asm"], "--stdout", str(write(tmp_path, "prog.xqasm", PUSH_42))])
+def test_asm_stdout_flag_emits_nonempty_bytes(tmp_path: Path) -> None:
+    result = invoke([*VM["asm"], "--stdout", str(write(tmp_path, "prog.xqasm", PUSH_42))])
     assert result.exit_code == 0, result.output
     assert result.stdout_bytes
 
 
-def test_asm_custom_output_path(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
+def test_asm_custom_output_path(tmp_path: Path) -> None:
     out = tmp_path / "custom.xqb"
-    result = invoke([*cmd["asm"], "-o", str(out), str(write(tmp_path, "prog.xqasm", PUSH_42))])
+    result = invoke([*VM["asm"], "-o", str(out), str(write(tmp_path, "prog.xqasm", PUSH_42))])
     assert result.exit_code == 0, result.output
     assert out.exists()
 
 
-def test_asm_invalid_source_exits_nonzero(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
-    result = invoke([*cmd["asm"], str(write(tmp_path, "bad.xqasm", INVALID_SRC))])
+def test_asm_invalid_source_exits_nonzero(tmp_path: Path) -> None:
+    result = invoke([*VM["asm"], str(write(tmp_path, "bad.xqasm", INVALID_SRC))])
     assert result.exit_code == 1
     assert "assembly failed" in result.stderr
 
 
-def test_asm_output_and_stdout_conflict(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
+def test_asm_output_and_stdout_conflict(tmp_path: Path) -> None:
     src = write(tmp_path, "prog.xqasm", PUSH_42)
-    result = invoke([*cmd["asm"], "-o", str(tmp_path / "x.xqb"), "--stdout", str(src)])
+    result = invoke([*VM["asm"], "-o", str(tmp_path / "x.xqb"), "--stdout", str(src)])
     assert result.exit_code == 2
 
 
-def test_missing_file_exits_one(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
-    result = invoke([*cmd["run"], str(tmp_path / "missing.xqb")])
+def test_missing_file_exits_one(tmp_path: Path) -> None:
+    result = invoke([*VM["run"], str(tmp_path / "missing.xqb")])
     assert result.exit_code == 1
     assert "failed to read" in result.stderr
 
@@ -114,15 +106,15 @@ def test_missing_file_exits_one(tmp_path: Path, cmd: dict[str, list[str]]) -> No
 # -- dis --
 
 
-def test_dis_file_listing_contains_push(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
+def test_dis_file_listing_contains_push(tmp_path: Path) -> None:
     xqb = write(tmp_path, "prog.xqb", assemble_bytes(tmp_path, PUSH_42))
-    result = invoke([*cmd["dis"], str(xqb)])
+    result = invoke([*VM["dis"], str(xqb)])
     assert result.exit_code == 0, result.output
     assert "PUSH" in result.stdout
 
 
-def test_dis_reads_stdin_when_no_file(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
-    result = invoke(cmd["dis"], stdin=assemble_bytes(tmp_path, PUSH_42))
+def test_dis_reads_stdin_when_no_file(tmp_path: Path) -> None:
+    result = invoke(VM["dis"], stdin=assemble_bytes(tmp_path, PUSH_42))
     assert result.exit_code == 0, result.output
     assert "PUSH" in result.stdout
 
@@ -130,30 +122,30 @@ def test_dis_reads_stdin_when_no_file(tmp_path: Path, cmd: dict[str, list[str]])
 # -- run --
 
 
-def test_run_binary_file_prints_stack(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
+def test_run_binary_file_prints_stack(tmp_path: Path) -> None:
     xqb = write(tmp_path, "prog.xqb", assemble_bytes(tmp_path, PUSH_42))
-    result = invoke([*cmd["run"], str(xqb)])
+    result = invoke([*VM["run"], str(xqb)])
     assert result.exit_code == 0, result.output
     assert result.stdout == "stack (bottom to top):\n  42\n"
 
 
-def test_run_text_flag_assembles_before_running(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
-    result = invoke([*cmd["run"], "--text", str(write(tmp_path, "prog.xqasm", PUSH_42))])
+def test_run_text_flag_assembles_before_running(tmp_path: Path) -> None:
+    result = invoke([*VM["run"], "--text", str(write(tmp_path, "prog.xqasm", PUSH_42))])
     assert result.exit_code == 0, result.output
     assert "42" in result.stdout
 
 
-def test_run_calldata_reaches_input_instruction(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
+def test_run_calldata_reaches_input_instruction(tmp_path: Path) -> None:
     src = write(tmp_path, "prog.xqasm", CALLDATA_R0)
-    result = invoke([*cmd["run"], "--text", "--calldata", "99", str(src)])
+    result = invoke([*VM["run"], "--text", "--calldata", "99", str(src)])
     assert result.exit_code == 0, result.output
     assert "99" in result.stdout
 
 
-def test_run_repeated_calldata_appends(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
+def test_run_repeated_calldata_appends(tmp_path: Path) -> None:
     # clap's `Vec<i64>` appended across repeats, so `--calldata 7 --calldata 9` is `[7, 9]`.
     src = write(tmp_path, "prog.xqasm", "PUSH 0\nINPUT r0\nPUSH 1\nINPUT r1\nLOAD r0\nLOAD r1\nHALT\n")
-    result = invoke([*cmd["run"], "--text", "--calldata", "7", "--calldata", "8,9", str(src)])
+    result = invoke([*VM["run"], "--text", "--calldata", "7", "--calldata", "8,9", str(src)])
     assert result.exit_code == 0, result.output
     assert result.stdout == "stack (bottom to top):\n  7\n  8\n"
 
@@ -177,8 +169,8 @@ def test_run_repeated_calldata_appends(tmp_path: Path, cmd: dict[str, list[str]]
         ["--calldata="],
     ],
 )
-def test_run_out_of_range_values_are_usage_errors(tmp_path: Path, cmd: dict[str, list[str]], flags: list[str]) -> None:
-    result = invoke([*cmd["run"], "--text", *flags, str(write(tmp_path, "prog.xqasm", PUSH_42))])
+def test_run_out_of_range_values_are_usage_errors(tmp_path: Path, flags: list[str]) -> None:
+    result = invoke([*VM["run"], "--text", *flags, str(write(tmp_path, "prog.xqasm", PUSH_42))])
     assert result.exit_code == 2, result.output
 
 
@@ -190,61 +182,57 @@ def test_run_accepts_signed_and_plus_prefixed_integers(tmp_path: Path) -> None:
     assert result.stdout == "stack (bottom to top):\n  -5\n"
 
 
-def test_run_trace_produces_stderr_output(
-    tmp_path: Path, cmd: dict[str, list[str]], capfd: pytest.CaptureFixture[str]
-) -> None:
-    result = invoke([*cmd["run"], "--text", "--trace", str(write(tmp_path, "prog.xqasm", PUSH_42))])
+def test_run_trace_produces_stderr_output(tmp_path: Path, capfd: pytest.CaptureFixture[str]) -> None:
+    result = invoke([*VM["run"], "--text", "--trace", str(write(tmp_path, "prog.xqasm", PUSH_42))])
     assert result.exit_code == 0, result.output
     assert capfd.readouterr().err
 
 
-def test_run_trace_json_format_emits_json_objects(
-    tmp_path: Path, cmd: dict[str, list[str]], capfd: pytest.CaptureFixture[str]
-) -> None:
+def test_run_trace_json_format_emits_json_objects(tmp_path: Path, capfd: pytest.CaptureFixture[str]) -> None:
     src = write(tmp_path, "prog.xqasm", PUSH_42)
-    result = invoke([*cmd["run"], "--text", "--trace", "--trace-format", "json", str(src)])
+    result = invoke([*VM["run"], "--text", "--trace", "--trace-format", "json", str(src)])
     assert result.exit_code == 0, result.output
     assert "{" in capfd.readouterr().err
 
 
-def test_run_trace_file_creates_nonempty_file(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
+def test_run_trace_file_creates_nonempty_file(tmp_path: Path) -> None:
     trace = tmp_path / "trace.txt"
     src = write(tmp_path, "prog.xqasm", PUSH_42)
-    result = invoke([*cmd["run"], "--text", "--trace", "--trace-file", str(trace), str(src)])
+    result = invoke([*VM["run"], "--text", "--trace", "--trace-file", str(trace), str(src)])
     assert result.exit_code == 0, result.output
     assert trace.stat().st_size > 0
 
 
-def test_run_step_limit_exceeded_exits_nonzero(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
+def test_run_step_limit_exceeded_exits_nonzero(tmp_path: Path) -> None:
     src = write(tmp_path, "prog.xqasm", LOOP_1M)
-    result = invoke([*cmd["run"], "--text", "--step-limit", "10", str(src)])
+    result = invoke([*VM["run"], "--text", "--step-limit", "10", str(src)])
     assert result.exit_code == 1
 
 
-def test_run_step_limit_zero_exits_nonzero(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
+def test_run_step_limit_zero_exits_nonzero(tmp_path: Path) -> None:
     # The limit is exact, so 0 is a real budget and not a sentinel.
     src = write(tmp_path, "prog.xqasm", PUSH_42)
-    result = invoke([*cmd["run"], "--text", "--step-limit", "0", str(src)])
+    result = invoke([*VM["run"], "--text", "--step-limit", "0", str(src)])
     assert result.exit_code == 1
 
 
-def test_run_unlimited_steps_removes_the_bound(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
+def test_run_unlimited_steps_removes_the_bound(tmp_path: Path) -> None:
     # A million-iteration loop is past the default budget, so it completes only if the flag removes the bound.
     src = write(tmp_path, "prog.xqasm", LOOP_1M)
-    result = invoke([*cmd["run"], "--text", "--unlimited-steps", str(src)])
+    result = invoke([*VM["run"], "--text", "--unlimited-steps", str(src)])
     assert result.exit_code == 0, result.output
 
 
-def test_run_step_limit_and_unlimited_steps_conflict(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
+def test_run_step_limit_and_unlimited_steps_conflict(tmp_path: Path) -> None:
     # A usage error (exit 2), not a program that faulted (exit 1).
     src = write(tmp_path, "prog.xqasm", PUSH_42)
-    result = invoke([*cmd["run"], "--text", "--step-limit", "10", "--unlimited-steps", str(src)])
+    result = invoke([*VM["run"], "--text", "--step-limit", "10", "--unlimited-steps", str(src)])
     assert result.exit_code == 2
 
 
 @pytest.mark.parametrize("flags", [["--trace-format", "json"], ["--trace-file", "t.txt"]])
-def test_run_trace_options_require_trace(tmp_path: Path, cmd: dict[str, list[str]], flags: list[str]) -> None:
-    result = invoke([*cmd["run"], "--text", *flags, str(write(tmp_path, "prog.xqasm", PUSH_42))])
+def test_run_trace_options_require_trace(tmp_path: Path, flags: list[str]) -> None:
+    result = invoke([*VM["run"], "--text", *flags, str(write(tmp_path, "prog.xqasm", PUSH_42))])
     assert result.exit_code == 2
 
 
@@ -297,33 +285,27 @@ def test_outputs_debug_leaves_unset_slots_none() -> None:
 # -- check --
 
 
-def test_check_bytecode(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
+def test_check_bytecode(tmp_path: Path) -> None:
     xqb = write(tmp_path, "prog.xqb", assemble_bytes(tmp_path, PUSH_42))
-    result = invoke([*cmd["check"], str(xqb)])
+    result = invoke([*VM["check"], str(xqb)])
     assert result.exit_code == 0, result.output
     assert result.stdout == f"ok: {xqb} (2 instructions)\n"
 
 
-def test_check_text_violation_exits_one(tmp_path: Path, cmd: dict[str, list[str]]) -> None:
-    result = invoke([*cmd["check"], "--text", str(write(tmp_path, "bad.xqasm", "NEXT\nHALT\n"))])
+def test_check_text_violation_exits_one(tmp_path: Path) -> None:
+    result = invoke([*VM["check"], "--text", str(write(tmp_path, "bad.xqasm", "NEXT\nHALT\n"))])
     assert result.exit_code == 1
     assert "NoActiveLoop" in result.stderr
 
 
-# -- aliases --
+# -- removed top-level names --
 
 
-@pytest.mark.parametrize(("old", "new"), [("asm", "asm"), ("dism", "dis"), ("run", "run"), ("verify", "check")])
-def test_alias_warns_on_stderr_and_matches_stdout(tmp_path: Path, old: str, new: str) -> None:
-    src = write(tmp_path, "prog.xqasm", PUSH_42)
-    xqb = write(tmp_path, "prog.xqb", assemble_bytes(tmp_path, PUSH_42))
-    args = {"asm": ["--stdout", str(src)], "dis": [str(xqb)], "run": [str(xqb)], "check": [str(xqb)]}[new]
-    old_result = invoke([old, *args])
-    new_result = invoke(["vm", new, *args])
-    assert old_result.exit_code == new_result.exit_code == 0
-    assert old_result.stdout_bytes == new_result.stdout_bytes
-    warning = f"warning: 'xquad {old}' is deprecated and will be removed in v0.6.0; use 'xquad vm {new}'\n"
-    assert old_result.stderr == warning + new_result.stderr
+@pytest.mark.parametrize("old", ["asm", "dism", "run", "verify"])
+def test_removed_top_level_names_are_usage_errors(old: str) -> None:
+    result = invoke([old])
+    assert result.exit_code == 2
+    assert "No such command" in result.stderr
 
 
 def test_help_lists_only_vm() -> None:

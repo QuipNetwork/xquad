@@ -1,0 +1,19 @@
+; atleast_spin_model_k_above_n: a check that runs before the model type check
+; still wins on a spin model.
+;
+; ATLEAST checks k against the index count before it reads the model register,
+; so k = 3 over 2 indices raises IndexOutOfBounds as it did before
+; NonBinaryModel existed. Only checks against the model itself come after the
+; domain check.
+
+PUSH 4
+SQMX r0          ; spin model, 4 variables
+VECI r1
+PUSH 0
+VECPUSH r1
+PUSH 1
+VECPUSH r1       ; indices = [0, 1]
+PUSH 3           ; k = 3 > 2
+PUSH 1           ; penalty
+ATLEAST r0 r1
+HALT

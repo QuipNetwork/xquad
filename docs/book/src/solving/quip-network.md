@@ -22,11 +22,8 @@ Requires the `[quip]` extra:
 pip install "xquad[quip]"
 ```
 
-The umbrella `xquad` package forwards `[quip]` to the matching `xqsa`
-extra, as it does `[cuda]`, `[dwave]`, and `[metal]`; with `xqsa` alone,
-`pip install "xqsa[quip]"` is the same install. The extra brings in
-`substrate-interface` (the chain RPC client), `websocket-client` (its
-transport), `certifi` (the CA
+The extra brings in `substrate-interface` (the chain RPC client),
+`websocket-client` (its transport), `certifi` (the CA
 bundle `wss://` falls back to on a macOS Python with none), and
 `quip-signer`, a
 native extension providing the chain's hybrid signature scheme
@@ -628,7 +625,7 @@ on chain state or the round trip completing.
 ## Deprecated APIs
 
 Each of these warns with a `DeprecationWarning` and is removed in
-v0.6.0:
+v0.7.0:
 
 | Deprecated | Since | Use instead | Notes |
 |---|---|---|---|
@@ -643,7 +640,6 @@ v0.6.0:
 | `QuipUnconfirmedError` | v0.4.5 | `QuipSubmitIncompleteError` | No longer raised; warns on import from `xqsa.quip` |
 | Loading a pickled `unconfirmed` order | v0.4.5 | None | Orders pickled by 0.4.3 or 0.4.4 in that state still load, warn, and are never sent again; look up the extrinsic the warning names |
 | `xqsa.quip.signing.SIGNED_EXTENSIONS` | v0.4.5 | None | The signed-extension order now comes from the runtime metadata |
-| The top-level commands `xquad asm`, `dism`, `run` and `verify` | v0.4.5 | `xquad vm asm`, `dis`, `run` and `check` | Print a warning line to stderr rather than a `DeprecationWarning`; see [xquad vm](../cli/vm/) |
 
 `solve()` is not deprecated, and neither is a typed `resolution=` on
 `solve()`. The strict paths refuse what the deprecated ones accept:

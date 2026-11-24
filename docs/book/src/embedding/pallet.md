@@ -102,7 +102,7 @@ Decode, execute, store, in that order:
    `OUTPUT` inside a loop that writes slots 0 and 1 records `1`; sizing the
    output vec from it makes the slot-1 write raise `OutputIndex` and the
    call fail with `ExecutionFailed`, rejecting a program the VM and the
-   verifier both accept. See
+   checker both accept. See
    [the bytecode format](../xqvm/bytecode-format.md), which states that
    neither header count may be used to pre-size a slot array.
 4. Build a fresh `Vm`, set the calldata, the output-slot count and the
@@ -133,11 +133,11 @@ VM's own 1 GiB so that only the caller's ability to name something
 smaller is under test; a production runtime sets it to a figure its
 heap can actually honour.
 
-What the fixture does not do is call `xqvm::verifier::verify`: it
-decodes the bytecode and runs it, so every static check the verifier
+What the fixture does not do is call `xqvm::checker::check`: it
+decodes the bytecode and runs it, so every static check the checker
 performs is skipped, and the faults those checks would have caught
 surface at runtime as `ExecutionFailed` instead. A production pallet
-must verify before it executes, for the reasons set out in
+must check before it executes, for the reasons set out in
 [On-Chain Admissibility](admissibility.md).
 
 Off-chain, produce the bytecode however you like; the assembler CLI is

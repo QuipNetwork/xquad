@@ -3,7 +3,7 @@
 ;
 ; r0 holds an int, not an XQMX, and the dimensions are zero. Both faults are
 ; live; SPEC.md's order of work decides which one is raised. INPUT writes a
-; register of unknown kind, so the verifier admits this program -- the
+; register of unknown kind, so the checker admits this program -- the
 ; divergence is consensus-visible (QUI-1178 route B).
 
 PUSH 0

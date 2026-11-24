@@ -131,7 +131,7 @@ Without `length=`, the output is append-only: it is filled with `.append(val)`, 
 
 ### `problem.compile()`
 
-Generate the three `.xqasm` programs. Returns a `CompiledPrograms(encoder, verifier, decoder)` dataclass. If the Rust bytecode verifier is available (via `xqffi`), each program is verified before return.
+Generate the three `.xqasm` programs. Returns a `CompiledPrograms(encoder, verifier, decoder)` dataclass. If the Rust bytecode checker is available (via `xqffi`), each program is checked before return.
 
 ## Compilation Contract
 

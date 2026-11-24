@@ -26,9 +26,11 @@ RANGE             ; range loop [0, 10)
   LOAD r0
   PUSH 0x05
   GT
-  JUMPI .0        ; break if r0 > 5
+  JUMPI .0        ; skip the rest of this iteration if r0 > 5
+  LOAD r0         ; skipped when r0 > 5
+  POP
+  TARGET .0       ; still inside the loop body
 NEXT
-TARGET .0
 HALT
 ```
 

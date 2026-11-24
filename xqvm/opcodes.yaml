@@ -470,10 +470,10 @@ opcodes:
   # XQMX High-Level Constraints (0x70-0x73, 0x7F)
   # ------------------------------------------------------------------------
 
-  - {code: 0x70, mnemonic: ONEHOTR, variant: OneHotR, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop penalty and row; add a one-hot constraint over the grid row."}
-  - {code: 0x71, mnemonic: ONEHOTC, variant: OneHotC, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop penalty and col; add a one-hot constraint over the grid column."}
-  - {code: 0x72, mnemonic: EXCLUDE, variant: Exclude, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop penalty, j, and i; add a mutual-exclusion constraint between variables i and j; raises IndexOutOfBounds outside [0, size)."}
-  - {code: 0x73, mnemonic: IMPLIES, variant: Implies, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop penalty, j, and i; add an implication constraint from variable i to variable j; raises IndexOutOfBounds outside [0, size)."}
+  - {code: 0x70, mnemonic: ONEHOTR, variant: OneHotR, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop penalty and row; add a one-hot constraint over the grid row; a model whose domain is not binary raises `NonBinaryModel`."}
+  - {code: 0x71, mnemonic: ONEHOTC, variant: OneHotC, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 2, stack_push: 0, doc: "Pop penalty and col; add a one-hot constraint over the grid column; a model whose domain is not binary raises `NonBinaryModel`."}
+  - {code: 0x72, mnemonic: EXCLUDE, variant: Exclude, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop penalty, j, and i; add a mutual-exclusion constraint between variables i and j; a model whose domain is not binary raises `NonBinaryModel`; raises IndexOutOfBounds outside [0, size)."}
+  - {code: 0x73, mnemonic: IMPLIES, variant: Implies, category: xqmx-high-level, operands: [{name: reg, type: register, width: 1}], stack_pop: 3, stack_push: 0, doc: "Pop penalty, j, and i; add an implication constraint from variable i to variable j; a model whose domain is not binary raises `NonBinaryModel`; raises IndexOutOfBounds outside [0, size)."}
 
   - code: 0x74
     mnemonic: EQUALITY
@@ -485,7 +485,7 @@ opcodes:
       - {name: coeffs, type: register, width: 1}
     stack_pop: 2
     stack_push: 0
-    doc: "Pop penalty and target; expand weighted equality constraint into QUBO terms on a model."
+    doc: "Pop penalty and target; expand weighted equality constraint into QUBO terms on a model; a model whose domain is not binary raises `NonBinaryModel`."
 
   - code: 0x75
     mnemonic: ATLEAST
@@ -496,7 +496,7 @@ opcodes:
       - {name: indices, type: register, width: 1}
     stack_pop: 2
     stack_push: 0
-    doc: "Pop penalty and k; allocate slack variables and apply at-least-k constraint."
+    doc: "Pop penalty and k; allocate slack variables and apply at-least-k constraint; a model whose domain is not binary raises `NonBinaryModel`."
 
   - code: 0x76
     mnemonic: ATLEASTW
@@ -508,7 +508,7 @@ opcodes:
       - {name: coeffs, type: register, width: 1}
     stack_pop: 2
     stack_push: 0
-    doc: "Pop penalty and k; allocate slack variables and apply weighted at-least-k constraint."
+    doc: "Pop penalty and k; allocate slack variables and apply weighted at-least-k constraint; a model whose domain is not binary raises `NonBinaryModel`."
 
   - code: 0x77
     mnemonic: REDUCE
@@ -518,7 +518,7 @@ opcodes:
       - {name: model, type: register, width: 1}
     stack_pop: 3
     stack_push: 1
-    doc: "Pop P_aux, var_b, var_a; allocate auxiliary variable and add Rosenberg enforcement terms; push aux index."
+    doc: "Pop P_aux, var_b, var_a; allocate auxiliary variable and add Rosenberg enforcement terms; push aux index; a model whose domain is not binary raises `NonBinaryModel`."
 
   - code: 0x7F
     mnemonic: ENERGY

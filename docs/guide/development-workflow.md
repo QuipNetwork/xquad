@@ -54,7 +54,7 @@ follows is only the naming.
 following in the same MR:**
 
 1. `spec/xqvm/*.md` -- any normative spec file: the change documented.
-   `SPEC.md`, `ISA.md`, `HLF.md`, `ENCODING.md` and `VERIFIER.md` all
+   `SPEC.md`, `ISA.md`, `HLF.md`, `ENCODING.md` and `CHECKER.md` all
    satisfy this layer; the guard matches the directory, not one file.
 2. `xqvm/src/**/*.rs` -- the implementation updated.
 3. `xqvm/tests/vectors/**` or `xqvm/opcodes.yaml` -- a new

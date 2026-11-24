@@ -13,7 +13,7 @@ begins, the VM scans the raw instruction stream once for `TARGET` opcodes:
 the first one encountered is assigned sequential id `0`, the second id `1`,
 and so on in program order, with each id recorded against the byte offset
 where its `TARGET` starts. This is the same scan the
-[verifier](../verifier.md) uses to check that every jump references a valid
+[checker](../checker.md) uses to check that every jump references a valid
 id, and the [Bytecode Format](../bytecode-format.md) chapter covers its
 wire-level details.
 

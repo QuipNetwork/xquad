@@ -87,7 +87,7 @@ pub fn equality_expansion_steps(n: u64) -> u64 {
 }
 
 /// Cost of evaluating a model with `terms` nonzero coefficients against a
-/// sample of `sample_len` values, including the copy of the sample.
+/// sample of `sample_len` values, including the read of every sample value.
 #[must_use]
 pub fn model_eval_steps(sample_len: u64, terms: u64) -> u64 {
     sample_len

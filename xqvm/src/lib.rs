@@ -99,8 +99,8 @@ mod vm;
 #[cfg(feature = "std")]
 pub mod disasm;
 
-// Pre-execution bytecode verifier.
-pub mod verifier;
+// Pre-execution bytecode checker.
+pub mod checker;
 
 // Worklist data-flow analysis framework.
 pub mod dataflow;
@@ -118,6 +118,7 @@ pub use bytecode::{
 // Public API re-exports — interpreter
 // ---------------------------------------------------------------------------
 
+pub use checker::{CheckerError, RegType};
 #[cfg(feature = "std")]
 pub use disasm::Disassembly;
 pub use error::Error;
@@ -128,5 +129,4 @@ pub use model::{Domain, XqmxModel, XqmxSample, grid_fits, triu_index};
 pub use tracer::{JsonTracer, TextTracer};
 pub use tracer::{NoopTracer, StepState, Tracer};
 pub use value::{IncompatibleTypeError, RegVal, RegValKind};
-pub use verifier::{RegType, VerifierError};
 pub use vm::{DEFAULT_MEMORY_LIMIT, DEFAULT_STEP_LIMIT, MAX_ALLOCATION_SIZE, Vm};
