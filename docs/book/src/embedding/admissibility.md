@@ -97,7 +97,7 @@ its opcodes.
 
 | Layer | Runs | Enforces |
 |---|---|---|
-| Static | `xqvm::checker::check` at program submission | Structural integrity, jump targets, loop balance, register type-state, must-init, stack depth |
+| Static | `xqvm::checker::check` at program submission | Structural integrity, jump targets, loop balance, jump span, register type-state, must-init, stack depth |
 | Runtime | `Vm::set_memory_limit` before execution | The allocation budget, charged before each allocation |
 | Runtime | `Vm::set_step_limit` before execution | The step budget, charged before each unit of work |
 | Weight | The extrinsic's declared and refunded weight | The block's share of the above |

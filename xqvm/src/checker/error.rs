@@ -117,6 +117,17 @@ pub enum CheckerError {
         depth_a: usize,
         depth_b: usize,
     },
+
+    /// A `JUMP`/`JUMPI` crosses a loop-body boundary: its target lies in a
+    /// different lexical loop body than the jump itself. With no cross-body
+    /// jumps the runtime loop stack equals the lexical nesting at every pc, so
+    /// permitting one would desynchronize them. `offset` is the jump's
+    /// byte offset, `target` the target `TARGET` opcode's byte offset.
+    #[error(
+        "jump at byte {offset:#06x} crosses a loop-body boundary to a target at byte \
+         {target:#06x}"
+    )]
+    JumpAcrossLoopBoundary { offset: usize, target: usize },
 }
 
 impl CheckerError {
@@ -136,6 +147,7 @@ impl CheckerError {
             Self::StackOverflowRisk { .. } => "StackOverflowRisk",
             Self::LoopStackImbalance { .. } => "LoopStackImbalance",
             Self::StackDepthMismatch { .. } => "StackDepthMismatch",
+            Self::JumpAcrossLoopBoundary { .. } => "JumpAcrossLoopBoundary",
         }
     }
 }

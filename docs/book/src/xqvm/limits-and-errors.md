@@ -93,10 +93,11 @@ storage is charged as `VECPUSH` and `SLACK` create it.
 
 `ITER` copies the slice it iterates into its loop frame, and a loop frame is
 released only by `NEXT`. A back-edge that re-enters an `ITER` without reaching
-its `NEXT` therefore accumulates copies, which is why the copy is charged.
-The loop frame itself is not charged, but it is bounded: the loop stack is
-capped at 8,192 frames and a program that grows it past that fails with
-`LoopStackOverflow`.
+its `NEXT` therefore accumulates copies, which is why the copy is charged. Only
+an unchecked program can do that: the default checker rejects the jump such a
+back-edge needs (phase 1d). The loop frame itself is not charged, but it is
+bounded: the loop stack is capped at 8,192 frames and a program that grows it
+past that fails with `LoopStackOverflow`.
 
 An element of a `vec<xqmx>` is charged the whole-model copy rate, because
 cloning a model clones its coefficient maps: 8 bytes per declared variable
@@ -160,8 +161,8 @@ which disassembles the program and points at the failing instruction.
 Produced by `xqvm::checker::CheckerError`
 ([`xqvm/src/checker/error.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/checker/error.rs))
 before a program runs, by the four-phase pipeline described in
-[Checker](checker.md): structural, jump-target and loop-nesting checks;
-register type-state; must-init analysis; and stack depth.
+[Checker](checker.md): structural, jump-target, loop-nesting and
+jump-span checks; register type-state; must-init analysis; and stack depth.
 
 The variants, which phase raises each one, and what each one means
 are catalogued in [Checker's error reference](checker.md#error-reference)

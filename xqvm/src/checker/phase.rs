@@ -24,6 +24,7 @@ use crate::dataflow::register::check_register_types_with_cfg;
 use crate::dataflow::uninit::check_uninit_registers_with_cfg;
 
 use super::error::CheckerError;
+use super::jump_span::JumpSpanPhase;
 use super::scan::scan;
 
 /// A single composable checking pass over a [`Program`].
@@ -129,6 +130,7 @@ impl Default for Checker {
     fn default() -> Self {
         Self::new()
             .with_phase(CombinedPhase)
+            .with_phase(JumpSpanPhase)
             .with_phase(AllCfgPhases)
     }
 }

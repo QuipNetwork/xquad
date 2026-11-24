@@ -22,6 +22,7 @@ use crate::{Instruction, InstructionBuilder, InstructionStream, JumpTable, Progr
 
 use super::check;
 use super::error::CheckerError;
+use super::jump_span::JumpSpanPhase;
 use super::jump_target::JumpTargetPhase;
 use super::loop_nesting::LoopNestingPhase;
 use super::phase::{Checker, Phase};
@@ -180,6 +181,173 @@ fn nested_loops_outer_unmatched() {
             depth: 1
         }
     ));
+}
+
+// --- JumpSpanPhase (jumps across loop bodies) ---
+
+#[test]
+fn jump_span_rejects_a_jump_out_of_a_loop_body() {
+    // RANGE opens the inner body; the JUMP sits inside it but targets a TARGET
+    // placed after NEXT, in the enclosing body. Cross-body -> rejected.
+    let code = bytes(&[
+        Instruction::Range {},
+        Instruction::Jump1 { label: 0 },
+        Instruction::Next {},
+        Instruction::Target {},
+        Instruction::Halt {},
+    ]);
+    let err = JumpSpanPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "JumpAcrossLoopBoundary");
+}
+
+#[test]
+fn jump_span_rejects_a_jump_into_a_loop_body() {
+    // The JUMP is outside all loops; its target is a TARGET inside a loop body.
+    // Cross-body in the other direction -> rejected.
+    let code = bytes(&[
+        Instruction::Jump1 { label: 0 },
+        Instruction::Range {},
+        Instruction::Target {},
+        Instruction::Next {},
+        Instruction::Halt {},
+    ]);
+    let err = JumpSpanPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "JumpAcrossLoopBoundary");
+}
+
+#[test]
+fn jump_span_accepts_an_intra_body_jump() {
+    // Both the JUMP and its TARGET sit inside the same loop body.
+    let code = bytes(&[
+        Instruction::Range {},
+        Instruction::Target {},
+        Instruction::Jump1 { label: 0 },
+        Instruction::Next {},
+        Instruction::Halt {},
+    ]);
+    assert!(JumpSpanPhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn jump_span_accepts_a_jump_outside_all_loops() {
+    // No loop at all: the JUMP and TARGET share the top-level body.
+    let code = bytes(&[
+        Instruction::Target {},
+        Instruction::Jump1 { label: 0 },
+        Instruction::Halt {},
+    ]);
+    assert!(JumpSpanPhase.run(&Program::new(code)).is_ok());
+}
+
+#[test]
+fn jump_span_rejects_a_jump_from_one_loop_body_into_another() {
+    // A 22-byte program: a JUMPI1 in loop A's body targets a TARGET inside
+    // loop B's body, so the NEXT the checker pairs with B closes A at runtime.
+    // Both loops stay reachable with equal known depths, so the balance check
+    // passes; the cross-body jump is what must be rejected.
+    let code = vec![
+        0x11, 0x00, // PUSH1 0
+        0x12, 0x23, 0x28, // PUSH2 9000
+        0x08, // RANGE (loop A)
+        0x11, 0x01, // PUSH1 1
+        0x11, 0x01, // PUSH1 1
+        0x02, 0x00, // JUMPI1 .0  (loop A body -> loop B body)
+        0x11, 0x00, // PUSH1 0
+        0x11, 0x01, // PUSH1 1
+        0x08, // RANGE (loop B)
+        0x00, // TARGET .0
+        0x07, // NEXT   (checker pairs with B, VM closes A)
+        0x10, // POP
+        0x07, // NEXT
+        0xFF, // HALT
+    ];
+    assert_eq!(code.len(), 22);
+    let err = JumpSpanPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "JumpAcrossLoopBoundary");
+}
+
+#[test]
+fn jump_span_rejects_the_cross_loop_jump_whatever_the_loop_count() {
+    // The same program with loop A's count set to 1 (PUSH2 1): at runtime its NEXT
+    // would hit NoActiveLoop. The opcode shape is identical, so the cross-body
+    // jump is rejected regardless of the loop count.
+    let code = vec![
+        0x11, 0x00, // PUSH1 0
+        0x12, 0x00, 0x01, // PUSH2 1
+        0x08, // RANGE (loop A)
+        0x11, 0x01, 0x11, 0x01, 0x02, 0x00, // ...; JUMPI1 .0
+        0x11, 0x00, 0x11, 0x01, 0x08, // ...; RANGE (loop B)
+        0x00, // TARGET .0
+        0x07, 0x10, 0x07, 0xFF, // NEXT; POP; NEXT; HALT
+    ];
+    let err = JumpSpanPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "JumpAcrossLoopBoundary");
+}
+
+/// Boundary semantics of the transition lookup, pinned with explicit jump
+/// tables (`Program::from_parts`) so the target can be a loop instruction
+/// itself rather than a TARGET: a `RANGE` belongs to the enclosing body and its
+/// `NEXT` to the inner body it closes.
+#[test]
+fn jump_span_places_range_in_the_enclosing_body_and_next_in_the_inner() {
+    // 0 JUMP1 .0; 2 PUSH1 0; 4 PUSH1 1; 6 RANGE; 7 NEXT; 8 HALT
+    let code = vec![0x01, 0x00, 0x11, 0x00, 0x11, 0x01, 0x08, 0x07, 0xFF];
+    let to_range = Program::from_parts(code.clone(), JumpTable::new(vec![6]));
+    assert!(
+        JumpSpanPhase.run(&to_range).is_ok(),
+        "RANGE is in the top-level body"
+    );
+    let to_next = Program::from_parts(code, JumpTable::new(vec![7]));
+    assert!(
+        matches!(
+            JumpSpanPhase.run(&to_next),
+            Err(CheckerError::JumpAcrossLoopBoundary {
+                offset: 0,
+                target: 7
+            })
+        ),
+        "NEXT is in the loop body"
+    );
+}
+
+/// A jump table shorter than the code's labels (only reachable through
+/// `Program::from_parts`) is rejected, not skipped: the phase must hold when
+/// run on its own.
+#[test]
+fn jump_span_rejects_a_label_missing_from_the_jump_table() {
+    let code = bytes(&[
+        Instruction::Jump1 { label: 0 },
+        Instruction::Target {},
+        Instruction::Halt {},
+    ]);
+    let program = Program::from_parts(code, JumpTable::new(vec![]));
+    assert!(matches!(
+        JumpSpanPhase.run(&program),
+        Err(CheckerError::UndefinedJumpTarget {
+            offset: 0,
+            label: 0,
+            target_count: 0
+        })
+    ));
+}
+
+#[test]
+fn jump_span_pairs_bodies_by_lexical_nesting() {
+    // Two sibling loops: a jump in the first loop's body to a TARGET in the
+    // second loop's body is cross-body even though both are at nesting depth 1.
+    // Mutation control: were body ids assigned by depth rather than by lexical
+    // pairing, this would be wrongly accepted.
+    let code = bytes(&[
+        Instruction::Range {},
+        Instruction::Jump1 { label: 0 },
+        Instruction::Next {},
+        Instruction::Range {},
+        Instruction::Target {},
+        Instruction::Next {},
+        Instruction::Halt {},
+    ]);
+    let err = JumpSpanPhase.run(&Program::new(code)).unwrap_err();
+    assert_eq!(err.variant_name(), "JumpAcrossLoopBoundary");
 }
 
 // --- RegisterTypePhase ---

@@ -35,13 +35,14 @@
 //! | [`StructuralPhase`] | Truncated bytes, unknown opcodes | [`CheckerError::TruncatedInstruction`], [`CheckerError::BadOpcode`] |
 //! | [`JumpTargetPhase`] | Jump label ≥ target count | [`CheckerError::UndefinedJumpTarget`] |
 //! | [`LoopNestingPhase`] | Loop open/close balance, loop-context reads | [`CheckerError::NoActiveLoop`], [`CheckerError::UnmatchedLoop`] |
+//! | [`JumpSpanPhase`] | Jumps whose target lies in a different loop body | [`CheckerError::JumpAcrossLoopBoundary`] |
 //! | [`RegisterTypePhase`] | CFG-based read-before-write; type-state mismatches | [`CheckerError::ReadUnsetRegister`], [`CheckerError::RegisterTypeMismatch`] |
 //! | [`UninitRegisterPhase`] | CFG AND-meet: registers uninit on at least one path | [`CheckerError::ReadUnsetRegister`] |
 //! | [`StackDepthPhase`] | CFG-based stack depth: underflow/overflow, loop balance, join-point mismatch | [`CheckerError::StackUnderflow`], [`CheckerError::StackOverflowRisk`], [`CheckerError::LoopStackImbalance`], [`CheckerError::StackDepthMismatch`] |
 //!
 //! The structural, jump, and loop phases run as a single combined pass via
-//! `scan`. The remaining phases each build a control-flow graph and run a
-//! forward worklist analysis:
+//! `scan`. [`JumpSpanPhase`] is a second lexical pass. The remaining phases
+//! each build a control-flow graph and run a forward worklist analysis:
 //!
 //! * [`RegisterTypePhase`] -- greatest-lower-bound meet with absorbing Unset; catches
 //!   read-before-write and type mismatches on all CFG paths.
@@ -81,6 +82,7 @@
 //! ```
 
 mod error;
+mod jump_span;
 mod jump_target;
 mod loop_nesting;
 mod phase;
@@ -99,6 +101,7 @@ mod tests;
 // ---------------------------------------------------------------------------
 
 pub use error::CheckerError;
+pub use jump_span::JumpSpanPhase;
 pub use jump_target::JumpTargetPhase;
 pub use loop_nesting::LoopNestingPhase;
 pub use phase::{Checker, Phase};
@@ -115,7 +118,8 @@ use crate::Program;
 /// Run the full four-phase checker over `program`.
 ///
 /// Equivalent to `Checker::default().run(program)`. Runs `CombinedPhase`
-/// (structural, jump-target, loop-nesting) followed by [`RegisterTypePhase`]
+/// (structural, jump-target, loop-nesting) followed by [`JumpSpanPhase`]
+/// (jumps across loop bodies) followed by [`RegisterTypePhase`]
 /// (CFG-based read-before-write and type-state checks) followed by
 /// [`UninitRegisterPhase`] (CFG AND-meet must-init analysis) followed by
 /// [`StackDepthPhase`] (CFG-based stack depth, loop balance, and join-point

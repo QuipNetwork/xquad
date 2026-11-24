@@ -45,16 +45,18 @@ that a linear scan would miss to be detected.
 | 1a | Structural | `StructuralPhase` | Truncated bytes, unknown opcodes |
 | 1b | Jump target | `JumpTargetPhase` | Jump label >= target count |
 | 1c | Loop nesting | `LoopNestingPhase` | Loop open/close balance, loop-context reads |
+| 1d | Jump span | `JumpSpanPhase` | Jump target in a different loop body from the jump |
 | 2 | Register type-state | `RegisterTypePhase` | CFG-based read-before-write, register type mismatches |
 | 3 | Must-init | `UninitRegisterPhase` | CFG AND-meet: registers uninit on at least one path |
 | 4 | Stack depth | `StackDepthPhase` | CFG-based stack underflow/overflow, loop balance, join-point depth mismatch |
 
-Phases 1a--1c share the `scan` kernel and run as one combined pass. Custom
-pipelines are supported via `Checker::new().with_phase(p)`.
+Phases 1a--1c share the `scan` kernel and run as one combined pass; 1d is a
+second lexical pass over the same bytes. Custom pipelines are supported via
+`Checker::new().with_phase(p)`.
 
 ---
 
-## Phase 1 -- Structural, Jump-Target, Loop-Nesting
+## Phase 1 -- Structural, Jump-Target, Loop-Nesting, Jump-Span
 
 ### 1a: Structural
 
@@ -84,6 +86,32 @@ checker tracks nesting depth and rejects:
   offset of the outermost unmatched opener.
 
 Errors: `NoActiveLoop`, `UnmatchedLoop`.
+
+### 1d: Jump span
+
+Every program position has a *body*: the innermost lexical loop body that
+encloses it, by `RANGE`/`ITER`..`NEXT` pairing. A `RANGE` or `ITER`
+instruction belongs to the *enclosing* body; its matching `NEXT` belongs to
+the *inner* body it closes. A `JUMP1`, `JUMPI1`, `JUMP2`, or `JUMPI2` whose
+target lies in a different body from the jump itself is rejected -- whether
+it jumps into a loop, out of one, or into a sibling loop.
+
+Why this is enough: with no cross-body jumps, the runtime loop stack equals
+the lexical nesting at every pc (a skipped loop resynchronizes by a lexical
+scan), so a jump that stays within one body cannot change the active loop
+set between source and target. A cross-body jump would let the VM carry a
+loop stack the lexical structure does not predict, which the other phases
+assume it does. The rule deliberately also rejects break/continue style
+exits; the toolchain (`xqcp`) never emits them as raw cross-body jumps, and
+its "if inside a loop" and "loop inside an if" output stays within one body.
+Reachability is not consulted.
+
+The phase runs as its own lexical pass after the combined Phase 1 scan.
+Its memory is proportional to the number of loop boundaries and jumps, not
+to the number of instructions.
+
+Error: `JumpAcrossLoopBoundary` (carries the jump's and the target's byte
+offsets).
 
 ---
 
@@ -234,9 +262,10 @@ For each dequeued block:
 Stop at the first witnessed fault or edge conflict. This replaces the old
 whole-program error-class priority; rejected programs can change diagnostic
 variant or offset. Against the minimum-walk analysis this replaces, the
-accepted program set is unchanged. Acceptance does change under two other
-rules: block transfer stops at the first terminator (Phase 1), and the
-intra-block peak is checked (Phase 4).
+accepted program set is unchanged. Acceptance does change under three other
+rules: block transfer stops at the first terminator (Phase 1), a jump may not
+cross a loop-body boundary (Phase 1d), and the intra-block peak is checked
+(Phase 4).
 
 The implicit program-entry edge always has height zero. Back-edges to entry
 are compared with it, never ignored. A single-block CFG receives the same
@@ -271,10 +300,10 @@ skip-edge to the block after `NEXT` (empty-loop path). `NEXT` emits a
 back-edge to the loop body start and a fall-through to the post-loop block.
 
 All these edges participate in exact-height consistency, including the
-post-loop `after_next` block. Arbitrary jumps leaving or re-entering a body
-remain ordinary CFG edges; no lexical confinement rule is added. A matching
-`NEXT` back-edge must restore the body's entry height, which enforces zero
-net effect without a separate body simulation.
+post-loop `after_next` block. Within Phase 4, jumps leaving or re-entering a
+body are ordinary CFG edges; the default pipeline has already rejected them
+in Phase 1d. A matching `NEXT` back-edge must restore the body's entry
+height, which enforces zero net effect without a separate body simulation.
 
 ### `SCLR` semantics
 
@@ -461,6 +490,7 @@ All bound arithmetic is checked, and exhaustion returns the dedicated error.
 | `UndefinedJumpTarget` | 1b | Jump references label id >= target count |
 | `NoActiveLoop` | 1c | `NEXT`, `LVAL`, or `LIDX` with no open loop frame |
 | `UnmatchedLoop` | 1c | Loop frame still open at end of program |
+| `JumpAcrossLoopBoundary` | 1d | Jump target lies in a different loop body from the jump |
 | `ReadUnsetRegister` | 2 or 3 | Register read before any write (or before write on all paths) |
 | `RegisterTypeMismatch` | 2 | Register holds wrong type for the instruction |
 | `LoopStackImbalance` | 4 | Loop body entry depth != exit depth |

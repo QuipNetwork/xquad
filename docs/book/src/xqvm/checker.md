@@ -20,12 +20,13 @@ means. For why a specific program was rejected and how to change it, see
 its `run` method against a program returns `Ok(())` if every phase passes,
 or the first `CheckerError` encountered otherwise. A program that passes is
 guaranteed structurally sound: every opcode decodes, every jump lands on a
-real `TARGET`, every loop is balanced, and every register is read only after
-it is written on every reachable path. For the value stack, phase 4 found no
-underflow, no join-point depth disagreement, and no basic block whose depth
-exceeds the 8,192-item limit. Every instruction on every reachable path has
-at least as many values on the stack as it pops, counted before any of its
-pushes, so a program that passes cannot underflow the value stack.
+real `TARGET` in its own loop body, every loop is balanced, and every
+register is read only after it is written on every reachable path. For the
+value stack, phase 4 found no underflow, no join-point depth disagreement,
+and no basic block whose depth exceeds the 8,192-item limit. Every
+instruction on every reachable path has at least as many values on the stack
+as it pops, counted before any of its pushes, so a program that passes
+cannot underflow the value stack.
 
 Every phase reasons about types, control flow and depths. None reasons
 about values, so no phase can decide a question whose answer the program
@@ -50,19 +51,21 @@ step and allocation budgets it sets, not from a checker pass.
 | 1a | Structural | Truncated instruction bytes, unknown opcodes |
 | 1b | Jump target | A jump label id at or past the program's target count |
 | 1c | Loop nesting | `RANGE`/`ITER`/`NEXT` balance, loop-only instructions used outside a loop |
+| 1d | Jump span | A jump whose target lies in a different loop body from the jump |
 | 2 | Register type-state | Control-flow-based read-before-write and register type checks |
 | 3 | Must-init | Control-flow AND-meet analysis: a register read that is unset on at least one incoming path |
 | 4 | Stack depth | Control-flow-based stack underflow, overflow risk, and join-point depth mismatches |
 
 Phases 1a-1c share one linear scan over the instruction bytes -- the same
 scan that produces the program's id-to-offset lookup for `TARGET` labels
-(see [Bytecode Format](bytecode-format.md)). Phases 2 through 4 share one
-control-flow graph of basic blocks, built once, and each runs its own
-forward worklist analysis over it. The control-flow graph correctly accounts for unreachable code,
-conditional branches, and loop back-edges, catching errors that a purely
-linear scan would miss.
+(see [Bytecode Format](bytecode-format.md)). Phase 1d is a second lexical
+pass. Phases 2 through 4 share one control-flow graph of basic blocks, built
+once, and each runs its own forward worklist analysis over it. The
+control-flow graph correctly accounts for unreachable code, conditional
+branches, and loop back-edges, catching errors that a purely linear scan
+would miss.
 
-## Phase 1 -- structural, jump target, loop nesting
+## Phase 1 -- structural, jump target, loop nesting, jump span
 
 **1a, structural.** Every byte in the instruction stream must decode to a
 known opcode with the correct number of operand bytes. An unrecognised
@@ -79,6 +82,16 @@ closes one. The checker rejects `NEXT`, `LVAL`, or `LIDX` reached with no
 open loop frame, and any loop frame still open at the end of the program
 (reported at the byte offset of the outermost unmatched opener).
 Errors: `NoActiveLoop`, `UnmatchedLoop`.
+
+**1d, jump span.** Every position belongs to the innermost loop body that
+encloses it: a `RANGE` or `ITER` belongs to the enclosing body, and its
+matching `NEXT` to the inner body it closes. A jump whose target lies in a
+different body from the jump itself -- into a loop, out of one, or into a
+sibling loop -- is rejected. With no such jumps the VM's loop stack always
+matches the program's lexical nesting, which the later phases rely on.
+Jumps that stay within one body, such as `xqcp`'s "if inside a loop" and
+"loop inside an if", are unaffected.
+Error: `JumpAcrossLoopBoundary`.
 
 ## Phase 2 -- register type-state
 
@@ -180,13 +193,15 @@ Checks run in this order:
 The first witnessed fault is reported. This replaces the former global
 error-class priority, so rejected programs can change diagnostic variant or
 offset. Against the minimum-walk analysis it replaces, accepted programs are
-unchanged. Two other 0.6.0 rules do change acceptance: block analysis stops
-at the first terminator, so bytes after it are dead, and the transient peak
-inside a block is checked. Arbitrary loop escapes and re-entry
-remain ordinary CFG edges; there are no separate body walks or new nesting
-limits. Depth work is at most N block transfers and E edge checks after
-indexing the graph. See the normative checker specification for the
-acceptance-equivalence proof and historical minimum-walk oracle.
+unchanged. Three other 0.6.0 rules do change acceptance: block analysis
+stops at the first terminator, so bytes after it are dead; a jump may not
+cross a loop-body boundary (phase 1d); and the transient peak inside a block
+is checked. Within phase 4, loop escapes and re-entry are ordinary CFG
+edges, which the default pipeline has already rejected in phase 1d; there
+are no separate body walks or new nesting limits. Depth work is at most N
+block transfers and E edge checks after indexing the graph. See the
+normative checker specification for the acceptance-equivalence proof and
+historical minimum-walk oracle.
 
 ## Error reference
 
@@ -197,6 +212,7 @@ acceptance-equivalence proof and historical minimum-walk oracle.
 | `UndefinedJumpTarget` | 1b | A jump references a label id at or past the program's target count |
 | `NoActiveLoop` | 1c | `NEXT`, `LVAL`, or `LIDX` reached with no open loop frame |
 | `UnmatchedLoop` | 1c | A loop frame is still open at the end of the program |
+| `JumpAcrossLoopBoundary` | 1d | A jump's target lies in a different loop body from the jump |
 | `ReadUnsetRegister` | 2 or 3 | A register is read before it is written, or before it is written on every path |
 | `RegisterTypeMismatch` | 2 | A register holds a different `RegVal` variant than the instruction expects |
 | `LoopStackImbalance` | 4 | A loop body's entry and exit stack depths differ |
@@ -222,6 +238,6 @@ from the side of fixing them rather than defining them.
 ## Sources
 
 - [`spec/xqvm/CHECKER.md`](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/CHECKER.md) is the normative reference, including the full per-opcode stack-effect table.
-- [`xqvm/src/checker/phase.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/checker/phase.rs) defines the `Phase` trait and the default pipeline (`CombinedPhase` for 1a-1c, `AllCfgPhases` for 2-4).
+- [`xqvm/src/checker/phase.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/checker/phase.rs) defines the `Phase` trait and the default pipeline (`CombinedPhase` for 1a-1c, `JumpSpanPhase` for 1d, `AllCfgPhases` for 2-4).
 - The individual phase modules live alongside it in [`xqvm/src/checker/`](https://gitlab.com/quip.network/xquad/-/tree/main/xqvm/src/checker).
 - [`xqvm/src/checker/error.rs`](https://gitlab.com/quip.network/xquad/-/blob/main/xqvm/src/checker/error.rs) defines `CheckerError` and its display strings, reproduced in the table above.
