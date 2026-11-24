@@ -40,22 +40,28 @@ mod tests {
 
     wasm_bindgen_test_configure!(run_in_node_experimental);
 
+    /// The structural checker runs without `std`: it accepts a well-formed
+    /// loop and rejects a `NEXT` with no loop open.
     #[wasm_bindgen_test]
-    fn cyclic_register_analysis_terminates() {
-        let drop_cycle = Program::new(vec![
-            0x43, 0x02, 0x02, 0x02, 0x0c, 0x02, 0x02, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01,
-            0x01, 0xff,
-        ]);
+    fn structural_checker_runs_without_std() {
+        let mut b = InstructionBuilder::new();
+        b.emit_push(0)
+            .emit_push(2)
+            .emit_range()
+            .emit_next()
+            .emit_halt();
+        assert!(xqvm::checker::check(&b.build().expect("build")).is_ok());
+
+        let stray_next = Program::new(
+            [Instruction::Next {}, Instruction::Halt {}]
+                .iter()
+                .flat_map(xqvm::codec::encode)
+                .collect(),
+        );
         assert!(matches!(
-            xqvm::checker::check(&drop_cycle),
-            Err(xqvm::CheckerError::StackUnderflow { offset: 0 })
+            xqvm::checker::check(&stray_next),
+            Err(xqvm::CheckerError::NoActiveLoop { offset: 0 })
         ));
-        let entry_cycle = Program::new(vec![
-            0x00, 0x01, 0x04, 0x00, 0x11, 0x00, 0x43, 0x00, 0x01, 0x02, 0x00, 0x11, 0x00, 0x43,
-            0x00, 0x01, 0x03, 0x00, 0x11, 0x00, 0x02, 0x06, 0x00, 0x11, 0x00, 0x02, 0x06, 0x00,
-            0x01, 0x03, 0x00, 0x11, 0x00, 0x02, 0x02, 0x00, 0xff,
-        ]);
-        assert!(xqvm::checker::check(&entry_cycle).is_ok());
     }
 
     /// PUSH 3, PUSH 4, ADD, HALT -- result 7 on stack.

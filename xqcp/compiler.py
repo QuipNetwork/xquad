@@ -1033,8 +1033,8 @@ class _VerifierEmitter:
     """Emits a sample check in place of each of the encoder's constraints.
 
     Every emitter is net-zero on the stack and initialises its accumulator
-    before the loop that feeds it, so the bytecode checker accepts a
-    check emitted inside a loop body or a branch arm.
+    before the loop that feeds it, so a check emitted inside a loop body or
+    a branch arm neither unbalances the stack nor reads an unset register.
     """
 
     def __init__(self, model_data: dict[str, Any], base: int, slack_equalities: set[int]) -> None:

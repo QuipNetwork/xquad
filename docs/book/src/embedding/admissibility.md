@@ -97,16 +97,17 @@ its opcodes.
 
 | Layer | Runs | Enforces |
 |---|---|---|
-| Static | `xqvm::checker::check` at program submission | Structural integrity, jump targets, loop balance, register type-state, must-init, stack depth |
+| Static | `xqvm::checker::check` at program submission | Structural integrity, jump targets, loop balance |
 | Runtime | `Vm::set_memory_limit` before execution | The allocation budget, charged before each allocation |
 | Runtime | `Vm::set_step_limit` before execution | The step budget, charged before each unit of work |
 | Weight | The extrinsic's declared and refunded weight | The block's share of the above |
 
-The static layer is what makes a rejection cheap: a program that cannot run
-correctly is refused before it consumes execution weight. The runtime layer
-is what makes admission safe: the checker does not bound allocation or
-running time, and cannot, because both depend on values computed at
-runtime. Neither layer substitutes for the other.
+The static layer is what makes a rejection cheap: bytecode that is not a
+well-formed program is refused in one linear pass, before it consumes
+execution weight. The runtime layer is what makes admission safe: register
+contents, stack depth, allocation and running time all depend on what the
+program does, so the VM checks them as it runs and the budgets bound the
+work before the fault. Neither layer substitutes for the other.
 
 The budgets belong in the runtime's configuration rather than in the VM
 defaults. The library defaults documented in

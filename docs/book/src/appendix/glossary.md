@@ -18,8 +18,8 @@ so they read out as one value rather than breaking apart under the
 problem's own couplings. See [D-Wave QPU](../solving/dwave-qpu.md).
 
 **Checker.** The bytecode checker: static analysis (`xqvm::checker`) that
-checks a program's structure before it runs. Every jump lands on a
-`TARGET`, and every register is read only after it is written. Not the
+checks a program's structure before it runs. Every instruction decodes,
+every jump lands on a `TARGET`, and every loop is closed. Not the
 verifier program (see the Verifier entry below). See
 [Checker](../xqvm/checker.md).
 

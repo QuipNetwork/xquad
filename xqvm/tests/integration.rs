@@ -733,10 +733,10 @@ fn iter_skips_an_inverted_range() {
 
 #[test]
 fn iter_resolves_its_register_before_it_skips() {
-    // `ITER` carries a `read` effect on its register that the checker's
-    // static type system depends on, so an empty slice does not excuse the
-    // VM from resolving the register: an `ITER` whose register does not hold
-    // a vec raises whether or not the body would have run. Returning
+    // `ITER` reads its register whether or not the body runs, so an empty
+    // slice does not excuse the VM from resolving the register: an `ITER`
+    // whose register does not hold a vec raises whether or not the body
+    // would have run. Returning
     // `SkipLoop` first made a stored program that aborted with a
     // register-type fault on 0.3.x complete and write outputs.
     let err = run_err(|b| {

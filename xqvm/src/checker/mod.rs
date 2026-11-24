@@ -35,21 +35,11 @@
 //! | [`StructuralPhase`] | Truncated bytes, unknown opcodes | [`CheckerError::TruncatedInstruction`], [`CheckerError::BadOpcode`] |
 //! | [`JumpTargetPhase`] | Jump label ≥ target count | [`CheckerError::UndefinedJumpTarget`] |
 //! | [`LoopNestingPhase`] | Loop open/close balance, loop-context reads | [`CheckerError::NoActiveLoop`], [`CheckerError::UnmatchedLoop`] |
-//! | [`RegisterTypePhase`] | CFG-based read-before-write; type-state mismatches | [`CheckerError::ReadUnsetRegister`], [`CheckerError::RegisterTypeMismatch`] |
-//! | [`UninitRegisterPhase`] | CFG AND-meet: registers uninit on at least one path | [`CheckerError::ReadUnsetRegister`] |
-//! | [`StackDepthPhase`] | CFG-based stack depth: underflow/overflow, loop balance, join-point mismatch | [`CheckerError::StackUnderflow`], [`CheckerError::StackOverflowRisk`], [`CheckerError::LoopStackImbalance`], [`CheckerError::StackDepthMismatch`] |
 //!
-//! The structural, jump, and loop phases run as a single combined pass via
-//! `scan`. The remaining phases each build a control-flow graph and run a
-//! forward worklist analysis:
-//!
-//! * [`RegisterTypePhase`] -- greatest-lower-bound meet with absorbing Unset; catches
-//!   read-before-write and type mismatches on all CFG paths.
-//! * [`UninitRegisterPhase`] -- AND-meet at join points; flags registers that
-//!   are definitely unset on at least one incoming path.
-//! * [`StackDepthPhase`] -- exact heights in FIFO order, checking local
-//!   effects and each outgoing edge once, including the program-entry edge.
-//!   Conflicts on matching NEXT back-edges report loop imbalance.
+//! [`Checker::default`] runs all three as a single combined pass via `scan`.
+//! The checker reads the bytecode's shape only: it does not follow control
+//! flow, so register contents and stack depth are the VM's to enforce as the
+//! program runs.
 //!
 //! # Quick start
 //!
@@ -84,12 +74,8 @@ mod error;
 mod jump_target;
 mod loop_nesting;
 mod phase;
-pub(crate) mod reg_type;
-mod register_type;
 mod scan;
-mod stack_depth;
 mod structural;
-mod uninit_register;
 
 #[cfg(test)]
 mod tests;
@@ -102,25 +88,19 @@ pub use error::CheckerError;
 pub use jump_target::JumpTargetPhase;
 pub use loop_nesting::LoopNestingPhase;
 pub use phase::{Checker, Phase};
-pub use reg_type::RegType;
-pub use register_type::RegisterTypePhase;
-pub use stack_depth::StackDepthPhase;
 pub use structural::StructuralPhase;
-pub use uninit_register::UninitRegisterPhase;
 
 pub(crate) use scan::scan;
 
 use crate::Program;
 
-/// Run the full four-phase checker over `program`.
+/// Run the structural checker over `program`.
 ///
-/// Equivalent to `Checker::default().run(program)`. Runs `CombinedPhase`
-/// (structural, jump-target, loop-nesting) followed by [`RegisterTypePhase`]
-/// (CFG-based read-before-write and type-state checks) followed by
-/// [`UninitRegisterPhase`] (CFG AND-meet must-init analysis) followed by
-/// [`StackDepthPhase`] (CFG-based stack depth, loop balance, and join-point
-/// depth consistency). Returns the first [`CheckerError`] found, or
-/// `Ok(())` if all checks pass.
+/// Equivalent to `Checker::default().run(program)`: one pass over the
+/// instruction bytes that checks every instruction decodes, every jump
+/// names a defined `TARGET`, and every `RANGE`/`ITER` is closed by a `NEXT`
+/// with `NEXT`, `LVAL` and `LIDX` only inside an open loop. Returns the first
+/// [`CheckerError`] found, or `Ok(())` if all checks pass.
 ///
 /// # Errors
 ///

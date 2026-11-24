@@ -24,7 +24,7 @@ address -- the same fault the four
 [grid opcodes](grid.md) raise for an out-of-range row or column.
 `xquad vm check` cannot catch either,
 because the grid dimensions and the index alike are popped stack values
-rather than something the checker's dataflow passes track. Vec-based
+and the checker reads only the bytecode's structure. Vec-based
 opcodes (`EQUALITY`, `ATLEAST`, `ATLEASTW`, `REDUCE`) operate on
 arbitrary variable sets. All coefficients are `i64`. For each opcode's
 byte value and operand layout, see the

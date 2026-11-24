@@ -46,8 +46,8 @@ exceeds its extent is the normal state after any of them; a later
 `RESIZE` over a strict subset of the variables is still accepted.
 
 Both checks are runtime checks, not ones the checker catches statically,
-since grid dimensions are ordinary popped stack values rather than
-something the checker's dataflow passes track.
+since grid dimensions are ordinary popped stack values and the checker
+reads only the bytecode's structure.
 
 The canonical use is encoding a two-index variable directly instead of
 computing flat indices by hand at every access site. A 4-city TSP, for

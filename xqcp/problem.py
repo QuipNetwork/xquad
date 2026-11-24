@@ -917,8 +917,8 @@ class Problem:
         """Compile the problem into three .xqasm program strings.
 
         After generating the three programs, runs the bytecode checker
-        (all four phases) on each one to catch code-generation bugs at
-        compile time.  The checker requires ``xqffi``; if that extension is
+        (structural, jump-target and loop-nesting) on each one to catch
+        code-generation bugs at compile time.  The checker requires ``xqffi``; if that extension is
         not available the check is silently skipped.
 
         # Errors

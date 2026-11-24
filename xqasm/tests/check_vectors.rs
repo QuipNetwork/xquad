@@ -28,11 +28,7 @@
 //! that are in fact valid, long before that regression would otherwise
 //! surface as a mysterious conformance or example-smoke failure.
 //!
-//! The sweep has no exclusions. It carried two until QUI-1168, both there
-//! because `RegisterTypePhase` required a model register for
-//! `GETLINE`/`SETLINE`/`ADDLINE` while the runtime and `spec/xqvm/ISA.md`
-//! both accepted a sample. That was a defect in the checker rather than
-//! deliberate strictness, and fixing it retired the exclusions with it.
+//! The sweep has no exclusions.
 
 #![expect(
     clippy::expect_used,

@@ -19,19 +19,13 @@ use thiserror::Error;
 
 /// Errors produced by the pre-execution bytecode checker.
 ///
-/// Bytecode errors carry their offending location. Analysis budget exhaustion
-/// instead indicates a broken internal convergence contract without one offset.
+/// Every variant carries the byte offset of the offending instruction.
 #[derive(Debug, Error)]
 #[expect(
     missing_docs,
     reason = "error variants are documented via their #[error(...)] display strings"
 )]
 pub enum CheckerError {
-    /// A built-in analysis exceeded its proven deterministic work bound.
-    /// This indicates an analysis defect, not invalid user bytecode.
-    #[error("checker analysis work budget exhausted")]
-    AnalysisBudgetExceeded,
-
     /// A jump instruction references a `TARGET` label id that does not exist
     /// in the program's jump table.
     #[error(
@@ -64,59 +58,6 @@ pub enum CheckerError {
     /// The instruction stream encountered an unrecognized opcode byte.
     #[error("unknown opcode {byte:#04x} at byte {offset:#06x}")]
     BadOpcode { offset: usize, byte: u8 },
-
-    /// A register read is not preceded by a write on every reachable path.
-    #[error("register r{reg} read at byte {offset:#06x} before being written on every path")]
-    ReadUnsetRegister { offset: usize, reg: u8 },
-
-    /// An instruction found a register holding the wrong type.
-    #[error("register r{reg} at byte {offset:#06x}: expected {expected}, got {got}")]
-    RegisterTypeMismatch {
-        offset: usize,
-        reg: u8,
-        expected: &'static str,
-        got: &'static str,
-    },
-
-    /// A stack-consuming instruction was reached with insufficient items on the stack.
-    ///
-    /// An instruction needs as many values as it pops, checked before any
-    /// of its pushes are counted, so an opcode that both pops and pushes
-    /// (e.g. `IDXGRID`: pop 3, push 1) is held to its full pop count. See
-    /// "Stack underflow rule" under Phase 4 in `spec/xqvm/CHECKER.md`.
-    #[error("stack underflow at byte {offset:#06x}")]
-    StackUnderflow { offset: usize },
-
-    /// The stack depth may exceed the VM limit of 8192 at this instruction.
-    #[error("potential stack overflow at byte {offset:#06x} (depth {depth})")]
-    StackOverflowRisk { offset: usize, depth: usize },
-
-    /// A loop body's net stack effect is non-zero: the depth at `NEXT` differs
-    /// from the depth at the matching `RANGE`/`ITER` opener.
-    #[error(
-        "loop starting at byte {opener:#06x} has non-zero stack effect \
-         (entry depth {entry}, exit depth {exit})"
-    )]
-    LoopStackImbalance {
-        opener: usize,
-        entry: usize,
-        exit: usize,
-    },
-
-    /// Two control-flow paths arrive at a join point with different stack
-    /// depths, making the stack state undefined at that point.  This is a
-    /// structural ill-formedness: the stack depth after this join point is
-    /// not deterministic, so subsequent instructions may underflow on one
-    /// path while appearing correct on another.
-    #[error(
-        "stack depth mismatch at join point byte {target_offset:#06x}: \
-         one path has depth {depth_a}, another has depth {depth_b}"
-    )]
-    StackDepthMismatch {
-        target_offset: usize,
-        depth_a: usize,
-        depth_b: usize,
-    },
 }
 
 impl CheckerError {
@@ -124,18 +65,11 @@ impl CheckerError {
     /// to match expected errors without coupling to the `Display` format.
     pub fn variant_name(&self) -> &'static str {
         match self {
-            Self::AnalysisBudgetExceeded => "AnalysisBudgetExceeded",
             Self::UndefinedJumpTarget { .. } => "UndefinedJumpTarget",
             Self::NoActiveLoop { .. } => "NoActiveLoop",
             Self::UnmatchedLoop { .. } => "UnmatchedLoop",
             Self::TruncatedInstruction { .. } => "TruncatedInstruction",
             Self::BadOpcode { .. } => "BadOpcode",
-            Self::ReadUnsetRegister { .. } => "ReadUnsetRegister",
-            Self::RegisterTypeMismatch { .. } => "RegisterTypeMismatch",
-            Self::StackUnderflow { .. } => "StackUnderflow",
-            Self::StackOverflowRisk { .. } => "StackOverflowRisk",
-            Self::LoopStackImbalance { .. } => "LoopStackImbalance",
-            Self::StackDepthMismatch { .. } => "StackDepthMismatch",
         }
     }
 }

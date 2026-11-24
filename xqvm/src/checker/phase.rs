@@ -19,9 +19,6 @@
 use alloc::{boxed::Box, vec::Vec};
 
 use crate::Program;
-use crate::dataflow::bytecode::{build_cfg, check_stack_depth_with_context};
-use crate::dataflow::register::check_register_types_with_cfg;
-use crate::dataflow::uninit::check_uninit_registers_with_cfg;
 
 use super::error::CheckerError;
 use super::scan::scan;
@@ -127,9 +124,7 @@ impl Default for Checker {
     /// Callers that need selective phase composition should use [`Checker::new`]
     /// combined with specific phase types.
     fn default() -> Self {
-        Self::new()
-            .with_phase(CombinedPhase)
-            .with_phase(AllCfgPhases)
+        Self::new().with_phase(CombinedPhase)
     }
 }
 
@@ -145,28 +140,5 @@ impl Phase for CombinedPhase {
     fn run(&self, program: &Program) -> Result<(), CheckerError> {
         let (_table, _slots, err) = scan(program.code());
         err.map_or(Ok(()), Err)
-    }
-}
-
-/// Builds the CFG once and runs all three CFG-based checks in sequence.
-///
-/// Used by [`Checker::default`] to avoid triple CFG construction when all
-/// three analyses are needed together.
-pub(super) struct AllCfgPhases;
-
-impl Phase for AllCfgPhases {
-    type Error = CheckerError;
-
-    fn run(&self, program: &Program) -> Result<(), CheckerError> {
-        let code = program.code();
-        if code.is_empty() {
-            return Ok(());
-        }
-        let Some(ctx) = build_cfg(code, program.jump_table()) else {
-            return Ok(());
-        };
-        check_register_types_with_cfg(program, &ctx.cfg)?;
-        check_uninit_registers_with_cfg(program, &ctx.cfg)?;
-        check_stack_depth_with_context(&ctx.cfg, &ctx.effects, &ctx.peaks, &ctx.loop_regions)
     }
 }

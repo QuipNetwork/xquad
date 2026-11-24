@@ -102,9 +102,6 @@ pub mod disasm;
 // Pre-execution bytecode checker.
 pub mod checker;
 
-// Worklist data-flow analysis framework.
-pub mod dataflow;
-
 // ---------------------------------------------------------------------------
 // Public API re-exports — bytecode types hoisted to crate root
 // ---------------------------------------------------------------------------
@@ -118,7 +115,7 @@ pub use bytecode::{
 // Public API re-exports — interpreter
 // ---------------------------------------------------------------------------
 
-pub use checker::{CheckerError, RegType};
+pub use checker::CheckerError;
 #[cfg(feature = "std")]
 pub use disasm::Disassembly;
 pub use error::Error;

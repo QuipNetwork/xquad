@@ -278,7 +278,7 @@ File format definitions, assembly syntax, and binary encoding rules: **[ENCODING
 
 ## Bytecode Checking
 
-Bytecode checker phases, error semantics, composable architecture, and per-opcode stack effects: **[CHECKER.md](CHECKER.md)**
+Bytecode checker phases, error semantics, and composable architecture: **[CHECKER.md](CHECKER.md)**
 
 ## Related Specifications
 

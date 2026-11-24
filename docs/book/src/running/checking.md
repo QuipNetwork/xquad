@@ -1,7 +1,7 @@
 # Checking
 
 `xquad vm check` rejects a program before it runs, printing the first
-structural or semantic problem the bytecode checker finds. This page takes
+structural problem the bytecode checker finds. This page takes
 you from that message to a working program. [Checker](../xqvm/checker.md)
 is the reference half, covering what each phase checks and what every
 error means. This page does not repeat that; it shows each error actually
@@ -97,127 +97,6 @@ means a `with problem.range(...)` block (see
 before the DSL closed it correctly -- check the generated `.xqasm` for the
 loop in question.
 
-### Register errors
-
-**`ReadUnsetRegister`** -- a register is read before anything writes it, or
-before every incoming control-flow path writes it. Both the type check
-(phase 2) and must-init analysis (phase 3) reject the second case:
-
-```asm
-LOAD r0
-HALT
-```
-
-```
-Error: check failed: ReadUnsetRegister: register r0 read at byte 0x0000 before being written on every path
-```
-
-Fix: write the register before reading it. If the read follows a branch,
-confirm both arms write it -- a register set on only one side of a
-conditional is `ReadUnsetRegister` at the first read after the join, even
-though nothing about the type looked wrong on either arm individually.
-`DROP` also resets a register to unset; a `LOAD` right after `DROP` on the
-same register fails the same way.
-
-**`RegisterTypeMismatch`** -- a register holds a `RegVal` variant other
-than the one the instruction needs. Here `BQMX` writes a `Model`, and
-`LOAD` only handles `Int`:
-
-```asm
-PUSH 4
-BQMX r0
-LOAD r0
-HALT
-```
-
-```
-Error: check failed: RegisterTypeMismatch: register r0 at byte 0x0004: expected int, got model
-```
-
-Fix: `LOAD` is for scalar integers. To move a `Model` out of a register for
-inspection or as another instruction's operand, pass the register directly
-to an instruction that accepts `Model` (`GETLINE`, `ENERGY`, and others);
-do not route it through `LOAD`.
-
-### Stack-depth errors
-
-**`StackUnderflow`** -- a reachable instruction would pop more items than
-the analysis can prove are on the stack:
-
-```asm
-ADD
-HALT
-```
-
-```
-Error: check failed: StackUnderflow: stack underflow at byte 0x0000
-```
-
-Fix: push the operands an instruction needs before it runs. This same
-check also catches loop-related shortfalls; see the "does not guarantee"
-section below for its blind spot.
-
-**`StackOverflowRisk`** -- a reachable block's exact entry or exit height,
-or a peak inside the block, exceeds the 8,192-item limit. A straight-line run
-of 8,200
-`PUSH` instructions with no loop involved:
-
-```
-Error: check failed: StackOverflowRisk: potential stack overflow at byte 0x0000 (depth 8200)
-```
-
-Fix: this fires on a single basic block's static depth, so the usual cause
-is building up a large flat structure with individual `PUSH`/`VECPUSH`
-calls rather than a loop. Reducing the item count, or restructuring the
-build as a loop the analysis can bound per iteration, both work; see the
-next section for why a loop is not automatically safe either.
-
-**`LoopStackImbalance`** -- a loop body's net stack effect is non-zero: the
-depth the analysis computes at `NEXT` differs from the depth at the
-matching `RANGE`/`ITER`. An unmatched `PUSH` inside the loop body:
-
-```asm
-PUSH 0
-PUSH 3
-RANGE
-PUSH 99
-NEXT
-HALT
-```
-
-```
-Error: check failed: LoopStackImbalance: loop starting at byte 0x0004 has non-zero stack effect (entry depth 0, exit depth 1)
-```
-
-Fix: every value a loop body pushes needs a matching pop (directly, or via
-`STOW` into a register) before `NEXT`, so each iteration leaves the stack
-exactly as it found it. `SCLR` inside a loop body is a special case: it
-resets the tracked depth to zero unconditionally, so this error fires
-when the loop's *entry* depth was already non-zero, not when the body's
-depth before the reset was non-zero. If the entry depth was zero, the
-same reset can instead mask a real imbalance earlier in the body, and
-the mismatch surfaces later, at the next downstream join point, rather
-than here.
-
-**`StackDepthMismatch`** -- two control-flow paths reach the same join
-point with different stack depths, so the depth at that point is not
-well-defined. A conditional that pushes on only one arm:
-
-```asm
-PUSH 1
-JUMPI .0
-PUSH 2
-.0: HALT
-```
-
-```
-Error: check failed: StackDepthMismatch: stack depth mismatch at join point byte 0x0006: one path has depth 0, another has depth 1
-```
-
-Fix: make every arm of a branch leave the same stack depth before it
-rejoins. If only one arm pushes a value, move that push above the branch
-so both arms inherit it.
-
 ## What passing the check does not guarantee
 
 A pass means every phase's static checks succeeded. It does not mean the
@@ -226,20 +105,16 @@ guarantees](../xqvm/checker.md#what-passing-the-check-guarantees) states
 the precise scope. Treat a pass as "structurally sound," not as "will run
 to completion."
 
-A whole class of faults is outside the checker's reach: they depend on
-values, and the checker tracks types and depths rather than values. An
-allocator size, a grid extent, a loop bound, a calldata index and every
-arithmetic operand are ordinary popped stack values, so `InvalidAllocation`,
-`InvalidGridDimensions`, `InvalidIntegerK`, `ArithmeticOverflow`,
-`IndexOutOfBounds`, `SampleOutOfDomain`, `LoopStackOverflow`,
-`StepLimitExceeded` and `MemoryLimitExceeded` are all runtime faults with no
-static counterpart. `SampleOutOfDomain` is the clearest case of why: the
-value written into a sample can arrive from calldata, so no amount of static
-analysis can know it. `NonBinaryModel` has no static counterpart either, for
-a different reason: the checker does not track a model's domain. A checked
-program can still raise any of them, and for an embedder that is the point:
-the budgets and the range checks are what bound a program the checker has
-already passed. See [Limits and
+The checker reads the shape of the bytecode, not what it does. A register
+read before anything writes it, an instruction that pops more values than
+the stack holds, a register holding the wrong kind of value, and every
+fault that depends on a computed value -- an allocator size, a grid extent,
+a loop bound, a calldata index, an arithmetic operand -- all pass the check
+and fault when the VM reaches them: `UnsetRegister`, `StackUnderflow`,
+`RegisterType`, `InvalidAllocation`, `InvalidGridDimensions`,
+`ArithmeticOverflow`, `IndexOutOfBounds` and the rest. For an embedder
+that is the point: the budgets and the run-time checks are what bound a
+program the checker has already passed. See [Limits and
 Errors](../xqvm/limits-and-errors.md#vm-runtime-errors).
 
 ## The generated verifier program is not the bytecode checker

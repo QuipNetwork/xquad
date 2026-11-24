@@ -22,9 +22,9 @@ xquad vm check [OPTIONS] <FILE>
 | `--text` | off | Treat `FILE` as assembly source and assemble it before checking. |
 
 `xquad vm check` runs the same default pipeline documented in
-[Checker](../../xqvm/checker.md): structural checks, jump-target checks,
-loop-nesting balance, register type-state, must-init analysis, and stack
-depth, in that order, stopping at the first phase that fails. This page
+[Checker](../../xqvm/checker.md): structural checks, jump-target checks
+and loop-nesting balance, in that order, stopping at the first phase that
+fails. This page
 covers only the command's own behaviour; for what each phase checks and
 what each error means, see that page. For a task-oriented walkthrough of
 fixing a rejected program, see
@@ -48,19 +48,19 @@ in memory first and never written to disk.
 
 ## A failing program
 
-`uninit.xqasm` reads register `r0` before anything ever writes it:
+`stray.xqasm` closes a loop it never opened:
 
 ```asm
-LOAD r0
+NEXT
 HALT
 ```
 
 ```sh
-xquad vm check --text uninit.xqasm
+xquad vm check --text stray.xqasm
 ```
 
 ```
-Error: check failed: ReadUnsetRegister: register r0 read at byte 0x0000 before being written on every path
+Error: check failed: NoActiveLoop: loop instruction at byte 0x0000 executed outside any active loop
 ```
 
 `check` exits `1` on the first violation any phase finds. A program with
@@ -69,12 +69,11 @@ may surface the next.
 
 ## Passing the check is not a runtime guarantee
 
-The check is static: it looks at types, control flow and
-stack depth, and does not look at values. An allocator size, a grid extent, a
-loop bound and every arithmetic operand are runtime quantities, so a
-program that allocates a negative model, resizes past its own variable
-count, overflows an `i64` or exhausts its step or allocation budget
-checks cleanly and faults when run. See
+The check is structural: it looks at how the bytecode is laid out, not at
+what it does. A program that reads a register before writing it, pops an
+empty stack, allocates a negative model, resizes past its own variable
+count, overflows an `i64` or exhausts its step or allocation budget checks
+cleanly and faults when run. See
 [Checker](../../xqvm/checker.md#what-passing-the-check-guarantees) for the
 precise scope of what a pass proves, and [Limits and
 Errors](../../xqvm/limits-and-errors.md#vm-runtime-errors) for the faults that

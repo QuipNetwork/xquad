@@ -1483,14 +1483,13 @@ impl Vm {
         let end = self.pop(pos)?;
         let start = self.pop(pos)?;
         // The register kind is discriminated before the skip, not after it:
-        // `ITER` carries a `read` effect on `reg` that the checker's static
-        // type system depends on, and skipping the loop without ever
-        // resolving the register discards it. `spec/xqvm/ISA.md`'s `ITER` row
-        // orders the steps register-read-before-skip and its error clause has
-        // no emptiness carve-out. Returning `SkipLoop` first made
+        // `ITER` reads `reg` whether or not the body runs, and skipping the
+        // loop without ever resolving the register drops that read.
+        // `spec/xqvm/ISA.md`'s `ITER` row orders the steps
+        // register-read-before-skip and its error clause has no emptiness
+        // carve-out. Returning `SkipLoop` first made
         // `INPUT r0 / PUSH 1 / PUSH 1 / ITER r0 / NEXT / ...` complete and
-        // write outputs where 0.3.x aborted with a register-type fault, on a
-        // program the checker admits because `INPUT` writes `RegType::Any`.
+        // write outputs where 0.3.x aborted with a register-type fault.
         self.require_vec(pos, reg)?;
         if start >= end {
             return Ok(StepResult::SkipLoop);
@@ -2244,15 +2243,12 @@ impl Vm {
         let capacity = self.pop(pos)?;
         let start_index = self.pop(pos)?;
         // Both registers are discriminated before the empty-capacity skip,
-        // and before either is mutated. `SLACK` carries a `mutate` effect on
-        // both, and the checker's static type system depends on it:
-        // `xqvm/src/checker/reg_type.rs` requires `vec<int>` of each, and
-        // `RegType::Any` -- what `INPUT` writes -- satisfies that, so
-        // `INPUT r0 / INPUT r1 / PUSH 0 / PUSH 0 / SLACK r0 r1` is
-        // checker-clean and reaches here with two ints. Returning on
-        // `capacity <= 0` before touching either register discarded the
-        // effect and halted Ok where the spec requires a fault. Same rule,
-        // and same reason, as `ITER`'s register-read-before-skip.
+        // and before either is mutated. `SLACK` requires `vec<int>` in both
+        // whatever the capacity, so `INPUT r0 / INPUT r1 / PUSH 0 / PUSH 0 /
+        // SLACK r0 r1` reaches here with two ints and must fault. Returning
+        // on `capacity <= 0` before touching either register halted Ok
+        // where the spec requires a fault. Same rule, and same reason, as
+        // `ITER`'s register-read-before-skip.
         //
         // Resolving both up front also fixes the order within the non-empty
         // path: the second register used to be discriminated only after the

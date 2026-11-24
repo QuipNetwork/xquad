@@ -3954,7 +3954,6 @@ name = "xqvm"
 version = "0.6.0-dev"
 dependencies = [
  "crc32fast",
- "hashbrown 0.15.5",
  "miette",
  "pastey",
  "serde",

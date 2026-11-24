@@ -39,7 +39,7 @@ assert vm.outputs() == [42]
 
 ### `xqffi.checker` -- static checking
 
-`check(bytes)` and `check_source(str)` run the pre-execution checker: every jump lands on a `TARGET`, every register is read after it is written, and stack depth balances. Both return `None` on success and raise `ValueError` on a rejected program. See [Checker](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/xqvm/checker.md).
+`check(bytes)` and `check_source(str)` run the pre-execution checker: every instruction decodes, every jump lands on a `TARGET`, and every loop is closed. Both return `None` on success and raise `ValueError` on a rejected program. See [Checker](https://gitlab.com/quip.network/xquad/-/blob/main/docs/book/src/xqvm/checker.md).
 
 ## Interactive / multi-run API
 
