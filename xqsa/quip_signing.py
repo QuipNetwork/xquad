@@ -20,7 +20,7 @@ Deprecated alias for :mod:`xqsa.quip.signing`.
 
 Importing ``xqsa.quip_signing`` warns and returns the ``xqsa.quip.signing`` module
 itself, so attribute access and patch targets keep working. The shim is removed
-in v0.6.0.
+in v0.7.0.
 """
 
 import importlib
