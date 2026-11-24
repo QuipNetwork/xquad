@@ -50,6 +50,8 @@ Two ways to hit it after a clean upgrade:
 - A project that still depends on `xqsa`, `xqcp` or `xqffi` by name pulls the
   0.5 distributions in. Replace the dependency with `xquad>=0.6,<0.7`.
 
+The check is a transition aid and is removed before 1.0.0.
+
 An environment that installed only `xqffi` or `xqcp` now also gets
 `dwave-samplers` (and with it NumPy) and `click`, the base dependencies of
 `xquad`. One that installed only `xqsa` gains `click`. All of them now get the
@@ -86,13 +88,14 @@ program, such as `programs.verifier` in the examples, keeps its name; see
 checker](../running/checking.md#the-generated-verifier-program-is-not-the-bytecode-checker).
 A blanket replace of `verifier` with `checker` breaks code that uses that name.
 
-The script below renames the fully qualified forms in `.rs`, `.py` and `.pyi`
-files under the current directory. It uses `perl`, which behaves the same on
-macOS and Linux. Run it on a clean working tree and review the diff:
+The script below renames the fully qualified forms, and every bare
+`VerifierError`, in the `.rs`, `.py` and `.pyi` files git tracks in the
+current repository. It uses `perl`, which behaves the same on macOS and
+Linux. Run it on a clean working tree and review the diff:
 
 ```sh
-grep -rlE 'verifier|VerifierError' --include='*.rs' --include='*.py' --include='*.pyi' . |
-  xargs perl -pi -e '
+git grep -lzE 'verifier|VerifierError' -- '*.rs' '*.py' '*.pyi' |
+  xargs -0 perl -pi -e '
     s/\bxqvm::verifier::verify\b/xqvm::checker::check/g;
     s/\bxqvm::verifier::Verifier\b/xqvm::checker::Checker/g;
     s/\bxqvm::verifier\b/xqvm::checker/g;
@@ -103,19 +106,24 @@ grep -rlE 'verifier|VerifierError' --include='*.rs' --include='*.py' --include='
   '
 ```
 
-It leaves these for you, and each one fails loudly:
+It leaves these for you:
 
 - Names imported on their own, such as `use xqvm::verifier::{verify, Verifier}`
   or `from xqffi.verifier import verify`. The module path is renamed, so the
   build or the import fails on the old item name. Rename the item.
 - `from xqffi import verifier` or `from xquad import verifier`, and the calls
   made through that name. The import raises `ImportError`.
+- A module bound to a name, such as `use xqvm::verifier;` or
+  `import xqffi.verifier as v`, and the calls made through it. The script
+  renames the module path but not `verifier::verify(...)` or `v.verify(...)`.
+  In Rust the build fails; in Python the call raises `AttributeError` only
+  when it runs.
 - Code that matches the error text `verification failed`. Nothing fails here;
   search for the string.
 
 ## Removed CLI Aliases
 
-The hidden top-level commands that 0.5 deprecated are gone. Use the
+The deprecated hidden top-level commands are gone. Use the
 [`xquad vm`](../cli/vm/) subcommands:
 
 | 0.5 | 0.6 |
@@ -137,6 +145,8 @@ no longer make them run unbounded.
   says how to pick the bound.
 - `CheckerError` gains `AnalysisBudgetExceeded`. The enum is not
   `#[non_exhaustive]`, so an exhaustive match needs an arm for it.
+
+This cannot be scripted: the bound depends on your analysis.
 
 ## Programs the Checker Accepts and Rejects
 
@@ -200,9 +210,13 @@ constraints on a model that is not binary.
 needs an arm for it. In Python, catch `xqffi.vm.NonBinaryModel`, or its base
 `XqvmError`. See [Limits and Errors](../xqvm/limits-and-errors.md).
 
+This cannot be scripted. Run the programs you store and fix the ones that
+raise `NonBinaryModel`.
+
 ## Deprecated Names
 
-The names that 0.4 deprecated are not removed in 0.6. They still work and
+Apart from the CLI aliases above, the names that 0.4 deprecated are not
+removed in 0.6. They still work and
 still warn, and they are removed in v0.7.0. The [Deprecated
 APIs](../solving/quip-network.md#deprecated-apis) table lists each one with
 its replacement. Moving to the replacements now leaves nothing to change
