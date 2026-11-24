@@ -54,6 +54,33 @@ use super::scan::stream_err;
 /// to the number of instructions: the body id changes only at a loop boundary,
 /// so the scan records those transitions and looks up a target's body by binary
 /// search. A program with no loops and no jumps allocates nothing here.
+///
+/// # Errors
+///
+/// [`CheckerError::JumpAcrossLoopBoundary`] for the first jump whose target
+/// lies in a different loop body, and [`CheckerError::UndefinedJumpTarget`]
+/// for a jump whose label is missing from the program's jump table. A
+/// malformed instruction stream is reported as the stream error.
+///
+/// # Examples
+///
+/// ```rust
+/// use xqvm::checker::{CheckerError, JumpSpanPhase, Phase};
+/// use xqvm::{Instruction, InstructionBuilder};
+///
+/// // The JUMP sits inside the loop body; its TARGET is after NEXT, outside it.
+/// let mut b = InstructionBuilder::new();
+/// let out = b.label();
+/// b.emit_push(1).emit(Instruction::Range {}).emit_jump(out);
+/// b.emit(Instruction::Next {});
+/// b.place(out).unwrap().emit(Instruction::Halt {});
+/// let program = b.build().unwrap();
+///
+/// assert!(matches!(
+///     JumpSpanPhase.run(&program),
+///     Err(CheckerError::JumpAcrossLoopBoundary { .. })
+/// ));
+/// ```
 pub struct JumpSpanPhase;
 
 impl Phase for JumpSpanPhase {
@@ -103,11 +130,17 @@ impl Phase for JumpSpanPhase {
         // Pass 2: reject any jump whose target lies in a different body. The
         // target's body is the one set by the last transition strictly before
         // it (top level, 0, if none). `transitions` is in stream order, so it is
-        // sorted by position. An undefined target is left to JumpTargetPhase,
-        // which runs first.
+        // sorted by position. A label missing from `program.jump_table()` is
+        // rejected here rather than assumed checked: the default pipeline's
+        // `CombinedPhase` validates labels against the table it rebuilds from
+        // the code, not this one, and this phase can also run on its own.
         for (pos, label, jump_body) in jumps {
             let Some(target) = program.jump_table().get(label) else {
-                continue;
+                return Err(CheckerError::UndefinedJumpTarget {
+                    offset: pos,
+                    label,
+                    target_count: program.jump_table().len(),
+                });
             };
             let after = transitions.partition_point(|&(at, _)| at < target);
             let target_body = after
@@ -115,7 +148,10 @@ impl Phase for JumpSpanPhase {
                 .and_then(|last| transitions.get(last))
                 .map_or(0, |&(_, body)| body);
             if jump_body != target_body {
-                return Err(CheckerError::JumpAcrossLoopBoundary { pos, target });
+                return Err(CheckerError::JumpAcrossLoopBoundary {
+                    offset: pos,
+                    target,
+                });
             }
         }
 

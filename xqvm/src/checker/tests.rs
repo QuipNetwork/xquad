@@ -301,10 +301,34 @@ fn jump_span_places_range_in_the_enclosing_body_and_next_in_the_inner() {
     assert!(
         matches!(
             JumpSpanPhase.run(&to_next),
-            Err(CheckerError::JumpAcrossLoopBoundary { pos: 0, target: 7 })
+            Err(CheckerError::JumpAcrossLoopBoundary {
+                offset: 0,
+                target: 7
+            })
         ),
         "NEXT is in the loop body"
     );
+}
+
+/// A jump table shorter than the code's labels (only reachable through
+/// `Program::from_parts`) is rejected, not skipped: the phase must hold when
+/// run on its own.
+#[test]
+fn jump_span_rejects_a_label_missing_from_the_jump_table() {
+    let code = bytes(&[
+        Instruction::Jump1 { label: 0 },
+        Instruction::Target {},
+        Instruction::Halt {},
+    ]);
+    let program = Program::from_parts(code, JumpTable::new(vec![]));
+    assert!(matches!(
+        JumpSpanPhase.run(&program),
+        Err(CheckerError::UndefinedJumpTarget {
+            offset: 0,
+            label: 0,
+            target_count: 0
+        })
+    ));
 }
 
 #[test]

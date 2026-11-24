@@ -19,7 +19,7 @@
 //!
 //! The cross-body-jump rule is a single extra checker phase, `JumpSpanPhase`,
 //! registered in `Checker::default()`. This compares a baseline checker (the
-//! pinned 4a31c96 phases, no `JumpSpanPhase`) against the candidate -- the
+//! current default phases without `JumpSpanPhase`) against the candidate -- the
 //! production `xqvm::checker::check`, so the phase must really be registered
 //! there -- over a seeded corpus of structured programs,
 //! malformed byte streams, the constructed cross-loop reproduction, and the
@@ -47,7 +47,7 @@ use xqvm::checker::{
     StructuralPhase, UninitRegisterPhase,
 };
 
-/// The pinned 4a31c96 phase set, without the cross-body rule.
+/// The current default phases, without the cross-body rule.
 fn baseline(program: &Program) -> Result<(), CheckerError> {
     Checker::new()
         .with_phase(StructuralPhase)
@@ -235,7 +235,7 @@ impl Rng {
 
 /// A seeded structured program: loop-balanced, with a small alphabet of
 /// control-flow instructions and jumps to a bounded set of labels. Many are
-/// invalid under the baseline (stack/register/undefined-target); that is fine —
+/// invalid under the baseline (stack/register/undefined-target); that is fine --
 /// the invariants hold for every program, valid or not.
 fn gen_structured(rng: &mut Rng) -> Vec<u8> {
     let mut code: Vec<u8> = Vec::new();

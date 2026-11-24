@@ -90,7 +90,7 @@ mod block_ranges {
         assert!(xqvm::Vm::new().run(&program).is_ok());
     }
 
-    /// Direction 1 (the 12-byte reproduction — former false accept): a live block
+    /// Direction 1 (the 12-byte reproduction -- former false accept): a live block
     /// reads `r5`, a dead block that is skipped writes `r5`. The write must not
     /// count, so the live read of the unset register is rejected.
     #[test]
