@@ -19,8 +19,10 @@ use core::hash::Hash;
 
 use crate::dataflow::cfg::Cfg;
 
-mod sealed {
-    pub trait Sealed {}
+pub(super) mod sealed {
+    pub trait Sealed {
+        const FORWARD: bool;
+    }
 }
 
 /// Zero-sized marker for a forward data-flow analysis.
@@ -33,8 +35,12 @@ pub struct Forward;
 /// The boundary is the CFG exit; facts flow from successors into each node.
 pub struct Backward;
 
-impl sealed::Sealed for Forward {}
-impl sealed::Sealed for Backward {}
+impl sealed::Sealed for Forward {
+    const FORWARD: bool = true;
+}
+impl sealed::Sealed for Backward {
+    const FORWARD: bool = false;
+}
 
 /// Sealed trait that parameterises the solver over flow direction.
 ///

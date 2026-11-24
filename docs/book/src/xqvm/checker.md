@@ -86,17 +86,13 @@ slot to a concrete type (`Int`, `VecInt`, `VecXqmx`, `Model`, `Sample`) or to
 `Any`; an instruction that reads a register is checked against what that
 instruction requires.
 
-At a join point -- two or more incoming control-flow paths -- the
-per-register meet is permissive: disagreeing types, including a register
-unset on one path and `Int` on the other, resolve to `Any` rather than an
-immediate error. That permissiveness avoids false positives for a register
-written on only one branch of a conditional; Phase 3 is what actually
-catches that case. Reading an `Unset` register is rejected, and so is a type
-mismatch, for example reading a `Model` register where an instruction
-requires `Int`.
+At a join point, a register unwritten on any incoming path remains
+possibly unset. Reading it is rejected. `Any` is the meet identity, while
+`Unset` is absorbing. This makes register propagation monotone and bounded.
+The standalone type-state phase now also catches partial writes across
+branches; the default pipeline already rejected them in the must-init phase.
 
-A join is held back from that permissiveness, because `Any` satisfies every
-requirement. Joining a model with a sample gives `model or sample`, and
+Joining a model with a sample gives `model or sample`, and
 joining the two vector types gives `vec<int> or vec<xqmx>`; each satisfies
 only what its two members have in common -- the grid operations and the
 linear coefficient trio for the first, `ITER` and `VECLEN` for the second.
@@ -123,53 +119,72 @@ A control-flow-based forward analysis using an AND-meet over a bitmap of
 which registers are definitely initialised. At program entry every register
 is un-written. At a join point, a register's bit is cleared unless every
 incoming path wrote it -- so a register written on only one branch of a
-conditional is flagged as possibly-unset at any read after the join, even
-though Phase 2's permissive meet let the same register pass its type check.
+conditional is flagged as possibly-unset at any read after the join, including
+when used independently of Phase 2.
 Unreachable blocks are skipped.
 
 Error: `ReadUnsetRegister`.
+
+## Migrating custom data-flow analyses
+
+`dataflow::solve` now takes a third argument, `max_visits`, and returns
+`Result<DataFlowResult<...>, SolveError>`. Supply a justified bound using
+checked arithmetic and handle `SolveError::BudgetExceeded`; do not retry
+without a bound. `N + H * E` visits suffice for N nodes, E edges and at most
+H strict output descents per node under a monotone transfer.
+
+All outputs start at top. The boundary value supplies the boundary input;
+its output is the result of its transfer. Backward results follow program
+order even when entry and exit refer to the same node.
+
+Exhaustive matches on `CheckerError` must handle `AnalysisBudgetExceeded`.
+Built-in analyses derive their bounds internally. Exhaustion reports an
+analysis defect and provides no partial facts or byte offset. The default
+pipeline can report a missing write earlier than before, changing diagnostic
+variant or offset on an invalid program. Standalone `RegisterTypePhase` now
+rejects reads after partial writes across branches.
+
+See the normative [analysis budget contract](https://gitlab.com/quip.network/xquad/-/blob/main/spec/xqvm/CHECKER.md#deterministic-analysis-budgets)
+for the register order, bounds and cost limitations.
+
+The built-in register and must-init phases forward changed coordinates into
+cached incoming facts. Per-block constant writes are summarised once; there
+is no full predecessor fold or repeated block scan per change. Each of 256 register
+coordinates descends at most four times, and each initialization bit clears
+once. At 2,048 nodes and 4,096 edges, this bounds register edge updates by
+4,194,304 and must-init bit updates by 1,048,576. These operation counts still
+need runtime weight calibration. The public generic `solve` keeps dense
+propagation; it changes only by its `max_visits` budget and `Result` return.
 
 ## Phase 4 -- stack depth
 
 A control-flow-based forward analysis over the abstract depth of the value
 stack. Each basic block is characterised by the minimum depth it needs on
-entry and its effect on exit; the analysis propagates the most conservative
-depth to each successor.
+entry and its effect on exit. The analysis assigns one exact height per
+reachable block and checks every incoming edge for agreement.
 
 Checks run in this order:
 
-1. **Loop stack imbalance.** A separate pass walks each loop body, ignoring
-   the back-edge, and compares the depth at `NEXT` against the depth at the
-   matching `RANGE`/`ITER` opener. A non-zero net effect is an imbalance,
-   reported before anything else in that loop is checked.
-2. **Stack depth mismatch.** After the pass converges, every join block --
-   two or more incoming edges -- has the arrival depths of all its reachable
-   incoming edges compared; any two that differ mean the stack state at that
-   point is not well-defined.
+1. **Local stack faults.** FIFO from program entry checks each block once:
+   minimum input and post-reset underflow first, then entry height, exit
+   height and transient peak against the 8,192 limit.
+2. **Edge consistency.** Successors retain CFG insertion order (jump target
+   before fall-through; loop body before skip; NEXT back-edge before exit).
+   An unseen successor receives its height and enters the queue once. A
+   different incoming height reports `StackDepthMismatch`; a matching NEXT
+   back-edge reports `LoopStackImbalance`. Back-edges to program entry are
+   compared with the implicit zero-height entry edge.
 
-   Program entry counts as an incoming edge of the entry block, arriving at
-   depth 0. So a back-edge targeting the entry block makes it a join block
-   even though it has only one predecessor *block*, and the loop body's exit
-   depth is compared against entry's depth 0.
-3. **Underflow and overflow risk.** A block whose converged depth would
-   fall below zero, or exceed 8,192, is flagged. The block's entry
-   requirement is the lowest depth any of its instructions' pops reaches:
-   each instruction's pops are counted before its pushes, so `PUSH 1 /
-   SWAP` needs one more value than it has, even though `SWAP` leaves the
-   depth unchanged.
-
-`SCLR` resets the abstract depth unconditionally to zero, which the analysis
-treats as a reset rather than a delta. A reset does not undo an underflow
-before it: `SCLR / POP / SCLR / HALT` is rejected, because the `POP` faults
-before the second `SCLR` runs. If the entry depth was `N > 0` and the
-exit depth is `0`, that reset is itself the imbalance: inside a loop it is
-reported directly as `LoopStackImbalance` by check 1, ahead of everything
-else in that loop. Outside a loop, the same reset is only a problem if it
-creates a discrepancy between incoming edges at a join, in which case check 2
-catches it as `StackDepthMismatch`.
-
-Errors: `LoopStackImbalance`, `StackDepthMismatch`, `StackUnderflow`,
-`StackOverflowRisk`.
+The first witnessed fault is reported. This replaces the former global
+error-class priority, so rejected programs can change diagnostic variant or
+offset. Against the minimum-walk analysis it replaces, accepted programs are
+unchanged. Two other 0.6.0 rules do change acceptance: block analysis stops
+at the first terminator, so bytes after it are dead, and the transient peak
+inside a block is checked. Arbitrary loop escapes and re-entry
+remain ordinary CFG edges; there are no separate body walks or new nesting
+limits. Depth work is at most N block transfers and E edge checks after
+indexing the graph. See the normative checker specification for the
+acceptance-equivalence proof and historical minimum-walk oracle.
 
 ## Error reference
 
@@ -186,9 +201,10 @@ Errors: `LoopStackImbalance`, `StackDepthMismatch`, `StackUnderflow`,
 | `StackDepthMismatch` | 4 | Two control-flow paths reach a join point with different stack depths |
 | `StackUnderflow` | 4 | Stack depth would go negative at a reachable instruction |
 | `StackOverflowRisk` | 4 | Stack depth would exceed 8,192 at a reachable instruction |
+| `AnalysisBudgetExceeded` | 2--4 | An analysis exhausted its derived work bound: a checker defect, not invalid bytecode |
 
-Every `CheckerError` variant carries the byte offset of the offending
-instruction; several (`RegisterTypeMismatch`, `UndefinedJumpTarget`, and
+Every `CheckerError` variant except `AnalysisBudgetExceeded` carries the
+byte offset of the offending instruction; several (`RegisterTypeMismatch`, `UndefinedJumpTarget`, and
 others) also carry the register number or label id involved, so a
 diagnostic can point at the exact spot in the bytecode.
 

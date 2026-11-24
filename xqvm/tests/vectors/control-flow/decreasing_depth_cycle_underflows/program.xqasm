@@ -1,0 +1,21 @@
+; Reject a decreasing cycle without counting the stack down.
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+PUSH 1
+TARGET .0
+POP
+JUMP .0
+HALT

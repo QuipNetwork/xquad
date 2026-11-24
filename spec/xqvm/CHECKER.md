@@ -87,6 +87,12 @@ Errors: `NoActiveLoop`, `UnmatchedLoop`.
 
 ---
 
+Basic-block transfer and replay stop immediately after the first terminator
+(`JUMP`, `JUMPI`, `RANGE`, `ITER`, `NEXT` or `HALT`), or at the next block
+leader if it comes first. Bytes after a terminator do not become part of the
+preceding block merely because a dead leader has no CFG edge. Dead writes
+cannot initialize a live read, and dead reads cannot reject a live halt.
+
 ## Phase 2 -- Register Type-State (`RegisterTypePhase`)
 
 A CFG-based forward analysis over `[RegType; 256]` (one slot per register).
@@ -114,12 +120,32 @@ types, `meet(meet(Model, Sample), Int)` is `Any` while
 `meet(Model, meet(Sample, Int))` is `Model`, and one branch of an unrelated
 type reopens the bypass the pair rows close.
 
-`Unset` is the exception: `meet(Unset, T) = Any`, which avoids false positives
-for a register written on only one branch of a conditional. That row is not a
-way back in, because the must-init pass (Phase 3) rejects every read of a
-register left unset on any path. Its cost is that the row is not associative,
-so a join mixing an unwritten branch with two related types can be rejected by
-either phase depending on edge order. Both outcomes reject.
+`Unset` is the absorbing bottom: `meet(Unset, T) = Unset`, including
+when `T` is `Any`. It means possibly unwritten on at least one incoming
+path. The descending cover relations over all ten values are:
+
+- `Any` covers `Int`, `Model`, `Sample`, `VecInt` and `VecXqmx`.
+- `Model` and `Sample` cover `Grid`.
+- `VecInt` and `VecXqmx` cover `AnyVec`.
+- `Int`, `Grid` and `AnyVec` cover `Conflict`.
+- `Conflict` covers `Unset`.
+
+The meet is the greatest lower bound in this order. Equal values stay
+unchanged; `Any` is identity; `Unset` absorbs; the two related families
+meet at their shared lower bound; all remaining initialized pairs share
+only `Conflict`. These cases cover every pair. In particular, associativity
+also holds for joins containing `Unset`.
+
+An individual register can descend strictly at most four times. A transfer
+replaces written coordinates with constants and carries all other coordinates
+unchanged, so it is monotone in this order. Dead blocks always return top.
+
+Register analysis could fail to terminate on some CFGs with the former
+`meet(Unset, T) = Any` rule. The absorbing rule also makes the standalone
+`RegisterTypePhase` stricter: a read after a partial write is rejected here.
+In the default pipeline the must-init phase already rejected such reads.
+Diagnostic phase, error variant and offset may change when a program has
+multiple errors; they are not compatibility guarantees between releases.
 
 Preconditions enforced:
 
@@ -131,8 +157,11 @@ Preconditions enforced:
   also writes `Unset`, and a subsequent `LOAD` or `OUTPUT` faults as
   `UnsetRegister`; the checker models that behaviour faithfully.
 
-Unreachable blocks (entry state equals `[Any; 256]`) are skipped, so dead code
-after unconditional jumps does not produce false positives.
+Reachability is computed by traversing CFG edges from program entry. Dead
+blocks contribute the meet identity without applying writes and are skipped
+by instruction replay. A reachable block whose input happens to equal
+`[Any; 256]` still applies its writes and checks its reads; lattice top does
+not encode reachability.
 
 Errors: `ReadUnsetRegister`, `RegisterTypeMismatch`.
 
@@ -150,12 +179,17 @@ value is `[0; 4]`; the lattice top is `[u64::MAX; 4]` (identity for AND-meet).
 At join points: `meet(a, b) = a & b`. A register written on only one branch
 has its bit cleared at the join, so subsequent reads are flagged.
 
-This phase complements Phase 2: Phase 2 uses a permissive `Any`-meet that
-prevents false positives for partial writes across branches; Phase 3 uses
-AND-meet specifically to catch reads after join points where at least one
-incoming path did not write the register.
+The initialization projection of Phase 2 maps `Unset` to false and every
+other type to true. It preserves meet (AND), entry, dead-block top, and
+all writes: `DROP` clears its bit and every other register write sets it.
+Both phases use the same CFG, reachability, block ranges and write effects.
+This phase therefore agrees on possible missing writes and remains available
+independently in custom pipelines.
 
-Unreachable blocks (entry state equals `top`) are skipped.
+The same CFG reachability rule applies here. Dead blocks contribute the
+identity without applying writes and are skipped by replay. Reachable blocks
+are checked even when all 256 registers are initialized, which equals `top`.
+A dead `DROP` cannot make another dead block appear reachable.
 
 Error: `ReadUnsetRegister`.
 
@@ -163,36 +197,52 @@ Error: `ReadUnsetRegister`.
 
 ## Phase 4 -- Stack Depth (`StackDepthPhase`)
 
-A CFG-based forward analysis over abstract stack depth. Each basic block is
-characterised by a `BlockEffect` (minimum entry depth required and the output
-depth or depth delta at exit). The worklist uses min-meet to propagate the
-most conservative depth to successors.
+Each reachable block has one exact entry height. A `BlockEffect` records
+its minimum required input and its exit delta or fixed output. The checker
+assigns heights on first reach, processes each block once and compares every
+incoming edge with the assigned height. It never iterates minimum depths or
+runs separate loop-body walks.
 
-### Check order
+The checker tracks the peak within every reachable basic block, not only
+its entry and exit. Before the first `SCLR`, the peak is relative to the
+incoming height; after a clear it is absolute. Later pops or clears do not
+erase either peak. A transient height above 8,192 is rejected even if the
+block exits empty; exactly 8,192 remains valid.
 
-1. **`LoopStackImbalance`** -- detected via a separate one-pass BFS over each
-   loop body (ignoring back-edges). If the exit depth of the `NEXT` block
-   differs from the depth at the matching `RANGE`/`ITER` opener, the loop body
-   has a non-zero net stack effect.
+### Deterministic check order
 
-2. **`StackDepthMismatch`** -- after the worklist converges, every join block
-   (2+ incoming edges) is examined. The arrival depths of all reachable
-   incoming edges are collected and compared, program entry contributing
-   depth 0. If any two differ, the stack is in
-   an undefined state at the join point. Blocks are checked in program order
-   (ascending byte offset) for deterministic error reporting.
+The traversal is FIFO, seeded with program entry at height zero. Dense node
+indices follow CFG node insertion order. Successors are examined in CFG
+edge insertion order: conditional jump target before fall-through,
+`RANGE`/`ITER` body before skip, and `NEXT` back-edge before fall-through.
+Neither hash-map iteration nor the order of predecessor sets controls a
+verdict. A node enters the queue only on its first height assignment.
 
-   Program entry counts as an incoming edge of the entry block, arriving at
-   depth 0. So a back-edge targeting the entry block makes it a join block with
-   two incoming edges -- entry at depth 0, and the back-edge at whatever depth
-   the loop body leaves -- even though it has only one predecessor *block*.
-   Counting predecessor blocks alone would let `.0: PUSH 1 / JUMP .0 / HALT`
-   check clean and then overflow the stack at runtime.
+For each dequeued block:
 
-3. **`StackUnderflow`** / **`StackOverflowRisk`** -- an instruction whose
-   pops take the depth below 0 is flagged under the
-   [Stack underflow rule](#stack-underflow-rule), and a block whose depth
-   exceeds 8192 is flagged as `StackOverflowRisk`.
+1. Apply its effect; a failed minimum-input check or an intrinsic post-reset
+   underflow reports `StackUnderflow` at the block start.
+2. Check entry height, exit height, then intra-block peak in that order;
+   the first value above 8,192 reports `StackOverflowRisk` at the block start.
+3. Examine outgoing edges in the order above. Assign an unseen successor's
+   height and enqueue it. A different height at an assigned successor
+   reports `StackDepthMismatch`, with the assigned height as `depth_a` and
+   the incoming height as `depth_b`. A conflicting matching `NEXT` back-edge
+   instead reports `LoopStackImbalance`, with its opener offset and the
+   assigned/incoming heights as entry/exit.
+
+Stop at the first witnessed fault or edge conflict. This replaces the old
+whole-program error-class priority; rejected programs can change diagnostic
+variant or offset. Against the minimum-walk analysis this replaces, the
+accepted program set is unchanged. Acceptance does change under two other
+rules: block transfer stops at the first terminator (Phase 1), and the
+intra-block peak is checked (Phase 4).
+
+The implicit program-entry edge always has height zero. Back-edges to entry
+are compared with it, never ignored. A single-block CFG receives the same
+check. Dead blocks, including unreachable leaders and loop openers, are not
+processed. A `SCLR` output is fixed, but its incoming edge heights must still
+agree. Underflow before a reset remains an error.
 
 ### Stack underflow rule
 
@@ -220,18 +270,184 @@ under [Per-Opcode Stack Effects](#per-opcode-stack-effects).
 skip-edge to the block after `NEXT` (empty-loop path). `NEXT` emits a
 back-edge to the loop body start and a fall-through to the post-loop block.
 
-`LoopStackImbalance` is reported before `StackDepthMismatch`, so if a loop is
-imbalanced the depth-mismatch check at the loop header is never reached.
+All these edges participate in exact-height consistency, including the
+post-loop `after_next` block. Arbitrary jumps leaving or re-entering a body
+remain ordinary CFG edges; no lexical confinement rule is added. A matching
+`NEXT` back-edge must restore the body's entry height, which enforces zero
+net effect without a separate body simulation.
 
 ### `SCLR` semantics
 
-`SCLR` resets the abstract depth unconditionally to 0 (`StackEffect::Reset`).
-If the entry depth was N > 0 and the exit depth is 0, this is reported as
-`LoopStackImbalance` if inside a loop, or detected by `StackDepthMismatch` at a
-downstream join if the reset creates a discrepancy.
+`SCLR` resets the abstract depth to zero (`StackEffect::Reset`). It neither
+erases a previous underflow nor exempts a join from equal incoming heights.
+A reset inside a loop can therefore produce a `LoopStackImbalance` when the
+matching `NEXT` edge disagrees with the body's assigned entry height.
+
+### Acceptance equivalence
+
+If the former minimum-depth checker accepts, every reachable value is
+finite, every reachable incoming edge agrees (including the implicit entry
+edge), and every minimum-input and transient-peak bound holds. These values
+form an exact solution. Induction over first discovery shows that the new
+traversal assigns those same values, including `Fixed`/`SCLR` outputs, so it
+accepts.
+
+Conversely, accepted exact heights satisfy every old min-meet equation.
+Induction over the old worklist shows that no propagated finite value can
+differ, and no negative cycle can produce underflow. For an old body walk
+with a reachable opener, its entry equals the full-CFG body height. Every
+edge it follows preserves the same solution, including escapes and re-entry.
+Removing its root back-edge and `after_next` only removes paths. Any reached
+predecessor of the body start has the body-entry height at its output;
+unreached predecessors contribute `Top`. Thus its loop-effect check cannot
+fail. An unreachable opener seeds only `Top`, and its body cannot fail that
+check either. Exact-height acceptance also preserves the old minimum-input,
+entry/exit bound and intra-block peak checks. No assumption about nesting depth or
+loop count is needed in either direction.
 
 Errors: `LoopStackImbalance`, `StackDepthMismatch`, `StackUnderflow`,
 `StackOverflowRisk`.
+
+---
+
+## Deterministic analysis budgets
+
+CFG edges preserve insertion order. A duplicate edge changes neither the
+successor nor predecessor list. Insertion checks the source's successor
+list once and appends both directions only for a new edge; it does not
+search the destination's growing predecessor list. Bytecode blocks have
+at most two successors, so edge deduplication takes at most two comparisons
+per insertion, including graphs where every block targets the same join.
+
+The generic Rust `dataflow::solve(analysis, cfg, max_visits)` returns
+`Result<DataFlowResult<...>, SolveError>`. Every output starts at lattice
+top, including the boundary node. The boundary value seeds only that node's
+input before its transfer runs. This applies in both flow directions.
+
+For N nodes, E edges and at most H strict descents per output, the FIFO
+worklist visits at most `N + H * E` nodes: N initial visits, then at most H
+enqueue attempts per edge. Duplicate pending nodes are suppressed. This is
+the public generic solver's scheduling bound, not the built-in sparse
+algorithm's whole-work bound. All bound arithmetic is checked.
+
+### Sparse built-in register and must-init propagation
+
+Each block's register transfer independently overwrites some coordinates
+with constants and leaves the rest unchanged. Decode the writes once and
+retain the last write to each coordinate for transfer purposes; replay still
+checks every original instruction in order. Reachability is computed
+separately, and dead blocks never apply writes. A reachable all-top block
+still applies its constant writes.
+
+The built-ins cache incoming facts and propagate only changed output
+coordinates. `meet(old contribution, new contribution) = new contribution`
+when outputs descend, so meeting a new contribution into the cached input
+is exactly the same as folding all current predecessors. The boundary's
+incoming facts remain constant; incoming back-edges never overwrite them.
+A written coordinate has a fixed output and needs no transfer on later
+input changes. An unwritten coordinate copies its changed input with
+constant scalar work. This sparse propagation is internal to the built-in
+phases: the generic `Analysis` and `Lattice` traits are unchanged, and the
+generic `solve` keeps dense propagation, changing only by its `max_visits`
+budget and `Result` return.
+
+Dense indices follow CFG insertion order. Initialise reachable nodes in that
+order and coordinates from 0 through 255. Outputs start at top and only
+strict descents enter a FIFO of `(node, coordinate)` pairs. At most one pair
+is pending for a given coordinate; a pending pair reads the latest output.
+Forward changed values to successors in CFG insertion order. Final error
+replay remains in ascending byte offset and instruction order.
+
+A register coordinate descends at most four times; an initialization bit
+clears at most once. With R = 256, register propagation performs at most
+`4 * R * N` constant-work coordinate events and `4 * R * E` coordinate edge
+updates. Must-init uses at most `R * N` events and `R * E` bit updates; its
+AND meet is applied only to a changed bit. These bounds include initial
+output descents and hold for coalesced pending updates as well. Separate
+checked budgets enforce event and edge-update ceilings. There is no full
+256-coordinate transfer or predecessor refold per event.
+
+At N = 2048 and E = 4096, the register ceilings are 2,097,152 events and
+4,194,304 edge updates; must-init ceilings are 524,288 events and 1,048,576
+bit updates. Initialising and materialising facts adds `O(R * N)` work,
+write extraction/replay adds `O(B)`, and dense graph indexing adds
+`O((N + E) log N)`. No term multiplies edge updates by R again or rescans a
+long block on each incoming change. Dictionary accesses in CFG/context
+construction remain separate from these exact scalar-operation counts;
+these are not reference-machine weight or wall-clock guarantees.
+
+### Exact-height depth work
+
+The exact-height checker has a node budget of N and an edge budget of E.
+It assigns each reachable node once and checks each outgoing edge once, so
+these ceilings follow directly from the algorithm. Indexing offsets into
+dense arrays takes `O((N + E) log N)` comparisons; the depth traversal takes
+`O(N + E)` work and space. With N = 2048 and E <= 4096, there are at most
+2048 block transfers and 4096 edge checks, independent of initial height,
+loop count and nesting depth. Budgets detect internal invariant failures;
+they are not a numerical cutoff for rejecting otherwise valid programs.
+
+Upstream checking adds no nesting cap. Loop pairing uses one explicit
+heap stack and one linear instruction scan. Nesting depth D is at most the
+instruction count; its storage is `O(D)`, not a factor multiplying graph
+work. Hosts may impose their own smaller depth limit.
+
+Generic-solver visits still include transfer work and incoming-edge folds;
+materialising its result also folds incoming edges. Its visit bound alone
+is not a whole-program wall-clock guarantee. A callback must terminate.
+
+Exhaustion returns `CheckerError::AnalysisBudgetExceeded` without partial
+facts. It indicates an analysis contract or bound defect, not a valid verdict
+about the program; callers must refuse admission and investigate. No retry
+through an unbounded solver is provided. Custom analyses must supply their
+own justified bound; a transfer callback itself must also terminate.
+
+The Rust API change is breaking: callers add the visit limit and handle
+`SolveError`; exhaustive matches on `CheckerError` add the new variant.
+Neither `Analysis` nor `Lattice` requires a new method. `RegType` has no new
+variant, but its `Unset` meet and standalone phase behavior change as above.
+
+---
+
+## Historical minimum-walk oracle
+
+The former algorithm is retained only in tests for equivalence and mutation
+controls. It is not used by the default check or a public depth phase.
+Its per-walk termination proof below does not provide an adequate aggregate
+cost bound: L body walks could cost `(L + 1) * N * (3 * N + 3)` visits plus
+`O(L * N)` setup. The exact-height checker removes those walks entirely.
+
+Partition a FIFO walk into rounds. A round drains exactly the nodes queued
+at its start; later arrivals belong to the next round. Queue membership
+suppresses duplicates, so each round visits at most N nodes. A newly
+improved node is processed no later than the following round.
+
+Treat the boundary output and every reachable `Fixed(k)` output as sources.
+A non-top value reaches every reachable node within N rounds along a simple
+path. A fixed output is then either `Known(k)` or `Underflow`; it can never
+produce a different finite source value. An input below its minimum or an
+already underflowed input makes it absorbing `Underflow`, even for a reset.
+
+For finite propagation, the witness counts edges since the last fixed
+source. A fixed effect resets this count, not an underflow. After N further
+rounds, all walks of fewer than N edges from all activated sources have
+contributed. Competing paths cannot delay this: the domain is totally
+ordered, transfers preserve the minimum, and retaining a smaller input
+cannot hide a smaller output. An accelerated underflow is smaller still.
+This argument includes short walks with repeated nodes, not just simple
+paths; the length limit bounds how many rounds they need.
+
+A later strict finite improvement therefore cannot have a witness shorter
+than N edges. The algorithm accelerates such an improvement to `Underflow`
+before propagation. Underflow then spreads in at most N rounds and cannot
+be reset or replaced by a shorter finite witness. Three additional rounds
+cover processing the endpoint of a witness and draining pending nodes,
+giving `N * (3 * N + 3)` visits.
+
+The boundary input is constant and incoming back-edges to it are ignored.
+A loop-body walk also skips its `after_next` node. Both restrictions remove
+walks from this argument; they cannot add delayed sources or improvements.
+All bound arithmetic is checked, and exhaustion returns the dedicated error.
 
 ---
 
@@ -239,6 +455,7 @@ Errors: `LoopStackImbalance`, `StackDepthMismatch`, `StackUnderflow`,
 
 | Variant | Phase | Description |
 |---------|-------|-------------|
+| `AnalysisBudgetExceeded` | 2--4 | Derived analysis work bound exhausted; no byte offset |
 | `TruncatedInstruction` | 1a | Instruction stream ends mid-operand |
 | `BadOpcode` | 1a | Opcode byte does not map to a known instruction |
 | `UndefinedJumpTarget` | 1b | Jump references label id >= target count |

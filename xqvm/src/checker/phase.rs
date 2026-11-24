@@ -167,6 +167,6 @@ impl Phase for AllCfgPhases {
         };
         check_register_types_with_cfg(program, &ctx.cfg)?;
         check_uninit_registers_with_cfg(program, &ctx.cfg)?;
-        check_stack_depth_with_context(&ctx.cfg, &ctx.effects, &ctx.loop_regions)
+        check_stack_depth_with_context(&ctx.cfg, &ctx.effects, &ctx.peaks, &ctx.loop_regions)
     }
 }

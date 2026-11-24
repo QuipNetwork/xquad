@@ -32,10 +32,9 @@ use super::phase::Phase;
 /// - Propagates type state along all live CFG edges, catching type mismatches
 ///   on conditional-branch paths that a linear scan would miss.
 ///
-/// At join points the per-register meet is permissive: registers written on
-/// only one incoming path become `Any` (not `Unset`), so reads after such
-/// joins are not flagged.  See [`crate::dataflow::register`] for the full
-/// meet semantics.
+/// At join points a register possibly unwritten on any incoming path stays
+/// `Unset`, and a subsequent read is rejected. See
+/// [`crate::dataflow::register`] for the complete meet semantics.
 pub struct RegisterTypePhase;
 
 impl Phase for RegisterTypePhase {

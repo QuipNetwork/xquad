@@ -1,0 +1,10 @@
+BSMX r2
+JUMPI .2
+DROP r2
+JUMPI .1
+.0:
+.1:
+.2:
+JUMPI .0
+JUMP .1
+HALT

@@ -64,7 +64,8 @@
 //!
 //!     fn transfer(&self, node: &u32, input: &Depth) -> Depth {
 //!         let delta = self.deltas.get(node).copied().unwrap_or(0);
-//!         Depth((input.0 as isize + delta).max(0) as usize)
+//!         if input.0 == usize::MAX { return input.clone(); }
+//!         Depth(input.0.saturating_add_signed(delta))
 //!     }
 //! }
 //!
@@ -81,7 +82,8 @@
 //!     deltas: [(0, 1_isize), (1, -1_isize)].into_iter().collect(),
 //! };
 //!
-//! let result = solve(&analysis, &cfg);
+//! // Three nodes plus two edges, with one output descent per node.
+//! let result = solve(&analysis, &cfg, 5).unwrap();
 //!
 //! assert_eq!(result.before(&0).unwrap().0, 0);  // entry: depth 0 before
 //! assert_eq!(result.after(&0).unwrap().0,  1);  // entry block pushes 1
@@ -93,9 +95,11 @@ mod analysis;
 pub mod bytecode;
 mod cfg;
 mod direction;
+mod indexed;
 mod lattice;
 pub mod register;
 mod solver;
+mod sparse;
 pub mod uninit;
 
 #[cfg(test)]
@@ -108,4 +112,4 @@ pub use bytecode::{
 pub use cfg::{Cfg, CfgBuilder};
 pub use direction::{Backward, Direction, Forward};
 pub use lattice::Lattice;
-pub use solver::{DataFlowResult, solve};
+pub use solver::{DataFlowResult, SolveError, solve};
