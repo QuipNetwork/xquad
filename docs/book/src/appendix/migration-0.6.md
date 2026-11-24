@@ -108,9 +108,15 @@ git grep -lzE 'verifier|VerifierError' -- '*.rs' '*.py' '*.pyi' |
 
 It leaves these for you:
 
-- Names imported on their own, such as `use xqvm::verifier::{verify, Verifier}`
-  or `from xqffi.verifier import verify`. The module path is renamed, so the
+- Names imported in a group or from a Python module, such as
+  `use xqvm::verifier::{verify, Verifier}` or
+  `from xqffi.verifier import verify`. The module path is renamed, so the
   build or the import fails on the old item name. Rename the item.
+- The calls made through a single imported name. The script renames
+  `use xqvm::verifier::verify;` to `use xqvm::checker::check;` and
+  `use xqvm::verifier::Verifier;` to `use xqvm::checker::Checker;`, but not
+  the `verify(...)` or `Verifier` uses that follow. The build fails at each
+  one; rename them.
 - `from xqffi import verifier` or `from xquad import verifier`, and the calls
   made through that name. The import raises `ImportError`.
 - A module bound to a name, such as `use xqvm::verifier;` or
@@ -216,8 +222,7 @@ raise `NonBinaryModel`.
 ## Deprecated Names
 
 Apart from the CLI aliases above, the names that 0.4 deprecated are not
-removed in 0.6. They still work and
-still warn, and they are removed in v0.7.0. The [Deprecated
-APIs](../solving/quip-network.md#deprecated-apis) table lists each one with
-its replacement. Moving to the replacements now leaves nothing to change
-for this when 0.7 arrives.
+removed in 0.6. They still work and still warn, and they are removed in
+v0.7.0. The [Deprecated APIs](../solving/quip-network.md#deprecated-apis)
+table lists each one with its replacement. Moving to the replacements now
+leaves nothing to change for this when 0.7 arrives.
