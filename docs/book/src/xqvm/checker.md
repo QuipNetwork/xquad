@@ -38,6 +38,8 @@ all ordinary popped stack values, which is why `InvalidAllocation`,
 have no checker counterpart. `SampleOutOfDomain` is the clearest of them:
 `SETLINE` on a sample is well-typed whatever it writes, and only the value
 the program computes decides whether the write is in domain.
+`NonBinaryModel` has no checker counterpart either, for a different reason:
+the checker does not track a model's domain.
 That is a boundary rather than a gap: an embedder gets its bound from the
 step and allocation budgets it sets, not from a checker pass.
 

@@ -60,7 +60,7 @@ observable behaviour and must be made in both places at once.
 | `COEFF_WRITE_STEPS` | 13 | One coefficient written into a model's sparse map. |
 | `MODEL_TERM_STEPS` | 1 | One model term accumulated into an energy. |
 | `GRID_CELL_STEPS` | 3 | One cell of a grid's linear surface read by a row or column scan. |
-| `SAMPLE_COPY_STEPS` | 1 | One sample element written. |
+| `SAMPLE_COPY_STEPS` | 1 | One sample element written by a sample allocator, or read by `ENERGY`. |
 | `ELEMENT_COPY_STEPS` | 1 | One `i64` copied out of a vec. |
 
 ### How the constants were measured
@@ -143,7 +143,7 @@ work it prices.
 | `EXCLUDE` | One `COEFF_WRITE_STEPS` for the quadratic term it writes | `COEFF_WRITE_STEPS` |
 | `IMPLIES` | Two `COEFF_WRITE_STEPS`, for the linear and the quadratic term it writes | `2 * COEFF_WRITE_STEPS` |
 | `REDUCE` | Four `COEFF_WRITE_STEPS`, for the three quadratic and one linear term the Rosenberg reduction writes | `4 * COEFF_WRITE_STEPS` |
-| `ENERGY` | Cost of copying the sample and accumulating every model term | [`model_eval_steps`](#model_eval_steps)`(sample_len, terms)` |
+| `ENERGY` | Cost of reading the sample and accumulating every model term | [`model_eval_steps`](#model_eval_steps)`(sample_len, terms)` |
 | `RANGE` (empty loop) | One `BASE_STEPS` per instruction the skip scan consumes | `skipped * BASE_STEPS` |
 | `ITER` (empty slice) | One `BASE_STEPS` per instruction the skip scan consumes | `skipped * BASE_STEPS` |
 
@@ -238,9 +238,11 @@ the number of its non-zero coefficients, since a write that leaves a
 coefficient at `0` removes the entry ([SPEC.md](SPEC.md#xqmx)). The
 same two counts are `linear_len` and `quadratic_len` below.
 Both multiplications and the addition saturate. This charges for `ENERGY`
-copying the sample out of its register (`sample_len` elements) and then
+reading the sample in its register (`sample_len` elements) and
 accumulating every model term into the energy (`terms` terms); both halves
-are computed and charged before either the copy or the accumulation begins.
+are computed and charged before either the read or the accumulation begins.
+The sample is read in place: `ENERGY` allocates nothing that scales with
+the sample or the model, so it charges no memory.
 
 ### `value_copy_steps`
 

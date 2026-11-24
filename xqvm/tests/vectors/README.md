@@ -142,6 +142,7 @@ changes, and two variants that describe the same fault share one name.
 | `INVALID_GRID_DIMENSIONS` | `InvalidGridDimensions` |
 | `INVALID_INTEGER_K` | `InvalidIntegerK` |
 | `SAMPLE_OUT_OF_DOMAIN` | `SampleOutOfDomain` |
+| `NON_BINARY_MODEL` | `NonBinaryModel` |
 | `TRACE_FAILED` | `TraceFailed` |
 | `INVALID_ALLOCATION` | `InvalidAllocation` |
 | `LOOP_STACK_OVERFLOW` | `LoopStackOverflow` |

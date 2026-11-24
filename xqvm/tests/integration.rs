@@ -4415,3 +4415,67 @@ fn setline_index_is_checked_before_the_value() {
         "expected IndexOutOfBounds, got {err:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Constraint opcodes on non-binary models (QUI-2357)
+//
+// The conformance vectors compare fault identity only, so the payload -- which
+// register, which domain -- is asserted here.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn exclude_reports_an_integer_k2_model() {
+    // k = 2 has values {0, 1}, but the check follows the declared domain.
+    // A non-zero slot catches a `reg` that is not the model register's.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_push(2).emit_xqmx(Register(3));
+        b.emit_push(0)
+            .emit_push(1)
+            .emit_push(5)
+            .emit_exclude(Register(3));
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::NonBinaryModel {
+                reg: 3,
+                domain: Domain::Integer(2),
+                ..
+            }
+        ),
+        "expected NonBinaryModel, got {err:?}"
+    );
+}
+
+#[test]
+fn atleastw_reports_the_model_register_not_an_operand() {
+    // The model sits in the highest of the three slots, so a payload taken
+    // from `indices` (r0) or `coeffs` (r1) would not match.
+    let err = run_err(|b| {
+        b.emit_push(4).emit_sqmx(Register(2));
+        b.emit_vec_i(Register(0));
+        b.emit_push(0).emit_vec_push(Register(0));
+        b.emit_push(1).emit_vec_push(Register(0));
+        b.emit_vec_i(Register(1));
+        b.emit_push(2).emit_vec_push(Register(1));
+        b.emit_push(3).emit_vec_push(Register(1));
+        b.emit_push(2).emit_push(1).emit(Instruction::AtLeastW {
+            model: Register(2),
+            indices: Register(0),
+            coeffs: Register(1),
+        });
+        b.emit_halt();
+    });
+    assert!(
+        matches!(
+            err,
+            Error::NonBinaryModel {
+                reg: 2,
+                domain: Domain::Spin,
+                ..
+            }
+        ),
+        "expected NonBinaryModel, got {err:?}"
+    );
+}

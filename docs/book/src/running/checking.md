@@ -229,15 +229,16 @@ to completion."
 A whole class of faults is outside the checker's reach: they depend on
 values, and the checker tracks types and depths rather than values. An
 allocator size, a grid extent, a loop bound, a calldata index and every
-arithmetic operand are ordinary popped stack values, so
-`InvalidAllocation`, `InvalidGridDimensions`, `InvalidIntegerK`,
-`ArithmeticOverflow`, `IndexOutOfBounds`, `SampleOutOfDomain`,
-`LoopStackOverflow`, `StepLimitExceeded` and `MemoryLimitExceeded` are all
-runtime faults with no static counterpart. `SampleOutOfDomain` is the
-clearest case of why: the value written into a sample can arrive from
-calldata, so no amount of static analysis can know it. A checked program
-can still raise any of them, and for an embedder that is the point: the
-budgets and the range checks are what bound a program the checker has
+arithmetic operand are ordinary popped stack values, so `InvalidAllocation`,
+`InvalidGridDimensions`, `InvalidIntegerK`, `ArithmeticOverflow`,
+`IndexOutOfBounds`, `SampleOutOfDomain`, `LoopStackOverflow`,
+`StepLimitExceeded` and `MemoryLimitExceeded` are all runtime faults with no
+static counterpart. `SampleOutOfDomain` is the clearest case of why: the
+value written into a sample can arrive from calldata, so no amount of static
+analysis can know it. `NonBinaryModel` has no static counterpart either, for
+a different reason: the checker does not track a model's domain. A checked
+program can still raise any of them, and for an embedder that is the point:
+the budgets and the range checks are what bound a program the checker has
 already passed. See [Limits and
 Errors](../xqvm/limits-and-errors.md#vm-runtime-errors).
 
