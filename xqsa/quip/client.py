@@ -1450,7 +1450,7 @@ class SolverQuip(Solver):
 
         ``strict=False`` is the deprecated ``solve``/``quote`` path: unknown
         options and raw chain dicts warn instead of raising, though an access
-        dict that cannot be read as a rule is refused. It is removed in v0.6.0.
+        dict that cannot be read as a rule is refused. It is removed in v0.7.0.
         """
         self._validate_model(model)
         merged = merge_options(
@@ -1659,7 +1659,7 @@ class SolverQuip(Solver):
         """Price ``model`` as a job without proposing it. Deprecated.
 
         Use ``create_order(model, **options).quote()``. This shortcut keeps
-        working until v0.6.0, accepting what :meth:`solve` accepts.
+        working until v0.7.0, accepting what :meth:`solve` accepts.
 
         Raises:
             ValueError: if ``mapping`` is given with ``topology="native"``.
@@ -1692,14 +1692,14 @@ class SolverQuip(Solver):
         A faucet drip is not returned if the job fails after it.
 
         Unlike :meth:`create_order`, an unknown option or a raw chain dict
-        warns with a ``DeprecationWarning`` instead of raising, until v0.6.0.
+        warns with a ``DeprecationWarning`` instead of raising, until v0.7.0.
         A raw ``access`` dict is read as the rule it names.
 
         Keyword args:
             reward, deadline_blocks, block_wait, topology, mapping, access,
                 resolution, max_energy, min_solutions, min_diversity: as for
                 :meth:`create_order`, for this solve only.
-            mode: deprecated name of ``access``; warns until v0.6.0.
+            mode: deprecated name of ``access``; warns until v0.7.0.
 
         Raises:
             TypeError: if both ``access`` and the deprecated ``mode`` are given.
@@ -1745,7 +1745,7 @@ class SolverQuip(Solver):
 
         Use :meth:`get_receipt` to follow an order without its model; decoding
         a receipt's answers onto a model has no replacement yet. This keeps
-        working, with a ``DeprecationWarning``, until v0.6.0 removes it.
+        working, with a ``DeprecationWarning``, until v0.7.0 removes it.
 
         Returns ``None`` if the order is not yet final (poll again later). Once
         final, re-derives the deterministic placement from ``model`` and decodes
@@ -1841,7 +1841,7 @@ class SolverQuip(Solver):
 
         Use ``get_receipt(order_id).status()``, whose keys follow
         :meth:`JobOrder.status <xqsa.quip.JobOrder.status>`. This keeps its
-        old keys, with a ``DeprecationWarning``, until v0.6.0 removes it.
+        old keys, with a ``DeprecationWarning``, until v0.7.0 removes it.
 
         One ``JobOrders`` read plus the chain head: status, key block heights,
         the computed ``effective_expiry``, and whether the order ``is_final``.
@@ -1891,7 +1891,7 @@ def _env_flag(name: str) -> bool | None:
 def _take_mode(access: Any, mode: Any, *, stacklevel: int) -> Any:
     """Return ``access``, or the deprecated ``mode`` in its place with a ``DeprecationWarning``.
 
-    ``mode=`` is removed in v0.6.0.
+    ``mode=`` is removed in v0.7.0.
 
     Raises:
         TypeError: if both are given.
@@ -1900,7 +1900,7 @@ def _take_mode(access: Any, mode: Any, *, stacklevel: int) -> Any:
         return access
     if access is not None:
         raise TypeError("pass access= or the deprecated mode=, not both")
-    message = "mode= is deprecated, use access= (removed in v0.6.0)"
+    message = "mode= is deprecated, use access= (removed in v0.7.0)"
     warnings.warn(message, DeprecationWarning, stacklevel=stacklevel + 1)
     return mode
 
