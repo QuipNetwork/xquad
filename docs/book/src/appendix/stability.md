@@ -57,9 +57,8 @@ changes in v0.6.0 are listed in [Migrating from 0.5 to
 changes in v0.5.0 are listed in [Migrating from 0.4 to
 0.5](migration-0.5.md). The book keeps the migration guides for the
 last three minor releases. To read an older one, check out the latest
-tag of the release it covers (the latest `v0.5.x` for 0.4 to 0.5), as
-described in [Reading the Documentation for an Older
-Release](#reading-the-documentation-for-an-older-release). If your use
+tag of the release it covers, as described in [Reading the
+Documentation for an Older Release](#reading-the-documentation-for-an-older-release). If your use
 case needs a stability guarantee this project does not yet make, [file an
 issue](https://gitlab.com/quip.network/xquad/-/issues) against the
 repository rather than assuming one.

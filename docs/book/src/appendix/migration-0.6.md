@@ -166,11 +166,18 @@ that 0.5 accepted:
 | The stack overflows inside one block and comes back down before the block ends | Accepted | Rejected (`StackOverflowRisk`) |
 | A `JUMP` or `JUMPI` targets a different loop body from the jump: into a loop, out of one, into a sibling loop, or from an inner loop to an outer one, reachable or not | Accepted | Rejected (`JumpAcrossLoopBoundary`) |
 
-`CheckerError` gains `JumpAcrossLoopBoundary { pos, target }`, its last
+`CheckerError` gains `JumpAcrossLoopBoundary { offset, target }`, its last
 variant; an exhaustive match needs an arm for it. In Python,
 `xqffi.checker.check` and `check_source` raise
 `ValueError("JumpAcrossLoopBoundary: ...")`, and `xquad vm check` exits 1 with
 that message. The rule is phase 1d in [Checker](../xqvm/checker.md).
+
+Only `xqvm::checker::check` and `Checker::default()` run the rule. A pipeline
+built with `Checker::new()` and `with_phase`, as 0.5 allowed, still compiles
+after the rename but accepts these jumps. Add `JumpSpanPhase` after
+`LoopNestingPhase` to reject them, and before `RegisterTypePhase`,
+`UninitRegisterPhase` and `StackDepthPhase` to report the same error as the
+default checker.
 
 Programs compiled by `xqcp` are unaffected. To fix a hand-written program the
 checker now rejects, keep each jump and its `TARGET` in the same loop body. To
@@ -182,15 +189,15 @@ over the programs you store, and fix the ones it rejects.
 
 ## A Rejected Program Can Report a Different Error
 
-A program that 0.5 rejected is still rejected, but the error can differ:
+A program that both 0.5 and 0.6 reject can report a different error:
 
 - A stack-depth fault is now the first one the traversal of the control-flow
   graph reaches, not the highest-priority class in the program, so the
   variant or offset can differ from 0.5.
 - The jump-span check runs before the register and stack-depth phases. A
   program with a cross-body jump that used to fail one of those
-  (`ReadUnsetRegister`, `RegisterTypeMismatch`, `AnalysisBudgetExceeded` or a
-  stack-depth error) now reports `JumpAcrossLoopBoundary`.
+  (`ReadUnsetRegister`, `RegisterTypeMismatch` or a stack-depth error) now
+  reports `JumpAcrossLoopBoundary`.
 - `RegisterTypePhase` run on its own rejects a read after a write on only one
   branch.
 - `ReadUnsetRegister`'s message now reads "register rN read at byte 0x...
